@@ -12,20 +12,52 @@ use serde_json::{json, Value};
 use tokio_postgres::{Row, Transaction};
 
 pub(crate) fn event_record(row: &Row, scope: Scope<'_>) -> Result<Value, ProtocolError> {
+    event_record_lossless(row, scope)?
+        .to_serde_checked()
+        .map_err(|_| ProtocolError::internal())
+}
+pub(crate) fn event_record_lossless(
+    row: &Row,
+    scope: Scope<'_>,
+) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
+    use crate::protocol::{
+        js_postgres::{decode_json_column, json_truthy, PgValue},
+        js_value::{JsJson as J, JsString as S},
+    };
     let seq: i64 = row.get("seq");
     if seq > 9_007_199_254_740_991 {
         return Err(ProtocolError::internal());
     }
-    let mut event = json!({scope.event_key():scope.id(),"seq":seq,"ts":super::records::row_timestamp(row,"ts"),"actor":row.get::<_,crate::protocol::js_json::JsValue>("actor").0,"type":row.get::<_,String>("type"),"payload":row.get::<_,crate::protocol::js_json::JsValue>("payload").0});
+    let mut fields = vec![
+        (S::from(scope.event_key()), J::String(S::from(scope.id()))),
+        (S::from("seq"), J::Number(seq as f64)),
+        (
+            S::from("ts"),
+            J::String(S::from(super::records::row_timestamp(row, "ts"))),
+        ),
+        (
+            S::from("actor"),
+            decode_json_column(row.get::<_, PgValue>("actor").0)?,
+        ),
+        (
+            S::from("type"),
+            J::String(S::from(row.get::<_, String>("type"))),
+        ),
+        (
+            S::from("payload"),
+            decode_json_column(row.get::<_, PgValue>("payload").0)?,
+        ),
+    ];
     if !matches!(scope, Scope::Session(_)) {
-        if let Some(compatibility) = row
-            .get::<_, Option<crate::protocol::js_json::JsValue>>("compatibility")
-            .map(|value| value.0)
+        if let Some(value) = row
+            .get::<_, Option<PgValue>>("compatibility")
+            .map(|v| v.0)
+            .filter(json_truthy)
         {
-            event["compatibility"] = compatibility;
+            fields.push((S::from("compatibility"), decode_json_column(value)?));
         }
     }
-    Ok(event)
+    Ok(J::Object(fields))
 }
 pub(crate) async fn tail(tx: &Transaction<'_>, scope: Scope<'_>) -> Result<i64, ProtocolError> {
     Ok(tx
@@ -233,6 +265,15 @@ impl Store {
     /// A single statement observes the anchor and selection at one authoritative
     /// prefix, closing the first-anchor race without a process-local cache.
     pub async fn repo_state_events(&self, repo: &str) -> Result<Value, ProtocolError> {
+        self.repo_state_events_lossless(repo)
+            .await?
+            .to_serde_checked()
+            .map_err(|_| ProtocolError::internal())
+    }
+    pub async fn repo_state_events_lossless(
+        &self,
+        repo: &str,
+    ) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
         static POLICY: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
         let policy = POLICY.get_or_init(|| {
             serde_json::from_str(include_str!("../../../fixtures/protocol-event-reads.json"))
@@ -259,10 +300,10 @@ impl Store {
             return Err(ProtocolError::missing("repo", repo));
         }
         let rows=client.query("WITH anchor AS (SELECT MAX(seq) AS seq FROM repo_events WHERE repo=$1 AND type='dispatcher.run-started') SELECT e.* FROM repo_events e CROSS JOIN anchor a WHERE e.repo=$1 AND (e.type=ANY($2::text[]) OR (a.seq IS NOT NULL AND e.seq>=a.seq AND NOT e.type=ANY($3::text[])) OR (e.type=ANY($3::text[]) AND e.seq=(SELECT MAX(l.seq) FROM repo_events l WHERE l.repo=$1 AND l.type=e.type))) ORDER BY e.seq",&[&repo,&durable,&latest]).await?;
-        Ok(rows
-            .iter()
-            .map(|row| event_record(row, Scope::Repo(repo)))
-            .collect::<Result<Vec<_>, _>>()?
-            .into())
+        Ok(crate::protocol::js_value::JsJson::Array(
+            rows.iter()
+                .map(|row| event_record_lossless(row, Scope::Repo(repo)))
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
     }
 }

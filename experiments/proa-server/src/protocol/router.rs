@@ -353,13 +353,16 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         req
     };
     if let Some(scope @ Scope::Build(_)) = scope {
-        if state.store.get_record(scope).await?.is_null() {
+        if state.store.get_record_lossless(scope).await?.is_null() {
             return Err(ProtocolError::missing("build", scope.id()));
         }
     }
     if method == "GET" && parts == ["builds"] {
         let repo = principal.as_ref().and_then(Principal::repo);
-        return Ok(reply(200, state.store.list_builds_js(repo.as_ref()).await?));
+        return Ok(reply_js(
+            200,
+            state.store.list_builds_lossless(repo.as_ref()).await?,
+        ));
     }
     if method == "POST" && parts == ["repos"] {
         let value = body_lossless(req, "ensureRepo").await?;
@@ -415,7 +418,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         let sql_slug = slug.to_usv_string();
         if !state
             .store
-            .get_record(Scope::Build(&sql_slug))
+            .get_record_lossless(Scope::Build(&sql_slug))
             .await?
             .is_null()
         {
@@ -590,16 +593,16 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         }
         let supports_audit =
             identity::client_supports_integration_audit_pending(version.as_deref());
-        let mut digests = state.store.repo_build_digests(parts[1]).await?;
+        let mut digests = state.store.repo_build_digests_lossless(parts[1]).await?;
         if !supports_audit {
             for digest in digests.as_array_mut().unwrap() {
                 digest
                     .as_object_mut()
                     .unwrap()
-                    .remove("integrationAuditPending");
+                    .retain(|(k, _)| !k.eq_str("integrationAuditPending"));
             }
         }
-        let mut response = reply(200, digests);
+        let mut response = reply_js(200, digests);
         response.headers_mut().insert(
             "x-autobuild-catalog-identity",
             identity::ServiceIdentity::current()
@@ -613,7 +616,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         if parts.get(2) == Some(&"streams") {
             if matches!(scope, Scope::Repo(_))
                 && !(method == "POST" && parts.len() == 3)
-                && state.store.get_record(scope).await?.is_null()
+                && state.store.get_record_lossless(scope).await?.is_null()
             {
                 return Err(ProtocolError::missing("repo", scope.id()));
             }
@@ -637,17 +640,20 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                             ProtocolError::validation("query parameter \"kind\" is required")
                         })?;
                     let rev = super::wire::int_parameter(req.uri().query(), "rev")?;
-                    return Ok(reply(
+                    return Ok(reply_js(
                         200,
-                        state.store.get_artifact(scope, &kind, rev).await?,
+                        state.store.get_artifact_lossless(scope, &kind, rev).await?,
                     ));
                 }
             }
             if method == "GET" && parts.len() == 3 && parts[2] == "artifact-list" {
                 let kind = super::wire::parameter(req.uri().query(), "kind");
-                return Ok(reply(
+                return Ok(reply_js(
                     200,
-                    state.store.list_artifacts(scope, kind.as_deref()).await?,
+                    state
+                        .store
+                        .list_artifacts_lossless(scope, kind.as_deref())
+                        .await?,
                 ));
             }
             if method == "POST"
@@ -690,7 +696,9 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             && matches!(scope, Scope::Build(_) | Scope::Repo(_))
             && !parts[3].contains('/')
         {
-            if matches!(scope, Scope::Repo(_)) && state.store.get_record(scope).await?.is_null() {
+            if matches!(scope, Scope::Repo(_))
+                && state.store.get_record_lossless(scope).await?.is_null()
+            {
                 return Err(ProtocolError::missing("repo", scope.id()));
             }
             super::store::snapshots::validate_snapshot_reducer(parts[3])?;
@@ -734,9 +742,12 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         if method == "GET" && parts.len() == 3 && parts[2] == "events" {
             let since = super::wire::int_parameter(req.uri().query(), "since")?.unwrap_or(0);
             let wait = super::wire::wait_parameter(req.uri().query())?;
-            return Ok(reply(
+            return Ok(reply_js(
                 200,
-                state.store.read_events_held(scope, since, wait).await?,
+                state
+                    .store
+                    .read_events_held_lossless(scope, since, wait)
+                    .await?,
             ));
         }
         if method == "POST"
@@ -781,15 +792,18 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             ));
         }
         if parts.len() == 2 && method == "GET" {
-            let record = state.store.get_record(scope).await?;
+            let record = state.store.get_record_lossless(scope).await?;
             if record.is_null() && !matches!(scope, Scope::Session(_)) {
                 return Err(ProtocolError::missing(scope.name(), scope.id()));
             }
-            return Ok(reply(200, record));
+            return Ok(reply_js(200, record));
         }
         if method == "GET" && parts.len() == 3 && parts[0] == "repos" && parts[2] == "state-events"
         {
-            return Ok(reply(200, state.store.repo_state_events(scope.id()).await?));
+            return Ok(reply_js(
+                200,
+                state.store.repo_state_events_lossless(scope.id()).await?,
+            ));
         }
         if method == "GET" && parts.len() == 3 && parts[0] == "repos" {
             match parts[2] {
@@ -800,9 +814,22 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     ))
                 }
                 "builds" => {
-                    return Ok(reply(200, state.store.list_builds(Some(scope.id())).await?))
+                    return Ok(reply_js(
+                        200,
+                        state
+                            .store
+                            .list_builds_lossless(Some(&super::js_value::JsString::from(
+                                scope.id(),
+                            )))
+                            .await?,
+                    ))
                 }
-                "sessions" => return Ok(reply(200, state.store.list_sessions(scope.id()).await?)),
+                "sessions" => {
+                    return Ok(reply_js(
+                        200,
+                        state.store.list_sessions_lossless(scope.id()).await?,
+                    ))
+                }
                 _ => {}
             }
         }
@@ -856,7 +883,9 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         }
     }
     if let Some(scope @ Scope::Repo(_)) = scope {
-        if parts.get(2) != Some(&"sessions") && state.store.get_record(scope).await?.is_null() {
+        if parts.get(2) != Some(&"sessions")
+            && state.store.get_record_lossless(scope).await?.is_null()
+        {
             return Err(ProtocolError::missing("repo", scope.id()));
         }
     }

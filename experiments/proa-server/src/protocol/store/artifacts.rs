@@ -34,24 +34,42 @@ fn table(scope: Scope<'_>) -> &'static str {
     }
 }
 fn meta(row: &Row, scope: Scope<'_>) -> Result<Value, ProtocolError> {
+    meta_lossless(row, scope)?
+        .to_serde_checked()
+        .map_err(|_| ProtocolError::internal())
+}
+fn meta_lossless(
+    row: &Row,
+    scope: Scope<'_>,
+) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
+    use crate::protocol::{
+        js_postgres::{decode_json_column, PgValue},
+        js_value::{JsJson as J, JsString as S},
+    };
     let revision: i64 = row.get("revision");
     if revision > 9_007_199_254_740_991 {
         return Err(ProtocolError::internal());
     }
-    let raw = row
-        .get::<_, crate::protocol::js_json::JsValue>("metadata")
-        .0;
-    // Bun.SQL normally stores objects directly; accept the historical encoded
-    // JSONB envelope as the TS adapter's `json` helper also does.
-    let metadata = if let Value::String(raw) = raw {
-        crate::protocol::js_json::parse_js_json(raw.as_bytes())
-            .map_err(|_| ProtocolError::internal())?
-    } else {
-        raw
-    };
-    Ok(
-        json!({scope.event_key():scope.id(),"kind":row.get::<_,String>("kind"),"revision":revision,"blobRef":row.get::<_,String>("blob_ref"),"metadata":metadata,"createdAt":super::records::row_timestamp(row,"created_at")}),
-    )
+    Ok(J::Object(vec![
+        (S::from(scope.event_key()), J::String(S::from(scope.id()))),
+        (
+            S::from("kind"),
+            J::String(S::from(row.get::<_, String>("kind"))),
+        ),
+        (S::from("revision"), J::Number(revision as f64)),
+        (
+            S::from("blobRef"),
+            J::String(S::from(row.get::<_, String>("blob_ref"))),
+        ),
+        (
+            S::from("metadata"),
+            decode_json_column(row.get::<_, PgValue>("metadata").0)?,
+        ),
+        (
+            S::from("createdAt"),
+            J::String(S::from(super::records::row_timestamp(row, "created_at"))),
+        ),
+    ]))
 }
 fn managed(kind: &str) -> bool {
     matches!(
@@ -362,23 +380,23 @@ impl Store {
         ]))
     }
     async fn require_artifact_scope(&self, scope: Scope<'_>) -> Result<(), ProtocolError> {
-        if self.get_record(scope).await?.is_null() {
+        if self.get_record_lossless(scope).await?.is_null() {
             return Err(ProtocolError::missing(scope.name(), scope.id()));
         }
         Ok(())
     }
-    pub async fn get_artifact(
+    pub async fn get_artifact_lossless(
         &self,
         scope: Scope<'_>,
         kind: &str,
         revision: Option<i64>,
-    ) -> Result<Value, ProtocolError> {
+    ) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
         self.require_artifact_scope(scope).await?;
         let client = self.database.client().await?;
         let row=client.query_opt(&format!("SELECT * FROM {} WHERE {}=$1 AND kind=$2 AND ($3::bigint IS NULL OR revision=$3) ORDER BY revision DESC LIMIT 1",table(scope),scope.event_key()),&[&scope.id(),&kind,&revision]).await.map_err(ProtocolError::query)?;
         drop(client);
         let Some(row) = row else {
-            return Ok(Value::Null);
+            return Ok(crate::protocol::js_value::JsJson::Null);
         };
         let hash: String = row.get("blob_ref");
         let bytes = match self
@@ -389,23 +407,58 @@ impl Store {
             .await
         {
             Ok(bytes) => bytes,
-            Err(DataError::MissingBlob) => return Ok(Value::Null),
+            Err(DataError::MissingBlob) => return Ok(crate::protocol::js_value::JsJson::Null),
             Err(error) => return Err(error.into()),
         };
-        Ok(json!({"meta":meta(&row,scope)?,"contentBase64":STANDARD.encode(bytes)}))
+        Ok(crate::protocol::js_value::JsJson::Object(vec![
+            (
+                crate::protocol::js_value::JsString::from("meta"),
+                meta_lossless(&row, scope)?,
+            ),
+            (
+                crate::protocol::js_value::JsString::from("contentBase64"),
+                crate::protocol::js_value::JsJson::String(
+                    crate::protocol::js_value::JsString::from(STANDARD.encode(bytes)),
+                ),
+            ),
+        ]))
+    }
+    pub async fn list_artifacts_lossless(
+        &self,
+        scope: Scope<'_>,
+        kind: Option<&str>,
+    ) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
+        self.require_artifact_scope(scope).await?;
+        let client = self.database.client().await?;
+        let rows=client.query(&format!("SELECT * FROM {} WHERE {}=$1 AND ($2::text IS NULL OR kind=$2) ORDER BY kind,revision",table(scope),scope.event_key()),&[&scope.id(),&kind]).await.map_err(ProtocolError::query)?;
+        Ok(crate::protocol::js_value::JsJson::Array(
+            rows.iter()
+                .map(|row| meta_lossless(row, scope))
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
+    }
+}
+
+impl Store {
+    pub async fn get_artifact(
+        &self,
+        scope: Scope<'_>,
+        kind: &str,
+        revision: Option<i64>,
+    ) -> Result<Value, ProtocolError> {
+        self.get_artifact_lossless(scope, kind, revision)
+            .await?
+            .to_serde_checked()
+            .map_err(|_| ProtocolError::internal())
     }
     pub async fn list_artifacts(
         &self,
         scope: Scope<'_>,
         kind: Option<&str>,
     ) -> Result<Value, ProtocolError> {
-        self.require_artifact_scope(scope).await?;
-        let client = self.database.client().await?;
-        let rows=client.query(&format!("SELECT * FROM {} WHERE {}=$1 AND ($2::text IS NULL OR kind=$2) ORDER BY kind,revision",table(scope),scope.event_key()),&[&scope.id(),&kind]).await.map_err(ProtocolError::query)?;
-        Ok(rows
-            .iter()
-            .map(|row| meta(row, scope))
-            .collect::<Result<Vec<_>, _>>()?
-            .into())
+        self.list_artifacts_lossless(scope, kind)
+            .await?
+            .to_serde_checked()
+            .map_err(|_| ProtocolError::internal())
     }
 }

@@ -2,6 +2,8 @@
 //! Scalar conversion is checked; USV replacement is explicit and boundary-specific.
 use serde_json::Value;
 use std::{collections::HashMap, fmt};
+mod construction;
+pub use construction::ToJs;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JsValueError {
@@ -447,6 +449,105 @@ impl std::ops::Index<usize> for JsJson {
         self.as_array().and_then(|v| v.get(index)).unwrap_or(&NULL)
     }
 }
+impl JsJson {
+    /// Object lookup compares the original UTF-16 property name.
+    pub fn get_js(&self, key: &JsString) -> Option<&Self> {
+        self.as_object()?
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+    pub fn get_js_mut(&mut self, key: &JsString) -> Option<&mut Self> {
+        self.as_object_mut()?
+            .iter_mut()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+    pub fn remove_js(&mut self, key: &JsString) -> Option<Self> {
+        let values = self.as_object_mut()?;
+        let index = values.iter().rposition(|(k, _)| k == key)?;
+        Some(values.remove(index).1)
+    }
+}
+impl std::ops::Index<&JsString> for JsJson {
+    type Output = JsJson;
+    fn index(&self, key: &JsString) -> &JsJson {
+        self.get_js(key).unwrap_or(&NULL)
+    }
+}
+impl std::ops::IndexMut<&JsString> for JsJson {
+    fn index_mut(&mut self, key: &JsString) -> &mut JsJson {
+        if self.is_null() {
+            *self = Self::Object(Vec::new());
+        }
+        let values = self
+            .as_object_mut()
+            .expect("cannot index non-object JSON value with string");
+        let index = values
+            .iter()
+            .rposition(|(k, _)| k == key)
+            .unwrap_or_else(|| {
+                values.push((key.clone(), Self::Null));
+                values.len() - 1
+            });
+        &mut values[index].1
+    }
+}
+impl std::ops::Index<String> for JsJson {
+    type Output = JsJson;
+    fn index(&self, key: String) -> &JsJson {
+        &self[key.as_str()]
+    }
+}
+impl std::ops::IndexMut<String> for JsJson {
+    fn index_mut(&mut self, key: String) -> &mut JsJson {
+        &mut self[key.as_str()]
+    }
+}
+impl std::ops::Index<&String> for JsJson {
+    type Output = JsJson;
+    fn index(&self, key: &String) -> &JsJson {
+        &self[key.as_str()]
+    }
+}
+impl std::ops::IndexMut<&String> for JsJson {
+    fn index_mut(&mut self, key: &String) -> &mut JsJson {
+        &mut self[key.as_str()]
+    }
+}
+impl PartialEq<String> for JsJson {
+    fn eq(&self, other: &String) -> bool {
+        self.as_string().is_some_and(|s| s.eq_str(other))
+    }
+}
+impl PartialEq<JsString> for JsJson {
+    fn eq(&self, other: &JsString) -> bool {
+        self.as_string() == Some(other)
+    }
+}
+impl PartialEq<&JsString> for JsJson {
+    fn eq(&self, other: &&JsString) -> bool {
+        self.as_string() == Some(*other)
+    }
+}
+impl JsJson {
+    /// Canonical reducer comparison sorts original UTF-16 property names.
+    pub fn sort_all_objects(&mut self) {
+        let mut pending = vec![self];
+        while let Some(value) = pending.pop() {
+            match value {
+                Self::Object(fields) => {
+                    fields.sort_by(|a, b| a.0.cmp(&b.0));
+                    pending.extend(fields.iter_mut().map(|(_, child)| child));
+                }
+                Self::Array(items) => pending.extend(items.iter_mut()),
+                _ => {}
+            }
+        }
+    }
+}
 impl std::ops::IndexMut<&str> for JsJson {
     fn index_mut(&mut self, key: &str) -> &mut JsJson {
         if self.is_null() {
@@ -667,8 +768,43 @@ pub fn drop_serde_iterative(value: Value) {
     }
 }
 
+impl From<&JsString> for JsString {
+    fn from(v: &JsString) -> Self {
+        v.clone()
+    }
+}
+impl std::ops::Index<JsString> for JsJson {
+    type Output = Self;
+    fn index(&self, key: JsString) -> &Self {
+        &self[&key]
+    }
+}
+impl std::ops::IndexMut<JsString> for JsJson {
+    fn index_mut(&mut self, key: JsString) -> &mut Self {
+        &mut self[&key]
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dynamic_property_mutation_never_aliases_replacement_or_prototype_names() {
+        use super::*;
+        let lone = JsString::from_units(vec![0xd800]);
+        let replacement = JsString::from("�");
+        let mut value = JsJson::Null;
+        value[&lone] = JsJson::Bool(true);
+        value[&replacement] = JsJson::Bool(false);
+        value[String::from("__proto__")] = JsJson::Number(3.0);
+        assert_eq!(value[&lone], true);
+        assert_eq!(value[&replacement], false);
+        assert_eq!(value["__proto__"].as_i64(), Some(3));
+        *value.get_js_mut(&lone).unwrap() = JsJson::Number(4.0);
+        assert_eq!(value.remove_js(&lone).unwrap().as_i64(), Some(4));
+        assert!(value.get_js(&lone).is_none());
+        assert_eq!(value[&replacement], false);
+        assert_eq!(super::parse(value.stringify().as_bytes()).unwrap(), value);
+    }
     use super::*;
     use serde_json::json;
     fn fingerprint(value: &JsJson) -> Value {

@@ -135,8 +135,8 @@ and constructor controls. The maintained aggregate exercises project/delegated
 authority, all event and storage families, ticket assets/pins, stream lifecycles,
 all 42 exposed named values, historical decoders and isolated dispatch. The
 separate contract command runs the entire unchanged shared suite. None of these
-reports waive an unimplemented protocol edge. The remaining legacy read-envelope
-diagnostic below still prevents a claim of complete conformance.
+reports replace the separate unchanged shared contract result. Legacy JSONB
+read envelopes are covered by the persisted-value proofs below.
 
 Generate the independent strict append corpus with
 `bun tools/generate-protocol-fixtures.ts`; verify it with
@@ -282,9 +282,22 @@ under `tools/`. UTF16 fingerprints retain exact units without relying on a text
 formatter to preserve surrogate escapes. Deep JSON regressions require successful
 asserted native/source responses through 8192 nested unused arrays.
 
-`tools/protocol-read-envelope-diagnostic.ts` records a separate known remaining
-storage-read difference outside the passing acceptance aggregate: legacy JSONB
-string envelopes in event fields can contain valid inner JSON, including lone
-units. Raw reads, reducer replay and lifecycle authority must decode and retain
-these values before full conformance. The family report explicitly records
-`fullConformance: false` and the diagnostic path until that work is complete.
+`bun tools/protocol-read-envelope-diagnostic.ts` compares legacy JSONB
+string envelopes against the actual TypeScript service: all three event journals,
+artifact metadata, build tickets and lists, optional-column truthiness, one-layer
+parsing, exact malformed-inner-JSON errors, all 42 named values and delegated
+phase issuance/authorization. Its sanitized evidence is
+`.ab/proa-protocol-read-envelopes/read-envelopes.json`.
+`protocol-read-envelope-diagnostic.ts` remains an equality-proof CLI alias.
+
+Persisted reducers now retain original UTF16 code units through permissive payload
+projection, compound readers, reducer dictionaries and lifecycle facts. They do
+not route stored facts through strict producer validation or a scalar fallback.
+The independent source oracles cover 4,103 persisted payloads, 25,112 replay cases
+across all 42 names, and 1,342 inner-JSON parsing cases. Generate/check them with
+`protocol-persisted-unicode-fixtures.ts`, `protocol-persisted-reducer-fixtures.ts`
+and `protocol-read-json-fixtures.ts` (each supports `--generate`); freshness is
+part of the maintained gate. The existing 15,053 scalar replay cases also exercise
+the typed kernels. PostgreSQL columns are decoded explicitly: the source helper
+unwraps event actor/payload/compatibility, artifact metadata and build ticket,
+whereas direct columns such as repository tick are not blanket-unwrapped.

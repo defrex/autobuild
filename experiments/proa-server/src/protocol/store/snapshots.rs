@@ -97,13 +97,7 @@ impl Store {
                 let stored = row
                     .get::<_, crate::protocol::js_postgres::PgValue>("state")
                     .0;
-                let state = if let Some(text) = stored.as_js_string() {
-                    let text = text.to_scalar().map_err(|_| ProtocolError::internal())?;
-                    crate::protocol::js_value::parse(text.as_bytes())
-                        .map_err(|_| ProtocolError::internal())?
-                } else {
-                    stored
-                };
+                let state = crate::protocol::js_postgres::decode_json_column(stored)?;
                 Ok(JsJson::Object(vec![
                     (
                         JsString::from("version"),

@@ -8,6 +8,7 @@ import { proveProtocolLeaseDates } from './protocol-lease-dates.integration.test
 import { proveProtocolSqlErrors } from './protocol-sql-errors.integration.test'
 import { proveProtocolDelegationEdges } from './protocol-delegation-edges.integration.test'
 import { proveProtocolJsonNesting } from './protocol-json-nesting.integration.test'
+import { proveProtocolReadEnvelopes } from './protocol-read-envelopes.integration.test'
 import { mkdir, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { cachePath } from './verify'
@@ -116,13 +117,16 @@ if (!process.argv.includes('--caller-holds-lock')) {
     json_nesting: await coverage.proof('protocol-json-nesting', () =>
       proveProtocolJsonNesting(server),
     ),
+    read_envelopes: await coverage.proof('protocol-read-envelopes', () =>
+      proveProtocolReadEnvelopes(server),
+    ),
   }
   const routeCoverage = coverage.assertComplete()
   const evidence = resolve(root, '.ab/proa-protocol-store')
   await mkdir(evidence, { recursive: true })
   await Bun.write(
     join(evidence, 'checkpoint-proof.json'),
-    `${JSON.stringify({ fullConformance: false, remainingReadEnvelopeDiagnostic: 'tools/protocol-read-envelope-diagnostic.ts', includesFullBuildStoreContract: false, fullContractReport: '.ab/proa-protocol-contract/report.json', routeCoverage, routeAliases, unicode, delegation, authority, compatibility, dispatch, assets, streams, reducers, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
+    `${JSON.stringify({ fullConformance: true, includesFullBuildStoreContract: false, fullContractReport: '.ab/proa-protocol-contract/report.json', routeCoverage, routeAliases, unicode, delegation, authority, compatibility, dispatch, assets, streams, reducers, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
   )
   console.log(
     `Native protocol family proofs passed; unchanged suite evidence is recorded separately by protocol-contract.ts. Evidence: ${evidence}`,

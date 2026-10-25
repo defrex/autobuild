@@ -213,75 +213,228 @@ pub fn resolve_lossless(
         version: entry["version"].as_i64().unwrap(),
     })
 }
+pub(super) fn validate_node_lossless(name: &str, events: &[J]) -> Result<(), ProtocolError> {
+    let mut node = false;
+    let selected: Vec<_> = events
+        .iter()
+        .filter_map(|e| {
+            if e["type"] == "build.created" {
+                node = e["payload"]["kind"] == "node";
+            }
+            let t = e["type"].as_string().unwrap().to_scalar().unwrap();
+            (t.starts_with("node.") || (node && t == "target.moved")).then_some(e.clone())
+        })
+        .collect();
+    crate::protocol::restack_values_lossless::reduce_node(&selected)
+        .map(|_| ())
+        .map_err(|mut e| {
+            if name != "buildStreamSeed" && e.error == "The object can not be cloned." {
+                e.error = "reducer finished value is not plain JSON".into();
+            }
+            e
+        })
+}
+/// Replay a coherent persisted log without projecting original UTF-16 values.
+pub fn reduce_events_lossless(
+    scope: Scope<'_>,
+    resolved: &ResolvedReducerLossless,
+    raw: &[J],
+) -> Result<J, ProtocolError> {
+    let data_scope = if matches!(scope, Scope::Repo(_)) {
+        reducers::Scope::Repository
+    } else {
+        reducers::Scope::Build
+    };
+    let mut events = Vec::new();
+    let mut unknown = Vec::new();
+    for event in raw {
+        let kind = event["type"]
+            .as_string()
+            .and_then(|s| s.to_scalar().ok())
+            .unwrap_or_default();
+        if known(scope, &kind) {
+            events.push(events::decode_payload_lossless(data_scope, event)?);
+        } else {
+            unknown.push(event.clone());
+        }
+    }
+    if resolved.name == "buildDelegation" || resolved.name == "harvestDelegation" {
+        return Ok(crate::protocol::delegation_facts::reduce(
+            &events,
+            resolved.name == "harvestDelegation",
+        ));
+    }
+    if [
+        "baseBranchValue",
+        "recordedBaseShaValue",
+        "publishedBranchHeadValue",
+        "verifyDiffBaseValue",
+        "openBuildWorkspace",
+        "openWorkspace",
+        "openExecution",
+        "lastExecutionOutcome",
+        "setupStreak",
+        "infrastructureFailureReset",
+        "pinnedAssets",
+        "buildDigest",
+    ]
+    .contains(&resolved.name.as_str())
+    {
+        return kernels_lossless::simple(&resolved.name, &events, &unknown);
+    }
+    if [
+        "currentPrAttachments",
+        "pendingPrAttachmentReclaims",
+        "summaryRequests",
+        "executionNoProgress",
+        "currentDeferralObservation",
+        "dispatchFailureBudget",
+        "phaseFailures",
+        "dashboardFacts",
+    ]
+    .contains(&resolved.name.as_str())
+    {
+        return Ok(kernels_lossless::extras(
+            &resolved.name,
+            &events,
+            &resolved.args,
+        ));
+    }
+    if matches!(resolved.name.as_str(), "build" | "buildReadFacts") {
+        validate_node_lossless(&resolved.name, &events)?;
+    }
+    if ["terminalGuard", "buildStreamSeed", "buildReadFacts"].contains(&resolved.name.as_str()) {
+        return read_facts_lossless::value(&resolved.name, scope, resolved, raw, &events, &unknown);
+    }
+    if matches!(resolved.name.as_str(), "nodeRestack" | "leafRestack") {
+        return crate::protocol::restack_values_lossless::reduce(&resolved.name, &events);
+    }
+    if resolved.name == "build" {
+        let mut acc = crate::data::reducers::build_lossless::BuildAcc::default();
+        for e in &events {
+            acc.fold(e)?;
+        }
+        let mut v = acc.finish();
+        v["compatibility"] = kernels_lossless::compatibility(&unknown)?;
+        v["lastSeq"] = J::Number(
+            v["lastSeq"]
+                .as_i64()
+                .unwrap_or(0)
+                .max(v["compatibility"]["lastSeq"].as_i64().unwrap_or(0)) as f64,
+        );
+        return Ok(v);
+    }
+    let field = match resolved.name.as_str() {
+        "repositoryReadFacts" => Some(""),
+        "ticketMigrations" => Some("ticketMigrations"),
+        "dispatchUpgrade" => Some("upgrades"),
+        "repositoryAttention" => Some("attention"),
+        "harvest" => Some("harvest"),
+        "dispatchSettings" => Some("settings"),
+        "forgeHealthValue" => Some("forgeHealth"),
+        "effectiveConfig" => Some("config"),
+        "sandboxStates" => Some("sandboxes"),
+        "openHarvestExecutions" => Some("openHarvest"),
+        "autoMergeDefault" => Some("autoMerge"),
+        _ => None,
+    };
+    if let Some(field) = field {
+        let mut acc = crate::data::reducers::repository_lossless::RepositoryAcc::default();
+        for event in &events {
+            let original = raw.iter().find(|raw| raw["seq"] == event["seq"]).unwrap();
+            if field.is_empty() || resolved.name == "harvest" {
+                acc.fold(event, original)?;
+            } else if resolved.name == "ticketMigrations"
+                || event["type"] != "tickets.migration-recorded"
+            {
+                acc.fold_without_harvest(event, original)?;
+            }
+        }
+        let mut facts = acc.finish()["repositoryReadFacts"].clone();
+        if field.is_empty() {
+            facts["compatibility"] = kernels_lossless::compatibility(&unknown)?;
+            return Ok(facts);
+        }
+        if resolved.name == "forgeHealthValue" {
+            return Ok(facts
+                .get(field)
+                .map(|v| obj(vec![("value", v.clone())]))
+                .unwrap_or_else(|| obj(vec![])));
+        }
+        return Ok(facts[field].clone());
+    }
+    if resolved.name == "dispatchStatus" {
+        return Ok(
+            crate::data::reducers::repository_lossless::RepositoryAcc::status_for_events(
+                resolved.args["run"].as_string().unwrap(),
+                &events,
+            ),
+        );
+    }
+    if resolved.name == "dispatcherRunFacts" || resolved.name == "openTick" {
+        let mut state = obj(vec![]);
+        for event in &events {
+            if event["payload"]["run"] != resolved.args["run"] {
+                continue;
+            }
+            let kind = event["type"].as_string().unwrap().to_scalar().unwrap();
+            match kind.as_str() {
+                "dispatcher.run-started" => {
+                    if state.get("start").is_none() {
+                        state["start"] = event.clone();
+                    }
+                    state["latestStart"] = event.clone();
+                }
+                "dispatcher.runtime-recorded" => state["runtime"] = event.clone(),
+                "dispatcher.run-stopped" => state["stop"] = event.clone(),
+                "dispatcher.stop-requested" => {
+                    if state.get("stopRequest").is_none() {
+                        state["stopRequest"] = event.clone();
+                    }
+                }
+                "dispatcher.tick-started"
+                | "dispatcher.tick-completed"
+                | "dispatcher.tick-failed" => {
+                    state["boundary"] = event["type"].clone();
+                    if kind != "dispatcher.tick-started" {
+                        state["tick"] = event.clone();
+                    }
+                    if kind == "dispatcher.tick-completed" {
+                        state["completed"] = event.clone();
+                    }
+                }
+                _ => {}
+            }
+        }
+        return Ok(if resolved.name == "openTick" {
+            J::Bool(state["boundary"] == "dispatcher.tick-started")
+        } else {
+            state
+        });
+    }
+    Err(ProtocolError::new(
+        500,
+        "internal",
+        format!("native reducer \"{}\" not implemented", resolved.name),
+    ))
+}
+/// Compatibility entry for scalar Rust callers; replay itself always uses the
+/// original-code-unit kernels, including when arguments carry isolated units.
 pub fn reduce_lossless(
     scope: Scope<'_>,
     resolved: &ResolvedReducerLossless,
     raw: &[Value],
 ) -> Result<J, ProtocolError> {
-    if let Ok(args) = resolved.args.to_serde_checked() {
-        return reduce(
-            scope,
-            &ResolvedReducer {
-                name: resolved.name.clone(),
-                args: serializable(args),
-                version: resolved.version,
-            },
-            raw,
-        )
-        .map(|v| J::from_serde(&serializable(v)));
-    }
-    let (events, _unknown) = projected(scope, raw)?;
-    match resolved.name.as_str() {
-        "dispatchStatus" => {
-            let run = &resolved.args["run"];
-            // Direct JSONB event strings cannot contain isolated UTF-16 units. Compare
-            // original code units anyway, so a replacement-valued run never matches.
-            if events
-                .iter()
-                .any(|e| J::from_serde(&e["payload"]["run"]) == *run)
-            {
-                return Err(ProtocolError::internal());
-            }
-            Ok(obj(vec![
-                ("run", run.clone()),
-                ("health", text("starting")),
-                ("roleWarnings", J::Array(vec![])),
-                ("diagnostics", J::Array(vec![])),
-                ("lastSeq", J::Number(0.0)),
-            ]))
-        }
-        "dispatcherRunFacts" | "openTick" => {
-            let run = &resolved.args["run"];
-            if events
-                .iter()
-                .any(|e| J::from_serde(&e["payload"]["run"]) == *run)
-            {
-                return Err(ProtocolError::internal());
-            }
-            Ok(if resolved.name == "openTick" {
-                J::Bool(false)
-            } else {
-                J::Object(vec![])
-            })
-        }
-        "phaseFailures" => {
-            let phase = &resolved.args["phase"];
-            if events
-                .iter()
-                .any(|e| J::from_serde(&e["payload"]["phase"]) == *phase)
-            {
-                return Err(ProtocolError::internal());
-            }
-            Ok(obj(vec![("count", J::Number(0.0))]))
-        }
-        "terminalGuard" => terminal_guard_lossless(&resolved.args, &events),
-        _ => Err(ProtocolError::internal()),
-    }
+    reduce_events_lossless(
+        scope,
+        resolved,
+        &raw.iter().map(J::from_serde).collect::<Vec<_>>(),
+    )
 }
-fn eq_string(value: &Value, wanted: &S) -> bool {
-    value.as_str().is_some_and(|v| wanted.eq_str(v))
+fn eq_string(value: &J, wanted: &S) -> bool {
+    value.as_string() == Some(wanted)
 }
-fn terminal_guard_lossless(args: &J, events: &[Value]) -> Result<J, ProtocolError> {
+pub(super) fn terminal_guard_lossless(args: &J, events: &[J]) -> Result<J, ProtocolError> {
     let phase = args["phase"]
         .as_string()
         .ok_or_else(ProtocolError::internal)?;
@@ -306,9 +459,10 @@ fn terminal_guard_lossless(args: &J, events: &[Value]) -> Result<J, ProtocolErro
     let mut permanent = None;
     let mut completion = None;
     for e in events {
-        let t = e["type"].as_str().unwrap();
+        let t_owned = e["type"].as_string().unwrap().to_scalar().unwrap();
+        let t = t_owned.as_str();
         let p = &e["payload"];
-        let sequence = seq(e);
+        let sequence = e["seq"].as_i64().unwrap_or(0);
         if t == "spec.revised" && (verify || phase.eq_str("finalize")) {
             completion = None;
         }
@@ -318,13 +472,13 @@ fn terminal_guard_lossless(args: &J, events: &[Value]) -> Result<J, ProtocolErro
         if t == "session.started" && eq_string(&p["session"], session) {
             started = Some(sequence);
         }
-        let round_matches = J::from_serde(&p["round"]) == *round;
+        let round_matches = p["round"].clone() == *round;
         let diagnostic = if t == "session.started"
             && eq_string(&p["continuation"]["predecessor"], session)
         {
             Some(format_js(
                 "terminal rejected (D5): session \"{}\" was superseded by continuation {}",
-                &[session, &S::from(p["session"].as_str().unwrap())],
+                &[session, p["session"].as_string().unwrap()],
             ))
         } else if matches!(t, "session.ended" | "session.suspended")
             && eq_string(&p["session"], session)
@@ -340,7 +494,7 @@ fn terminal_guard_lossless(args: &J, events: &[Value]) -> Result<J, ProtocolErro
             && e["actor"]["kind"] == "agent"
             && eq_string(&e["actor"]["session"], session)
         {
-            Some(S::from(format!("second terminal call rejected (D5): this session already escalated — escalation.raised \"{}\" at seq {sequence}. Every phase ends with exactly one terminal command (§8.4).",p["id"].as_str().unwrap())))
+            Some(format_js(&format!("second terminal call rejected (D5): this session already escalated — escalation.raised \"{{}}\" at seq {sequence}. Every phase ends with exactly one terminal command (§8.4)."),&[p["id"].as_string().unwrap()]))
         } else if t == "publication.requested"
             && e["actor"]["kind"] == "agent"
             && eq_string(&e["actor"]["session"], session)
@@ -356,8 +510,12 @@ fn terminal_guard_lossless(args: &J, events: &[Value]) -> Result<J, ProtocolErro
                 | "implement.completed"
                 | "code-review.verdict" => round_matches,
                 "verify.completed" => {
-                    phase.eq_str(&format!("verify:{}", p["step"].as_str().unwrap()))
-                        && J::from_serde(&p["attempt"]) == *round
+                    phase.units()
+                        == "verify:"
+                            .encode_utf16()
+                            .chain(p["step"].as_string().unwrap().units().iter().copied())
+                            .collect::<Vec<_>>()
+                        && p["attempt"].clone() == *round
                 }
                 "finalize.completed" => true,
                 "reconcile.completed" => {
@@ -424,11 +582,11 @@ impl Store {
             .await?;
         let events = rows
             .iter()
-            .map(|row| event_record(row, scope))
+            .map(|row| crate::protocol::store::events::event_record_lossless(row, scope))
             .collect::<Result<Vec<_>, _>>()?;
         let mut cursor = 0;
         for event in &events {
-            if seq(event) != cursor + 1 {
+            if event["seq"].as_i64().unwrap_or(0) != cursor + 1 {
                 return Err(ProtocolError::new(
                     500,
                     "internal",
@@ -437,7 +595,7 @@ impl Store {
             }
             cursor += 1;
         }
-        let value = reduce_lossless(scope, &resolved, &events)?;
+        let value = reduce_events_lossless(scope, &resolved, &events)?;
         tx.commit().await?;
         Ok(obj(vec![
             ("version", J::Number(resolved.version as f64)),
@@ -464,6 +622,54 @@ mod tests {
             J::Array(v) => J::Array(v.iter().map(unordered).collect()),
             v => v.clone(),
         }
+    }
+    #[test]
+    fn persisted_unicode_catalog_replay_matches_independent_source() {
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(
+            include_bytes!("../../fixtures/protocol-persisted-reducers.json.gz").as_slice(),
+        )
+        .read_to_end(&mut bytes)
+        .unwrap();
+        let fixture = crate::protocol::js_value::parse(&bytes).unwrap();
+        let mut failures = Vec::new();
+        let mut count = 0;
+        let mut names = std::collections::BTreeSet::new();
+        for row in fixture["cases"].as_array().unwrap() {
+            names.insert(row["reducer"].as_string().unwrap().to_scalar().unwrap());
+            let scope = if row["scope"] == "repository" {
+                Scope::Repo("fixture")
+            } else {
+                Scope::Build("fixture")
+            };
+            let event =
+                crate::protocol::js_value::parse_js_string(row["input"].as_string().unwrap())
+                    .unwrap();
+            let request = obj(vec![
+                ("reducer", row["reducer"].clone()),
+                ("args", row["args"].clone()),
+            ]);
+            let resolved = resolve_lossless(scope, &request).unwrap();
+            let expected =
+                crate::protocol::js_value::parse_js_string(row["expected"].as_string().unwrap())
+                    .unwrap();
+            match reduce_events_lossless(scope, &resolved, &[event]) {
+                Ok(value) if unordered(&value) == unordered(&expected) => {}
+                actual => {
+                    count += 1;
+                    if failures.len() < 60 {
+                        failures.push(format!(
+                            "{:?} reducer={:?} expected={} actual={actual:?}",
+                            row["name"],
+                            row["reducer"],
+                            expected.stringify()
+                        ));
+                    }
+                }
+            }
+        }
+        assert_eq!(names.len(), 42);
+        assert_eq!(count, 0, "{} failures\n{}", count, failures.join("\n"));
     }
     #[test]
     fn unicode_catalog_arguments_and_replay_match_independent_source() {
@@ -521,8 +727,17 @@ mod tests {
             let input =
                 parse_reducer_request_lossless(row["input"].as_str().unwrap().as_bytes()).unwrap();
             let resolved = resolve_lossless(scope, &input).unwrap();
-            let value =
-                reduce_lossless(scope, &resolved, row["events"].as_array().unwrap()).unwrap();
+            let value = reduce_events_lossless(
+                scope,
+                &resolved,
+                &row["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(J::from_serde)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
             let expected: Vec<u16> = row["valueUnits"]
                 .as_array()
                 .unwrap()
@@ -576,8 +791,17 @@ mod tests {
             };
             let request = J::from_serde(&json!({"reducer":row["name"],"args":row["args"]}));
             let resolved = resolve_lossless(scope, &request).unwrap();
-            let value =
-                reduce_lossless(scope, &resolved, row["events"].as_array().unwrap()).unwrap();
+            let value = reduce_events_lossless(
+                scope,
+                &resolved,
+                &row["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(J::from_serde)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
             assert_eq!(
                 serializable(value.to_serde_checked().unwrap()),
                 row["value"],

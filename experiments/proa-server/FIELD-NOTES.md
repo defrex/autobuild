@@ -589,3 +589,32 @@ increment must carry the lossless model through these reads and facts; the
 successful direct-JSONB scalar domain is not the entire shared-storage domain.
 The standalone read-envelope diagnostic records this remaining scope explicitly,
 rather than treating the green endpoint matrix as full conformance.
+
+
+## Legacy JSONB envelopes require typed replay as well as typed HTTP reads
+
+The read-side gap recorded above is now covered end to end. The source adapter
+unwraps one JSON text layer at specific columns; a JSONB string can therefore
+carry an escaped lone surrogate into a known event, even though a direct JSONB
+object cannot store it. Native event, artifact and ticket reads now apply that
+column-specific conversion and the source's outer-value truthiness. They preserve
+inner strings after one parse and report Bun-compatible original-code-unit errors
+for malformed inner JSON. Snapshots and stream chunks use the same parser.
+
+All 42 named reducers now execute on typed persisted values. Permissive stored
+payload projection remains separate from strict producer validation. Original
+UTF16 dictionary keys survive build/repository accumulators, compound log/read
+facts, restack aliases, named arguments and delegation facts. A lone-surrogate
+session and a U+FFFD session remain distinct through issuance, authorization,
+termination and verify-step deferral settlement. No replacement-key alias or
+scalar reducer fallback is used.
+
+The expanded actual HTTP proof covers 99 comparisons, including the original
+four failures. Independent generated source oracles cover 4,103 persisted payload
+cases, 25,112 replay cases across every named reducer and 1,342 JSON parsing
+cases. The existing scalar replay corpus is also checked through the typed path.
+The legacy diagnostic CLI now runs equality assertions; sanitized evidence is
+`.ab/proa-protocol-read-envelopes/read-envelopes.json`. These proofs supplement,
+not substitute for, the unchanged shared contract, authenticated dispatch and
+production reader checks in the maintained gate. The Builds-page rendering check
+remains deferred to node integration after file-131 by the approved ruling.

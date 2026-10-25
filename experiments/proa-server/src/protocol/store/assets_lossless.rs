@@ -252,12 +252,7 @@ async fn asset_meta_lossless<C: GenericClient + Sync>(
 ) -> Result<J, ProtocolError> {
     // Only the manifest envelope can retain non-scalar code units in PostgreSQL.
     let raw = row.get::<_, PgValue>("manifest").0;
-    let entries = if let Some(raw) = raw.as_string() {
-        let raw = raw.to_scalar().map_err(|_| ProtocolError::internal())?;
-        crate::protocol::js_value::parse(raw.as_bytes()).map_err(|_| ProtocolError::internal())?
-    } else {
-        raw
-    };
+    let entries = crate::protocol::js_postgres::decode_json_column(raw)?;
     let repo: String = row.get("repo");
     let id: String = row.get("ticket_id");
     let display = hosted_ticket(client, &repo, &id)
@@ -467,56 +462,70 @@ impl Store {
         name: &str,
         rev: Option<i64>,
     ) -> Result<J, ProtocolError> {
-        let record = self.get_record(Scope::Build(slug)).await?;
+        let scope = Scope::Build(slug);
+        let record = self.get_record_lossless(scope).await?;
         if record.is_null() {
             return Err(ProtocolError::missing("build", slug));
         }
         if record.get("ticket").is_none() {
             return Ok(J::Null);
         }
-        let events = self.read_events_held(Scope::Build(slug), 0, 0).await?;
+        let request = |name| obj(vec![("reducer", text(name)), ("args", J::Object(vec![]))]);
+        let sets = self
+            .get_reducer_value_lossless(scope, &request("pinnedAssets"))
+            .await?;
+        let sets = sets["value"]["pins"]
+            .as_array()
+            .ok_or_else(ProtocolError::internal)?;
         let mut selected = None;
-        let mut historical = None;
-        let mut created_seen = false;
-        for event in events.as_array().ok_or_else(ProtocolError::internal)? {
-            if event["type"] == "build.created" && !created_seen {
-                created_seen = true;
-                historical = event["payload"]["ticket"]["id"].as_str().map(str::to_owned);
-            }
-            if matches!(
-                event["type"].as_str(),
-                Some("build.created" | "spec.revised")
-            ) {
-                if let Some(pins) = event["payload"].get("assets").and_then(Value::as_array) {
-                    if rev.is_none() {
-                        selected = pins
-                            .iter()
-                            .find(|p| p["kind"] == kind && p["name"] == name)
-                            .cloned();
-                    } else if selected.is_none() {
-                        selected = pins
-                            .iter()
-                            .find(|p| {
-                                p["kind"] == kind
-                                    && p["name"] == name
-                                    && p["revision"].as_i64() == rev
-                            })
-                            .cloned();
-                    }
+        if rev.is_none() {
+            selected = sets
+                .last()
+                .and_then(J::as_array)
+                .and_then(|set| set.iter().find(|p| p["kind"] == kind && p["name"] == name))
+                .cloned();
+        } else {
+            for set in sets {
+                if let Some(pin) = set.as_array().and_then(|set| {
+                    set.iter().find(|p| {
+                        p["kind"] == kind && p["name"] == name && p["revision"].as_i64() == rev
+                    })
+                }) {
+                    selected = Some(pin.clone());
+                    break;
                 }
             }
         }
         let Some(pin) = selected else {
             return Ok(J::Null);
         };
-        let repo = string(&record, "repo")?;
-        let ticket = string(&record["ticket"], "id")?;
+        // Repo is a PostgreSQL TEXT field. Ticket is a decoded JSON value and
+        // remains an original JavaScript string for immutable snapshot checks.
+        let repo = field(&record, "repo")?
+            .to_scalar()
+            .map_err(|_| ProtocolError::internal())?;
+        let ticket = field(&record["ticket"], "id")?;
         if pin.get("snapshot").is_none() {
             return self
-                .get_ticket_asset_lossless(repo, ticket, kind, name, pin["revision"].as_i64())
+                .get_ticket_asset_lossless(
+                    &repo,
+                    &ticket.to_usv_string(),
+                    kind,
+                    name,
+                    pin["revision"].as_i64(),
+                )
                 .await;
         }
-        self.read_asset_snapshot_lossless(repo, ticket, &J::from_serde(&pin), historical.as_deref())
+        let facts = self
+            .get_reducer_value_lossless(scope, &request("buildReadFacts"))
+            .await?;
+        let created = &facts["value"]["created"];
+        let historical = if created["type"] == "build.created" {
+            created["payload"]["ticket"]["id"].as_string()
+        } else {
+            None
+        };
+        self.read_asset_snapshot_lossless(&repo, ticket, &pin, historical)
             .await
     }
 }
@@ -555,23 +564,27 @@ impl Store {
         let kind = field(reference, "kind")?.to_usv_string();
         let revision = n(reference, "revision")? as i64;
         let artifact = self
-            .get_artifact(Scope::Repo(repo), &kind, Some(revision))
+            .get_artifact_lossless(Scope::Repo(repo), &kind, Some(revision))
             .await?;
         if artifact.is_null() {
             return Ok(None);
         }
         Ok(Some(
             STANDARD
-                .decode(string(&artifact, "contentBase64")?)
+                .decode(
+                    field(&artifact, "contentBase64")?
+                        .to_scalar()
+                        .map_err(|_| ProtocolError::internal())?,
+                )
                 .map_err(|_| ProtocolError::internal())?,
         ))
     }
     async fn read_asset_snapshot_lossless(
         &self,
         repo: &str,
-        ticket: &str,
+        ticket: &S,
         pin: &J,
-        historical: Option<&str>,
+        historical: Option<&S>,
     ) -> Result<J, ProtocolError> {
         let bytes = self
             .snapshot_artifact_bytes_lossless(
@@ -609,13 +622,13 @@ impl Store {
         let meta = manifest.get("meta").ok_or_else(ProtocolError::internal)?;
         let summary = summarize_lossless(meta)?;
         let expected_ticket =
-            if historical.is_some_and(|v| field(meta, "ticketId").is_ok_and(|id| id.eq_str(v))) {
+            if historical.is_some_and(|v| field(meta, "ticketId").is_ok_and(|id| id == v)) {
                 historical.unwrap()
             } else {
                 ticket
             };
         if !field(meta, "repo")?.eq_str(repo)
-            || !field(meta, "ticketId")?.eq_str(expected_ticket)
+            || field(meta, "ticketId")? != expected_ticket
             || [
                 "kind",
                 "name",
@@ -704,7 +717,7 @@ impl Store {
             ]));
         }
         let mut meta = meta.clone();
-        *meta.get_mut("ticketId").unwrap() = text(ticket);
+        *meta.get_mut("ticketId").unwrap() = text(ticket.clone());
         Ok(obj(vec![("meta", meta), ("entries", J::Array(entries))]))
     }
 }

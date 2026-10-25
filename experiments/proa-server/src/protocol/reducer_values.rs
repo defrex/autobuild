@@ -17,7 +17,7 @@ use crate::data::{
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 use tokio_postgres::IsolationLevel;
-fn catalog() -> &'static Value {
+pub(super) fn catalog() -> &'static Value {
     static CATALOG: OnceLock<Value> = OnceLock::new();
     CATALOG.get_or_init(|| {
         serde_json::from_str(include_str!("../../fixtures/protocol-reducer-catalog.json"))
@@ -35,91 +35,92 @@ pub fn parse_reducer_request(bytes: &[u8]) -> Result<Value, ProtocolError> {
             "reducer request exceeds 4 KiB",
         ));
     }
-    parse_js_json(bytes).map_err(|e| {
-        let text = String::from_utf8_lossy(bytes);
-        let raw = text.trim();
-        let message = e.to_string();
-        let offset = e.column().saturating_sub(1).min(text.len());
-        let array_comma = text.as_bytes().get(offset) == Some(&b']')
-            && text.as_bytes()[..offset]
-                .iter()
-                .rev()
-                .find(|c| !c.is_ascii_whitespace())
-                == Some(&b',');
-        let detail = if raw
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-            .ends_with(",]")
-            || array_comma
-        {
-            "Unexpected comma at the end of array expression".to_string()
-        } else if message.starts_with("invalid escape") || message.starts_with("invalid unicode") {
-            let start = text
-                .get(..offset.min(text.len()))
-                .and_then(|prefix| prefix.rfind('\\'));
-            if let Some(start) = start {
-                let tail = &text[start..];
-                if tail.starts_with("\\u") {
-                    format!(
-                        "\"{}\" is not a valid unicode escape",
-                        tail.chars().take(6).collect::<String>()
-                    )
-                } else {
-                    format!(
-                        "Invalid escape character {}",
-                        tail.chars().nth(1).unwrap_or(' ')
-                    )
-                }
+    parse_js_json(bytes).map_err(|e| json_parse_error(bytes, &e))
+}
+
+/// Bun JSON.parse diagnostic shared by persisted JSON envelopes and requests.
+/// This function neither decodes HTTP text nor imposes a request byte ceiling.
+pub(crate) fn json_parse_error(bytes: &[u8], e: &serde_json::Error) -> ProtocolError {
+    let text = String::from_utf8_lossy(bytes);
+    let raw = text.trim();
+    let message = e.to_string();
+    let offset = e.column().saturating_sub(1).min(text.len());
+    let array_comma = text.as_bytes().get(offset) == Some(&b']')
+        && text.as_bytes()[..offset]
+            .iter()
+            .rev()
+            .find(|c| !c.is_ascii_whitespace())
+            == Some(&b',');
+    let detail = if raw
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .ends_with(",]")
+        || array_comma
+    {
+        "Unexpected comma at the end of array expression".to_string()
+    } else if message.starts_with("invalid escape") || message.starts_with("invalid unicode") {
+        let start = text
+            .get(..offset.min(text.len()))
+            .and_then(|prefix| prefix.rfind('\\'));
+        if let Some(start) = start {
+            let tail = &text[start..];
+            if tail.starts_with("\\u") {
+                format!(
+                    "\"{}\" is not a valid unicode escape",
+                    tail.chars().take(6).collect::<String>()
+                )
             } else {
-                "Unable to parse JSON string".into()
+                format!(
+                    "Invalid escape character {}",
+                    tail.chars().nth(1).unwrap_or(' ')
+                )
             }
-        } else if message.starts_with("EOF while parsing an object") {
-            "Expected '}'".to_string()
-        } else if message.starts_with("EOF while parsing a string") {
-            "Unterminated string".to_string()
-        } else if message.starts_with("EOF") {
-            "Unexpected EOF".to_string()
-        } else if message.starts_with("expected `,` or `}`") {
-            "Expected '}'".to_string()
-        } else if message.starts_with("expected `:`") {
-            "Expected ':' before value in object property definition".to_string()
-        } else if message.starts_with("trailing comma")
-            && (raw.ends_with(']')
-                || text.as_bytes().get(e.column().saturating_sub(1)) == Some(&b']'))
-        {
-            "Unexpected comma at the end of array expression".to_string()
-        } else if message.starts_with("key must be a string")
-            || message.starts_with("trailing comma")
-        {
-            if raw.contains(',') {
-                "Property name must be a string literal".to_string()
-            } else {
-                "Expected '}'".to_string()
-            }
-        } else if message.starts_with("trailing characters") {
-            "Unable to parse JSON string".to_string()
         } else {
-            let col = e.column().saturating_sub(1).min(text.len());
-            let bytes = text.as_bytes();
-            let mut start = col;
-            while start > 0 && bytes[start - 1].is_ascii_alphabetic() {
-                start -= 1
-            }
-            let mut end = start;
-            while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
-                end += 1
-            }
-            if end > start {
-                format!("Unexpected identifier \"{}\"", &text[start..end])
-            } else if let Some(c) = text.get(col..).and_then(|s| s.chars().next()) {
-                format!("Unexpected token '{c}'")
-            } else {
-                "Unable to parse JSON string".to_string()
-            }
-        };
-        error(format!("SyntaxError: JSON Parse error: {detail}"))
-    })
+            "Unable to parse JSON string".into()
+        }
+    } else if message.starts_with("EOF while parsing an object") {
+        "Expected '}'".to_string()
+    } else if message.starts_with("EOF while parsing a string") {
+        "Unterminated string".to_string()
+    } else if message.starts_with("EOF") {
+        "Unexpected EOF".to_string()
+    } else if message.starts_with("expected `,` or `}`") {
+        "Expected '}'".to_string()
+    } else if message.starts_with("expected `:`") {
+        "Expected ':' before value in object property definition".to_string()
+    } else if message.starts_with("trailing comma")
+        && (raw.ends_with(']') || text.as_bytes().get(e.column().saturating_sub(1)) == Some(&b']'))
+    {
+        "Unexpected comma at the end of array expression".to_string()
+    } else if message.starts_with("key must be a string") || message.starts_with("trailing comma") {
+        if raw.contains(',') {
+            "Property name must be a string literal".to_string()
+        } else {
+            "Expected '}'".to_string()
+        }
+    } else if message.starts_with("trailing characters") {
+        "Unable to parse JSON string".to_string()
+    } else {
+        let col = e.column().saturating_sub(1).min(text.len());
+        let bytes = text.as_bytes();
+        let mut start = col;
+        while start > 0 && bytes[start - 1].is_ascii_alphabetic() {
+            start -= 1
+        }
+        let mut end = start;
+        while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+            end += 1
+        }
+        if end > start {
+            format!("Unexpected identifier \"{}\"", &text[start..end])
+        } else if let Some(c) = text.get(col..).and_then(|s| s.chars().next()) {
+            format!("Unexpected token '{c}'")
+        } else {
+            "Unable to parse JSON string".to_string()
+        }
+    };
+    error(format!("SyntaxError: JSON Parse error: {detail}"))
 }
 
 fn error(message: impl Into<String>) -> ProtocolError {
@@ -1183,18 +1184,46 @@ impl Store {
         )
     }
     pub async fn repo_build_digests(&self, repo: &str) -> Result<Value, ProtocolError> {
-        let records = self.list_builds(Some(repo)).await?;
+        self.repo_build_digests_lossless(repo)
+            .await?
+            .to_serde_checked()
+            .map_err(|_| ProtocolError::internal())
+    }
+    pub async fn repo_build_digests_lossless(
+        &self,
+        repo: &str,
+    ) -> Result<super::js_value::JsJson, ProtocolError> {
+        use super::js_value::JsJson as J;
+        let client = self.database.client().await?;
+        let rows = client
+            .query(
+                "SELECT * FROM builds WHERE repo=$1 ORDER BY created_at,slug",
+                &[&repo],
+            )
+            .await?;
+        let records = rows
+            .iter()
+            .map(|row| super::store::records::record_lossless(row, Scope::Build("")))
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(client);
         let mut digests = Vec::new();
-        for record in records.as_array().unwrap() {
-            let slug = record["slug"].as_str().unwrap();
+        for record in records {
+            let slug = record["slug"]
+                .as_string()
+                .unwrap()
+                .to_scalar()
+                .map_err(|_| ProtocolError::internal())?;
             let result = self
-                .get_reducer_value(Scope::Build(slug), &json!({"reducer":"buildDigest"}))
+                .get_reducer_value_lossless(
+                    Scope::Build(&slug),
+                    &J::from_serde(&json!({"reducer":"buildDigest"})),
+                )
                 .await?;
             let mut digest = result["value"].clone();
-            digest["slug"] = json!(slug);
-            digests.push(digest)
+            digest["slug"] = record["slug"].clone();
+            digests.push(digest);
         }
-        Ok(digests.into())
+        Ok(J::Array(digests))
     }
 }
 #[cfg(test)]
@@ -1257,5 +1286,12 @@ mod tests {
 #[path = "reducer_values_lossless.rs"]
 mod lossless_values;
 pub use lossless_values::{
-    parse_reducer_request_lossless, reduce_lossless, resolve_lossless, ResolvedReducerLossless,
+    parse_reducer_request_lossless, reduce_events_lossless, reduce_lossless, resolve_lossless,
+    ResolvedReducerLossless,
 };
+
+#[path = "reducer_kernels_lossless.rs"]
+mod kernels_lossless;
+
+#[path = "reducer_read_facts_lossless.rs"]
+mod read_facts_lossless;

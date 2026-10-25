@@ -66,7 +66,7 @@ pub async fn registered(store: &Store, repo: &S) -> Result<bool, ProtocolError> 
         .await?;
     Ok(row.is_some_and(|r| r.get::<_, String>(0) == "added"))
 }
-async fn record_js(store: &Store, scope: Scope<'_>, id: &S) -> Result<Value, ProtocolError> {
+async fn record_js(store: &Store, scope: Scope<'_>, id: &S) -> Result<J, ProtocolError> {
     let client = store.database.client().await?;
     let row = client
         .query_opt(
@@ -74,11 +74,11 @@ async fn record_js(store: &Store, scope: Scope<'_>, id: &S) -> Result<Value, Pro
             &[&PgText(id)],
         )
         .await?;
-    Ok(row
-        .map(|row| super::store::records::record(&row, scope))
-        .unwrap_or(Value::Null))
+    row.map(|row| super::store::records::record_lossless(&row, scope))
+        .transpose()
+        .map(|v| v.unwrap_or(J::Null))
 }
-pub async fn delegation_facts(store: &Store, c: &J) -> Result<Value, ProtocolError> {
+pub async fn delegation_facts(store: &Store, c: &J) -> Result<J, ProtocolError> {
     let build = c["kind"].as_string().is_some_and(|s| {
         s.units()
             .starts_with(&"build".encode_utf16().collect::<Vec<_>>())
@@ -96,7 +96,10 @@ pub async fn delegation_facts(store: &Store, c: &J) -> Result<Value, ProtocolErr
     } else {
         "harvestDelegation"
     };
-    let resolved = super::reducer_values::resolve(scope, &json!({"reducer":reducer}))?;
+    let resolved = super::reducer_values::resolve_lossless(
+        scope,
+        &J::from_serde(&json!({"reducer":reducer})),
+    )?;
     let mut client = store.database.client().await?;
     let tx = client
         .build_transaction()
@@ -126,7 +129,7 @@ pub async fn delegation_facts(store: &Store, c: &J) -> Result<Value, ProtocolErr
         .await?;
     let events = rows
         .iter()
-        .map(|row| super::store::events::event_record(row, scope))
+        .map(|row| super::store::events::event_record_lossless(row, scope))
         .collect::<Result<Vec<_>, _>>()?;
     for (index, event) in events.iter().enumerate() {
         if event["seq"].as_i64() != Some(index as i64 + 1) {
@@ -137,7 +140,7 @@ pub async fn delegation_facts(store: &Store, c: &J) -> Result<Value, ProtocolErr
             ));
         }
     }
-    let value = super::reducer_values::reduce(scope, &resolved, &events)?;
+    let value = super::reducer_values::reduce_events_lossless(scope, &resolved, &events)?;
     tx.commit().await?;
     Ok(value)
 }
@@ -196,16 +199,16 @@ pub async fn authorize_resource(
         return Ok(());
     };
     let repo = if matches!(scope, Scope::Repo(_)) {
-        scope.id().to_owned()
+        S::from(scope.id())
     } else {
-        let record = store.get_record(scope).await?;
-        let repo = record["repo"].as_str().ok_or_else(unavailable)?;
-        if p.repo().is_none_or(|r| !r.eq_str(repo)) {
+        let record = store.get_record_lossless(scope).await?;
+        let repo = record["repo"].as_string().ok_or_else(unavailable)?;
+        if p.repo().is_none_or(|r| r != *repo) {
             return Err(unavailable());
         }
-        repo.to_owned()
+        repo.clone()
     };
-    p.require_project(&repo)
+    p.require_project_js(&repo)
 }
 /// Early delegated write gate. `true` requires cloned raw JSON and the later
 /// mutation classifier; `false` completes authorization without reading a body.
@@ -575,11 +578,11 @@ pub async fn issue_claims(
     let build = if kind.starts_with("build") {
         record_js(store, Scope::Build(""), id).await?
     } else {
-        Value::Null
+        J::Null
     };
     let repo = build["repo"]
-        .as_str()
-        .map(S::from)
+        .as_string()
+        .cloned()
         .or_else(|| target["repo"].as_string().cloned())
         .ok_or_else(|| auth(404, "resource unavailable"))?;
     p.require_project_js(&repo)?;

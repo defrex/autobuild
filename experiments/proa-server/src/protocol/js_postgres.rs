@@ -72,10 +72,136 @@ impl<'a> FromSql<'a> for PgValue {
     }
 }
 
+/// Match the source adapter's `json(column)` helper at explicitly named columns.
+/// Only a string receives one JSON.parse layer; decoded strings are not parsed
+/// recursively, and JSON.parse does not apply the HTTP decoder's BOM removal.
+pub fn decode_json_column(value: JsJson) -> Result<JsJson, super::error::ProtocolError> {
+    let Some(text) = value.as_js_string() else {
+        return Ok(value);
+    };
+    super::js_value::parse_js_string(text).map_err(|_| {
+        super::error::ProtocolError::new_js(
+            500,
+            "internal",
+            super::js_postgres_diagnostics::parse_error(text),
+        )
+    })
+}
+
+/// JavaScript truthiness is tested on the outer driver value before optional
+/// JSON columns are decoded (not on their parsed inner value).
+pub fn json_truthy(value: &JsJson) -> bool {
+    match value {
+        JsJson::Null => false,
+        JsJson::Bool(v) => *v,
+        JsJson::Number(v) => *v != 0.0 && !v.is_nan(),
+        JsJson::String(v) => !v.is_empty(),
+        JsJson::Array(_) | JsJson::Object(_) => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::js_value::parse;
+
+    #[test]
+    fn persisted_json_parse_errors_match_bun_oracle() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../fixtures/protocol-read-json.json")).unwrap();
+        let mut errors = Vec::new();
+        for row in fixture["cases"].as_array().unwrap() {
+            let units = row["sourceUnits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u16)
+                .collect();
+            let input = JsString::from_units(units);
+            let actual = decode_json_column(JsJson::String(input.clone()));
+            if let Some(json) = row["jsonUnits"].as_array() {
+                let expected =
+                    JsString::from_units(json.iter().map(|v| v.as_u64().unwrap() as u16).collect());
+                let actual_json = actual.as_ref().ok().map(|v| JsString::from(v.stringify()));
+                if actual_json.as_ref() != Some(&expected) {
+                    errors.push(format!("{} success {:?}", input.quote(), actual));
+                }
+            } else {
+                let expected = JsString::from_units(
+                    row["errorUnits"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_u64().unwrap() as u16)
+                        .collect(),
+                );
+                if actual.as_ref().err().map(|e| e.message_js()).as_ref() != Some(&expected) {
+                    errors.push(format!(
+                        "{} expected {} got {:?}",
+                        input.quote(),
+                        expected.quote(),
+                        actual.err().map(|e| e.message_js().quote())
+                    ));
+                }
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "{} parser differences:\n{}",
+            errors.len(),
+            errors.join("\n")
+        );
+    }
+    #[test]
+    fn named_json_columns_decode_exactly_one_layer_and_keep_original_units() {
+        let original = parse(br#"{"x":"\ud800","\udfff":1}"#).unwrap();
+        let envelope = JsJson::String(JsString::from(original.stringify()));
+        assert_eq!(decode_json_column(envelope).unwrap(), original);
+        let encoded_string = JsJson::String(JsString::from(r#""{\"x\":1}""#));
+        assert_eq!(
+            decode_json_column(encoded_string).unwrap(),
+            JsJson::String(JsString::from(r#"{"x":1}"#))
+        );
+        assert_eq!(
+            decode_json_column(JsJson::Bool(false)).unwrap(),
+            JsJson::Bool(false)
+        );
+        // Inner JSON.parse rejects BOM; only Request.json strips a leading BOM.
+        assert!(decode_json_column(JsJson::String(JsString::from("\u{feff}{}"))).is_err());
+        assert_eq!(
+            decode_json_column(JsJson::String(JsString::from("{")))
+                .unwrap_err()
+                .error,
+            "JSON Parse error: Expected '}'"
+        );
+    }
+    #[test]
+    fn malformed_deep_column_diagnostics_use_heap_frames() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let source = JsString::from("[".repeat(16_384));
+                let error = decode_json_column(JsJson::String(source)).unwrap_err();
+                assert_eq!(error.error, "JSON Parse error: Unexpected EOF");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn optional_json_columns_test_outer_driver_truthiness_before_decoding() {
+        for input in ["null", "false", "0", "-0", r#""""#] {
+            assert!(!json_truthy(&parse(input.as_bytes()).unwrap()));
+        }
+        for input in ["[]", "{}", "1", r#""null""#, r#""false""#] {
+            assert!(json_truthy(&parse(input.as_bytes()).unwrap()));
+        }
+        assert_eq!(
+            decode_json_column(JsJson::String(JsString::from("null"))).unwrap(),
+            JsJson::Null
+        );
+    }
 
     #[test]
     fn text_binding_replaces_only_at_the_transport_boundary() {

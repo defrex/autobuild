@@ -1,3 +1,4 @@
+pub(crate) use super::records_lossless::record_lossless;
 use super::{timestamp, Store};
 use crate::protocol::error::ProtocolError;
 use chrono::{DateTime, Utc};
@@ -277,17 +278,10 @@ impl Store {
         Ok(value)
     }
     pub async fn get_record(&self, scope: Scope<'_>) -> Result<Value, ProtocolError> {
-        let client = self.database.client().await?;
-        match client
-            .query_opt(
-                &format!("SELECT * FROM {} WHERE {}=$1", scope.table(), scope.key()),
-                &[&scope.id()],
-            )
+        self.get_record_lossless(scope)
             .await?
-        {
-            Some(row) => current_record(&**client, &row, scope).await,
-            None => Ok(Value::Null),
-        }
+            .to_serde_checked()
+            .map_err(|_| ProtocolError::internal())
     }
     pub async fn list_builds(&self, repo: Option<&str>) -> Result<Value, ProtocolError> {
         let repo = repo.map(crate::protocol::js_value::JsString::from);

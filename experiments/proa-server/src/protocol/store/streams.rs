@@ -366,12 +366,7 @@ fn chunk_lossless(row: &Row) -> Result<JsJson, ProtocolError> {
         return Err(ProtocolError::internal());
     }
     let parts = row.get::<_, PgValue>("parts").0;
-    let parts = if let Some(text) = parts.as_js_string() {
-        let encoded = text.to_scalar().map_err(|_| ProtocolError::internal())?;
-        JsJson::parse(encoded.as_bytes()).map_err(|_| ProtocolError::internal())?
-    } else {
-        parts
-    };
+    let parts = crate::protocol::js_postgres::decode_json_column(parts)?;
     let mut out = JsJson::from_serde(
         &json!({"stream":row.get::<_,String>("stream"),"seq":seq,"ts":super::records::row_timestamp(row,"ts")}),
     );

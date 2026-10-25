@@ -182,6 +182,10 @@ runner/phase credentials; project credentials remain database-backed. Backend
 connections open lazily and preflight before use, so public health remains
 available during a database outage. Without storage configuration, machine paths
 fail closed. Open authority and injected clocks exist only in private test
-examples. Acceptance work is still in progress; this is a nonshipping experiment. See
-[the native protocol tools](tools/README.md#native-machine-protocol-checkpoints)
-for fixture generation, isolated proofs, evidence and remaining coverage.
+examples. The maintained acceptance gate covers the unchanged shared contract,
+cross-language credentials and persistence, all named reducers, historical
+clients and a finite delegated dispatch with production reader evidence. Rendering
+the dispatched build on the sibling Builds page remains a node integration check
+after file-131, per the approved scope ruling. This is a nonshipping experiment.
+See [the native protocol tools](tools/README.md#native-machine-protocol-checkpoints)
+for fixture generation, isolated proofs and evidence.
