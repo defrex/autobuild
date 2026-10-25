@@ -582,6 +582,7 @@ function BuildRow({
           <>
             {' '}
             · {row.kind ?? 'work'} · target <span className="machine">{row.target}</span>
+            {row.targetDistance && <span className="slack"> {row.targetDistance}</span>}
             {row.integration ? ` · ${row.integration}` : ''}
           </>
         )}
@@ -610,6 +611,9 @@ function BuildRow({
         <>
           <p className="sub integration-progress">
             integration into {row.integrationRow.destination}
+            {row.integrationRow.parentDistance && (
+              <span className="slack"> {row.integrationRow.parentDistance}</span>
+            )}
             {'  '}
             {row.integrationRow.children.known ? (
               row.integrationRow.children.total ? (
@@ -633,7 +637,6 @@ function BuildRow({
             ) : (
               <span className="slack">children unknown</span>
             )}
-            <span className="slack"> · {row.integrationRow.parentDistance}</span>
             {row.integrationRow.verified && <span className="ok"> · verified</span>}
           </p>
           <StepLine steps={row.integrationRow.steps} now={now} label={`${row.slug} pipeline`} />
@@ -846,6 +849,7 @@ function BuildDetail({
         {build.target && !build.integrationDetail && (
           <span>
             {build.kind ?? 'work'} · target {build.target}
+            {build.targetDistance ? ` ${build.targetDistance}` : ''}
             {build.integration ? ` · ${build.integration}` : ''}
           </span>
         )}
@@ -982,9 +986,11 @@ function BuildDetail({
                   <span>
                     <span className="k">Branch </span>
                     {displayText(detail.branch)} · restack {displayText(detail.restack)}
-                    {detail.parentDistance && (
-                      <span className="slack"> · {displayText(detail.parentDistance)}</span>
-                    )}
+                    <span className="slack">
+                      {' '}
+                      · Parent {build.integrationRow?.destination}
+                      {detail.parentDistance ? ` ${displayText(detail.parentDistance)}` : ''}
+                    </span>
                   </span>
                 </div>
                 {detail.conflictFiles?.map((path) => (

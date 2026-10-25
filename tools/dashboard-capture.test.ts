@@ -376,16 +376,24 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.result.diagnostics.happy.buildEventsAfter['cache-warm-on-deploy']).not.toContain(
     'build.completed',
   )
-  expect(first.result.diagnostics.happy.buildEventsAfter['dashboard-key-legend'].at(-1)).toBe(
-    'implement.started',
-  )
-  expect(first.result.diagnostics.happy.buildEventsAfter['harvest-dedup-window'].at(-1)).toBe(
-    'plan.started',
-  )
-  expect(first.result.diagnostics.happy.buildEventsAfter['parallel-verify-steps'].at(-1)).toBe(
-    'verify.started',
-  )
-  expect(first.result.diagnostics.happy.buildEventsAfter['ticket-source-adapters'].at(-1)).toBe(
-    'code-review.started',
-  )
+  expect(
+    first.result.diagnostics.happy.buildEventsAfter['dashboard-key-legend']
+      .filter((type) => type !== 'target.distance')
+      .at(-1),
+  ).toBe('implement.started')
+  expect(
+    first.result.diagnostics.happy.buildEventsAfter['harvest-dedup-window']
+      .filter((type) => type !== 'target.distance')
+      .at(-1),
+  ).toBe('plan.started')
+  expect(
+    first.result.diagnostics.happy.buildEventsAfter['parallel-verify-steps']
+      .filter((type) => type !== 'target.distance')
+      .at(-1),
+  ).toBe('verify.started')
+  expect(
+    first.result.diagnostics.happy.buildEventsAfter['ticket-source-adapters']
+      .filter((type) => type !== 'target.distance')
+      .at(-1),
+  ).toBe('code-review.started')
 }, 30_000)

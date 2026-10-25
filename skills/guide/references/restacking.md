@@ -53,8 +53,11 @@ and unopened nodes. Paused or blocked nodes wait for their normal safety gates.
 A request arriving during replay survives until its parent and required identities
 are covered. Re-parenting invalidates requests for the old destination.
 
-Both dashboards show `parent N commits ahead`, `parent current`, or
-`parent distance unknown`. Distance counts commits reachable from the observed
+Both dashboards use `+N` beside the destination for commits it has that the
+build lacks, no suffix when current, and `+?` when unknown. Merged and closed
+builds omit the suffix. Terminal list rows put `→ destination +N` on the slug
+line; work steps follow immediately and integration progress keeps only the
+bar and child counts. Detail target/Parent fields use the same suffix. Distance counts commits reachable from the observed
 parent but not the last confirmed contribution base; it is not elapsed time or
 poll count. Samples are invalidated by replay or re-parenting. A stale node
 cannot verify or merge; inventory and child merges continue while it collects.

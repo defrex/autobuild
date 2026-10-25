@@ -939,8 +939,14 @@ releaseId = 42
       }),
     ).toEqual({ ...emptyTickReport(), resumed: 1 })
 
-    expect(await h.store.getEvents(resumed)).toEqual(beforeResumed)
-    expect(await h.store.getEvents('direct-build')).toEqual(beforeDirect)
+    expect(
+      (await h.store.getEvents(resumed)).filter((e): boolean => e.type !== 'target.distance'),
+    ).toEqual(beforeResumed)
+    expect(
+      (await h.store.getEvents('direct-build')).filter(
+        (e): boolean => e.type !== 'target.distance',
+      ),
+    ).toEqual(beforeDirect)
     expect(h.launches).toEqual([resumed])
   })
 
@@ -3368,8 +3374,16 @@ describe('Dispatcher janitor', () => {
     expect((await h.store.listBuilds()).some((record) => record.ticket?.id === 'T-ready')).toBe(
       true,
     )
-    expect((await h.store.getEvents(failedA)).slice(0, -1)).toEqual(failedABefore)
-    expect((await h.store.getEvents(failedB)).slice(0, -1)).toEqual(failedBBefore)
+    expect(
+      (await h.store.getEvents(failedA))
+        .filter((e): boolean => e.type !== 'target.distance')
+        .slice(0, -1),
+    ).toEqual(failedABefore)
+    expect(
+      (await h.store.getEvents(failedB))
+        .filter((e): boolean => e.type !== 'target.distance')
+        .slice(0, -1),
+    ).toEqual(failedBBefore)
     expect(reduceBuild(await h.store.getEvents(failedA)).status).not.toBe('done')
 
     // Materialize the fake launch boundary and keep both launched runners out
@@ -4228,9 +4242,11 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
 
     // baseSha comes from `git ls-remote <repo> refs/heads/<base>` (§15.7).
-    expect(h.execCalls).toEqual(
-      Array.from({ length: 2 }, () => ['git', 'ls-remote', REPO, 'refs/heads/main']),
-    )
+    expect(h.execCalls).toEqual([
+      ['git', 'ls-remote', REPO, 'refs/heads/main'],
+      ['git', 'rev-parse', '--verify', `refs/heads/ab/${slug}^{commit}`],
+      ['git', 'ls-remote', REPO, 'refs/heads/main'],
+    ])
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('pr.conflicted')
     expect(events.at(-1)?.payload).toEqual({ baseSha: BASE_SHA })
@@ -4256,7 +4272,7 @@ describe('Dispatcher janitor', () => {
       repo: 'https://github.com/acme/app',
       checkout: '/repos/checkout',
     })
-    await seedBuild(h, {
+    const slug = await seedBuild(h, {
       ticketId: 'T-1',
       pr: PR,
       repo: 'https://github.com/acme/app',
@@ -4265,9 +4281,11 @@ describe('Dispatcher janitor', () => {
 
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
-    expect(h.execCalls).toEqual(
-      Array.from({ length: 2 }, () => ['git', 'ls-remote', '/repos/checkout', 'refs/heads/main']),
-    )
+    expect(h.execCalls).toEqual([
+      ['git', 'ls-remote', '/repos/checkout', 'refs/heads/main'],
+      ['git', 'rev-parse', '--verify', `refs/heads/ab/${slug}^{commit}`],
+      ['git', 'ls-remote', '/repos/checkout', 'refs/heads/main'],
+    ])
   })
 
   test('conflicted re-entry records replacement provisioning failures durably', async () => {
@@ -4335,6 +4353,7 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect((await h.store.getEvents(slug)).slice(before).map((event) => event.type)).toEqual([
+      'target.distance',
       'landing.native-applied',
     ])
     expect(h.launches).toEqual([])
@@ -5268,7 +5287,9 @@ describe('Dispatcher startup resume', () => {
         ...emptyTickReport(),
         blockedDiagnostics: [diagnostic],
       })
-      expect(await h.store.getEvents(slug)).toEqual(before)
+      expect(
+        (await h.store.getEvents(slug)).filter((e): boolean => e.type !== 'target.distance'),
+      ).toEqual(before.filter((e): boolean => e.type !== 'target.distance'))
       expect(
         reduceBuild(await h.store.getEvents(slug)).openEscalations.map(({ id }) => id),
       ).toEqual(escalations.map(({ id }) => id))
@@ -5303,7 +5324,9 @@ describe('Dispatcher startup resume', () => {
       resumed: 1,
     })
     expect(h.launches).toEqual([slug])
-    expect(await h.store.getEvents(slug)).toEqual(before)
+    expect(
+      (await h.store.getEvents(slug)).filter((e): boolean => e.type !== 'target.distance'),
+    ).toEqual(before.filter((e): boolean => e.type !== 'target.distance'))
   })
 
   test('startup still launches blocked builds with pending abort, pause, or resume commands', async () => {
@@ -5381,7 +5404,11 @@ describe('Dispatcher startup resume', () => {
       blockedDiagnostics: ['build blocked skipped: open escalations esc_agent'],
     })
     expect(blocked.launches).toEqual([])
-    expect((await blocked.store.getEvents('blocked')).at(-1)?.type).toBe('escalation.raised')
+    expect(
+      (await blocked.store.getEvents('blocked'))
+        .filter((e): boolean => e.type !== 'target.distance')
+        .at(-1)?.type,
+    ).toBe('escalation.raised')
   })
 })
 
@@ -6109,7 +6136,11 @@ describe('Dispatcher tick idempotency', () => {
     })
     const eventCounts = async () =>
       Promise.all(
-        (await h.store.listBuilds()).map(async (b) => (await h.store.getEvents(b.slug)).length),
+        (await h.store.listBuilds()).map(
+          async (b) =>
+            (await h.store.getEvents(b.slug)).filter((e): boolean => e.type !== 'target.distance')
+              .length,
+        ),
       )
     const before = await eventCounts()
 
@@ -10617,4 +10648,48 @@ test('dispatcher reuses a historical pinned pipeline without config repair', asy
       (await h.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT))!.content,
     ),
   ).toBe(content)
+})
+
+test('advisory work samples refresh head and target, deduplicate across restart, and record failed reads as unknown', async () => {
+  let head = 'b'.repeat(40)
+  let count = 3
+  let failed = false
+  const exec: Exec = async (cmd) => {
+    if (cmd[1] === 'rev-parse') return { stdout: head, stderr: '', exitCode: 0 }
+    if (cmd[1] === 'rev-list')
+      return {
+        stdout: String(count),
+        stderr: failed ? 'unavailable' : '',
+        exitCode: failed ? 1 : 0,
+      }
+    return { stdout: BASE_SHA, stderr: '', exitCode: 0 }
+  }
+  const h = harness({ exec })
+  const slug = await seedBuild(h)
+  await h.store.claimLease(slug, 'running', 3_600_000)
+  const samples = async () =>
+    (await h.store.getEvents(slug))
+      .filter((e) => e.type === 'target.distance')
+      .map((e) => e.payload)
+  await h.dispatcher.tick()
+  expect((await samples()).at(-1)?.count).toBe(3)
+  await h.dispatcher.tick()
+  expect(await samples()).toHaveLength(1)
+  head = 'c'.repeat(40)
+  count = 2
+  await h.dispatcher.tick()
+  expect((await samples()).at(-1)?.head).toBe(head)
+  h.forge.remoteBranches.set('main', 'd'.repeat(40))
+  await h.dispatcher.tick()
+  expect((await samples()).at(-1)?.sha).toBe('d'.repeat(40))
+  const resumed = harness({ store: h.store, forge: h.forge, exec })
+  await resumed.dispatcher.tick()
+  expect(await samples()).toHaveLength(3)
+  failed = true
+  await resumed.dispatcher.tick()
+  expect((await samples()).at(-1)?.count).toBeNull()
+  await resumed.dispatcher.tick()
+  expect(await samples()).toHaveLength(4)
+  expect(h.forge.rewrites).toEqual([])
+  expect(h.launches).toEqual([])
 })
