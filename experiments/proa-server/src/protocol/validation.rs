@@ -3,6 +3,8 @@
 //! This gate is deliberately NOT a complete write validator: callers must still
 //! validate payloads, compatibility and cross-field rules before mutation. It
 //! never invokes the forward-compatible stored-event decoder.
+pub mod lossless;
+pub mod lossless_writes;
 pub mod session;
 pub mod writes;
 use serde_json::{json, Value};

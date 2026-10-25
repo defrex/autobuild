@@ -40,6 +40,57 @@ fn whitespace(character: char) -> bool {
     )
 }
 impl Store {
+    pub async fn create_session_lossless(
+        &self,
+        repo: &str,
+        operator: &crate::protocol::js_value::JsString,
+        title: Option<&crate::protocol::js_value::JsString>,
+    ) -> Result<Value, ProtocolError> {
+        use crate::protocol::{
+            js_postgres::PgText,
+            js_value::{JsJson, JsString},
+            validation::lossless_writes,
+        };
+        let operator = operator.trim_js();
+        if operator.is_empty() {
+            return Err(ProtocolError::new(500, "internal", "operator is required"));
+        }
+        if repo.is_empty() {
+            return Err(ProtocolError::new(500, "internal", "repo is required"));
+        }
+        let payload = JsJson::Object(
+            title
+                .map(|title| vec![(JsString::from("title"), JsJson::String(title.clone()))])
+                .unwrap_or_default(),
+        );
+        let actor = JsJson::Object(vec![
+            (
+                JsString::from("kind"),
+                JsJson::String(JsString::from("human")),
+            ),
+            (JsString::from("user"), JsJson::String(operator.clone())),
+        ]);
+        let input = JsJson::Object(vec![
+            (JsString::from("actor"), actor),
+            (
+                JsString::from("type"),
+                JsJson::String(JsString::from("session.created")),
+            ),
+            (JsString::from("payload"), payload),
+        ]);
+        let event = lossless_writes::prepare_session_write(&input)
+            .map_err(|error| ProtocolError::new_js(422, "validation", error))?;
+        let id = new_id();
+        let now = self.now();
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        let title = title.map(PgText);
+        tx.execute("INSERT INTO sessions(id,repo,operator,title,creation_seq,created_at,updated_at) VALUES($1,$2,$3,$4,nextval('sessions_creation_seq'),$5,$5)",&[&id,&repo,&PgText(&operator),&title,&now]).await.map_err(ProtocolError::query)?;
+        super::events::insert_prepared_lossless(&tx, Scope::Session(&id), &event, 1, now).await?;
+        let value = record(&lock(&tx, Scope::Session(&id)).await?, Scope::Session(&id));
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(value)
+    }
     pub async fn create_session(
         &self,
         repo: &str,

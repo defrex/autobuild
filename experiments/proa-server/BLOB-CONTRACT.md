@@ -233,3 +233,15 @@ The normal server's deferred backend initialization changes liveness only:
 `/health` does not contact storage; configured data operations and `/readyz`
 still require schema preflight. Blob credentials remain constructor input and
 are never exposed by health, routing errors, capture metadata or evidence logs.
+
+Request and response values now retain JavaScript UTF16 units until an explicit
+encoding boundary. Artifact metadata goes to PostgreSQL as exact JSON, so its
+server-side failure occurs after the same upload/CAS decisions as TypeScript.
+Ticket manifests and stream parts use the source JSONB string envelope and can
+retain escaped lone units; compressed snapshot-pin decoding and SDK close bytes
+use the lossless model too. Request/response ceilings count the actual source
+serialization, including escaped units and replacement-decoded HTTP body bytes.
+
+Legacy string envelopes in other stored fields remain a separate unfinished read
+increment, including artifact metadata. See FIELD-NOTES.md and the read-envelope
+diagnostic; successful write/provider proofs do not waive that remaining scope.

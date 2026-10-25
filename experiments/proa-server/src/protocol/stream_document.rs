@@ -1078,6 +1078,10 @@ fn fix_json(input: &str) -> String {
     result
 }
 
+#[path = "stream_document_lossless.rs"]
+mod lossless;
+pub use lossless::{artifact_input_js, assemble_js, Assembly as JsAssembly};
+
 #[cfg(test)]
 mod tests {
     use super::*;

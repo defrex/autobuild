@@ -202,6 +202,165 @@ impl Store {
         tx.commit().await.map_err(ProtocolError::query)?;
         Ok(json!({"event":event,"artifacts":deposited}))
     }
+
+    /// Preserve JSON strings through blob preparation and the locked JSONB write.
+    pub async fn put_artifact_lossless(
+        &self,
+        scope: Scope<'_>,
+        input: &crate::protocol::js_value::JsJson,
+    ) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
+        let artifact = crate::protocol::artifact_preparation::decode_artifact_lossless(input)?;
+        let artifact = self.prepare_artifact_lossless(artifact).await?;
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        lock(&tx, scope).await?;
+        let result = self
+            .deposit_artifact_lossless_locked(&tx, scope, &artifact)
+            .await?;
+        self.prune_artifacts_locked(&tx, scope, &artifact.kind.to_usv_string())
+            .await?;
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(result)
+    }
+    async fn prepare_artifact_lossless(
+        &self,
+        input: crate::protocol::artifact_preparation::LosslessArtifactInput,
+    ) -> Result<crate::protocol::artifact_preparation::LosslessArtifactInput, ProtocolError> {
+        if input.kind.is_empty() {
+            return Err(ProtocolError::new(
+                500,
+                "internal",
+                "artifact kind is required",
+            ));
+        }
+        self.blobs
+            .as_ref()
+            .ok_or_else(ProtocolError::internal)?
+            .put(&input.blob_ref, &input.bytes)
+            .await?;
+        Ok(input)
+    }
+    pub(crate) async fn deposit_artifact_lossless_locked(
+        &self,
+        tx: &Transaction<'_>,
+        scope: Scope<'_>,
+        artifact: &crate::protocol::artifact_preparation::LosslessArtifactInput,
+    ) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
+        use crate::protocol::js_postgres::{PgJson, PgText};
+        let kind = PgText(&artifact.kind);
+        let revision: i64 = tx
+            .query_one(
+                &format!(
+                    "SELECT COALESCE(MAX(revision),-1)+1 FROM {} WHERE {}=$1 AND kind=$2",
+                    table(scope),
+                    scope.event_key()
+                ),
+                &[&scope.id(), &kind],
+            )
+            .await
+            .map_err(ProtocolError::query)?
+            .get(0);
+        let now = self.now();
+        let metadata = PgJson(&artifact.metadata);
+        let row=tx.query_one(&format!("INSERT INTO {}({},kind,revision,blob_ref,metadata,created_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",table(scope),scope.event_key()),&[&scope.id(),&kind,&revision,&artifact.blob_ref,&metadata,&now]).await.map_err(ProtocolError::query)?;
+        tx.execute(
+            &format!(
+                "UPDATE {} SET updated_at=$1 WHERE {}=$2",
+                scope.table(),
+                scope.key()
+            ),
+            &[&now, &scope.id()],
+        )
+        .await
+        .map_err(ProtocolError::query)?;
+        let mut result = crate::protocol::js_value::JsJson::from_serde(&meta(&row, scope)?);
+        *result.get_mut("kind").unwrap() =
+            crate::protocol::js_value::JsJson::String(artifact.kind.clone());
+        Ok(result)
+    }
+    pub async fn deposit_lossless(
+        &self,
+        scope: Scope<'_>,
+        input: &crate::protocol::js_value::JsJson,
+        expected: Option<&crate::protocol::js_value::JsJson>,
+    ) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
+        use crate::protocol::{
+            artifact_preparation::{
+                decode_artifacts_lossless, substitute_placeholder_refs_lossless,
+            },
+            js_value::{JsJson, JsString},
+            validation::lossless_writes,
+        };
+        let error = |status, kind, message| {
+            let mut e = ProtocolError::validation_js(message);
+            e.status = axum::http::StatusCode::from_u16(status).unwrap();
+            e.kind = kind;
+            e
+        };
+        let expected = expected
+            .map(lossless_writes::validate_expected_seq)
+            .transpose()
+            .map_err(|message| error(500, "internal", message))?;
+        // Decode every input before the first upload, just as the scalar adapter.
+        let decoded = decode_artifacts_lossless(
+            input
+                .get("artifacts")
+                .and_then(JsJson::as_array)
+                .ok_or_else(ProtocolError::internal)?,
+        )?;
+        let mut prepared = Vec::new();
+        for artifact in decoded {
+            prepared.push(self.prepare_artifact_lossless(artifact).await?);
+        }
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        lock(&tx, scope).await?;
+        let current = tail(&tx, scope).await?;
+        if expected.is_some_and(|expected| expected != current) {
+            return Ok(JsJson::Null);
+        }
+        let mut deposited = Vec::new();
+        for artifact in &prepared {
+            deposited.push(
+                self.deposit_artifact_lossless_locked(&tx, scope, artifact)
+                    .await?,
+            );
+        }
+        let mut event = input
+            .get("event")
+            .ok_or_else(ProtocolError::internal)?
+            .clone();
+        let payload = event.get("payload").ok_or_else(ProtocolError::internal)?;
+        let payload = substitute_placeholder_refs_lossless(payload, &deposited);
+        *event
+            .get_mut("payload")
+            .ok_or_else(ProtocolError::internal)? = payload;
+        let event = match scope {
+            Scope::Build(_) => lossless_writes::prepare_build_write(&event),
+            Scope::Repo(_) => lossless_writes::prepare_repository_write(&event),
+            Scope::Session(_) => lossless_writes::prepare_session_write(&event),
+        }
+        .map_err(|message| error(422, "validation", message))?;
+        let mut pruned = Vec::new();
+        for artifact in &prepared {
+            if !pruned.contains(&artifact.kind) {
+                self.prune_artifacts_locked(&tx, scope, &artifact.kind.to_usv_string())
+                    .await?;
+                pruned.push(artifact.kind.clone());
+            }
+        }
+        let seq = current
+            .checked_add(1)
+            .filter(|s| *s <= 9_007_199_254_740_991)
+            .ok_or_else(ProtocolError::internal)?;
+        let event =
+            super::events::insert_prepared_lossless(&tx, scope, &event, seq, self.now()).await?;
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(JsJson::Object(vec![
+            (JsString::from("event"), JsJson::from_serde(&event)),
+            (JsString::from("artifacts"), JsJson::Array(deposited)),
+        ]))
+    }
     async fn require_artifact_scope(&self, scope: Scope<'_>) -> Result<(), ProtocolError> {
         if self.get_record(scope).await?.is_null() {
             return Err(ProtocolError::missing(scope.name(), scope.id()));

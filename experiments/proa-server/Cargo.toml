@@ -7,6 +7,7 @@ rust-version = "1.93"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+bytes = "1"
 cookie = { version = "0.18", features = ["signed", "key-expansion"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

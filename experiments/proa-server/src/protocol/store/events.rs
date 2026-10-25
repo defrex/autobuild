@@ -71,7 +71,102 @@ pub(crate) async fn insert_prepared(
     }
     Ok(stored)
 }
+/// Lossless producer DTOs reach PostgreSQL before any scalar projection. Direct
+/// JSONB rejection therefore preserves the source's transaction/CAS ordering.
+pub(crate) async fn insert_prepared_lossless(
+    tx: &Transaction<'_>,
+    scope: Scope<'_>,
+    event: &crate::protocol::js_value::JsJson,
+    seq: i64,
+    now: DateTime<Utc>,
+) -> Result<Value, ProtocolError> {
+    use crate::protocol::{
+        js_postgres::{PgJson, PgText},
+        js_value::{JsJson, JsString},
+    };
+    let kind = event["type"]
+        .as_js_string()
+        .ok_or_else(ProtocolError::internal)?;
+    let actor = PgJson(&event["actor"]);
+    let payload = PgJson(&event["payload"]);
+    if matches!(scope, Scope::Session(_)) {
+        tx.execute("INSERT INTO session_events(session,seq,ts,actor,type,payload) VALUES($1,$2,$3,$4,$5,$6)", &[&scope.id(),&seq,&now,&actor,&PgText(kind),&payload]).await.map_err(ProtocolError::query)?;
+    } else {
+        let compatibility = event.get("compatibility").map(PgJson);
+        tx.execute(&format!("INSERT INTO {}({},seq,ts,actor,type,payload,compatibility) VALUES($1,$2,$3,$4,$5,$6,$7)",scope.events(),scope.event_key()),&[&scope.id(),&seq,&now,&actor,&PgText(kind),&payload,&compatibility]).await.map_err(ProtocolError::query)?;
+    }
+    tx.execute(
+        &format!(
+            "UPDATE {} SET updated_at=$1 WHERE {}=$2",
+            scope.table(),
+            scope.key()
+        ),
+        &[&now, &scope.id()],
+    )
+    .await
+    .map_err(ProtocolError::query)?;
+    let mut stored = JsJson::Object(vec![
+        (
+            JsString::from(scope.event_key()),
+            JsJson::String(JsString::from(scope.id())),
+        ),
+        (JsString::from("seq"), JsJson::Number(seq as f64)),
+        (
+            JsString::from("ts"),
+            JsJson::String(JsString::from(timestamp(now))),
+        ),
+        (JsString::from("actor"), event["actor"].clone()),
+        (JsString::from("type"), event["type"].clone()),
+        (JsString::from("payload"), event["payload"].clone()),
+    ]);
+    if let Some(compatibility) = event.get("compatibility") {
+        stored["compatibility"] = compatibility.clone();
+    }
+    // JSON.stringify owns accepted nonfinite numbers; successful direct JSONB
+    // persistence establishes that no unpaired string can reach this conversion.
+    crate::protocol::js_value::parse(stored.stringify().as_bytes())
+        .and_then(|value| value.to_serde_checked())
+        .map_err(|_| ProtocolError::internal())
+}
+
 impl Store {
+    pub async fn append_event_lossless(
+        &self,
+        scope: Scope<'_>,
+        input: &crate::protocol::js_value::JsJson,
+        expected_seq: Option<&crate::protocol::js_value::JsJson>,
+    ) -> Result<crate::protocol::js_value::JsJson, ProtocolError> {
+        use crate::protocol::{
+            js_value::JsJson,
+            validation::{lossless_writes, WriteScope},
+        };
+        let expected = expected_seq
+            .map(lossless_writes::validate_expected_seq)
+            .transpose()
+            .map_err(|error| ProtocolError::new_js(500, "internal", error))?;
+        let kind = match scope {
+            Scope::Build(_) => WriteScope::Build,
+            Scope::Repo(_) => WriteScope::Repository,
+            Scope::Session(_) => WriteScope::Session,
+        };
+        let event = lossless_writes::prepare(kind, input)
+            .map_err(|error| ProtocolError::new_js(422, "validation", error))?;
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        lock(&tx, scope).await?;
+        let current = tail(&tx, scope).await?;
+        if expected.is_some_and(|expected| expected != current) {
+            return Ok(JsJson::Null);
+        }
+        let seq = current
+            .checked_add(1)
+            .filter(|seq| *seq <= 9_007_199_254_740_991)
+            .ok_or_else(ProtocolError::internal)?;
+        let stored = insert_prepared_lossless(&tx, scope, &event, seq, self.now()).await?;
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(JsJson::from_serde(&stored))
+    }
+
     pub async fn append_event(
         &self,
         scope: Scope<'_>,

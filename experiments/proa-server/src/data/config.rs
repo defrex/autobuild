@@ -40,9 +40,13 @@ impl DataConfig {
     pub fn parse(env: &HashMap<String, String>) -> Result<Option<Self>, String> {
         let optional = |name: &str| {
             env.get(name)
-                .map(|value| value.trim())
+                .map(|value| {
+                    crate::protocol::js_value::JsString::from(value.as_str())
+                        .trim_js()
+                        .to_scalar()
+                        .expect("trimming scalar input preserves Unicode scalars")
+                })
                 .filter(|value| !value.is_empty())
-                .map(str::to_owned)
         };
         let required = |name: &str| {
             optional(name).ok_or_else(|| format!("{name} is required and must be nonblank"))

@@ -39,22 +39,55 @@ pub fn parse_reducer_request(bytes: &[u8]) -> Result<Value, ProtocolError> {
         let text = String::from_utf8_lossy(bytes);
         let raw = text.trim();
         let message = e.to_string();
+        let offset = e.column().saturating_sub(1).min(text.len());
+        let array_comma = text.as_bytes().get(offset) == Some(&b']')
+            && text.as_bytes()[..offset]
+                .iter()
+                .rev()
+                .find(|c| !c.is_ascii_whitespace())
+                == Some(&b',');
         let detail = if raw
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
             .ends_with(",]")
+            || array_comma
         {
             "Unexpected comma at the end of array expression".to_string()
+        } else if message.starts_with("invalid escape") || message.starts_with("invalid unicode") {
+            let start = text
+                .get(..offset.min(text.len()))
+                .and_then(|prefix| prefix.rfind('\\'));
+            if let Some(start) = start {
+                let tail = &text[start..];
+                if tail.starts_with("\\u") {
+                    format!(
+                        "\"{}\" is not a valid unicode escape",
+                        tail.chars().take(6).collect::<String>()
+                    )
+                } else {
+                    format!(
+                        "Invalid escape character {}",
+                        tail.chars().nth(1).unwrap_or(' ')
+                    )
+                }
+            } else {
+                "Unable to parse JSON string".into()
+            }
         } else if message.starts_with("EOF while parsing an object") {
             "Expected '}'".to_string()
         } else if message.starts_with("EOF while parsing a string") {
             "Unterminated string".to_string()
         } else if message.starts_with("EOF") {
             "Unexpected EOF".to_string()
+        } else if message.starts_with("expected `,` or `}`") {
+            "Expected '}'".to_string()
         } else if message.starts_with("expected `:`") {
             "Expected ':' before value in object property definition".to_string()
-        } else if message.starts_with("trailing comma") && raw.ends_with(']') {
+        } else if message.starts_with("trailing comma")
+            && (raw.ends_with(']')
+                || text.as_bytes().get(e.column().saturating_sub(1)) == Some(&b']'))
+        {
             "Unexpected comma at the end of array expression".to_string()
         } else if message.starts_with("key must be a string")
             || message.starts_with("trailing comma")
@@ -1220,3 +1253,9 @@ mod tests {
         assert!(f["replay"].as_array().unwrap().len() > 1000);
     }
 }
+
+#[path = "reducer_values_lossless.rs"]
+mod lossless_values;
+pub use lossless_values::{
+    parse_reducer_request_lossless, reduce_lossless, resolve_lossless, ResolvedReducerLossless,
+};

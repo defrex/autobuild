@@ -2,7 +2,8 @@
 //! statement owns existence, tail bounds and monotone replacement together.
 use super::{records::Scope, Store};
 use crate::protocol::error::ProtocolError;
-use serde_json::{json, Value};
+use crate::protocol::js_value::{JsJson, JsString};
+use serde_json::Value;
 use tokio_postgres::error::SqlState;
 
 pub const SNAPSHOT_BODY_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -64,6 +65,17 @@ impl Store {
         reducer: &str,
         version: i64,
     ) -> Result<Value, ProtocolError> {
+        self.get_snapshot_lossless(scope, reducer, version)
+            .await?
+            .to_serde_checked()
+            .map_err(|_| ProtocolError::internal())
+    }
+    pub async fn get_snapshot_lossless(
+        &self,
+        scope: Scope<'_>,
+        reducer: &str,
+        version: i64,
+    ) -> Result<JsJson, ProtocolError> {
         validate_snapshot_reducer(reducer)?;
         let (kind, key) = scope_parts(scope)?;
         let client = self.database.client().await?;
@@ -82,21 +94,30 @@ impl Store {
             .await;
         match found {
             Ok(Some(row)) => {
-                let stored = row.get::<_, crate::protocol::js_json::JsValue>("state").0;
-                // BunSQL binds the TypeScript adapter's JSON.stringify output
-                // as a JSONB scalar string. Its json() helper unwraps that one
-                // layer; legacy direct JSONB objects remain readable too.
-                let state = match stored {
-                    Value::String(text) => crate::protocol::js_json::parse_js_json(text.as_bytes())
-                        .map_err(|_| ProtocolError::internal())?,
-                    other => other,
+                let stored = row
+                    .get::<_, crate::protocol::js_postgres::PgValue>("state")
+                    .0;
+                let state = if let Some(text) = stored.as_js_string() {
+                    let text = text.to_scalar().map_err(|_| ProtocolError::internal())?;
+                    crate::protocol::js_value::parse(text.as_bytes())
+                        .map_err(|_| ProtocolError::internal())?
+                } else {
+                    stored
                 };
-                Ok(
-                    json!({"version":row.get::<_,i32>("version"),"cursor":row.get::<_,i64>("cursor"),"state":state}),
-                )
+                Ok(JsJson::Object(vec![
+                    (
+                        JsString::from("version"),
+                        JsJson::Number(f64::from(row.get::<_, i32>("version"))),
+                    ),
+                    (
+                        JsString::from("cursor"),
+                        JsJson::Number(row.get::<_, i64>("cursor") as f64),
+                    ),
+                    (JsString::from("state"), state),
+                ]))
             }
-            Ok(None) => Ok(Value::Null),
-            Err(error) if missing_table(&error) => Ok(Value::Null),
+            Ok(None) => Ok(JsJson::Null),
+            Err(error) if missing_table(&error) => Ok(JsJson::Null),
             Err(error) => Err(storage_error(error)),
         }
     }
@@ -107,7 +128,6 @@ impl Store {
         snapshot: &Value,
     ) -> Result<bool, ProtocolError> {
         validate_snapshot_reducer(reducer)?;
-        let (kind, key) = scope_parts(scope)?;
         let version = integer(snapshot, "version")?;
         let cursor = integer(snapshot, "cursor")?;
         // Preserve the shared adapter's JSONB string envelope, including scalar
@@ -118,6 +138,39 @@ impl Store {
             ))
             .map_err(|_| ProtocolError::internal())?,
         );
+        self.put_snapshot_encoded(scope, reducer, version, cursor, state)
+            .await
+    }
+    pub async fn put_snapshot_lossless(
+        &self,
+        scope: Scope<'_>,
+        reducer: &str,
+        snapshot: &JsJson,
+    ) -> Result<bool, ProtocolError> {
+        validate_snapshot_reducer(reducer)?;
+        let integer = |key| {
+            snapshot
+                .get(key)
+                .and_then(JsJson::as_f64)
+                .filter(|n| n.is_finite() && n.fract() == 0.0 && n.abs() <= 9_007_199_254_740_991.0)
+                .map(|n| n as i64)
+                .ok_or_else(|| ProtocolError::validation("invalid reducer snapshot"))
+        };
+        let version = integer("version")?;
+        let cursor = integer("cursor")?;
+        let state = Value::String(snapshot.get("state").unwrap_or(&JsJson::Null).stringify());
+        self.put_snapshot_encoded(scope, reducer, version, cursor, state)
+            .await
+    }
+    async fn put_snapshot_encoded(
+        &self,
+        scope: Scope<'_>,
+        reducer: &str,
+        version: i64,
+        cursor: i64,
+        state: Value,
+    ) -> Result<bool, ProtocolError> {
+        let (kind, key) = scope_parts(scope)?;
         let client = self.database.client().await?;
         let written = client.query_opt(
             "INSERT INTO reducer_snapshots(scope_kind,scope_key,reducer,version,cursor,state,updated_at)

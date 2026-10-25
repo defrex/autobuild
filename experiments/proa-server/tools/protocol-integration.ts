@@ -1,3 +1,13 @@
+import { proveProtocolUnicode } from './protocol-unicode.integration.test'
+import { proveProtocolUnicodeWrites } from './protocol-unicode-writes.integration.test'
+import { proveProtocolArtifactUnicode } from './protocol-artifact-unicode.integration.test'
+import { proveProtocolAssetUnicode } from './protocol-asset-unicode.integration.test'
+import { proveProtocolReducerUnicode } from './protocol-reducer-unicode.integration.test'
+import { proveProtocolUnicodeStreams } from './protocol-unicode-streams.integration.test'
+import { proveProtocolLeaseDates } from './protocol-lease-dates.integration.test'
+import { proveProtocolSqlErrors } from './protocol-sql-errors.integration.test'
+import { proveProtocolDelegationEdges } from './protocol-delegation-edges.integration.test'
+import { proveProtocolJsonNesting } from './protocol-json-nesting.integration.test'
 import { mkdir, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { cachePath } from './verify'
@@ -79,12 +89,40 @@ if (!process.argv.includes('--caller-holds-lock')) {
   const routeAliases = await coverage.proof('route-aliases', () =>
     proveProtocolRouteAliases(server),
   )
+  const unicode = {
+    unicode: await coverage.proof('protocol-unicode', () => proveProtocolUnicode(server)),
+    unicode_writes: await coverage.proof('protocol-unicode-writes', () =>
+      proveProtocolUnicodeWrites(server),
+    ),
+    artifact_unicode: await coverage.proof('protocol-artifact-unicode', () =>
+      proveProtocolArtifactUnicode(server),
+    ),
+    asset_unicode: await coverage.proof('protocol-asset-unicode', () =>
+      proveProtocolAssetUnicode(server),
+    ),
+    reducer_unicode: await coverage.proof('protocol-reducer-unicode', () =>
+      proveProtocolReducerUnicode(server),
+    ),
+    unicode_streams: await coverage.proof('protocol-unicode-streams', () =>
+      proveProtocolUnicodeStreams(server),
+    ),
+    lease_dates: await coverage.proof('protocol-lease-dates', () =>
+      proveProtocolLeaseDates(server),
+    ),
+    sql_errors: await coverage.proof('protocol-sql-errors', () => proveProtocolSqlErrors(server)),
+    delegation_edges: await coverage.proof('protocol-delegation-edges', () =>
+      proveProtocolDelegationEdges(server),
+    ),
+    json_nesting: await coverage.proof('protocol-json-nesting', () =>
+      proveProtocolJsonNesting(server),
+    ),
+  }
   const routeCoverage = coverage.assertComplete()
   const evidence = resolve(root, '.ab/proa-protocol-store')
   await mkdir(evidence, { recursive: true })
   await Bun.write(
     join(evidence, 'checkpoint-proof.json'),
-    `${JSON.stringify({ includesFullBuildStoreContract: false, fullContractReport: '.ab/proa-protocol-contract/report.json', routeCoverage, routeAliases, delegation, authority, compatibility, dispatch, assets, streams, reducers, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
+    `${JSON.stringify({ fullConformance: false, remainingReadEnvelopeDiagnostic: 'tools/protocol-read-envelope-diagnostic.ts', includesFullBuildStoreContract: false, fullContractReport: '.ab/proa-protocol-contract/report.json', routeCoverage, routeAliases, unicode, delegation, authority, compatibility, dispatch, assets, streams, reducers, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
   )
   console.log(
     `Native protocol family proofs passed; unchanged suite evidence is recorded separately by protocol-contract.ts. Evidence: ${evidence}`,

@@ -352,3 +352,287 @@ impl Store {
         Ok(value)
     }
 }
+
+// Parallel typed APIs retain arbitrary UTF-16 stream envelopes through the
+// encoded JSONB-string storage format used by the TypeScript adapter.
+use crate::protocol::{
+    artifact_preparation::LosslessArtifactInput,
+    js_postgres::{PgJson, PgText, PgValue},
+    js_value::{JsJson, JsString},
+};
+fn chunk_lossless(row: &Row) -> Result<JsJson, ProtocolError> {
+    let seq: i64 = row.get("seq");
+    if seq > 9_007_199_254_740_991 {
+        return Err(ProtocolError::internal());
+    }
+    let parts = row.get::<_, PgValue>("parts").0;
+    let parts = if let Some(text) = parts.as_js_string() {
+        let encoded = text.to_scalar().map_err(|_| ProtocolError::internal())?;
+        JsJson::parse(encoded.as_bytes()).map_err(|_| ProtocolError::internal())?
+    } else {
+        parts
+    };
+    let mut out = JsJson::from_serde(
+        &json!({"stream":row.get::<_,String>("stream"),"seq":seq,"ts":super::records::row_timestamp(row,"ts")}),
+    );
+    out["parts"] = parts;
+    Ok(out)
+}
+async fn chunks_lossless(
+    tx: &Transaction<'_>,
+    id: &str,
+    since: i64,
+) -> Result<Vec<JsJson>, ProtocolError> {
+    tx.query(
+        "SELECT * FROM stream_chunks WHERE stream=$1 AND seq>$2 ORDER BY seq",
+        &[&id, &since],
+    )
+    .await
+    .map_err(ProtocolError::query)?
+    .iter()
+    .map(chunk_lossless)
+    .collect()
+}
+fn prepare_parts_lossless(parts: &JsJson) -> Result<JsJson, ProtocolError> {
+    let values = parts.as_array().filter(|p| !p.is_empty()).ok_or_else(|| {
+        ProtocolError::new(500, "internal", "stream parts must be a nonempty array")
+    })?;
+    for part in values {
+        if !part.is_object() {
+            return Err(ProtocolError::new(
+                500,
+                "internal",
+                "every stream part must be a JSON object",
+            ));
+        }
+        if !part["type"].as_string().is_some_and(|s| !s.is_empty()) {
+            return Err(ProtocolError::new(
+                500,
+                "internal",
+                "every stream part must carry a nonempty string \"type\"",
+            ));
+        }
+    }
+    let encoded = parts.stringify();
+    let bytes = encoded.len();
+    if bytes > BATCH_MAX_BYTES {
+        return Err(ProtocolError::new(
+            413,
+            "validation",
+            format!("stream batch of {bytes} bytes exceeds the {BATCH_MAX_BYTES}-byte ceiling"),
+        ));
+    }
+    // The JSON wire, persisted envelope and HTTP reply all use JSON.stringify's
+    // number normalization while isolated UTF-16 units remain escaped intact.
+    JsJson::parse(encoded.as_bytes()).map_err(|_| ProtocolError::internal())
+}
+impl Store {
+    pub async fn create_stream_lossless(
+        &self,
+        scope: Scope<'_>,
+        label: &JsString,
+    ) -> Result<JsJson, ProtocolError> {
+        if label.is_empty() {
+            return Err(ProtocolError::new(
+                500,
+                "internal",
+                "stream label is required",
+            ));
+        }
+        let id = fresh_id();
+        let now = self.now();
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        lock(&tx, scope).await?;
+        let kind = scope.name();
+        let owner = scope.id();
+        let build = matches!(scope, Scope::Build(_)).then_some(owner);
+        let repo = matches!(scope, Scope::Repo(_)).then_some(owner);
+        let session = matches!(scope, Scope::Session(_)).then_some(owner);
+        let label = PgText(label);
+        tx.execute("DELETE FROM stream_chunks WHERE stream IN (SELECT id FROM streams WHERE status='closed' AND scope_kind=$1 AND ((scope_kind='build' AND build=$2) OR (scope_kind='repo' AND repo=$3) OR (scope_kind='session' AND session=$4)) ORDER BY closed_at DESC,id DESC OFFSET 1)",&[&kind,&build,&repo,&session]).await.map_err(ProtocolError::query)?;
+        let row=tx.query_one("INSERT INTO streams(id,scope_kind,build,repo,session,label,format,status,creation_seq,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,'open',nextval('streams_creation_seq'),$8) RETURNING *",&[&id,&kind,&build,&repo,&session,&label,&FORMAT,&now]).await.map_err(ProtocolError::query)?;
+        let out = JsJson::from_serde(&record(&row)?);
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(out)
+    }
+    pub async fn append_stream_parts_lossless(
+        &self,
+        id: &str,
+        parts: &JsJson,
+    ) -> Result<JsJson, ProtocolError> {
+        let parts = prepare_parts_lossless(parts)?;
+        let envelope = JsJson::String(JsString::from(parts.stringify()));
+        let encoded = PgJson(&envelope);
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        let row = locked(&tx, id).await?;
+        if row.get::<_, String>("status") == "closed" {
+            return Err(ProtocolError::new(
+                409,
+                "conflict",
+                format!("stream \"{id}\" is closed"),
+            ));
+        }
+        let tail: i64 = tx
+            .query_one(
+                "SELECT COALESCE(MAX(seq),0) FROM stream_chunks WHERE stream=$1",
+                &[&id],
+            )
+            .await
+            .map_err(ProtocolError::query)?
+            .get(0);
+        let seq = tail
+            .checked_add(1)
+            .filter(|n| *n <= 9_007_199_254_740_991)
+            .ok_or_else(ProtocolError::internal)?;
+        let now = self.now();
+        tx.execute(
+            "INSERT INTO stream_chunks(stream,seq,ts,parts) VALUES($1,$2,$3,$4)",
+            &[&id, &seq, &now, &encoded],
+        )
+        .await
+        .map_err(ProtocolError::query)?;
+        tx.commit().await.map_err(ProtocolError::query)?;
+        let mut out = JsJson::from_serde(&json!({"stream":id,"seq":seq,"ts":timestamp(now)}));
+        out["parts"] = parts;
+        Ok(out)
+    }
+    async fn stream_snapshot_lossless(
+        &self,
+        id: &str,
+        since: i64,
+    ) -> Result<(Value, Vec<JsJson>), ProtocolError> {
+        let mut client = self.database.client().await?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()
+            .await?;
+        let row = tx
+            .query_opt("SELECT * FROM streams WHERE id=$1", &[&id])
+            .await
+            .map_err(ProtocolError::query)?
+            .ok_or_else(|| ProtocolError::missing("stream", id))?;
+        let value = record(&row)?;
+        let parts = chunks_lossless(&tx, id, since).await?;
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok((value, parts))
+    }
+    pub async fn read_stream_lossless(
+        &self,
+        id: &str,
+        since: i64,
+        wait: u64,
+    ) -> Result<JsJson, ProtocolError> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait.min(30));
+        loop {
+            let (record, chunks) = self.stream_snapshot_lossless(id, since).await?;
+            if !chunks.is_empty()
+                || record["status"] == "closed"
+                || tokio::time::Instant::now() >= deadline
+            {
+                let mut out = JsJson::from_serde(&json!({"status":record["status"]}));
+                out["chunks"] = JsJson::Array(chunks);
+                for key in ["outcome", "artifact"] {
+                    if let Some(value) = record.get(key) {
+                        out[key] = JsJson::from_serde(value)
+                    }
+                }
+                return Ok(out);
+            }
+            tokio::time::sleep_until(
+                (tokio::time::Instant::now() + std::time::Duration::from_secs(1)).min(deadline),
+            )
+            .await;
+        }
+    }
+    async fn prepare_stream_close_lossless(
+        &self,
+        record: &Value,
+        chunks: &[JsJson],
+        outcome: &str,
+    ) -> Result<LosslessArtifactInput, ProtocolError> {
+        let parts = chunks
+            .iter()
+            .flat_map(|c| c["parts"].as_array().into_iter().flatten().cloned())
+            .collect::<Vec<_>>();
+        let assembly = crate::protocol::stream_document::assemble_js(&parts);
+        let input = crate::protocol::stream_document::artifact_input_js(
+            record["id"].as_str().unwrap(),
+            &JsJson::from_serde(&record["scope"]),
+            &JsString::from(record["label"].as_str().unwrap()),
+            outcome,
+            &assembly,
+            chunks.len(),
+        );
+        let bytes = input["content"]
+            .as_string()
+            .ok_or_else(ProtocolError::internal)?
+            .to_scalar()
+            .map_err(|_| ProtocolError::internal())?
+            .into_bytes();
+        let blob_ref = format!("{:x}", Sha256::digest(&bytes));
+        self.blobs
+            .as_ref()
+            .ok_or_else(ProtocolError::internal)?
+            .put(&blob_ref, &bytes)
+            .await?;
+        Ok(LosslessArtifactInput {
+            kind: input["kind"]
+                .as_string()
+                .ok_or_else(ProtocolError::internal)?
+                .clone(),
+            bytes,
+            blob_ref,
+            metadata: input["metadata"].clone(),
+        })
+    }
+    pub async fn close_stream_lossless(
+        &self,
+        id: &str,
+        outcome: &str,
+    ) -> Result<JsJson, ProtocolError> {
+        let (snapshot, prepared_chunks) = self.stream_snapshot_lossless(id, 0).await?;
+        if snapshot["status"] == "closed" {
+            return Ok(JsJson::from_serde(&snapshot));
+        }
+        let mut prepared = self
+            .prepare_stream_close_lossless(&snapshot, &prepared_chunks, outcome)
+            .await?;
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        let row = locked(&tx, id).await?;
+        if row.get::<_, String>("status") == "closed" {
+            return record(&row).map(|v| JsJson::from_serde(&v));
+        }
+        let fresh = chunks_lossless(&tx, id, 0).await?;
+        if fresh.len() != prepared_chunks.len() {
+            prepared = self
+                .prepare_stream_close_lossless(&snapshot, &fresh, outcome)
+                .await?
+        }
+        let scope = record_scope(&snapshot)?;
+        let meta = self
+            .deposit_artifact_lossless_locked(&tx, scope, &prepared)
+            .await?;
+        let revision = meta["revision"]
+            .as_i64()
+            .ok_or_else(ProtocolError::internal)?;
+        let closed_at = chrono::DateTime::parse_from_rfc3339(
+            &meta["createdAt"]
+                .as_string()
+                .ok_or_else(ProtocolError::internal)?
+                .to_scalar()
+                .map_err(|_| ProtocolError::internal())?,
+        )
+        .map_err(|_| ProtocolError::internal())?
+        .with_timezone(&chrono::Utc);
+        let kind = PgText(&prepared.kind);
+        tx.execute("UPDATE streams SET status='closed',outcome=$1,closed_at=$2,artifact_kind=$3,artifact_revision=$4,artifact_blob_ref=$5 WHERE id=$6",&[&outcome,&closed_at,&kind,&revision,&prepared.blob_ref,&id]).await.map_err(ProtocolError::query)?;
+        let value = record(&locked(&tx, id).await?)?;
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(JsJson::from_serde(&value))
+    }
+}

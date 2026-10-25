@@ -92,6 +92,95 @@ pub fn substitute_placeholder_refs(value: &Value, deposited: &[Value]) -> Value 
     value.clone()
 }
 
+/// Lossless wire preparation keeps kind/metadata in JavaScript's string domain
+/// until the provider and PostgreSQL boundaries explicitly consume them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LosslessArtifactInput {
+    pub kind: super::js_value::JsString,
+    pub bytes: Vec<u8>,
+    pub blob_ref: String,
+    pub metadata: super::js_value::JsJson,
+}
+pub fn decode_artifact_lossless(
+    input: &super::js_value::JsJson,
+) -> Result<LosslessArtifactInput, ProtocolError> {
+    use super::js_value::JsJson;
+    let content = input
+        .get("contentBase64")
+        .and_then(JsJson::as_string)
+        .ok_or_else(ProtocolError::internal)?;
+    // Canonical base64 is ASCII: a lone unit is a validation refusal, never a
+    // lossy conversion that might manufacture accepted upload bytes.
+    let text = content
+        .to_scalar()
+        .map_err(|_| ProtocolError::validation("artifact content is not valid base64"))?;
+    let scalar = json!({"kind":"validated","contentBase64":text});
+    let decoded = decode_artifact(&scalar)?;
+    Ok(LosslessArtifactInput {
+        kind: input
+            .get("kind")
+            .and_then(JsJson::as_string)
+            .ok_or_else(ProtocolError::internal)?
+            .clone(),
+        bytes: decoded.bytes,
+        blob_ref: decoded.blob_ref,
+        metadata: input
+            .get("metadata")
+            .cloned()
+            .unwrap_or_else(|| JsJson::Object(vec![])),
+    })
+}
+pub fn decode_artifacts_lossless(
+    inputs: &[super::js_value::JsJson],
+) -> Result<Vec<LosslessArtifactInput>, ProtocolError> {
+    inputs.iter().map(decode_artifact_lossless).collect()
+}
+pub fn substitute_placeholder_refs_lossless(
+    value: &super::js_value::JsJson,
+    deposited: &[super::js_value::JsJson],
+) -> super::js_value::JsJson {
+    use super::js_value::{JsJson, JsString};
+    if let Some(object) = value.as_object() {
+        if object.len() == 2 && value.get("kind").is_some_and(JsJson::is_string) {
+            if let Some(revision) = value
+                .get("rev")
+                .and_then(JsJson::as_f64)
+                .filter(|v| v.fract() == 0.0 && *v < 0.0)
+            {
+                let index = -revision - 1.0;
+                if index < deposited.len() as f64 {
+                    let meta = &deposited[index as usize];
+                    return JsJson::Object(vec![
+                        (JsString::from("kind"), meta.get("kind").unwrap().clone()),
+                        (JsString::from("rev"), meta.get("revision").unwrap().clone()),
+                    ]);
+                }
+                return value.clone();
+            }
+        }
+        return JsJson::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        substitute_placeholder_refs_lossless(value, deposited),
+                    )
+                })
+                .collect(),
+        );
+    }
+    if let Some(array) = value.as_array() {
+        return JsJson::Array(
+            array
+                .iter()
+                .map(|value| substitute_placeholder_refs_lossless(value, deposited))
+                .collect(),
+        );
+    }
+    value.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +214,42 @@ mod tests {
             count += 1;
         }
         assert!(count > 100);
+    }
+    #[test]
+    fn lossless_preparation_preserves_kind_metadata_and_placeholder_strings() {
+        use crate::protocol::js_value::{parse, JsJson};
+        let input =
+            parse(br#"{"kind":"\ud800","contentBase64":"YQ==","metadata":{"\udfff":"\ud800"}}"#)
+                .unwrap();
+        let prepared = decode_artifact_lossless(&input).unwrap();
+        assert_eq!(prepared.kind.units(), &[0xd800]);
+        assert_eq!(prepared.metadata.stringify(), r#"{"\udfff":"\ud800"}"#);
+        assert_eq!(prepared.bytes, b"a");
+        let input = parse(br#"{"\ud800":[{"kind":"ignored","rev":-1},"\udfff"]}"#).unwrap();
+        let deposited = vec![parse(br#"{"kind":"\udfff","revision":3}"#).unwrap()];
+        assert_eq!(
+            substitute_placeholder_refs_lossless(&input, &deposited).stringify(),
+            r#"{"\ud800":[{"kind":"\udfff","rev":3},"\udfff"]}"#
+        );
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../fixtures/protocol-artifact-preparation.json"
+        ))
+        .unwrap();
+        for row in fixture["substitution"].as_array().unwrap() {
+            let input = JsJson::from_serde(&row["input"]);
+            let deposited: Vec<_> = row["deposited"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(JsJson::from_serde)
+                .collect();
+            assert_eq!(
+                substitute_placeholder_refs_lossless(&input, &deposited),
+                JsJson::from_serde(&row["oracle"]),
+                "{}",
+                row["id"]
+            );
+        }
     }
     #[test]
     fn decoded_ceiling_accepts_boundary_and_refuses_one_more_without_mutation() {

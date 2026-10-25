@@ -149,6 +149,56 @@ async fn current_record<C: GenericClient + Sync>(
     Ok(value)
 }
 impl Store {
+    pub async fn create_build_lossless(
+        &self,
+        input: &crate::protocol::js_value::JsJson,
+    ) -> Result<Value, ProtocolError> {
+        use crate::protocol::{
+            js_postgres::{PgJson, PgText},
+            js_value::JsString,
+            validation::lossless_writes,
+        };
+        let created = lossless_writes::validate_created_event(input)
+            .map_err(|error| ProtocolError::new_js(422, "validation", error))?;
+        let slug = input["slug"]
+            .as_js_string()
+            .ok_or_else(ProtocolError::internal)?;
+        let repo = input["repo"]
+            .as_js_string()
+            .ok_or_else(ProtocolError::internal)?;
+        let ticket = input.get("ticket").map(PgJson);
+        let branch = input
+            .get("branch")
+            .and_then(|v| v.as_js_string())
+            .map(PgText);
+        let origin = input
+            .get("repoOrigin")
+            .and_then(|v| v.as_js_string())
+            .map(PgText);
+        let now = self.now();
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        let inserted = tx.query_opt("INSERT INTO builds(slug,repo,ticket,branch,repo_origin,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6) ON CONFLICT(slug) DO NOTHING RETURNING slug",&[&PgText(slug),&PgText(repo),&ticket,&branch,&origin,&now]).await.map_err(ProtocolError::query)?;
+        // This identifier names an already encoded database row, not authority.
+        let sql_slug = slug.to_usv_string();
+        let scope = Scope::Build(&sql_slug);
+        let row = lock(&tx, scope).await?;
+        if inserted.is_none() {
+            let mut error = JsString::from("build \"");
+            error.0.extend_from_slice(slug.units());
+            error.0.extend("\" already exists".encode_utf16());
+            return Err(ProtocolError::new_js(409, "conflict", error));
+        }
+        let row = if let Some(created) = created {
+            super::events::insert_prepared_lossless(&tx, scope, &created, 1, self.now()).await?;
+            lock(&tx, scope).await?
+        } else {
+            row
+        };
+        let value = current_record(&tx, &row, scope).await?;
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(value)
+    }
     pub async fn create_empty_build(&self, input: EmptyBuildInput) -> Result<Value, ProtocolError> {
         self.create_build_inner(input, None).await
     }
@@ -192,6 +242,28 @@ impl Store {
         tx.commit().await.map_err(ProtocolError::query)?;
         Ok(value)
     }
+    pub async fn ensure_repo_lossless(
+        &self,
+        repo: &crate::protocol::js_value::JsString,
+    ) -> Result<Value, ProtocolError> {
+        use crate::protocol::js_postgres::PgText;
+        if repo.is_empty() {
+            return Err(ProtocolError::validation("repo is required"));
+        }
+        let now = self.now();
+        let mut client = self.database.client().await?;
+        let tx = client.transaction().await?;
+        tx.execute("INSERT INTO repo_streams(repo,created_at,updated_at) VALUES($1,$2,$2) ON CONFLICT(repo) DO NOTHING", &[&PgText(repo),&now]).await?;
+        let row = tx
+            .query_one(
+                "SELECT * FROM repo_streams WHERE repo=$1 FOR UPDATE",
+                &[&PgText(repo)],
+            )
+            .await?;
+        let value = record(&row, Scope::Repo(""));
+        tx.commit().await.map_err(ProtocolError::query)?;
+        Ok(value)
+    }
     pub async fn ensure_repo(&self, repo: &str) -> Result<Value, ProtocolError> {
         if repo.is_empty() {
             return Err(ProtocolError::validation("repo is required"));
@@ -218,6 +290,14 @@ impl Store {
         }
     }
     pub async fn list_builds(&self, repo: Option<&str>) -> Result<Value, ProtocolError> {
+        let repo = repo.map(crate::protocol::js_value::JsString::from);
+        self.list_builds_js(repo.as_ref()).await
+    }
+    pub async fn list_builds_js(
+        &self,
+        repo: Option<&crate::protocol::js_value::JsString>,
+    ) -> Result<Value, ProtocolError> {
+        let repo = repo.map(crate::protocol::js_postgres::PgText);
         let client = self.database.client().await?;
         let rows = if super::assets::has_readable_ticket_schema(&**client).await? {
             client.query("SELECT b.*, t.readable_id AS projected_ticket_id FROM builds b LEFT JOIN LATERAL (SELECT readable_id FROM ab_tickets WHERE b.ticket->>'source'='hosted' AND repo=b.repo AND (id=b.ticket->>'id' OR lower(readable_id)=lower(b.ticket->>'id')) LIMIT 1) t ON true WHERE ($1::text IS NULL OR b.repo=$1) ORDER BY b.created_at,b.slug", &[&repo]).await?

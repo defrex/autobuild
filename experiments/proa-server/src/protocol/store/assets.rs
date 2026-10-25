@@ -718,3 +718,10 @@ mod tests {
         assert_eq!(manifest[1]["size"], 3);
     }
 }
+
+#[path = "assets_lossless.rs"]
+mod lossless;
+pub use lossless::{
+    prepare_asset_lossless, prepare_asset_with_limits_lossless, validate_label_lossless,
+    validate_path_lossless, validate_structure_lossless, PreparedAssetLossless,
+};

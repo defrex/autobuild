@@ -191,3 +191,6 @@ mod tests {
         assert!(cases["cases"].as_array().unwrap().len() >= 20);
     }
 }
+
+#[path = "ticks_lossless.rs"]
+mod lossless;

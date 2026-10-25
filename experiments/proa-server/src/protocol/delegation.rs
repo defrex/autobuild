@@ -5,6 +5,10 @@ use super::{
     store::{records::Scope, Store},
     token::DelegationClaims,
 };
+use super::{
+    js_postgres::PgText,
+    js_value::{JsJson as J, JsString as S},
+};
 use serde_json::{json, Value};
 #[path = "delegation_lifecycle.rs"]
 mod lifecycle;
@@ -13,32 +17,29 @@ pub use lifecycle::{evaluate_delegation_facts, issuance_anchor};
 pub enum Principal {
     Project(ProjectPrincipal),
     Delegated(DelegationClaims),
-    Internal {
-        repo: String,
-        user: String,
-        via: Option<Value>,
-    },
-    Admin {
-        user: String,
-    },
+    Internal { repo: S, user: S, via: Option<J> },
+    Admin { user: S },
 }
 fn auth(status: u16, message: &str) -> ProtocolError {
     ProtocolError::new(status, "auth", message)
 }
-fn claims(c: &DelegationClaims) -> Value {
-    serde_json::to_value(c).expect("plain claims")
+fn claims(c: &DelegationClaims) -> J {
+    c.as_js_value()
 }
 impl Principal {
-    pub fn repo(&self) -> Option<&str> {
+    pub fn repo(&self) -> Option<S> {
         match self {
-            Self::Project(p) => Some(&p.repo),
-            Self::Delegated(p) => Some(&p.repo),
-            Self::Internal { repo, .. } => Some(repo),
+            Self::Project(p) => Some(S::from(p.repo.as_str())),
+            Self::Delegated(p) => Some(p.repo.clone()),
+            Self::Internal { repo, .. } => Some(repo.clone()),
             Self::Admin { .. } => None,
         }
     }
     pub fn require_project(&self, repo: &str) -> Result<(), ProtocolError> {
-        if self.repo().is_some_and(|r| r != repo) {
+        self.require_project_js(&S::from(repo))
+    }
+    pub fn require_project_js(&self, repo: &S) -> Result<(), ProtocolError> {
+        if self.repo().is_some_and(|r| r != *repo) {
             Err(auth(403, "wrong project"))
         } else {
             Ok(())
@@ -55,48 +56,98 @@ impl Principal {
         }
     }
 }
-pub async fn registered(store: &Store, repo: &str) -> Result<bool, ProtocolError> {
+pub async fn registered(store: &Store, repo: &S) -> Result<bool, ProtocolError> {
     let connection = store.database.client().await?;
     let row = connection
         .query_opt(
             "SELECT action FROM project_journal WHERE repo = $1 ORDER BY seq DESC LIMIT 1",
-            &[&repo],
+            &[&PgText(repo)],
         )
         .await?;
     Ok(row.is_some_and(|r| r.get::<_, String>(0) == "added"))
 }
-pub async fn delegation_facts(store: &Store, c: &Value) -> Result<Value, ProtocolError> {
-    let scope = if c["kind"].as_str().unwrap_or("").starts_with("build") {
-        Scope::Build(c["id"].as_str().unwrap_or(""))
+async fn record_js(store: &Store, scope: Scope<'_>, id: &S) -> Result<Value, ProtocolError> {
+    let client = store.database.client().await?;
+    let row = client
+        .query_opt(
+            &format!("SELECT * FROM {} WHERE {}=$1", scope.table(), scope.key()),
+            &[&PgText(id)],
+        )
+        .await?;
+    Ok(row
+        .map(|row| super::store::records::record(&row, scope))
+        .unwrap_or(Value::Null))
+}
+pub async fn delegation_facts(store: &Store, c: &J) -> Result<Value, ProtocolError> {
+    let build = c["kind"].as_string().is_some_and(|s| {
+        s.units()
+            .starts_with(&"build".encode_utf16().collect::<Vec<_>>())
+    });
+    let scope = if build {
+        Scope::Build("")
     } else {
-        Scope::Repo(c["repo"].as_str().unwrap_or(""))
+        Scope::Repo("")
     };
-    let reducer = if matches!(scope, Scope::Build(_)) {
+    let id = c[if build { "id" } else { "repo" }]
+        .as_string()
+        .ok_or_else(ProtocolError::internal)?;
+    let reducer = if build {
         "buildDelegation"
     } else {
         "harvestDelegation"
     };
-    let answer = store
-        .get_reducer_value(scope, &json!({"reducer":reducer}))
-        .await
-        .map_err(|error| {
-            if error.status.as_u16() == 404 {
-                ProtocolError::new(500, "internal", "unknown reducer scope")
-            } else {
-                error
-            }
-        })?;
-    Ok(answer["value"].clone())
+    let resolved = super::reducer_values::resolve(scope, &json!({"reducer":reducer}))?;
+    let mut client = store.database.client().await?;
+    let tx = client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await?;
+    if tx
+        .query_opt(
+            &format!("SELECT 1 FROM {} WHERE {}=$1", scope.table(), scope.key()),
+            &[&PgText(id)],
+        )
+        .await?
+        .is_none()
+    {
+        return Err(ProtocolError::new(500, "internal", "unknown reducer scope"));
+    }
+    let rows = tx
+        .query(
+            &format!(
+                "SELECT * FROM {} WHERE {}=$1 ORDER BY seq",
+                scope.events(),
+                scope.event_key()
+            ),
+            &[&PgText(id)],
+        )
+        .await?;
+    let events = rows
+        .iter()
+        .map(|row| super::store::events::event_record(row, scope))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, event) in events.iter().enumerate() {
+        if event["seq"].as_i64() != Some(index as i64 + 1) {
+            return Err(ProtocolError::new(
+                500,
+                "internal",
+                "noncontiguous reducer log",
+            ));
+        }
+    }
+    let value = super::reducer_values::reduce(scope, &resolved, &events)?;
+    tx.commit().await?;
+    Ok(value)
 }
-pub async fn delegation_active(
-    store: &Store,
-    c: &Value,
-    now_ms: i64,
-) -> Result<bool, ProtocolError> {
-    if c["kind"].as_str().unwrap_or("").starts_with("build") {
-        let record = store
-            .get_record(Scope::Build(c["id"].as_str().unwrap_or("")))
-            .await?;
+pub async fn delegation_active(store: &Store, c: &J, now_ms: i64) -> Result<bool, ProtocolError> {
+    if c["kind"].as_string().is_some_and(|s| {
+        s.units()
+            .starts_with(&"build".encode_utf16().collect::<Vec<_>>())
+    }) {
+        let id = c["id"].as_string().ok_or_else(ProtocolError::internal)?;
+        let record = record_js(store, Scope::Build(""), id).await?;
         if record["repo"] != c["repo"] {
             return Ok(false);
         }
@@ -149,7 +200,7 @@ pub async fn authorize_resource(
     } else {
         let record = store.get_record(scope).await?;
         let repo = record["repo"].as_str().ok_or_else(unavailable)?;
-        if Some(repo) != p.repo() {
+        if p.repo().is_none_or(|r| !r.eq_str(repo)) {
             return Err(unavailable());
         }
         repo.to_owned()
@@ -169,7 +220,7 @@ pub fn mutation_needs_body(
         return Ok(false);
     };
     let g = claims(c);
-    let kind = g["kind"].as_str().unwrap_or("");
+    let kind = c.kind.as_str();
     let value_read = method == "POST"
         && raw_path.ends_with("/reducer-values")
         && !matches!(scope, Scope::Session(_));
@@ -222,6 +273,26 @@ pub async fn authorize_mutation(
     raw_path: &str,
     body: &Value,
 ) -> Result<(), ProtocolError> {
+    authorize_mutation_js(
+        store,
+        p,
+        scope,
+        method,
+        path,
+        raw_path,
+        &J::from_serde(body),
+    )
+    .await
+}
+pub async fn authorize_mutation_js(
+    store: &Store,
+    p: &Principal,
+    scope: Scope<'_>,
+    method: &str,
+    path: &[String],
+    raw_path: &str,
+    body: &J,
+) -> Result<(), ProtocolError> {
     if !mutation_needs_body(p, scope, method, path, raw_path)? {
         return Ok(());
     }
@@ -229,7 +300,7 @@ pub async fn authorize_mutation(
         return Ok(());
     };
     let g = claims(c);
-    let kind = g["kind"].as_str().unwrap_or("");
+    let kind = c.kind.as_str();
     if matches!(scope, Scope::Build(_)) && path.get(2).is_some_and(|s| s == "node-writer") {
         return Err(auth(
             403,
@@ -260,7 +331,7 @@ pub async fn authorize_mutation(
         && kind.starts_with("build")
         && method == "POST"
         && raw_path.split('/').skip(3).collect::<Vec<_>>().join("/") == "events"
-        && super::validation::validate_request("eventWrite", body).is_ok()
+        && super::validation::lossless::validate_request("eventWrite", body).is_ok()
         && body["actor"]["kind"] == "kernel"
         && body["type"] == "dispatcher.forge-degraded"
     {
@@ -294,21 +365,25 @@ pub async fn authorize_mutation(
             Err(deny())
         };
     }
-    let owns = |label: &str| {
-        let prefix = format!(
-            "harvest:{}:{}:",
-            g["id"].as_str().unwrap_or(""),
-            g["execution"].as_str().unwrap_or("")
-        );
-        if let Some(session) = g["session"].as_str() {
-            label == format!("{prefix}session:{session}")
+    let owns = |label: &S| {
+        let mut prefix = S::from("harvest:").0;
+        prefix.extend_from_slice(c.id.units());
+        prefix.push(58);
+        if let Some(execution) = &c.execution {
+            prefix.extend_from_slice(execution.units())
+        }
+        prefix.push(58);
+        if let Some(session) = &c.session {
+            prefix.extend("session:".encode_utf16());
+            prefix.extend_from_slice(session.units());
+            label.units() == prefix
         } else {
-            label.starts_with(&prefix)
+            label.units().starts_with(&prefix)
         }
     };
     if path.first().is_some_and(|s| s == "streams") || rest.starts_with("streams") {
         if path.len() == 3 && path.first().is_some_and(|s| s == "repos") {
-            return if body["label"].as_str().is_some_and(owns) {
+            return if body["label"].as_string().is_some_and(owns) {
                 Ok(())
             } else {
                 Err(deny())
@@ -322,22 +397,28 @@ pub async fn authorize_mutation(
         .map(String::as_str)
         .unwrap_or("");
         let record = store.get_stream(id).await?;
-        return if record["label"].as_str().is_some_and(owns) {
+        return if record["label"]
+            .as_str()
+            .map(S::from)
+            .as_ref()
+            .is_some_and(owns)
+        {
             Ok(())
         } else {
             Err(deny())
         };
     }
-    let artifact_ok = |a: &Value| {
+    let artifact_ok = |a: &J| {
         a["metadata"]["run"] == g["id"]
-            && a["kind"].as_str().is_some_and(|k| {
+            && a["kind"].as_string().is_some_and(|k| {
                 [
                     "harvest-proposals",
                     "harvest-review",
                     "harvest-report",
                     "harvest-transcript",
                 ]
-                .contains(&k)
+                .iter()
+                .any(|name| k.eq_str(name))
             })
     };
     if rest == "artifacts" {
@@ -361,16 +442,19 @@ pub async fn authorize_mutation(
     {
         return Err(ProtocolError::new(500,"internal","event?.type?.startsWith is not a function. (In 'event?.type?.startsWith(\"harvest.\")', 'event?.type?.startsWith' is undefined)"));
     }
-    let t = event["type"].as_str().unwrap_or("");
+    let empty = S::default();
+    let t = event["type"].as_string().unwrap_or(&empty);
     if rest == "events"
-        && t == "harvest.execution.ended"
+        && t.eq_ascii("harvest.execution.ended")
         && kind == "harvest-runner"
         && event["payload"]["run"] == g["id"]
         && event["payload"]["execution"] == g["execution"]
     {
         return Ok(());
     }
-    if !t.starts_with("harvest.")
+    if !t
+        .units()
+        .starts_with(&"harvest.".encode_utf16().collect::<Vec<_>>())
         || event["payload"]["run"] != g["id"]
         || [
             "harvest.started",
@@ -382,21 +466,22 @@ pub async fn authorize_mutation(
             "harvest.execution.authorized",
             "harvest.execution.ended",
         ]
-        .contains(&t)
+        .iter()
+        .any(|name| t.eq_str(name))
     {
         return Err(deny());
     }
-    if g["session"].as_str().is_some()
+    if g["session"].as_string().is_some()
         && event["payload"]["session"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty() && g["session"] != s)
+            .as_string()
+            .is_some_and(|s| !s.is_empty() && g["session"].as_string() != Some(s))
     {
         return Err(deny());
     }
-    enforce_via(p, &event["actor"])?;
+    enforce_via_js(p, &event["actor"])?;
     if rest == "deposits" {
         match body.get("artifacts") {
-            Some(Value::Array(items)) => {
+            Some(J::Array(items)) => {
                 for artifact in items {
                     if artifact.is_null() {
                         return Err(ProtocolError::new(
@@ -410,17 +495,17 @@ pub async fn authorize_mutation(
                     }
                 }
             }
-            Some(Value::String(text)) if text.is_empty() => (),
-            Some(Value::String(_)) => return Err(deny()),
+            Some(J::String(text)) if text.is_empty() => (),
+            Some(J::String(_)) => return Err(deny()),
             value => {
                 let message = match value {
                     None => "undefined is not an object (evaluating 'artifact of body.artifacts')",
-                    Some(Value::Null) => {
+                    Some(J::Null) => {
                         "null is not an object (evaluating 'artifact of body.artifacts')"
                     }
-                    Some(Value::Bool(true)) => "true is not iterable",
-                    Some(Value::Bool(false)) => "false is not iterable",
-                    Some(Value::Number(_)) => "number is not iterable",
+                    Some(J::Bool(true)) => "true is not iterable",
+                    Some(J::Bool(false)) => "false is not iterable",
+                    Some(J::Number(_)) => "number is not iterable",
                     _ => "{} is not iterable",
                 };
                 return Err(ProtocolError::new(500, "internal", message));
@@ -430,14 +515,12 @@ pub async fn authorize_mutation(
 
     Ok(())
 }
-pub fn enforce_via(p: &Principal, actor: &Value) -> Result<Value, ProtocolError> {
+pub fn enforce_via_js(p: &Principal, actor: &J) -> Result<J, ProtocolError> {
     if let Principal::Delegated(c) = p {
-        let g = claims(c);
-        if g["session"].as_str().is_some()
-            && actor["kind"] == "agent"
-            && actor["session"] != g["session"]
-        {
-            return Err(auth(403, "wrong delegated session"));
+        if let Some(session) = &c.session {
+            if actor["kind"] == "agent" && actor["session"].as_string() != Some(session) {
+                return Err(auth(403, "wrong delegated session"));
+            }
         }
     }
     let via = if let Principal::Internal { via, .. } = p {
@@ -456,16 +539,10 @@ pub fn enforce_via(p: &Principal, actor: &Value) -> Result<Value, ProtocolError>
     }
     if let Some(via) = via {
         if let Some(candidate) = actor.get("via") {
-            // TypeScript compares JSON.stringify bytes, including key order.
-            let candidate_json = candidate.to_string();
-            let via_json = via.to_string();
+            let candidate_json = candidate.stringify();
+            let via_json = via.stringify();
             if candidate_json != via_json {
-                return Err(auth(
-                    403,
-                    &format!(
-                        "token carries via {via}; it may not write events claiming via {candidate}"
-                    ),
-                ));
+                return Err(auth(403,&format!("token carries via {via_json}; it may not write events claiming via {candidate_json}")));
             }
         }
         let mut actor = actor.clone();
@@ -474,26 +551,38 @@ pub fn enforce_via(p: &Principal, actor: &Value) -> Result<Value, ProtocolError>
     }
     Ok(actor.clone())
 }
+pub fn enforce_via(p: &Principal, actor: &Value) -> Result<Value, ProtocolError> {
+    enforce_via_js(p, &J::from_serde(actor))?
+        .to_serde_checked()
+        .map_err(|_| ProtocolError::internal())
+}
+
 /// Body already validated strictly by crypto agent target schema. Returns claims
 /// Value for conversion/mint, and deliberately rechecks active facts at end.
 pub async fn issue_claims(
     store: &Store,
     p: &Principal,
-    target: &Value,
+    target: &J,
     now_ms: i64,
-) -> Result<Value, ProtocolError> {
-    let kind = target["kind"].as_str().unwrap_or("");
-    let id = target["id"].as_str().unwrap_or("");
+) -> Result<J, ProtocolError> {
+    let kind = target["kind"]
+        .as_string()
+        .and_then(|s| s.to_scalar().ok())
+        .ok_or_else(ProtocolError::internal)?;
+    let id = target["id"]
+        .as_string()
+        .ok_or_else(ProtocolError::internal)?;
     let build = if kind.starts_with("build") {
-        store.get_record(Scope::Build(id)).await?
+        record_js(store, Scope::Build(""), id).await?
     } else {
         Value::Null
     };
     let repo = build["repo"]
         .as_str()
-        .or_else(|| target["repo"].as_str())
+        .map(S::from)
+        .or_else(|| target["repo"].as_string().cloned())
         .ok_or_else(|| auth(404, "resource unavailable"))?;
-    p.require_project(repo)?;
+    p.require_project_js(&repo)?;
     if matches!(p, Principal::Internal { .. }) {
         return Err(auth(
             403,
@@ -506,7 +595,10 @@ pub async fn issue_claims(
         None
     };
     if let Some(parent) = &parent {
-        let pk = parent["kind"].as_str().unwrap_or("");
+        let pk = parent["kind"]
+            .as_string()
+            .and_then(|s| s.to_scalar().ok())
+            .ok_or_else(ProtocolError::internal)?;
         if !pk.ends_with("-runner")
             || !kind.ends_with("-phase")
             || parent["id"] != target["id"]
@@ -516,7 +608,7 @@ pub async fn issue_claims(
         }
     }
     if target.get("leaseHolder").is_some() {
-        let record = store.get_record(Scope::Repo(repo)).await?;
+        let record = record_js(store, Scope::Repo(""), &repo).await?;
         if record["lease"]["holder"] != target["leaseHolder"] {
             return Err(auth(
                 403,
@@ -525,9 +617,13 @@ pub async fn issue_claims(
         }
     }
     let execution = target["execution"]
-        .as_str()
-        .or_else(|| parent.as_ref().and_then(|p| p["execution"].as_str()));
-    let mut c = json!({"repo":repo,"kind":kind,"id":id});
+        .as_string()
+        .or_else(|| parent.as_ref().and_then(|p| p["execution"].as_string()));
+    let mut c = J::Object(vec![
+        (S::from("repo"), J::String(repo)),
+        (S::from("kind"), J::String(S::from(kind))),
+        (S::from("id"), J::String(id.clone())),
+    ]);
     let facts = delegation_facts(store, &c).await?;
     let anchor = issuance_anchor(target, &facts, execution);
     if parent
@@ -536,10 +632,11 @@ pub async fn issue_claims(
     {
         return Err(auth(403, "session predates runner authority"));
     }
-    c["anchor"] = json!(anchor.ok_or_else(|| auth(404, "lifecycle binding unavailable"))?);
+    c["anchor"] =
+        J::Number(anchor.ok_or_else(|| auth(404, "lifecycle binding unavailable"))? as f64);
     if let Some(execution) = execution {
         if !execution.is_empty() {
-            c["execution"] = json!(execution)
+            c["execution"] = J::String(execution.clone())
         }
     }
     for field in ["session", "leaseHolder"] {
@@ -607,4 +704,87 @@ pub fn parse_authority_body(bytes: &[u8]) -> Result<Value, ProtocolError> {
         };
         ProtocolError::new(500, "internal", format!("JSON Parse error: {detail}"))
     })
+}
+
+/// Lossless Request.clone().json() with the existing Bun SyntaxError contract.
+pub fn parse_authority_body_js(bytes: &[u8]) -> Result<J, ProtocolError> {
+    match super::js_value::parse_http(bytes) {
+        Ok(value) => Ok(value),
+        Err(_) => {
+            let decoded = super::js_value::decode_http_utf8(bytes);
+            let diagnostic = super::js_value::grammar_diagnostic_text(&decoded);
+            match parse_authority_body(diagnostic.as_bytes()) {
+                Err(error) => Err(error),
+                Ok(_) => Err(ProtocolError::new(
+                    500,
+                    "internal",
+                    "JSON Parse error: Unable to parse JSON string",
+                )),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn actor_identity_and_injected_via_preserve_original_units() {
+        let scope = super::super::js_value::parse(
+            br#"{"repo":"repo","kind":"build-phase","id":"build","anchor":1,"session":"\ud800"}"#,
+        )
+        .unwrap();
+        let principal = Principal::Delegated(
+            super::super::token::parse_delegation_claims_lossless(&scope).unwrap(),
+        );
+        let actor =
+            super::super::js_value::parse(br#"{"kind":"agent","role":"plan","session":"\ud800"}"#)
+                .unwrap();
+        assert_eq!(enforce_via_js(&principal, &actor).unwrap(), actor);
+        let mut replacement = actor;
+        replacement["session"] = J::String(S::from("�"));
+        assert_eq!(
+            enforce_via_js(&principal, &replacement)
+                .unwrap_err()
+                .status
+                .as_u16(),
+            403
+        );
+        let via = super::super::js_value::parse(br#"{"kind":"session","id":"\ud800"}"#).unwrap();
+        let principal = Principal::Internal {
+            repo: S::from("repo"),
+            user: S::from("operator"),
+            via: Some(via.clone()),
+        };
+        let actor = J::from_serde(&json!({"kind":"human","user":"operator"}));
+        let injected = enforce_via_js(&principal, &actor).unwrap();
+        assert_eq!(injected["via"], via);
+        assert!(injected.to_serde_checked().is_err());
+        let mut alternate = actor;
+        alternate["via"] =
+            super::super::js_value::parse(br#"{"id":"\ud800","kind":"session"}"#).unwrap();
+        assert_eq!(
+            enforce_via_js(&principal, &alternate)
+                .unwrap_err()
+                .status
+                .as_u16(),
+            403
+        );
+    }
+    #[test]
+    fn authority_parser_keeps_strings_but_preserves_source_syntax_errors() {
+        let parsed = parse_authority_body_js(br#"{"ignored":"\ud800"}"#).unwrap();
+        assert_eq!(parsed["ignored"].as_string().unwrap().units(), &[0xd800]);
+        assert_eq!(
+            parse_authority_body_js(b"\xef\xbb\xbf\"\xff\"").unwrap(),
+            J::String(S::from("�"))
+        );
+        for raw in [b"{".as_slice(), b"[, ]", b"{\"a\" 1}", b"\"unterminated"] {
+            let a = parse_authority_body(raw).unwrap_err();
+            let b = parse_authority_body_js(raw).unwrap_err();
+            assert_eq!(a.status, b.status);
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.error, b.error);
+        }
+    }
 }

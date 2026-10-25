@@ -542,14 +542,50 @@ reader after restart. Per ruling esc_6370a20b, rendering that dispatched build o
 the sibling Builds page remains a node integration check after file-131; shell
 captures cannot substitute for it.
 
-A remaining string-model boundary needs an explicit design decision. JavaScript
-JSON accepts an escaped lone UTF-16 surrogate; serde's String rejects it. This is
-observable even in stripped request properties. It also reaches authority:
-PostgreSQL's JavaScript driver encodes a lone surrogate as U+FFFD for a lookup,
-while JavaScript retains the original claim for later identity comparisons.
-Replacing the claim globally with U+FFFD would therefore widen authority. The
-standalone `tools/protocol-utf16-diagnostic.ts` reproduces both public HTTP
-mismatches against isolated services. It is diagnostic evidence, not an
-acceptance test or a claim that the scalar-string domain is the full protocol.
-The partial-tool stream artifact sidecar solves its bounded assembly case only;
-it does not solve arbitrary request, identity, error or database strings.
+The scalar-string checkpoint exposed a real JavaScript/Rust boundary. JavaScript
+JSON accepts escaped lone UTF-16 units; serde String cannot retain them. Lossy
+replacement is unsafe for authority: PostgreSQL TEXT lookup can resolve the
+replacement row while in-memory write comparisons must keep the original units.
+
+## Lossless request, token and envelope values
+
+The protocol now uses JsString code units and an ordered JsJson tree through
+request validation, token claims, write preparation, responses, snapshot/stream
+string envelopes, assets and SDK document assembly. Checked serde conversion is
+explicit; replacement belongs only to source-specified UTF8/URL/PG TEXT
+boundaries. Malformed HTTP UTF8 is replacement-decoded before JSON parsing, with
+one leading BOM removed. Limits count the decoded UTF8 text, including expansion
+of malformed bytes, rather than blindly counting the original request bytes.
+
+General JSON parsing, cloning, equality, serialization and disposal use heap work
+stacks. Valid nested data in a field that schema stripping later discards must not
+terminate a worker. Pure tests use a 64 KiB thread, and real HTTP checks retain
+source parity through 8192 nested arrays. The partial-tool parser remains a
+separate policy: prototype filtering and JSON repair do not belong to general
+JSON.parse.
+
+PostgreSQL TEXT parameters use replacement encoding only at binding. JSONB
+parameters preserve exact JSON escapes and let the server own rejection and
+transaction ordering. Snapshots, stream chunks and ticket manifests have JSONB
+string envelopes, so escaped lone units can survive storage. Stream close and
+snapshot reads retain those values through their actual output bytes. Lease
+expiry additionally needs JavaScript TimeClip and expanded-year ISO text before
+PostgreSQL parses it; sending a native binary timestamp can accept a date the
+source rejects. Node-writer release compares its holder in SQL, unlike execution
+lease release's JavaScript comparison. Both distinctions have HTTP regressions.
+
+`tools/protocol-utf16-diagnostic.ts` now runs equality regressions for the original
+Unicode failures; the old known-divergence report remains historical evidence.
+The full maintained gate includes independent Unicode schema/producer/token/date
+oracles and native mutation, stream, asset, reducer and SQL-error comparisons.
+
+A separate confirmed read-side gap remains. The TypeScript adapter's json()
+helper also unwraps legacy JSONB string envelopes in event actor/payload/
+compatibility, artifact metadata and build tickets. Raw event reads currently
+expose some as literal strings, and persisted serde reducer/lifecycle facts
+cannot yet retain an unpaired unit decoded from such an envelope. A future fact
+with wrapped payload `{"x":"\\ud800"}` demonstrates the difference. The next
+increment must carry the lossless model through these reads and facts; the
+successful direct-JSONB scalar domain is not the entire shared-storage domain.
+The standalone read-envelope diagnostic records this remaining scope explicitly,
+rather than treating the green endpoint matrix as full conformance.

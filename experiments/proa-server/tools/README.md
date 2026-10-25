@@ -135,9 +135,8 @@ and constructor controls. The maintained aggregate exercises project/delegated
 authority, all event and storage families, ticket assets/pins, stream lifecycles,
 all 42 exposed named values, historical decoders and isolated dispatch. The
 separate contract command runs the entire unchanged shared suite. None of these
-reports waive an unimplemented protocol edge; the standalone UTF-16 diagnostic
-below records a known string-model divergence that still prevents a claim of
-complete conformance.
+reports waive an unimplemented protocol edge. The remaining legacy read-envelope
+diagnostic below still prevents a claim of complete conformance.
 
 Generate the independent strict append corpus with
 `bun tools/generate-protocol-fixtures.ts`; verify it with
@@ -229,8 +228,9 @@ state publish atomically. Held reads use monotonic deadlines, release their pool
 slot between one-second database polls, and terminate when the HTTP future is
 cancelled. `bun tools/protocol-stream-document-fixtures.ts` checks the pinned SDK
 classifier, assembler and exact artifact byte oracles, including lossless UTF-16
-partial tool JSON. The inspection Value projection cannot encode lone surrogate
-units, so typed raw fragments retain the authoritative encoded artifact document.
+partial tool JSON. The production assembler retains JsJson values and UTF16 strings through artifact
+encoding. The previous scalar/fragment implementation remains a compatibility
+oracle, not the active machine close path.
 
 `bun tools/protocol-reducer-fixtures.ts` checks catalog/scope/arguments and native
 value replay. Named values use one read-only repeatable-read prefix and replay
@@ -271,8 +271,20 @@ including a fresh reader. Rendering that dispatched result on the sibling Builds
 page is deferred to node integration after file-131 by ruling esc_6370a20b.
 The existing 16-frame captures prove browser coexistence only.
 
-`bun tools/protocol-utf16-diagnostic.ts` is a standalone diagnostic for a known
-unresolved parity boundary, not part of the green acceptance aggregate. It uses
-isolated public HTTP services to show escaped lone-surrogate request/authority
-differences. It builds the native example under the same external Cargo cache lock. See
-[FIELD-NOTES.md](../FIELD-NOTES.md) for why lossy claim replacement would be unsafe.
+`bun tools/protocol-utf16-diagnostic.ts` retains the original investigation entry
+but now asserts native/source equality and writes
+`.ab/proa-protocol-utf16/conformance.json`. The aggregate runs those same checks
+plus separate Unicode write, artifact, asset, reducer and stream proofs. New
+freshness commands are `protocol-unicode-fixtures.ts`,
+`protocol-token-unicode-fixtures.ts`, `protocol-unicode-validation-fixtures.ts`,
+`protocol-reducer-unicode-fixtures.ts` and `protocol-lease-dates-fixtures.ts`, all
+under `tools/`. UTF16 fingerprints retain exact units without relying on a text
+formatter to preserve surrogate escapes. Deep JSON regressions require successful
+asserted native/source responses through 8192 nested unused arrays.
+
+`tools/protocol-read-envelope-diagnostic.ts` records a separate known remaining
+storage-read difference outside the passing acceptance aggregate: legacy JSONB
+string envelopes in event fields can contain valid inner JSON, including lone
+units. Raw reads, reducer replay and lifecycle authority must decode and retain
+these values before full conformance. The family report explicitly records
+`fullConformance: false` and the diagnostic path until that work is complete.

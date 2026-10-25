@@ -57,6 +57,50 @@ impl Store {
             .map_err(storage_error)?;
         Ok(presence(&row))
     }
+    pub async fn upsert_operator_presence_lossless(
+        &self,
+        repo: &str,
+        input: &crate::protocol::js_value::JsJson,
+    ) -> Result<Value, ProtocolError> {
+        if repo.is_empty() {
+            return Err(ProtocolError::new(500, "internal", "repo is required"));
+        }
+        let identity =
+            crate::protocol::validation::lossless::validate_request("operatorPresence", input)
+                .map_err(|error| {
+                    let mut prefix =
+                        crate::protocol::js_value::JsString::from("invalid request body: ");
+                    prefix.0.extend_from_slice(error.units());
+                    ProtocolError::validation_js(prefix)
+                })?;
+        let id = identity["id"].as_js_string().unwrap();
+        let host = identity["host"].as_js_string().unwrap();
+        let pid = identity["pid"]
+            .as_i64()
+            .or_else(|| identity["pid"].as_f64().map(|value| value as i64))
+            .unwrap();
+        let started_at = identity["startedAt"].as_js_string().unwrap();
+        let client = self.database.client().await?;
+        let row = client
+            .query_one(
+                "INSERT INTO operator_presence(repo,id,host,pid,started_at,heartbeat_at)
+             VALUES($1,$2,$3,$4::bigint::integer,$5::text::timestamptz,$6)
+             ON CONFLICT(repo,id) DO UPDATE SET host=EXCLUDED.host,pid=EXCLUDED.pid,
+               heartbeat_at=GREATEST(operator_presence.heartbeat_at,EXCLUDED.heartbeat_at)
+             RETURNING repo,id,host,pid,started_at,heartbeat_at",
+                &[
+                    &repo,
+                    &crate::protocol::js_postgres::PgText(id),
+                    &crate::protocol::js_postgres::PgText(host),
+                    &pid,
+                    &crate::protocol::js_postgres::PgText(started_at),
+                    &self.now(),
+                ],
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(presence(&row))
+    }
     pub async fn list_operator_presence(&self, repo: &str) -> Result<Value, ProtocolError> {
         let cutoff = self.now() - Duration::milliseconds(OPERATOR_PRESENCE_TTL_MS);
         let client = self.database.client().await?;

@@ -1,6 +1,6 @@
 //! The machine branch is built separately so browser origin/cookie middleware
-//! can never rewrite its requests. Normal binary wiring waits for the complete
-//! route/validation/delegation contract; this constructor is exercised natively.
+//! can never rewrite its requests. The normal server and native proof executable
+//! share this router; private fixture controls belong only to the latter.
 use super::{
     auth::authenticate_project_bearer,
     delegation::{self, Principal},
@@ -44,6 +44,14 @@ fn unavailable() -> ProtocolError {
         "not-found",
         "resource unavailable: unknown resource or wrong project",
     )
+}
+fn reply_js(status: u16, value: super::js_value::JsJson) -> Response {
+    (
+        StatusCode::from_u16(status).expect("static status"),
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        value.stringify(),
+    )
+        .into_response()
 }
 fn reply(status: u16, value: Value) -> Response {
     (
@@ -118,7 +126,7 @@ async fn authenticate(
             Principal::Internal {
                 repo,
                 user,
-                via: via.map(|value| serde_json::to_value(value).expect("plain via")),
+                via: via.map(|value| value.as_js_value()),
             }
         }
         _ => {
@@ -165,24 +173,31 @@ async fn authorize(
     }
     Ok(principal)
 }
-fn enforce_via(principal: Option<&Principal>, actor: Option<&Value>) -> Result<(), ProtocolError> {
+fn enforce_via_lossless(
+    principal: Option<&Principal>,
+    actor: Option<&super::js_value::JsJson>,
+) -> Result<(), ProtocolError> {
     if let (Some(principal), Some(actor)) = (principal, actor) {
-        delegation::enforce_via(principal, actor)?;
+        delegation::enforce_via_js(principal, actor)?;
     }
     Ok(())
 }
-
-async fn body(req: Request, schema: &str) -> Result<Value, ProtocolError> {
-    body_with_limit(req, schema, None).await
+async fn body_lossless(
+    req: Request,
+    schema: &str,
+) -> Result<super::js_value::JsJson, ProtocolError> {
+    body_lossless_with_limit(req, schema, None).await
 }
-async fn body_with_limit(
+async fn body_lossless_with_limit(
     req: Request,
     schema: &str,
     ceiling: Option<(usize, &str)>,
-) -> Result<Value, ProtocolError> {
+) -> Result<super::js_value::JsJson, ProtocolError> {
     let bytes = to_bytes(
         req.into_body(),
-        ceiling.map(|(limit, _)| limit).unwrap_or(usize::MAX),
+        ceiling
+            .map(|(limit, _)| limit.saturating_add(3))
+            .unwrap_or(usize::MAX),
     )
     .await
     .map_err(|error| {
@@ -197,10 +212,19 @@ async fn body_with_limit(
         }
         ProtocolError::validation("request body is not valid JSON")
     })?;
-    let raw: Value = super::js_json::parse_js_json(&bytes)
+    let text = super::js_value::decode_http_utf8(&bytes);
+    if let Some((limit, message)) = ceiling {
+        if text.len() > limit {
+            return Err(ProtocolError::new(413, "validation", message));
+        }
+    }
+    let raw = super::js_value::parse(text.as_bytes())
         .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
-    super::validation::validate_request(schema, &raw)
-        .map_err(|message| ProtocolError::validation(format!("invalid request body: {message}")))
+    super::validation::lossless::validate_request(schema, &raw).map_err(|error| {
+        let mut message = super::js_value::JsString::from("invalid request body: ");
+        message.0.extend_from_slice(error.units());
+        ProtocolError::validation_js(message)
+    })
 }
 async fn dispatch(state: MachineState, req: Request) -> Result<Response, ProtocolError> {
     let path = req.uri().path().to_owned();
@@ -242,11 +266,11 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             let bytes = to_bytes(req.into_body(), usize::MAX)
                 .await
                 .map_err(|_| ProtocolError::validation("invalid JSON"))?;
-            let raw = super::js_json::parse_js_json(&bytes)
+            let raw = super::js_value::parse_http(&bytes)
                 .map_err(|_| ProtocolError::validation("invalid JSON"))?;
-            let target = super::token::parse_target(&raw)
+            let target = super::token::parse_target_lossless(&raw)
                 .ok_or_else(|| ProtocolError::validation("invalid delegation target"))?;
-            let target = serde_json::to_value(target).expect("plain delegation target");
+            let target = target.as_js_value();
             let claims = delegation::issue_claims(
                 &state.store,
                 &principal,
@@ -254,11 +278,16 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 state.store.now().timestamp_millis(),
             )
             .await?;
-            let claims = super::token::parse_delegation_claims(&claims)
-                .ok_or_else(ProtocolError::internal)?;
+            let scope = super::js_value::JsJson::Object(vec![
+                (
+                    super::js_value::JsString::from("version"),
+                    super::js_value::JsJson::Number(2.0),
+                ),
+                (super::js_value::JsString::from("delegation"), claims),
+            ]);
             return Ok(reply(
                 200,
-                json!({"token":super::token::mint_delegated_token(secret,&claims)}),
+                json!({"token":super::token::mint_js_token(secret,&scope)}),
             ));
         }
         return Err(ProtocolError::new(
@@ -329,42 +358,43 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         }
     }
     if method == "GET" && parts == ["builds"] {
-        return Ok(reply(
-            200,
-            state
-                .store
-                .list_builds(principal.as_ref().and_then(Principal::repo))
-                .await?,
-        ));
+        let repo = principal.as_ref().and_then(Principal::repo);
+        return Ok(reply(200, state.store.list_builds_js(repo.as_ref()).await?));
     }
     if method == "POST" && parts == ["repos"] {
-        let value = body(req, "ensureRepo").await?;
-        let repo = value["repo"].as_str().unwrap();
+        let value = body_lossless(req, "ensureRepo").await?;
+        let repo = value["repo"].as_js_string().unwrap();
         if let Some(principal) = principal {
-            principal.require_project(repo)?;
+            principal.require_project_js(repo)?;
         }
-        return Ok(reply(200, state.store.ensure_repo(repo).await?));
+        return Ok(reply(200, state.store.ensure_repo_lossless(repo).await?));
     }
     if method == "POST" && parts == ["builds"] {
-        let mut value = body(req, "newBuild").await?;
+        let mut value = body_lossless(req, "newBuild").await?;
         if let Some(principal) = principal.filter(|p| !matches!(p, Principal::Admin { .. })) {
-            principal.require_project(value["repo"].as_str().unwrap())?;
-            let prefix = String::from_utf16_lossy(
-                &value["slug"]
-                    .as_str()
+            principal.require_project_js(value["repo"].as_js_string().unwrap())?;
+            let prefix = super::js_value::JsString::from_units(
+                value["slug"]
+                    .as_js_string()
                     .unwrap()
-                    .encode_utf16()
+                    .units()
+                    .iter()
+                    .copied()
                     .take(60)
-                    .collect::<Vec<_>>(),
+                    .collect(),
             );
             for _ in 0..10 {
                 use rand::RngCore;
                 let mut suffix = [0u8; 12];
                 rand::thread_rng().fill_bytes(&mut suffix);
                 let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
-                value["slug"] = format!("{prefix}-{suffix}").into();
-                value["branch"] = format!("ab/{}", value["slug"].as_str().unwrap()).into();
-                match state.store.create_build(&value).await {
+                let mut slug = prefix.clone();
+                slug.0.extend(format!("-{suffix}").encode_utf16());
+                let mut branch = super::js_value::JsString::from("ab/");
+                branch.0.extend_from_slice(slug.units());
+                value["slug"] = super::js_value::JsJson::String(slug);
+                value["branch"] = super::js_value::JsJson::String(branch);
+                match state.store.create_build_lossless(&value).await {
                     Ok(record) => return Ok(reply(201, record)),
                     Err(error)
                         if error.status == StatusCode::CONFLICT
@@ -381,29 +411,36 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 "build identity allocation failed",
             ));
         }
-        let slug = value["slug"].as_str().unwrap();
-        if !state.store.get_record(Scope::Build(slug)).await?.is_null() {
-            return Err(ProtocolError::new(
-                409,
-                "conflict",
-                format!("build \"{slug}\" already exists"),
-            ));
+        let slug = value["slug"].as_js_string().unwrap();
+        let sql_slug = slug.to_usv_string();
+        if !state
+            .store
+            .get_record(Scope::Build(&sql_slug))
+            .await?
+            .is_null()
+        {
+            let mut error = super::js_value::JsString::from("build \"");
+            error.0.extend_from_slice(slug.units());
+            error.0.extend("\" already exists".encode_utf16());
+            return Err(ProtocolError::new_js(409, "conflict", error));
         }
-        return Ok(reply(201, state.store.create_build(&value).await?));
+        return Ok(reply(201, state.store.create_build_lossless(&value).await?));
     }
     if parts.len() == 3 && parts[0] == "repos" && parts[2] == "sessions" && method == "POST" {
-        let value = body(req, "newSession").await?;
-        if value["repo"] != parts[1] {
+        let value = body_lossless(req, "newSession").await?;
+        if !value["repo"].as_js_string().unwrap().eq_str(parts[1]) {
             return Err(ProtocolError::new(403, "auth", "wrong project"));
         }
         return Ok(reply(
             201,
             state
                 .store
-                .create_session(
+                .create_session_lossless(
                     parts[1],
-                    value["operator"].as_str().unwrap(),
-                    value.get("title").and_then(Value::as_str),
+                    value["operator"].as_js_string().unwrap(),
+                    value
+                        .get("title")
+                        .and_then(super::js_value::JsJson::as_js_string),
                 )
                 .await?,
         ));
@@ -415,12 +452,12 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                 state.store.list_operator_presence(parts[1]).await?,
             )),
             "POST" => {
-                let value = body(req, "operatorPresence").await?;
+                let value = body_lossless(req, "operatorPresence").await?;
                 Ok(reply(
                     200,
                     state
                         .store
-                        .upsert_operator_presence(parts[1], &value)
+                        .upsert_operator_presence_lossless(parts[1], &value)
                         .await?,
                 ))
             }
@@ -434,28 +471,28 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
     if method == "POST" && parts.len() == 4 && parts[0] == "repos" && parts[2] == "tick" {
         let repo = parts[1];
         if parts[3] == "begin" {
-            let value = body(req, "leaseHolder").await?;
-            return Ok(reply(
+            let value = body_lossless(req, "leaseHolder").await?;
+            return Ok(reply_js(
                 200,
                 state
                     .store
-                    .begin_repo_tick(repo, value["holder"].as_str().unwrap())
+                    .begin_repo_tick_lossless(repo, value["holder"].as_js_string().unwrap())
                     .await?,
             ));
         }
         if parts[3] == "finish" {
-            let value = body(req, "finishRepoTick").await?;
+            let value = body_lossless(req, "finishRepoTick").await?;
             let events = value["events"].as_array().unwrap();
             for event in events {
-                enforce_via(principal.as_ref(), event.get("actor"))?;
+                enforce_via_lossless(principal.as_ref(), event.get("actor"))?;
             }
-            return Ok(reply(
+            return Ok(reply_js(
                 200,
                 state
                     .store
-                    .finish_repo_tick(
+                    .finish_repo_tick_lossless(
                         repo,
-                        value["holder"].as_str().unwrap(),
+                        value["holder"].as_js_string().unwrap(),
                         &value["completion"],
                         events,
                     )
@@ -494,7 +531,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         let rev = super::wire::int_parameter(req.uri().query(), "rev")?;
         let asset = state
             .store
-            .get_pinned_ticket_asset(parts[1], &kind, &name, rev)
+            .get_pinned_ticket_asset_lossless(parts[1], &kind, &name, rev)
             .await?;
         return asset_read_reply(&state, asset, &kind, &name, path.as_deref());
     }
@@ -507,22 +544,34 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     format!("no route: {method} reducer-values"),
                 ));
             }
-            let bytes = to_bytes(req.into_body(), 4096).await.map_err(|error| {
+            // Request.text strips one leading UTF-8 BOM before the source's
+            // 4096-byte check. Bound raw transport to at most those extra bytes.
+            let bytes = to_bytes(req.into_body(), 4099).await.map_err(|error| {
                 use std::error::Error;
                 if error
                     .source()
-                    .is_some_and(|e| e.is::<http_body_util::LengthLimitError>())
+                    .is_some_and(|cause| cause.is::<http_body_util::LengthLimitError>())
                 {
                     ProtocolError::new(413, "validation", "reducer request exceeds 4 KiB")
                 } else {
                     ProtocolError::validation("request body is not valid JSON")
                 }
             })?;
-            let input = super::reducer_values::parse_reducer_request(&bytes)?;
-            let mut result = state.store.get_reducer_value(scope, &input).await?;
-            let catalog = result.as_object_mut().unwrap().remove("catalogIdentity");
-            let mut response = reply(200, result);
-            if let Some(catalog) = catalog.and_then(|v| v.as_str().map(str::to_owned)) {
+            let input = super::reducer_values::parse_reducer_request_lossless(&bytes)?;
+            let mut result = state
+                .store
+                .get_reducer_value_lossless(scope, &input)
+                .await?;
+            let catalog = result
+                .get("catalogIdentity")
+                .and_then(super::js_value::JsJson::as_js_string)
+                .and_then(|v| v.to_scalar().ok());
+            result
+                .as_object_mut()
+                .unwrap()
+                .retain(|(key, _)| !key.eq_str("catalogIdentity"));
+            let mut response = reply_js(200, result);
+            if let Some(catalog) = catalog {
                 response.headers_mut().insert(
                     "x-autobuild-catalog-identity",
                     catalog.parse().map_err(|_| ProtocolError::internal())?,
@@ -575,8 +624,11 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         if parts.len() >= 3 && matches!(parts[2], "artifacts" | "artifact-list" | "deposits") {
             if parts.len() == 3 && parts[2] == "artifacts" {
                 if method == "POST" {
-                    let value = body(req, "putArtifact").await?;
-                    return Ok(reply(201, state.store.put_artifact(scope, &value).await?));
+                    let value = body_lossless(req, "putArtifact").await?;
+                    return Ok(reply_js(
+                        201,
+                        state.store.put_artifact_lossless(scope, &value).await?,
+                    ));
                 }
                 if method == "GET" {
                     let kind = super::wire::parameter(req.uri().query(), "kind")
@@ -605,7 +657,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                         && parts[3] == "conditional"
                         && matches!(scope, Scope::Build(_))))
             {
-                let value = body(req, "deposits").await?;
+                let value = body_lossless(req, "deposits").await?;
                 let expected = if matches!(scope, Scope::Build(_)) {
                     value.get("expectedSeq")
                 } else {
@@ -624,10 +676,13 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     }
                 }
                 if !matches!(scope, Scope::Session(_)) {
-                    enforce_via(principal.as_ref(), value["event"].get("actor"))?;
+                    enforce_via_lossless(principal.as_ref(), value["event"].get("actor"))?;
                 }
-                let result = state.store.deposit(scope, &value, expected).await?;
-                return Ok(reply(if result.is_null() { 200 } else { 201 }, result));
+                let result = state
+                    .store
+                    .deposit_lossless(scope, &value, expected)
+                    .await?;
+                return Ok(reply_js(if result.is_null() { 200 } else { 201 }, result));
             }
         }
         if parts.len() == 4
@@ -646,13 +701,16 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                         .ok_or_else(|| {
                             ProtocolError::validation("query parameter \"version\" is required")
                         })?;
-                    Ok(reply(
+                    Ok(reply_js(
                         200,
-                        state.store.get_snapshot(scope, parts[3], version).await?,
+                        state
+                            .store
+                            .get_snapshot_lossless(scope, parts[3], version)
+                            .await?,
                     ))
                 }
                 "PUT" => {
-                    let value = body_with_limit(
+                    let value = body_lossless_with_limit(
                         req,
                         "snapshotPut",
                         Some((
@@ -663,7 +721,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     .await?;
                     Ok(reply(
                         200,
-                        json!({"written":state.store.put_snapshot(scope,parts[3],&value).await?}),
+                        json!({"written":state.store.put_snapshot_lossless(scope,parts[3],&value).await?}),
                     ))
                 }
                 _ => Err(ProtocolError::new(
@@ -689,7 +747,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     && matches!(scope, Scope::Build(_) | Scope::Session(_))))
         {
             let conditional = parts.len() == 4;
-            let value = body(
+            let value = body_lossless(
                 req,
                 if conditional {
                     "conditionalEvent"
@@ -699,37 +757,22 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             )
             .await?;
             let input = if conditional { &value["event"] } else { &value };
-            let event = if matches!(scope, Scope::Session(_)) {
-                let expected = if conditional {
-                    Some(
-                        value["expectedSeq"]
-                            .as_i64()
-                            .or_else(|| value["expectedSeq"].as_f64().map(|n| n as i64))
-                            .ok_or_else(ProtocolError::internal)?,
-                    )
-                } else {
-                    None
-                };
-                state
-                    .store
-                    .append_session(scope.id(), input, expected)
-                    .await?
-            } else {
-                enforce_via(principal.as_ref(), input.get("actor"))?;
-                state
-                    .store
-                    .append_event(
-                        scope,
-                        input,
-                        if conditional {
-                            Some(&value["expectedSeq"])
-                        } else {
-                            None
-                        },
-                    )
-                    .await?
-            };
-            return Ok(reply(if event.is_null() { 200 } else { 201 }, event));
+            if !matches!(scope, Scope::Session(_)) {
+                enforce_via_lossless(principal.as_ref(), input.get("actor"))?;
+            }
+            let event = state
+                .store
+                .append_event_lossless(
+                    scope,
+                    input,
+                    if conditional {
+                        Some(&value["expectedSeq"])
+                    } else {
+                        None
+                    },
+                )
+                .await?;
+            return Ok(reply_js(if event.is_null() { 200 } else { 201 }, event));
         }
         if method == "GET" && parts.len() == 3 && parts[0] == "repos" && parts[2] == "high-water" {
             return Ok(reply(
@@ -775,7 +818,7 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             };
             let action = parts[3];
             if matches!(action, "claim" | "heartbeat" | "release") {
-                let value = body(
+                let value = body_lossless(
                     req,
                     if action == "claim" {
                         "leaseClaim"
@@ -784,27 +827,27 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     },
                 )
                 .await?;
-                let holder = value["holder"].as_str().unwrap();
+                let holder = value["holder"].as_js_string().unwrap();
                 let ok = match action {
                     "claim" => {
                         state
                             .store
-                            .claim(
+                            .claim_lossless(
                                 scope,
                                 kind,
                                 holder,
                                 value["ttlMs"]
-                                    .as_i64()
-                                    .or_else(|| value["ttlMs"].as_f64().map(|value| value as i64))
+                                    .as_f64()
+                                    .map(|value| value as i64)
                                     .ok_or_else(|| {
                                         ProtocolError::validation("invalid lease expiration")
                                     })?,
                             )
                             .await?
                     }
-                    "heartbeat" => state.store.heartbeat(scope, kind, holder).await?,
+                    "heartbeat" => state.store.heartbeat_lossless(scope, kind, holder).await?,
                     _ => {
-                        state.store.release(scope, kind, holder).await?;
+                        state.store.release_lossless(scope, kind, holder).await?;
                         true
                     }
                 };
@@ -858,12 +901,12 @@ async fn stream_route(
     if rest.is_empty() {
         return match method.as_str() {
             "POST" => {
-                let input = body(req, "createStream").await?;
-                Ok(reply(
+                let input = body_lossless(req, "createStream").await?;
+                Ok(reply_js(
                     201,
                     state
                         .store
-                        .create_stream(scope, input["label"].as_str().unwrap())
+                        .create_stream_lossless(scope, input["label"].as_js_string().unwrap())
                         .await?,
                 ))
             }
@@ -892,24 +935,37 @@ async fn stream_route(
     }
     match (method.as_str(), rest[1]) {
         ("POST", "chunks") => {
-            let input = body(req, "appendStream").await?;
-            Ok(reply(
+            let input = body_lossless(req, "appendStream").await?;
+            Ok(reply_js(
                 201,
-                state.store.append_stream_parts(id, &input["parts"]).await?,
+                state
+                    .store
+                    .append_stream_parts_lossless(id, &input["parts"])
+                    .await?,
             ))
         }
         ("GET", "chunks") => {
             let since = super::wire::int_parameter(req.uri().query(), "since")?.unwrap_or(0);
             let wait = super::wire::wait_parameter(req.uri().query())?;
-            Ok(reply(200, state.store.read_stream(id, since, wait).await?))
+            Ok(reply_js(
+                200,
+                state.store.read_stream_lossless(id, since, wait).await?,
+            ))
         }
         ("POST", "close") => {
-            let input = body(req, "closeStream").await?;
-            Ok(reply(
+            let input = body_lossless(req, "closeStream").await?;
+            Ok(reply_js(
                 200,
                 state
                     .store
-                    .close_stream(id, input["outcome"].as_str().unwrap())
+                    .close_stream_lossless(
+                        id,
+                        &input["outcome"]
+                            .as_js_string()
+                            .unwrap()
+                            .to_scalar()
+                            .map_err(|_| ProtocolError::internal())?,
+                    )
                     .await?,
             ))
         }
@@ -945,17 +1001,32 @@ fn asset_identity(query: Option<&str>) -> Result<(String, String), ProtocolError
         )),
     }
 }
+use super::js_value::{JsJson as AssetJson, JsString as AssetString};
+fn asset_format(template: &str, values: &[&AssetString]) -> AssetString {
+    let mut units = Vec::new();
+    let mut parts = template.split("{}");
+    units.extend(parts.next().unwrap().encode_utf16());
+    for (part, value) in parts.zip(values) {
+        units.extend(value.units());
+        units.extend(part.encode_utf16());
+    }
+    AssetString::from_units(units)
+}
 fn check_asset_response(
     state: &MachineState,
-    value: &Value,
-    describe: &str,
+    value: &AssetJson,
+    describe: &AssetString,
 ) -> Result<(), ProtocolError> {
     if let Some(max) = state.store.asset_max_request_bytes {
-        let bytes = serde_json::to_vec(&super::js_json::serializable(value.clone()))
-            .map_err(|_| ProtocolError::internal())?
-            .len();
+        let bytes = value.stringify().len();
         if bytes > max {
-            return Err(ProtocolError::new(413,"validation",format!("ticket asset {describe} is {bytes} bytes encoded, over this deployment's {max}-byte response ceiling; it can only be fetched from a store with a higher ceiling")));
+            let suffix=format!(" is {bytes} bytes encoded, over this deployment's {max}-byte response ceiling; it can only be fetched from a store with a higher ceiling");
+            let mut e = ProtocolError::validation_js(asset_format(
+                "ticket asset {}{}",
+                &[describe, &AssetString::from(suffix)],
+            ));
+            e.status = StatusCode::PAYLOAD_TOO_LARGE;
+            return Err(e);
         }
     }
     Ok(())
@@ -963,28 +1034,31 @@ fn check_asset_response(
 fn asset_json(
     state: &MachineState,
     status: u16,
-    value: Value,
-    describe: &str,
+    value: AssetJson,
+    describe: &AssetString,
 ) -> Result<Response, ProtocolError> {
     check_asset_response(state, &value, describe)?;
-    Ok(reply(status, value))
+    Ok(reply_js(status, value))
 }
 fn asset_read_reply(
     state: &MachineState,
-    asset: Value,
+    asset: AssetJson,
     kind: &str,
     name: &str,
     path: Option<&str>,
 ) -> Result<Response, ProtocolError> {
     if asset.is_null() {
-        return Ok(reply(200, Value::Null));
+        return Ok(reply_js(200, AssetJson::Null));
     }
     if let Some(path) = path {
         let entry = asset["entries"]
             .as_array()
             .into_iter()
             .flatten()
-            .find(|e| e["path"] == path && e["type"] == "file")
+            .find(|e| {
+                e["path"].as_js_string().is_some_and(|v| v.eq_str(path))
+                    && e["type"].as_js_string().is_some_and(|v| v.eq_str("file"))
+            })
             .ok_or_else(|| {
                 ProtocolError::new(
                     404,
@@ -993,25 +1067,27 @@ fn asset_read_reply(
                 )
             })?;
         let encoded = entry["contentBase64"]
-            .as_str()
-            .ok_or_else(ProtocolError::internal)?;
+            .as_js_string()
+            .ok_or_else(ProtocolError::internal)?
+            .to_scalar()
+            .map_err(|_| ProtocolError::internal())?;
         use base64::Engine;
         let size = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
+            .decode(&encoded)
             .map_err(|_| ProtocolError::internal())?
             .len();
         return asset_json(
             state,
             200,
-            json!({"contentBase64":encoded}),
-            &format!("file \"{path}\" of {kind}/{name} ({size} bytes)"),
+            AssetJson::from_serde(&json!({"contentBase64":encoded})),
+            &AssetString::from(format!("file \"{path}\" of {kind}/{name} ({size} bytes)")),
         );
     }
     asset_json(
         state,
         200,
         asset["meta"].clone(),
-        &format!("{kind}/{name} manifest"),
+        &AssetString::from(format!("{kind}/{name} manifest")),
     )
 }
 async fn asset_route(
@@ -1027,27 +1103,40 @@ async fn asset_route(
             let bytes = to_bytes(req.into_body(), usize::MAX)
                 .await
                 .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
+            let decoded = super::js_value::decode_http_utf8(&bytes);
             let limits = asset_limits(state);
             if let Some(max) = state.store.asset_max_request_bytes {
-                if bytes.len() > max {
-                    return Err(ProtocolError::new(413,"validation",format!("ticket asset exceeds this store's {}-byte limit (deployment request ceiling {max} bytes): request is {} bytes",limits["maxBytes"],bytes.len())));
+                if decoded.len() > max {
+                    return Err(ProtocolError::new(413,"validation",format!("ticket asset exceeds this store's {}-byte limit (deployment request ceiling {max} bytes): request is {} bytes",limits["maxBytes"],decoded.len())));
                 }
             }
-            let raw = super::js_json::parse_js_json(&bytes)
+            let raw = super::js_value::parse(decoded.as_bytes())
                 .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
-            let input = super::validation::validate_request("putTicketAsset", &raw)
-                .map_err(|m| ProtocolError::validation(format!("invalid request body: {m}")))?;
-            let (manifest, _, size) = super::store::assets::prepare_asset_with_limits(
+            let input = super::validation::lossless::validate_request("putTicketAsset", &raw)
+                .map_err(|m| {
+                    ProtocolError::validation_js(asset_format("invalid request body: {}", &[&m]))
+                })?;
+            let (manifest, _, size) = super::store::assets::prepare_asset_with_limits_lossless(
                 &input,
                 limits["maxBytes"].as_u64().unwrap() as usize,
                 limits["maxEntries"].as_u64().unwrap() as usize,
             )?;
-            let kind = input["kind"].as_str().unwrap();
-            let name = input["name"].as_str().unwrap();
-            let worst = json!({"repo":repo,"ticketId":ticket,"kind":kind,"name":name,"revision":999_999_999,"layout":input["layout"],"size":size,"entries":manifest,"createdAt":"2026-01-01T00:00:00.000Z"});
-            check_asset_response(state, &worst, &format!("{kind}/{name} manifest"))?;
-            let meta = state.store.put_ticket_asset(repo, ticket, &input).await?;
-            asset_json(state, 201, meta, &format!("{kind}/{name} manifest"))
+            let kind = input["kind"].as_js_string().unwrap();
+            let name = input["name"].as_js_string().unwrap();
+            let mut worst = AssetJson::from_serde(
+                &json!({"repo":repo,"ticketId":ticket,"kind":"","name":"","revision":999_999_999,"layout":"","size":size,"entries":[],"createdAt":"2026-01-01T00:00:00.000Z"}),
+            );
+            worst["kind"] = input["kind"].clone();
+            worst["name"] = input["name"].clone();
+            worst["layout"] = input["layout"].clone();
+            worst["entries"] = manifest;
+            let describe = asset_format("{}/{} manifest", &[kind, name]);
+            check_asset_response(state, &worst, &describe)?;
+            let meta = state
+                .store
+                .put_ticket_asset_lossless(repo, ticket, &input)
+                .await?;
+            asset_json(state, 201, meta, &describe)
         }
         ("GET", []) | ("GET", ["file"]) => {
             let (kind, name) = asset_identity(req.uri().query())?;
@@ -1067,7 +1156,7 @@ async fn asset_route(
                 state,
                 state
                     .store
-                    .get_ticket_asset(repo, ticket, &kind, &name, rev)
+                    .get_ticket_asset_lossless(repo, ticket, &kind, &name, rev)
                     .await?,
                 &kind,
                 &name,
@@ -1079,26 +1168,35 @@ async fn asset_route(
                 super::wire::parameter(req.uri().query(), "revisions").as_deref() == Some("1");
             let values = state
                 .store
-                .list_ticket_assets(repo, ticket, revisions)
+                .list_ticket_assets_lossless(repo, ticket, revisions)
                 .await?;
-            asset_json(state, 200, values, &format!("list for ticket \"{ticket}\""))
+            asset_json(
+                state,
+                200,
+                values,
+                &AssetString::from(format!("list for ticket \"{ticket}\"")),
+            )
         }
         ("POST", ["remove"]) => {
-            let input = body(req, "removeTicketAsset").await?;
-            let kind = input["kind"].as_str().unwrap();
-            let name = input["name"].as_str().unwrap();
+            let input = body_lossless(req, "removeTicketAsset").await?;
+            let kind = input["kind"].as_js_string().unwrap();
+            let name = input["name"].as_js_string().unwrap();
             let live = state
                 .store
-                .get_ticket_asset(repo, ticket, kind, name, None)
+                .get_ticket_asset_identity_lossless(repo, ticket, kind, name, None)
                 .await?;
             if !live.is_null() {
-                check_asset_response(state, &live["meta"], &format!("{kind}/{name} manifest"))?;
+                check_asset_response(
+                    state,
+                    &live["meta"],
+                    &asset_format("{}/{} manifest", &[kind, name]),
+                )?;
             }
-            Ok(reply(
+            Ok(reply_js(
                 200,
                 state
                     .store
-                    .remove_ticket_asset(repo, ticket, kind, name)
+                    .remove_ticket_asset_lossless(repo, ticket, kind, name)
                     .await?,
             ))
         }
@@ -1132,8 +1230,8 @@ async fn mutation_request(
     let bytes = to_bytes(body, usize::MAX)
         .await
         .map_err(|_| ProtocolError::new(500, "internal", "request body read failed"))?;
-    let raw = delegation::parse_authority_body(&bytes)?;
-    delegation::authorize_mutation(
+    let raw = delegation::parse_authority_body_js(&bytes)?;
+    delegation::authorize_mutation_js(
         &state.store,
         principal,
         scope,

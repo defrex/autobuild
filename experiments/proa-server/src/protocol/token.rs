@@ -1,11 +1,11 @@
 //! HMAC-signed lifecycle token wire format, independent of authorization.
 //! Signed tokens carry no backend authority until fresh registration/lifecycle
 //! checks succeed. v2 grants have no exp; old shapes remain classifiable only.
-use crate::protocol::js_json::{parse_js_json, serializable};
+use crate::protocol::js_value::{JsJson as J, JsString as S};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, Mac};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
@@ -46,118 +46,146 @@ impl DelegationKind {
         })
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DelegationClaims {
-    pub repo: String,
+    pub repo: S,
     pub kind: DelegationKind,
-    pub id: String,
+    pub id: S,
     pub anchor: i64,
-    // Production issuance constructs execution before session. Maintaining that
-    // order makes its JSON/HMAC wire bytes identical to the TS handler.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lease_holder: Option<String>,
+    pub execution: Option<S>,
+    pub session: Option<S>,
+    pub lease_holder: Option<S>,
+}
+fn object(values: impl IntoIterator<Item = (&'static str, J)>) -> J {
+    J::Object(values.into_iter().map(|(k, v)| (S::from(k), v)).collect())
+}
+fn string(s: &S) -> J {
+    J::String(s.clone())
+}
+fn integer_json(n: i64) -> J {
+    J::Number(n as f64)
 }
 impl DelegationClaims {
-    pub fn as_value(&self) -> Value {
-        serde_json::to_value(self).expect("serializable delegated claims")
+    pub fn as_js_value(&self) -> J {
+        let mut v = object([
+            ("repo", string(&self.repo)),
+            ("kind", J::String(S::from(self.kind.as_str()))),
+            ("id", string(&self.id)),
+            ("anchor", integer_json(self.anchor)),
+        ]);
+        for (key, value) in [
+            ("session", &self.session),
+            ("execution", &self.execution),
+            ("leaseHolder", &self.lease_holder),
+        ] {
+            if let Some(value) = value {
+                v[key] = string(value)
+            }
+        }
+        v
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Via {
-    Session { id: String },
-    Mcp { client: String },
+    Session { id: S },
+    Mcp { client: S },
+}
+impl Via {
+    pub fn as_js_value(&self) -> J {
+        match self {
+            Self::Session { id } => {
+                object([("kind", J::String(S::from("session"))), ("id", string(id))])
+            }
+            Self::Mcp { client } => object([
+                ("kind", J::String(S::from("mcp"))),
+                ("client", string(client)),
+            ]),
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum SignedScope {
     Delegated(DelegationClaims),
     Internal {
-        user: String,
-        repo: String,
+        user: S,
+        repo: S,
         exp: i64,
         via: Option<Via>,
     },
     Admin {
-        user: String,
+        user: S,
         exp: i64,
     },
-    Retired(Value),
+    Retired(J),
 }
 impl SignedScope {
-    pub fn as_value(&self) -> Value {
+    pub fn as_js_value(&self) -> J {
         match self {
-            Self::Delegated(claims) => json!({"version":2,"delegation":claims}),
+            Self::Delegated(c) => {
+                object([("version", J::Number(2.0)), ("delegation", c.as_js_value())])
+            }
             Self::Internal {
                 user,
                 repo,
                 exp,
                 via,
             } => {
-                let mut v =
-                    json!({"version":1,"internalOperator":{"user":user,"repo":repo},"exp":exp});
+                let mut v = object([
+                    ("version", J::Number(1.0)),
+                    (
+                        "internalOperator",
+                        object([("user", string(user)), ("repo", string(repo))]),
+                    ),
+                    ("exp", integer_json(*exp)),
+                ]);
                 if let Some(via) = via {
-                    v["via"] = serde_json::to_value(via).unwrap();
+                    v["via"] = via.as_js_value()
                 }
                 v
             }
-            Self::Admin { user, exp } => json!({"version":1,"ownerAdmin":{"user":user},"exp":exp}),
+            Self::Admin { user, exp } => object([
+                ("version", J::Number(1.0)),
+                ("ownerAdmin", object([("user", string(user))])),
+                ("exp", integer_json(*exp)),
+            ]),
             Self::Retired(v) => v.clone(),
         }
     }
 }
-fn keys(value: &Value, required: &[&str], optional: &[&str]) -> bool {
+fn keys(value: &J, required: &[&str], optional: &[&str]) -> bool {
     value.as_object().is_some_and(|object| {
-        required.iter().all(|key| object.contains_key(*key))
+        required.iter().all(|key| value.get(key).is_some())
             && object
-                .keys()
-                .all(|key| required.contains(&key.as_str()) || optional.contains(&key.as_str()))
+                .iter()
+                .all(|(key, _)| required.iter().chain(optional).any(|name| key.eq_str(name)))
     })
 }
-fn nonempty(value: &Value) -> Option<String> {
-    value.as_str().filter(|v| !v.is_empty()).map(str::to_owned)
+fn nonempty(value: &J) -> Option<S> {
+    value.as_string().filter(|v| !v.is_empty()).cloned()
 }
-fn exact_identity(value: &Value) -> Option<String> {
-    nonempty(value).filter(|v| v != "*")
+fn exact_identity(value: &J) -> Option<S> {
+    nonempty(value).filter(|v| !v.eq_ascii("*"))
 }
-fn optional_identity(value: &Value, key: &str) -> Option<Option<String>> {
+fn optional_identity(value: &J, key: &str) -> Option<Option<S>> {
     match value.get(key) {
         None => Some(None),
         Some(v) => exact_identity(v).map(Some),
     }
 }
-fn integer(value: &Value) -> Option<i64> {
+fn integer(value: &J) -> Option<i64> {
     value
         .as_f64()
         .filter(|n| n.is_finite() && n.fract() == 0.0 && n.abs() <= MAX_SAFE)
         .map(|n| n as i64)
 }
-fn js_space(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{000b}' | '\u{000c}' | '\r' | ' ' | '\u{00a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{feff}'
-    )
+fn user(value: &J) -> Option<S> {
+    value.as_string().map(S::trim_js).filter(|v| !v.is_empty())
 }
-fn user(value: &Value) -> Option<String> {
-    value
-        .as_str()
-        .map(|v| v.trim_matches(js_space))
-        .filter(|v| !v.is_empty())
-        .map(str::to_owned)
+fn scalar(value: &J) -> Option<String> {
+    value.as_string()?.to_scalar().ok()
 }
-fn via(value: &Value) -> Option<Via> {
-    match value["kind"].as_str()? {
+fn via(value: &J) -> Option<Via> {
+    match scalar(&value["kind"])?.as_str() {
         "session" if keys(value, &["kind", "id"], &[]) => Some(Via::Session {
             id: nonempty(&value["id"])?,
         }),
@@ -167,15 +195,16 @@ fn via(value: &Value) -> Option<Via> {
         _ => None,
     }
 }
-fn optional_via(value: &Value) -> Option<Option<Via>> {
+fn optional_via(value: &J) -> Option<Option<Via>> {
     match value.get("via") {
         None => Some(None),
         Some(v) => via(v).map(Some),
     }
 }
-/// Same strict schema and cross-field refinement as delegatedClaims. Do not
-/// over-constrain leaseHolder: TS permits it on every grant kind.
 pub fn parse_delegation_claims(value: &Value) -> Option<DelegationClaims> {
+    parse_delegation_claims_lossless(&J::from_serde(value))
+}
+pub fn parse_delegation_claims_lossless(value: &J) -> Option<DelegationClaims> {
     if !keys(
         value,
         &["repo", "kind", "id", "anchor"],
@@ -183,7 +212,7 @@ pub fn parse_delegation_claims(value: &Value) -> Option<DelegationClaims> {
     ) {
         return None;
     }
-    let kind = DelegationKind::parse(value["kind"].as_str()?)?;
+    let kind = DelegationKind::parse(&scalar(&value["kind"])?)?;
     let anchor = integer(&value["anchor"]).filter(|n| *n > 0)?;
     let session = optional_identity(value, "session")?;
     let execution = optional_identity(value, "execution")?;
@@ -196,15 +225,15 @@ pub fn parse_delegation_claims(value: &Value) -> Option<DelegationClaims> {
         kind,
         id: exact_identity(&value["id"])?,
         anchor,
-        session,
         execution,
+        session,
         lease_holder,
     })
 }
-fn parse_scope(value: &Value, now_ms: i64) -> Option<SignedScope> {
+fn parse_scope(value: &J, now_ms: i64) -> Option<SignedScope> {
     if value["version"].as_f64() == Some(2.0) {
         return keys(value, &["version", "delegation"], &[])
-            .then(|| parse_delegation_claims(&value["delegation"]))
+            .then(|| parse_delegation_claims_lossless(&value["delegation"]))
             .flatten()
             .map(SignedScope::Delegated);
     }
@@ -234,34 +263,56 @@ fn parse_scope(value: &Value, now_ms: i64) -> Option<SignedScope> {
         return None;
     }
     if keys(value, &["build", "session", "exp"], &[]) {
-        return Some(SignedScope::Retired(
-            json!({"build":nonempty(&value["build"])?,"session":nonempty(&value["session"])?,"exp":exp}),
-        ));
+        return Some(SignedScope::Retired(object([
+            ("build", string(&nonempty(&value["build"])?)),
+            ("session", string(&nonempty(&value["session"])?)),
+            ("exp", integer_json(exp)),
+        ])));
     }
     if keys(value, &["resource", "session", "exp"], &["via"])
         && keys(&value["resource"], &["kind", "id"], &[])
         && matches!(
-            value["resource"]["kind"].as_str(),
+            scalar(&value["resource"]["kind"]).as_deref(),
             Some("build" | "repo" | "session")
         )
     {
-        let mut v = json!({"resource":{"kind":value["resource"]["kind"],"id":nonempty(&value["resource"]["id"])?},"session":nonempty(&value["session"])?,"exp":exp});
+        let mut v = object([
+            (
+                "resource",
+                object([
+                    ("kind", value["resource"]["kind"].clone()),
+                    ("id", string(&nonempty(&value["resource"]["id"])?)),
+                ]),
+            ),
+            ("session", string(&nonempty(&value["session"])?)),
+            ("exp", integer_json(exp)),
+        ]);
         if let Some(via) = optional_via(value)? {
-            v["via"] = serde_json::to_value(via).ok()?;
+            v["via"] = via.as_js_value()
         }
         return Some(SignedScope::Retired(v));
     }
     if keys(value, &["operator", "exp"], &["via"]) && keys(&value["operator"], &["user"], &[]) {
-        let mut v = json!({"operator":{"user":user(&value["operator"]["user"]) ?},"exp":exp});
+        let mut v = object([
+            (
+                "operator",
+                object([("user", string(&user(&value["operator"]["user"])?))]),
+            ),
+            ("exp", integer_json(exp)),
+        ]);
         if let Some(via) = optional_via(value)? {
-            v["via"] = serde_json::to_value(via).ok()?;
+            v["via"] = via.as_js_value()
         }
         return Some(SignedScope::Retired(v));
     }
-    if keys(value, &["operator", "session", "exp"], &[]) && value["operator"] == true {
-        return Some(SignedScope::Retired(
-            json!({"operator":true,"session":nonempty(&value["session"])?,"exp":exp}),
-        ));
+    if keys(value, &["operator", "session", "exp"], &[])
+        && value["operator"].as_bool() == Some(true)
+    {
+        return Some(SignedScope::Retired(object([
+            ("operator", J::Bool(true)),
+            ("session", string(&nonempty(&value["session"])?)),
+            ("exp", integer_json(exp)),
+        ])));
     }
     None
 }
@@ -316,51 +367,98 @@ pub fn verify_token(secret: &str, token: &str, now_ms: i64) -> Option<SignedScop
     }
     let bytes = decode_buffer_base64url(payload);
     let text = String::from_utf8_lossy(&bytes);
-    let raw = parse_js_json(text.as_bytes()).ok()?;
+    let raw = super::js_value::parse(text.as_bytes()).ok()?;
     parse_scope(&raw, now_ms)
 }
-#[derive(Serialize)]
-struct Grant<'a> {
-    version: u8,
-    delegation: &'a DelegationClaims,
-}
-pub fn mint_delegated_token(secret: &str, claims: &DelegationClaims) -> String {
-    let scope = serializable(
-        serde_json::to_value(Grant {
-            version: 2,
-            delegation: claims,
-        })
-        .expect("serializable grant"),
-    );
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&scope).expect("serializable grant"));
+/// Raw scope minting preserves caller insertion order, as JSON.stringify does.
+pub fn mint_js_token(secret: &str, scope: &J) -> String {
+    let payload = URL_SAFE_NO_PAD.encode(scope.stringify().as_bytes());
     let signature = URL_SAFE_NO_PAD.encode(signature(secret, &payload));
     format!("{payload}.{signature}")
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+pub fn mint_delegated_token(secret: &str, claims: &DelegationClaims) -> String {
+    // Issuance constructs execution before session; verification returns Zod's
+    // schema order. The two contracts deliberately have separate serializers.
+    let mut value = object([
+        ("repo", string(&claims.repo)),
+        ("kind", J::String(S::from(claims.kind.as_str()))),
+        ("id", string(&claims.id)),
+        ("anchor", integer_json(claims.anchor)),
+    ]);
+    for (key, field) in [
+        ("execution", &claims.execution),
+        ("session", &claims.session),
+        ("leaseHolder", &claims.lease_holder),
+    ] {
+        if let Some(field) = field {
+            value[key] = string(field)
+        }
+    }
+    mint_js_token(
+        secret,
+        &object([("version", J::Number(2.0)), ("delegation", value)]),
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DelegationTarget {
     BuildRunner {
-        id: String,
+        id: S,
     },
     BuildPhase {
-        id: String,
-        session: String,
+        id: S,
+        session: S,
     },
     HarvestRunner {
-        execution: String,
-        repo: String,
-        id: String,
-        #[serde(rename = "leaseHolder")]
-        lease_holder: String,
+        execution: S,
+        repo: S,
+        id: S,
+        lease_holder: S,
     },
     HarvestPhase {
-        repo: String,
-        id: String,
-        session: String,
+        repo: S,
+        id: S,
+        session: S,
     },
 }
+impl DelegationTarget {
+    pub fn as_js_value(&self) -> J {
+        match self {
+            Self::BuildRunner { id } => object([
+                ("kind", J::String(S::from("build-runner"))),
+                ("id", string(id)),
+            ]),
+            Self::BuildPhase { id, session } => object([
+                ("kind", J::String(S::from("build-phase"))),
+                ("id", string(id)),
+                ("session", string(session)),
+            ]),
+            Self::HarvestRunner {
+                execution,
+                repo,
+                id,
+                lease_holder,
+            } => object([
+                ("kind", J::String(S::from("harvest-runner"))),
+                ("execution", string(execution)),
+                ("repo", string(repo)),
+                ("id", string(id)),
+                ("leaseHolder", string(lease_holder)),
+            ]),
+            Self::HarvestPhase { repo, id, session } => object([
+                ("kind", J::String(S::from("harvest-phase"))),
+                ("repo", string(repo)),
+                ("id", string(id)),
+                ("session", string(session)),
+            ]),
+        }
+    }
+}
 pub fn parse_target(value: &Value) -> Option<DelegationTarget> {
-    Some(match value["kind"].as_str()? {
+    parse_target_lossless(&J::from_serde(value))
+}
+pub fn parse_target_lossless(value: &J) -> Option<DelegationTarget> {
+    Some(match scalar(&value["kind"])?.as_str() {
         "build-runner" if keys(value, &["kind", "id"], &[]) => DelegationTarget::BuildRunner {
             id: nonempty(&value["id"])?,
         },
@@ -397,6 +495,7 @@ pub fn parse_target(value: &Value) -> Option<DelegationTarget> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::js_json::parse_js_json;
     #[test]
     fn signed_scope_interoperability_matches_typescript() {
         let fixture = parse_js_json(include_bytes!("../../fixtures/protocol-tokens.json")).unwrap();
@@ -406,7 +505,7 @@ mod tests {
                 case["token"].as_str().unwrap(),
                 case["now"].as_i64().unwrap(),
             )
-            .map(|scope| scope.as_value())
+            .map(|scope| scope.as_js_value().to_serde_checked().unwrap())
             .unwrap_or(Value::Null);
             assert_eq!(actual, case["expected"], "{}", case["id"]);
         }
@@ -419,9 +518,65 @@ mod tests {
         }
         for case in fixture["targets"].as_array().unwrap() {
             let actual = parse_target(&case["input"])
-                .map(|target| serde_json::to_value(target).unwrap())
+                .map(|target| target.as_js_value().to_serde_checked().unwrap())
                 .unwrap_or(Value::Null);
             assert_eq!(actual, case["accepted"]);
         }
+    }
+    #[test]
+    fn signed_unicode_scopes_match_javascript_without_replacement() {
+        let fixture =
+            parse_js_json(include_bytes!("../../fixtures/protocol-token-unicode.json")).unwrap();
+        for row in fixture["verify"].as_array().unwrap() {
+            let parsed = verify_token(
+                row["secret"].as_str().unwrap(),
+                row["token"].as_str().unwrap(),
+                row["now"].as_i64().unwrap(),
+            )
+            .map(|v| v.as_js_value())
+            .unwrap_or(J::Null);
+            let expected: Vec<u16> = row["expectedUnits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u16)
+                .collect();
+            assert_eq!(
+                parsed.stringify().encode_utf16().collect::<Vec<_>>(),
+                expected,
+                "{} verify",
+                row["name"]
+            );
+        }
+        for row in fixture["mint"].as_array().unwrap() {
+            let scope =
+                super::super::js_value::parse(row["input"].as_str().unwrap().as_bytes()).unwrap();
+            assert_eq!(
+                mint_js_token(row["secret"].as_str().unwrap(), &scope),
+                row["token"].as_str().unwrap(),
+                "{} mint",
+                row["name"]
+            );
+        }
+        for row in fixture["targets"].as_array().unwrap() {
+            let input =
+                super::super::js_value::parse(row["input"].as_str().unwrap().as_bytes()).unwrap();
+            let actual = parse_target_lossless(&input)
+                .map(|v| v.as_js_value())
+                .unwrap_or(J::Null);
+            let expected: Vec<u16> = row["expectedUnits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u16)
+                .collect();
+            assert_eq!(
+                actual.stringify().encode_utf16().collect::<Vec<_>>(),
+                expected,
+                "{} target",
+                row["name"]
+            );
+        }
+        assert!(fixture["verify"].as_array().unwrap().len() >= 100);
     }
 }
