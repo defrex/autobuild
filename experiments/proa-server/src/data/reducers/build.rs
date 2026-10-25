@@ -63,7 +63,11 @@ impl BuildAcc {
             ]
             .contains(&t)
             {
-                serde_json::to_string(p).unwrap()
+                // Poll activity keys are canonical JSON, independently of the
+                // insertion order retained for exact machine-write diagnostics.
+                let mut canonical = p.clone();
+                canonical.sort_all_objects();
+                serde_json::to_string(&canonical).unwrap()
             } else {
                 number(&e["seq"]).to_string()
             });

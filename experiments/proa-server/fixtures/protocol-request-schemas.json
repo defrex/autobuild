@@ -1,0 +1,148 @@
+{
+  "newBuild": {
+    "type": "object",
+    "shape": {
+      "slug": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "repo": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "repoOrigin": { "type": "optional", "inner": { "type": "string" } },
+      "ticket": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "shape": {
+            "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+            "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+            "url": { "type": "optional", "inner": { "type": "string" } },
+            "title": { "type": "optional", "inner": { "type": "string" } }
+          },
+          "strict": true
+        }
+      },
+      "branch": {
+        "type": "optional",
+        "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+      },
+      "created": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "shape": {
+            "compatibility": {
+              "type": "optional",
+              "inner": {
+                "type": "object",
+                "shape": {
+                  "writerVersion": {
+                    "type": "string",
+                    "checks": [{ "check": "min_length", "minimum": 1 }]
+                  },
+                  "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+                },
+                "strict": true
+              }
+            },
+            "actor": { "type": "unknown" },
+            "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+            "payload": { "type": "unknown" }
+          },
+          "strict": false
+        }
+      }
+    },
+    "strict": false
+  },
+  "ensureRepo": {
+    "type": "object",
+    "shape": { "repo": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] } },
+    "strict": false
+  },
+  "leaseClaim": {
+    "type": "object",
+    "shape": {
+      "holder": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "ttlMs": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": true }
+        ]
+      }
+    },
+    "strict": false
+  },
+  "leaseHolder": {
+    "type": "object",
+    "shape": {
+      "holder": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+    },
+    "strict": false
+  },
+  "newSession": {
+    "type": "object",
+    "shape": {
+      "repo": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "title": { "type": "optional", "inner": { "type": "string" } }
+    },
+    "strict": false
+  },
+  "eventWrite": {
+    "type": "object",
+    "shape": {
+      "compatibility": {
+        "type": "optional",
+        "inner": {
+          "type": "object",
+          "shape": {
+            "writerVersion": {
+              "type": "string",
+              "checks": [{ "check": "min_length", "minimum": 1 }]
+            },
+            "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+          },
+          "strict": true
+        }
+      },
+      "actor": { "type": "unknown" },
+      "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+      "payload": { "type": "unknown" }
+    },
+    "strict": false
+  },
+  "conditionalEvent": {
+    "type": "object",
+    "shape": {
+      "expectedSeq": {
+        "type": "number",
+        "checks": [
+          { "check": "number_format", "format": "safeint" },
+          { "check": "greater_than", "value": 0, "inclusive": true }
+        ]
+      },
+      "event": {
+        "type": "object",
+        "shape": {
+          "compatibility": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "writerVersion": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "classification": { "type": "enum", "values": ["advisory", "decisive"] }
+              },
+              "strict": true
+            }
+          },
+          "actor": { "type": "unknown" },
+          "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "payload": { "type": "unknown" }
+        },
+        "strict": false
+      }
+    },
+    "strict": false
+  }
+}

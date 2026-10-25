@@ -170,3 +170,10 @@ failed suffix or any later appends; successful neighboring scopes keep advancing
 Closed PostgreSQL pool connections reconnect on subsequent reads and pass the same
 read-only schema preflight before reuse. A disconnect during a query can still
 fail that request; subsequent polls retry with a replacement connection.
+
+The remote BuildStore implementation is in staged development under
+`src/protocol/`. Its native checkpoint server currently proves identity,
+project credentials, records, leases and session events independently of the
+browser router. It is not yet a complete hosted-store replacement. See
+[the native protocol tools](tools/README.md#native-machine-protocol-checkpoints)
+for fixture generation, isolated proofs, evidence and remaining coverage.

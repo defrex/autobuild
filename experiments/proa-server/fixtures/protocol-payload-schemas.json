@@ -1,0 +1,2864 @@
+{
+  "supported": {
+    "build": {
+      "build.compatibility-deferred": {
+        "type": "object",
+        "shape": {
+          "boundary": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "types": {
+            "type": "array",
+            "checks": [{ "check": "min_length", "minimum": 1 }],
+            "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "writerVersions": {
+            "type": "array",
+            "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "legacyVersionUnavailable": { "type": "boolean" },
+          "diagnostic": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.opening": {
+        "type": "object",
+        "shape": {
+          "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "parent": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "sha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.restack-satisfied": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "parent": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "outcome": { "type": "enum", "values": ["covered", "destination-changed"] }
+        },
+        "strict": true
+      },
+      "node.parent-distance": {
+        "type": "object",
+        "shape": {
+          "base": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "parent": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "count": {
+            "type": "nullable",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": true }
+              ]
+            }
+          }
+        },
+        "strict": true
+      },
+      "node.parent-requested": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "old": {
+            "type": "object",
+            "shape": {
+              "target": {
+                "type": "nullable",
+                "inner": {
+                  "type": "object",
+                  "shape": {
+                    "ticket": {
+                      "type": "object",
+                      "shape": {
+                        "source": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "id": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "url": { "type": "optional", "inner": { "type": "string" } },
+                        "title": { "type": "optional", "inner": { "type": "string" } }
+                      },
+                      "strict": true
+                    },
+                    "build": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    }
+                  },
+                  "strict": true
+                }
+              },
+              "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          },
+          "next": {
+            "type": "object",
+            "shape": {
+              "target": {
+                "type": "nullable",
+                "inner": {
+                  "type": "object",
+                  "shape": {
+                    "ticket": {
+                      "type": "object",
+                      "shape": {
+                        "source": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "id": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "url": { "type": "optional", "inner": { "type": "string" } },
+                        "title": { "type": "optional", "inner": { "type": "string" } }
+                      },
+                      "strict": true
+                    },
+                    "build": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    }
+                  },
+                  "strict": true
+                }
+              },
+              "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          },
+          "revision": { "type": "string" }
+        },
+        "strict": true
+      },
+      "node.parent-accepted": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "old": {
+            "type": "object",
+            "shape": {
+              "target": {
+                "type": "nullable",
+                "inner": {
+                  "type": "object",
+                  "shape": {
+                    "ticket": {
+                      "type": "object",
+                      "shape": {
+                        "source": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "id": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "url": { "type": "optional", "inner": { "type": "string" } },
+                        "title": { "type": "optional", "inner": { "type": "string" } }
+                      },
+                      "strict": true
+                    },
+                    "build": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    }
+                  },
+                  "strict": true
+                }
+              },
+              "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          },
+          "next": {
+            "type": "object",
+            "shape": {
+              "target": {
+                "type": "nullable",
+                "inner": {
+                  "type": "object",
+                  "shape": {
+                    "ticket": {
+                      "type": "object",
+                      "shape": {
+                        "source": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "id": {
+                          "type": "string",
+                          "checks": [{ "check": "min_length", "minimum": 1 }]
+                        },
+                        "url": { "type": "optional", "inner": { "type": "string" } },
+                        "title": { "type": "optional", "inner": { "type": "string" } }
+                      },
+                      "strict": true
+                    },
+                    "build": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    }
+                  },
+                  "strict": true
+                }
+              },
+              "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          },
+          "revision": { "type": "string" }
+        },
+        "strict": true
+      },
+      "node.parent-pr-retargeted": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "base": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.parent-completed": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.parent-cancelled": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "reason": { "type": "string" }
+        },
+        "strict": true
+      },
+      "node.parent-rejection-cleared": {
+        "type": "object",
+        "shape": {
+          "revision": { "type": "string" },
+          "target": { "type": "nullable", "inner": { "type": "string" } }
+        },
+        "strict": true
+      },
+      "node.parent-rejected": {
+        "type": "object",
+        "shape": {
+          "revision": { "type": "string" },
+          "target": { "type": "nullable", "inner": { "type": "string" } },
+          "reason": { "type": "string" }
+        },
+        "strict": true
+      },
+      "node.opened": {
+        "type": "object",
+        "shape": {
+          "sha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.writer-reserved": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "operation": { "type": "enum", "values": ["restack", "landing"] },
+          "requests": {
+            "type": "optional",
+            "inner": {
+              "type": "array",
+              "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            }
+          },
+          "expected": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "parent": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "oldBase": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "source": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "archive": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "changes": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "sha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "build": {
+                  "type": "optional",
+                  "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+                },
+                "mainline": { "type": "optional", "inner": { "type": "literal", "values": [1] } }
+              },
+              "strict": true
+            }
+          },
+          "upstreamBuilds": { "type": "array", "element": { "type": "string" } },
+          "merges": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "sha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "parent": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "identities": { "type": "array", "element": { "type": "string" } },
+                "build": { "type": "optional", "inner": { "type": "string" } },
+                "missing": { "type": "array", "element": { "type": "string" } }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
+      },
+      "node.item-prepared": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "index": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "base": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.item-replayed": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "index": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "base": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "dropped": { "type": "boolean" },
+          "dropReason": {
+            "type": "optional",
+            "inner": { "type": "enum", "values": ["upstream-identity", "upstream-commit"] }
+          }
+        },
+        "strict": true
+      },
+      "node.item-conflicted": {
+        "type": "object",
+        "shape": {
+          "files": {
+            "type": "optional",
+            "inner": { "type": "array", "element": { "type": "string" } }
+          },
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "index": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "base": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.publish-intended": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.rewritten": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "previous": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "node.writer-settled": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "outcome": { "type": "enum", "values": ["completed", "contended", "abandoned"] },
+          "actual": {
+            "type": "optional",
+            "inner": { "type": "nullable", "inner": { "type": "string" } }
+          }
+        },
+        "strict": true
+      },
+      "node.inventory": {
+        "type": "object",
+        "shape": {
+          "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "base": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "builds": { "type": "array", "element": { "type": "string" } },
+          "contributions": {
+            "type": "optional",
+            "inner": { "type": "array", "element": { "type": "string" } }
+          },
+          "foreign": { "type": "array", "element": { "type": "string" } }
+        },
+        "strict": true
+      },
+      "integration.abandoned": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "reason": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "integration.observed": {
+        "type": "object",
+        "shape": {
+          "membershipSource": { "type": "optional", "inner": { "type": "string" } },
+          "openChildren": { "type": "array", "element": { "type": "string" } },
+          "diagnostics": { "type": "array", "element": { "type": "string" } },
+          "contributions": { "type": "array", "element": { "type": "string" } },
+          "children": {
+            "type": "optional",
+            "inner": {
+              "type": "array",
+              "element": {
+                "type": "object",
+                "shape": {
+                  "source": { "type": "string" },
+                  "id": { "type": "string" },
+                  "title": { "type": "optional", "inner": { "type": "string" } },
+                  "builds": {
+                    "type": "optional",
+                    "inner": { "type": "array", "element": { "type": "string" } }
+                  },
+                  "claims": {
+                    "type": "optional",
+                    "inner": { "type": "array", "element": { "type": "string" } }
+                  }
+                },
+                "strict": true
+              }
+            }
+          }
+        },
+        "strict": true
+      },
+      "integration.prepared": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "parent": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "config": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "integration.landed": {
+        "type": "object",
+        "shape": {
+          "operation": { "type": "optional", "inner": { "type": "string" } },
+          "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "landed": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "provenance": { "type": "enum", "values": ["kernel", "human"] },
+          "verified": { "type": "boolean" },
+          "fenced": { "type": "boolean" }
+        },
+        "strict": true
+      },
+      "integration.audited": {
+        "type": "object",
+        "shape": {
+          "operation": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "verifiedTree": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "landedTree": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "identities": { "type": "array", "element": { "type": "string" } }
+        },
+        "strict": true
+      },
+      "node.compared": {
+        "type": "object",
+        "shape": {
+          "parentSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "headSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "ahead": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "pr.opened": {
+        "type": "object",
+        "shape": {
+          "pr": {
+            "type": "object",
+            "shape": {
+              "number": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": false }
+                ]
+              },
+              "url": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "headSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "build.completed": {
+        "type": "object",
+        "shape": {
+          "outcome": {
+            "type": "enum",
+            "values": ["merged", "closed-unmerged", "abandoned", "discarded"]
+          }
+        },
+        "strict": true
+      },
+      "runner.attached": {
+        "type": "object",
+        "shape": {
+          "instance": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "host": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "resumedFromSeq": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": true }
+              ]
+            }
+          }
+        },
+        "strict": true
+      },
+      "runner.setup-failed": {
+        "type": "object",
+        "shape": {
+          "command": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "exitStatus": {
+            "type": "nullable",
+            "inner": {
+              "type": "number",
+              "checks": [{ "check": "number_format", "format": "safeint" }]
+            }
+          },
+          "output": { "type": "string" }
+        },
+        "strict": true
+      },
+      "workspace.provision-started": {
+        "type": "object",
+        "shape": {
+          "provider": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "generation": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "execution.drain-settled": {
+        "type": "object",
+        "shape": {
+          "correlation": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "instance": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "execution.started": {
+        "type": "object",
+        "shape": {
+          "provider": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "workspaceRef": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "instance": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "sessionId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "commandId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      },
+      "execution.ended": {
+        "type": "object",
+        "shape": {
+          "instance": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "workspaceRef": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "outcome": { "type": "enum", "values": ["completed", "stopped", "lost", "relaunch"] },
+          "exitCode": {
+            "type": "optional",
+            "inner": {
+              "type": "nullable",
+              "inner": {
+                "type": "number",
+                "checks": [{ "check": "number_format", "format": "safeint" }]
+              }
+            }
+          }
+        },
+        "strict": true
+      },
+      "infrastructure.failed": {
+        "type": "object",
+        "shape": {
+          "provider": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "workspaceRef": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "instance": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "sessionId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "operation": {
+            "type": "enum",
+            "values": ["provision", "start", "wait", "stop", "delete", "reconcile"]
+          },
+          "cause": {
+            "type": "enum",
+            "values": [
+              "missing",
+              "session-expired",
+              "timeout",
+              "provider-limit",
+              "provider-error",
+              "unknown-outcome"
+            ]
+          },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "retryable": { "type": "boolean" },
+          "cleanupPending": { "type": "boolean" },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "infrastructure.cleanup-attempted": {
+        "type": "object",
+        "shape": {
+          "provider": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "workspaceRef": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "operation": { "type": "enum", "values": ["stop", "delete", "reconcile"] },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "outcome": { "type": "enum", "values": ["confirmed", "absent", "unknown"] },
+          "error": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "snapshots": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "outcome": { "type": "enum", "values": ["confirmed", "absent", "unknown"] },
+                "deleted": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "number",
+                    "checks": [
+                      { "check": "number_format", "format": "safeint" },
+                      { "check": "greater_than", "value": 0, "inclusive": true }
+                    ]
+                  }
+                },
+                "error": {
+                  "type": "optional",
+                  "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+                }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
+      },
+      "pr-summary.requested": {
+        "type": "object",
+        "shape": {
+          "occurrence": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "boundary": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "pr-summary.attempted": {
+        "type": "object",
+        "shape": {
+          "occurrence": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "boundary": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "pr": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "pr-summary.settled": {
+        "type": "object",
+        "shape": {
+          "request": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "disposition": { "type": "enum", "values": ["attempted", "skipped", "deferred"] }
+        },
+        "strict": true
+      },
+      "finalize.step-started": {
+        "type": "object",
+        "shape": {
+          "step": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "abort.remote-branch-deleted": {
+        "type": "object",
+        "shape": {
+          "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "abort.local-branch-deleted": {
+        "type": "object",
+        "shape": {
+          "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "abort.ticket-returned": {
+        "type": "object",
+        "shape": {
+          "ticket": {
+            "type": "object",
+            "shape": {
+              "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "url": { "type": "optional", "inner": { "type": "string" } },
+              "title": { "type": "optional", "inner": { "type": "string" } }
+            },
+            "strict": true
+          },
+          "state": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "label": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatch.failed": {
+        "type": "object",
+        "shape": {
+          "stage": {
+            "type": "enum",
+            "values": ["create", "workspace", "spec", "comment", "branch", "launch"]
+          },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatch.comment-posted": { "type": "object", "shape": {}, "strict": true },
+      "build.pause-requested": {
+        "type": "object",
+        "shape": { "reason": { "type": "optional", "inner": { "type": "string" } } },
+        "strict": true
+      },
+      "build.resume-requested": {
+        "type": "object",
+        "shape": { "reason": { "type": "optional", "inner": { "type": "string" } } },
+        "strict": true
+      },
+      "build.abort-requested": {
+        "type": "object",
+        "shape": { "reason": { "type": "optional", "inner": { "type": "string" } } },
+        "strict": true
+      },
+      "build.discard-requested": { "type": "object", "shape": {}, "strict": true },
+      "build.janitor-failing": {
+        "type": "object",
+        "shape": {
+          "message": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "build.janitor-recovered": { "type": "object", "shape": {}, "strict": true },
+      "build.hold-requested": { "type": "object", "shape": {}, "strict": true },
+      "build.land-requested": {
+        "type": "object",
+        "shape": {
+          "decisionSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "landing.command-acknowledged": {
+        "type": "object",
+        "shape": {
+          "commandSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "landing.native-enable-started": { "type": "object", "shape": {}, "strict": true },
+      "landing.forge-merged": {
+        "type": "object",
+        "shape": {
+          "classification": { "type": "enum", "values": ["human", "possible-stale-enable"] },
+          "overrodeHold": { "type": "boolean" }
+        },
+        "strict": true
+      },
+      "build.auto-merge-requested": {
+        "type": "object",
+        "shape": {
+          "integrationConsent": {
+            "type": "optional",
+            "inner": { "type": "literal", "values": [true] }
+          },
+          "defaultSeq": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": false }
+              ]
+            }
+          }
+        },
+        "strict": true
+      },
+      "build.auto-merge-cancelled": {
+        "type": "object",
+        "shape": {
+          "integrationConsent": {
+            "type": "optional",
+            "inner": { "type": "literal", "values": [true] }
+          },
+          "defaultSeq": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": false }
+              ]
+            }
+          }
+        },
+        "strict": true
+      },
+      "build.auto-merge-default-observed": {
+        "type": "object",
+        "shape": {
+          "defaultSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "build.paused": { "type": "object", "shape": {}, "strict": true },
+      "build.resumed": { "type": "object", "shape": {}, "strict": true },
+      "build.aborted": { "type": "object", "shape": {}, "strict": true },
+      "spec.imported": {
+        "type": "object",
+        "shape": {
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "ticket": {
+            "type": "object",
+            "shape": {
+              "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "url": { "type": "optional", "inner": { "type": "string" } },
+              "title": { "type": "optional", "inner": { "type": "string" } }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "spec.authored": {
+        "type": "object",
+        "shape": {
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "session": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "session.resume-fallback": {
+        "type": "object",
+        "shape": {
+          "session": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "stale": { "type": "optional", "inner": { "type": "boolean" } },
+          "reason": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "plan-review.started": {
+        "type": "object",
+        "shape": {
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "plan-review.verdict": {
+        "type": "object",
+        "shape": {
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "verdict": { "type": "enum", "values": ["approve", "revise", "escalate"] },
+          "findings": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "severity": { "type": "enum", "values": ["blocking", "important", "minor"] },
+                "file": { "type": "optional", "inner": { "type": "string" } },
+                "lines": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "array",
+                    "element": {
+                      "type": "number",
+                      "checks": [{ "check": "number_format", "format": "safeint" }]
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "detail": { "type": "optional", "inner": { "type": "string" } },
+                "persists": {
+                  "type": "default",
+                  "inner": { "type": "array", "element": { "type": "string" } },
+                  "value": []
+                }
+              },
+              "strict": true
+            }
+          },
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "reason": { "type": "optional", "inner": { "type": "string" } }
+        },
+        "strict": true
+      },
+      "implement.completed": {
+        "type": "object",
+        "shape": {
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "commits": {
+            "type": "object",
+            "shape": {
+              "base": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "head": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          },
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "code-review.started": {
+        "type": "object",
+        "shape": {
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "code-review.verdict": {
+        "type": "object",
+        "shape": {
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "verdict": { "type": "enum", "values": ["approve", "revise", "escalate"] },
+          "findings": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "severity": { "type": "enum", "values": ["blocking", "important", "minor"] },
+                "file": { "type": "optional", "inner": { "type": "string" } },
+                "lines": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "array",
+                    "element": {
+                      "type": "number",
+                      "checks": [{ "check": "number_format", "format": "safeint" }]
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "detail": { "type": "optional", "inner": { "type": "string" } },
+                "persists": {
+                  "type": "default",
+                  "inner": { "type": "array", "element": { "type": "string" } },
+                  "value": []
+                }
+              },
+              "strict": true
+            }
+          },
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "reason": { "type": "optional", "inner": { "type": "string" } }
+        },
+        "strict": true
+      },
+      "finalize.started": { "type": "object", "shape": {}, "strict": true },
+      "finalize.completed": {
+        "type": "object",
+        "shape": {
+          "pr": {
+            "type": "object",
+            "shape": {
+              "number": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": false }
+                ]
+              },
+              "url": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "headSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "pr-attachment.reclaimed": {
+        "type": "object",
+        "shape": {
+          "hostedSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "pr-attachment.reclaim-failed": {
+        "type": "object",
+        "shape": {
+          "hostedSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "pr.auto-merge-enabled": {
+        "type": "object",
+        "shape": {
+          "commandSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "pr.auto-merge-disabled": {
+        "type": "object",
+        "shape": {
+          "commandSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "pr.merged": {
+        "type": "object",
+        "shape": {
+          "sha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "buildTrailerPresent": { "type": "optional", "inner": { "type": "boolean" } }
+        },
+        "strict": true
+      },
+      "pr.closed": { "type": "object", "shape": {}, "strict": true },
+      "pr.conflicted": {
+        "type": "object",
+        "shape": {
+          "baseSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "reconcile.progress-checked": {
+        "type": "object",
+        "shape": {
+          "conflictSeq": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "baseSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "restack.replayed": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "conflicted": { "type": "boolean" },
+          "files": {
+            "type": "optional",
+            "inner": { "type": "array", "element": { "type": "string" } }
+          }
+        },
+        "strict": true
+      },
+      "reconcile.started": {
+        "type": "object",
+        "shape": {
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "baseSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "restackId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      },
+      "reconcile.replayed": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "conflicted": { "type": "boolean" },
+          "files": {
+            "type": "optional",
+            "inner": { "type": "array", "element": { "type": "string" } }
+          }
+        },
+        "strict": true
+      },
+      "observation.recorded": {
+        "type": "object",
+        "shape": {
+          "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "kind": { "type": "enum", "values": ["followup", "refactor", "latent-bug"] },
+          "summary": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "files": {
+            "type": "optional",
+            "inner": { "type": "array", "element": { "type": "string" } }
+          },
+          "refs": {
+            "type": "optional",
+            "inner": { "type": "array", "element": { "type": "string" } }
+          }
+        },
+        "strict": true
+      }
+    },
+    "repository": {
+      "dispatcher.forge-recovered": {
+        "type": "object",
+        "shape": {
+          "forge": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.ticket-source-dependency-limited": {
+        "type": "object",
+        "shape": {
+          "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.ticket-source-recovered": {
+        "type": "object",
+        "shape": {
+          "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "cause": { "type": "enum", "values": ["rate-limited", "ready-scan-failed"] },
+          "operation": { "type": "enum", "values": ["ready-scan", "dependency-check"] }
+        },
+        "strict": true
+      },
+      "harvest.pause-requested": { "type": "object", "shape": {}, "strict": true },
+      "harvest.resume-requested": { "type": "object", "shape": {}, "strict": true },
+      "harvest.paused": { "type": "object", "shape": {}, "strict": true },
+      "harvest.resumed": { "type": "object", "shape": {}, "strict": true },
+      "harvest.recovery-requested": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "attempt": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          }
+        },
+        "strict": true
+      },
+      "harvest.recovery-exhausted": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "step": { "type": "enum", "values": ["scan", "synthesize", "review", "file"] },
+          "round": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": false }
+              ]
+            }
+          },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "attempts": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "releasedObservations": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "build": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "seq": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": false }
+                  ]
+                }
+              },
+              "strict": true
+            }
+          },
+          "committedDispositions": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "occurrence": {
+                  "type": "object",
+                  "shape": {
+                    "build": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    },
+                    "seq": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": false }
+                      ]
+                    }
+                  },
+                  "strict": true
+                },
+                "action": { "type": "enum", "values": ["filed", "joined", "suppressed"] },
+                "proposalKey": {
+                  "type": "optional",
+                  "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+                },
+                "ticket": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "object",
+                    "shape": {
+                      "source": {
+                        "type": "string",
+                        "checks": [{ "check": "min_length", "minimum": 1 }]
+                      },
+                      "id": {
+                        "type": "string",
+                        "checks": [{ "check": "min_length", "minimum": 1 }]
+                      },
+                      "url": { "type": "optional", "inner": { "type": "string" } },
+                      "title": { "type": "optional", "inner": { "type": "string" } }
+                    },
+                    "strict": true
+                  }
+                },
+                "reason": {
+                  "type": "optional",
+                  "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+                }
+              },
+              "strict": true
+            }
+          },
+          "pendingProposals": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "proposalKey": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "action": { "type": "enum", "values": ["create", "join", "suppress"] },
+                "observations": {
+                  "type": "array",
+                  "checks": [{ "check": "min_length", "minimum": 1 }],
+                  "element": {
+                    "type": "object",
+                    "shape": {
+                      "build": {
+                        "type": "string",
+                        "checks": [{ "check": "min_length", "minimum": 1 }]
+                      },
+                      "seq": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": false }
+                        ]
+                      }
+                    },
+                    "strict": true
+                  }
+                }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
+      },
+      "harvest.started": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "observations": {
+            "type": "array",
+            "checks": [{ "check": "min_length", "minimum": 1 }],
+            "element": {
+              "type": "object",
+              "shape": {
+                "build": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "seq": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": false }
+                  ]
+                }
+              },
+              "strict": true
+            }
+          },
+          "scan": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "trigger": {
+            "type": "optional",
+            "inner": { "type": "enum", "values": ["count", "drift", "both"] }
+          },
+          "environment": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "provider": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "environmentId": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "sessionId": {
+                  "type": "optional",
+                  "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+                }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
+      },
+      "harvest.execution.authorized": {
+        "type": "object",
+        "shape": {
+          "execution": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "launch": { "type": "enum", "values": ["started", "resumed"] },
+          "leaseHolder": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "harvest.execution.ended": {
+        "type": "object",
+        "shape": {
+          "execution": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "harvest.execution.started": {
+        "type": "object",
+        "shape": {
+          "execution": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "provider": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "string",
+            "checks": [{ "check": "min_length", "minimum": 1 }]
+          },
+          "sessionId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "commandId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      },
+      "harvest.execution.released": {
+        "type": "object",
+        "shape": {
+          "execution": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "string",
+            "checks": [{ "check": "min_length", "minimum": 1 }]
+          },
+          "snapshots": {
+            "type": "object",
+            "shape": {
+              "outcome": { "type": "enum", "values": ["confirmed", "unknown"] },
+              "deleted": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "error": {
+                "type": "optional",
+                "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "harvest.step.started": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "step": { "type": "enum", "values": ["scan", "synthesize", "review", "file"] },
+          "round": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": false }
+              ]
+            }
+          }
+        },
+        "strict": true
+      },
+      "harvest.step.completed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "step": { "type": "enum", "values": ["scan", "synthesize", "review", "file"] },
+          "outcome": {
+            "type": "enum",
+            "values": ["completed", "approve", "revise", "escalate", "failed"]
+          },
+          "round": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": false }
+              ]
+            }
+          },
+          "artifact": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "rev": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "strict": true
+            }
+          },
+          "detail": { "type": "optional", "inner": { "type": "string" } }
+        },
+        "strict": true
+      },
+      "harvest.session.suspended": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "session": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "cause": { "type": "enum", "values": ["shutdown", "cutover"] },
+          "transcript": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "usage": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "inputTokens": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                },
+                "outputTokens": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                },
+                "turns": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
+      },
+      "harvest.session.resume-fallback": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "session": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "reason": {
+            "type": "enum",
+            "values": [
+              "missing-handle",
+              "changed-route",
+              "unsupported",
+              "wrong-runner",
+              "wrong-host",
+              "wrong-workspace",
+              "missing-state"
+            ]
+          },
+          "message": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "harvest.session.ended": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "session": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "transcript": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "usage": {
+            "type": "object",
+            "shape": {
+              "inputTokens": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "outputTokens": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "turns": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "harvest.proposals.submitted": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "harvest.review.verdict": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "round": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": false }
+            ]
+          },
+          "verdict": { "type": "enum", "values": ["approve", "revise", "escalate"] },
+          "findings": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "shape": {
+                "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "severity": { "type": "enum", "values": ["blocking", "important", "minor"] },
+                "file": { "type": "optional", "inner": { "type": "string" } },
+                "lines": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "array",
+                    "element": {
+                      "type": "number",
+                      "checks": [{ "check": "number_format", "format": "safeint" }]
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string",
+                  "checks": [{ "check": "min_length", "minimum": 1 }]
+                },
+                "detail": { "type": "optional", "inner": { "type": "string" } },
+                "persists": {
+                  "type": "default",
+                  "inner": { "type": "array", "element": { "type": "string" } },
+                  "value": []
+                }
+              },
+              "strict": true
+            }
+          },
+          "artifact": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "reason": { "type": "optional", "inner": { "type": "string" } }
+        },
+        "strict": true
+      },
+      "harvest.proposal.filed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "proposalKey": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "ticket": {
+            "type": "object",
+            "shape": {
+              "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "id": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "url": { "type": "optional", "inner": { "type": "string" } },
+              "title": { "type": "optional", "inner": { "type": "string" } }
+            },
+            "strict": true
+          },
+          "blockers": {
+            "type": "optional",
+            "inner": {
+              "type": "object",
+              "shape": {
+                "declared": {
+                  "type": "array",
+                  "element": {
+                    "type": "string",
+                    "checks": [{ "check": "min_length", "minimum": 1 }]
+                  }
+                },
+                "derived": {
+                  "type": "array",
+                  "element": {
+                    "type": "string",
+                    "checks": [{ "check": "min_length", "minimum": 1 }]
+                  }
+                }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
+      },
+      "harvest.completed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "dispositions": {
+            "type": "array",
+            "checks": [{ "check": "min_length", "minimum": 1 }],
+            "element": {
+              "type": "object",
+              "shape": {
+                "occurrence": {
+                  "type": "object",
+                  "shape": {
+                    "build": {
+                      "type": "string",
+                      "checks": [{ "check": "min_length", "minimum": 1 }]
+                    },
+                    "seq": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": false }
+                      ]
+                    }
+                  },
+                  "strict": true
+                },
+                "action": { "type": "enum", "values": ["filed", "joined", "suppressed"] },
+                "proposalKey": {
+                  "type": "optional",
+                  "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+                },
+                "ticket": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "object",
+                    "shape": {
+                      "source": {
+                        "type": "string",
+                        "checks": [{ "check": "min_length", "minimum": 1 }]
+                      },
+                      "id": {
+                        "type": "string",
+                        "checks": [{ "check": "min_length", "minimum": 1 }]
+                      },
+                      "url": { "type": "optional", "inner": { "type": "string" } },
+                      "title": { "type": "optional", "inner": { "type": "string" } }
+                    },
+                    "strict": true
+                  }
+                },
+                "reason": {
+                  "type": "optional",
+                  "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+                }
+              },
+              "strict": true
+            }
+          },
+          "report": {
+            "type": "object",
+            "shape": {
+              "kind": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "rev": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "harvest.escalated": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "source": { "type": "enum", "values": ["agent", "stall", "policy"] },
+          "reason": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "round": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": false }
+              ]
+            }
+          },
+          "observations": {
+            "type": "array",
+            "checks": [{ "check": "min_length", "minimum": 1 }],
+            "element": {
+              "type": "object",
+              "shape": {
+                "build": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+                "seq": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": false }
+                  ]
+                }
+              },
+              "strict": true
+            }
+          }
+        },
+        "strict": true
+      },
+      "orchestrator.sandbox.resumed": {
+        "type": "object",
+        "shape": {
+          "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "string",
+            "checks": [{ "check": "min_length", "minimum": 1 }]
+          },
+          "provider": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "sessionId": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      },
+      "orchestrator.sandbox.activity": {
+        "type": "object",
+        "shape": {
+          "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "orchestrator.sandbox.stopped": {
+        "type": "object",
+        "shape": {
+          "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "string",
+            "checks": [{ "check": "min_length", "minimum": 1 }]
+          },
+          "reason": { "type": "literal", "values": ["idle"] }
+        },
+        "strict": true
+      },
+      "orchestrator.sandbox.released": {
+        "type": "object",
+        "shape": {
+          "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "string",
+            "checks": [{ "check": "min_length", "minimum": 1 }]
+          },
+          "snapshots": {
+            "type": "object",
+            "shape": {
+              "outcome": { "type": "enum", "values": ["confirmed", "unknown"] },
+              "deleted": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "error": {
+                "type": "optional",
+                "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+              }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "orchestrator.sandbox.reset": {
+        "type": "object",
+        "shape": {
+          "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "orchestrator.sandbox.publish-failed": {
+        "type": "object",
+        "shape": {
+          "operator": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "environmentId": {
+            "type": "string",
+            "checks": [{ "check": "min_length", "minimum": 1 }]
+          },
+          "stage": { "type": "enum", "values": ["checks", "push", "pr"] },
+          "message": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.upgrade-target-resolved": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "lineage": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "target": {
+            "type": "object",
+            "shape": {
+              "mode": { "type": "enum", "values": ["pinned", "installed", "source"] },
+              "key": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "version": { "type": "optional", "inner": { "type": "string" } },
+              "base": { "type": "optional", "inner": { "type": "string" } },
+              "sha": { "type": "optional", "inner": { "type": "string" } }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "dispatcher.rollback-hold-cleared": {
+        "type": "object",
+        "shape": {
+          "correlation": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "lineage": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "target": {
+            "type": "object",
+            "shape": {
+              "mode": { "type": "enum", "values": ["pinned", "installed", "source"] },
+              "key": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "source": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+              "version": { "type": "optional", "inner": { "type": "string" } },
+              "base": { "type": "optional", "inner": { "type": "string" } },
+              "sha": { "type": "optional", "inner": { "type": "string" } }
+            },
+            "strict": true
+          }
+        },
+        "strict": true
+      },
+      "dispatcher.stop-requested": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "signal": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.run-stopped": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "outcome": { "type": "enum", "values": ["normal", "abnormal", "forced"] },
+          "exitCode": {
+            "type": "optional",
+            "inner": {
+              "type": "nullable",
+              "inner": {
+                "type": "number",
+                "checks": [{ "check": "number_format", "format": "safeint" }]
+              }
+            }
+          },
+          "signal": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "error": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "reason": { "type": "optional", "inner": { "type": "enum", "values": ["superseded"] } }
+        },
+        "strict": true
+      },
+      "dispatcher.tick-yielded": {
+        "type": "object",
+        "shape": {
+          "run": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "holder": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.forge-readiness-failed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "forge": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "rootBranch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "check": {
+            "type": "enum",
+            "values": ["squash", "rebase", "build-refs", "node-refs", "archive-refs"]
+          },
+          "detail": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "remediation": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.config-rejected": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.config-publication-failed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.tick-completed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "queued": {
+            "type": "number",
+            "checks": [
+              { "check": "number_format", "format": "safeint" },
+              { "check": "greater_than", "value": 0, "inclusive": true }
+            ]
+          },
+          "observations": {
+            "type": "optional",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": true }
+              ]
+            }
+          },
+          "counters": {
+            "type": "object",
+            "shape": {
+              "forgeRequests": {
+                "type": "optional",
+                "inner": {
+                  "type": "object",
+                  "shape": {
+                    "restPrimary": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "restNotModified": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "graphql": {
+                      "type": "optional",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          { "check": "number_format", "format": "safeint" },
+                          { "check": "greater_than", "value": 0, "inclusive": true }
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    },
+                    "unattributed": {
+                      "type": "number",
+                      "checks": [
+                        { "check": "number_format", "format": "safeint" },
+                        { "check": "greater_than", "value": 0, "inclusive": true }
+                      ]
+                    },
+                    "builds": {
+                      "type": "array",
+                      "checks": [{ "check": "max_length", "maximum": 10 }],
+                      "element": {
+                        "type": "object",
+                        "shape": {
+                          "build": {
+                            "type": "string",
+                            "checks": [{ "check": "min_length", "minimum": 1 }]
+                          },
+                          "requests": {
+                            "type": "number",
+                            "checks": [
+                              { "check": "number_format", "format": "safeint" },
+                              { "check": "greater_than", "value": 0, "inclusive": false }
+                            ]
+                          }
+                        },
+                        "strict": true
+                      }
+                    },
+                    "complete": { "type": "boolean" }
+                  },
+                  "strict": true
+                }
+              },
+              "merged": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "closed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "conflicted": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "abandoned": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "discarded": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "janitorFailed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "recovered": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "dispatchFailed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "resumed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "swept": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "dispatched": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "authored": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "bounced": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "claimRaces": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "invalidTickets": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "creationWithheld": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "dependencyBlocked": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "dependencyCheckFailed": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "settled": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "provisioning": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "sandboxIdleStops": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "sandboxSettleFailures": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "orchestratorSandboxFailures": {
+                "type": "optional",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    { "check": "number_format", "format": "safeint" },
+                    { "check": "greater_than", "value": 0, "inclusive": true }
+                  ]
+                }
+              },
+              "harvestStarted": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestResumed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestCompleted": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestEscalated": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              },
+              "harvestFailed": {
+                "type": "number",
+                "checks": [
+                  { "check": "number_format", "format": "safeint" },
+                  { "check": "greater_than", "value": 0, "inclusive": true }
+                ]
+              }
+            },
+            "strict": true
+          },
+          "blockedDiagnostics": {
+            "type": "optional",
+            "inner": {
+              "type": "array",
+              "checks": [{ "check": "max_length", "maximum": 1000 }],
+              "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            }
+          },
+          "janitorDiagnostics": {
+            "type": "array",
+            "checks": [{ "check": "max_length", "maximum": 1000 }],
+            "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "ticketDiagnostics": {
+            "type": "array",
+            "checks": [{ "check": "max_length", "maximum": 1000 }],
+            "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "creationDiagnostics": {
+            "type": "optional",
+            "inner": {
+              "type": "array",
+              "checks": [{ "check": "max_length", "maximum": 1000 }],
+              "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+            }
+          },
+          "dependencyDiagnostics": {
+            "type": "array",
+            "checks": [{ "check": "max_length", "maximum": 1000 }],
+            "element": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      },
+      "dispatcher.tick-failed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.runner-settled": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "slug": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "outcome": {
+            "type": "enum",
+            "values": ["parked", "lease-held", "launch-failed", "failed", "relaunch"]
+          },
+          "status": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "error": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      },
+      "dispatcher.harvest-runner-failed": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "error": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.upgrade-available": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "version": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.operator-reported": {
+        "type": "object",
+        "shape": {
+          "run": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "level": { "type": "enum", "values": ["info", "warning"] },
+          "message": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "dispatcher.intake-set": {
+        "type": "object",
+        "shape": {
+          "enabled": { "type": "boolean" },
+          "run": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      },
+      "dispatcher.pause-set": {
+        "type": "object",
+        "shape": { "enabled": { "type": "boolean" } },
+        "strict": true
+      },
+      "dispatcher.auto-merge-default-set": {
+        "type": "object",
+        "shape": {
+          "enabled": { "type": "boolean" },
+          "run": {
+            "type": "optional",
+            "inner": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          }
+        },
+        "strict": true
+      }
+    }
+  },
+  "unsupported": {
+    "build": {
+      "build.created": "Unsupported producer check: build.created.pr.inner.imageHost.inner.repository/string_format",
+      "node.restack-requested": "Unsupported producer check: node.restack-requested/custom",
+      "node.contribution-recorded": "Unsupported producer check: node.contribution-recorded.landing/string_format",
+      "integration.verification-failed": "Unsupported producer check: integration.verification-failed.id/overwrite",
+      "integration.landing-intended": "Unsupported producer check: integration.landing-intended/custom",
+      "node.poll-checked": "Unsupported producer check: node.poll-checked.unchangedSince/string_format",
+      "runner.runtime-recorded": "Unsupported producer check: runner.runtime-recorded.runtime.version/overwrite",
+      "workspace.provisioned": "Unsupported producer union: workspace.provisioned.base",
+      "workspace.released": "Unsupported producer union: workspace.released",
+      "execution.relaunch-requested": "Unsupported producer check: execution.relaunch-requested.from.version/overwrite",
+      "execution.drain-authorized": "Unsupported producer check: execution.drain-authorized.targetRuntime.inner.version/overwrite",
+      "pr-summary.result": "Unsupported producer check: pr-summary.result.eligibleAfter.inner/string_format",
+      "publication.requested": "Unsupported producer union: publication.requested",
+      "publication.lost": "Unsupported producer check: publication.lost.sha/string_format",
+      "build.janitor-attempt-failed": "Unsupported producer check: build.janitor-attempt-failed.firstFailureAt/string_format",
+      "landing.application-failed": "Unsupported producer check: landing.application-failed.after/string_format",
+      "landing.decided": "Unsupported producer union: landing.decided.rule",
+      "landing.native-applied": "Unsupported producer check: landing.native-applied.retry.inner.after/string_format",
+      "spec.revised": "Unsupported producer union: spec.revised",
+      "session.started": "Unsupported producer check: session.started.continuation.inner.handle.runner/custom",
+      "session.suspended": "Unsupported producer error override: session.suspended.phase",
+      "session.resumed": "Unsupported producer check: session.resumed.handle.runner/custom",
+      "session.native-handle-recorded": "Unsupported producer error override: session.native-handle-recorded.phase",
+      "session.ended": "Unsupported producer union: session.ended",
+      "plan.started": "Unsupported producer union: plan.started.feedback.inner",
+      "plan.completed": "Unsupported producer check: plan.completed.verifySteps.inner/custom",
+      "implement.started": "Unsupported producer union: implement.started.feedback.inner",
+      "verify.started": "Unsupported producer check: verify.started.baseSha.inner/string_format",
+      "verify.reconcile-policy-captured": "Unsupported producer check: verify.reconcile-policy-captured.steps/custom",
+      "verify.completed": "Unsupported producer union: verify.completed",
+      "finalize.step-completed": "Unsupported producer union: finalize.step-completed",
+      "pr-attachment.designated": "Unsupported producer check: pr-attachment.designated.filename/custom",
+      "pr-attachment.hosted": "Unsupported producer check: pr-attachment.hosted.asset.repository/string_format",
+      "target.moved": "Unsupported producer check: target.moved.sha/string_format",
+      "restack.prepared": "Unsupported producer check: restack.prepared.oldHead/string_format",
+      "restack.publish-intended": "Unsupported producer check: restack.publish-intended.oldHead/string_format",
+      "restack.rewritten": "Unsupported producer check: restack.rewritten.oldHead/string_format",
+      "restack.contended": "Unsupported producer check: restack.contended.actual.inner/string_format",
+      "restack.completed": "Unsupported producer check: restack.completed.oldHead/string_format",
+      "reconcile.prepared": "Unsupported producer check: reconcile.prepared.oldHead/string_format",
+      "reconcile.contended": "Unsupported producer check: reconcile.contended.actual.inner/string_format",
+      "reconcile.publish-intended": "Unsupported producer check: reconcile.publish-intended.oldHead/string_format",
+      "reconcile.rewritten": "Unsupported producer check: reconcile.rewritten.oldHead/string_format",
+      "reconcile.completed": "Unsupported producer union: reconcile.completed",
+      "escalation.raised": "Catalog-level dispatcher/source/policyCause checks require a dedicated port",
+      "escalation.answered": "Unsupported producer check: escalation.answered.assets.inner.element.snapshot.inner.kind/string_format",
+      "session.build-read-failed": "Unsupported producer error override: session.build-read-failed.phase",
+      "phase.deferred": "Unsupported producer error override: phase.deferred.phase",
+      "phase.deferral-escalated": "Unsupported producer error override: phase.deferral-escalated.phase",
+      "phase.failed": "Unsupported producer error override: phase.failed.phase"
+    },
+    "repository": {
+      "tickets.migration-recorded": "Unsupported producer check: tickets.migration-recorded/custom",
+      "dispatcher.forge-degraded": "Unsupported producer check: dispatcher.forge-degraded.resetAt/string_format",
+      "change-presence.observed": "Unsupported producer check: change-presence.observed.head/string_format",
+      "dispatcher.ticket-source-degraded": "Unsupported producer union: dispatcher.ticket-source-degraded",
+      "harvest.session.native-handle-recorded": "Unsupported producer check: harvest.session.native-handle-recorded.handle.runner/custom",
+      "harvest.session.resumed": "Unsupported producer check: harvest.session.resumed.handle.runner/custom",
+      "harvest.session.started": "Unsupported producer check: harvest.session.started.continuation.inner.handle.inner.runner/custom",
+      "harvest.proposal.id-reserved": "Unsupported producer check: harvest.proposal.id-reserved.id/string_format",
+      "harvest.failed": "Unsupported producer check: harvest.failed.providerAttempts.inner/custom",
+      "orchestrator.sandbox.provisioned": "Unsupported producer check: orchestrator.sandbox.provisioned.baseSha.inner/string_format",
+      "orchestrator.sandbox.published": "Unsupported producer check: orchestrator.sandbox.published.sha/string_format",
+      "dispatcher.ticket-scan-completed": "Unsupported producer check: dispatcher.ticket-scan-completed.startedAt/string_format",
+      "dispatcher.target-prepared": "Unsupported producer check: dispatcher.target-prepared.from.version/overwrite",
+      "dispatcher.yield-requested": "Unsupported producer check: dispatcher.yield-requested.from.version/overwrite",
+      "dispatcher.terminal-released": "Unsupported producer check: dispatcher.terminal-released.from.version/overwrite",
+      "dispatcher.takeover": "Unsupported producer check: dispatcher.takeover.from.version/overwrite",
+      "dispatcher.drain-settled": "Unsupported producer check: dispatcher.drain-settled.from.version/overwrite",
+      "dispatcher.drain-deadline": "Unsupported producer check: dispatcher.drain-deadline.from.version/overwrite",
+      "dispatcher.upgrade-detected": "Unsupported producer check: dispatcher.upgrade-detected.from.version/overwrite",
+      "dispatcher.upgrade-failed": "Unsupported producer check: dispatcher.upgrade-failed.from.version/overwrite",
+      "dispatcher.runtime-rolled-back": "Unsupported producer check: dispatcher.runtime-rolled-back.takeoverAt/string_format",
+      "dispatcher.handoff-started": "Unsupported producer check: dispatcher.handoff-started.from.version/overwrite",
+      "dispatcher.handoff-completed": "Unsupported producer check: dispatcher.handoff-completed.from.version/overwrite",
+      "dispatcher.runtime-recorded": "Unsupported producer check: dispatcher.runtime-recorded.runtime.version/overwrite",
+      "dispatcher.run-started": "Unsupported producer check: dispatcher.run-started.host.inner/overwrite",
+      "dispatcher.tick-started": "Unsupported producer check: dispatcher.tick-started.startedAt.inner/string_format",
+      "dispatcher.config-reloaded": "Unsupported producer check: dispatcher.config-reloaded.restartRequired/custom"
+    }
+  }
+}

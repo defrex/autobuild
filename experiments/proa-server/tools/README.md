@@ -124,3 +124,46 @@ start Rust or claim the shared HTTP contract suite; those remain outstanding.
 `withProtocolDatabase` supplies only an isolated environment to its callback,
 never a TypeScript backing store. A future remote-client factory must stop its
 Rust server and connections inside that callback before database teardown.
+
+### Native machine-protocol checkpoints
+
+The protocol implementation is still staged. `src/protocol/router.rs` is a
+separate JSON branch exercised by the native test executable; it is not yet
+mounted into the normal browser server. Unsupported families do not count as
+conformance. In particular, atomic initial build events are refused until the
+complete build validator exists, and delegation, artifacts, snapshots, assets,
+streams, repository writes and reducer values remain outstanding.
+
+Generate the independent strict append corpus with
+`bun tools/generate-protocol-fixtures.ts`; verify it with
+`bun tools/check-protocol-fixtures.ts`. The generator consults the core write
+validators and actual TypeScript HTTP handler separately. It records source
+hashes, normalized accepted writes and exact refusal messages in the deterministic
+compressed corpus. It is distinct from the permissive persisted-log fixtures.
+`protocol-payload-schemas.json` records which payload schemas the closed Rust
+interpreter supports and which require further custom checks. Unsupported
+schemas fail closed; the actor/type prefix is never a complete build validator.
+
+Identity inputs and exact refusal oracles come from
+`bun tools/protocol-identity-generate.ts`, checked by
+`bun tools/protocol-identity-check.ts`. This tracks the actual release window,
+protocol history and catalog identity rather than illustrative protocol versions.
+
+Run `bun tools/protocol-integration.ts` for the native checkpoint proofs. It
+uses the configured external Cargo cache and acquires its `.verify.lock` once.
+Inside the maintained gate, use `--caller-holds-lock` to avoid nested acquisition.
+The gate runs this command, identity freshness and append freshness automatically.
+The example binary binds an ephemeral loopback port; its private stdin/stdout
+channel synchronizes each request's clock without freezing monotonic waits.
+Open machine authority and clock control exist only in the test example, never
+as switches in the normal executable. Retention input is explicitly refused
+until artifact retention is implemented.
+
+The proofs cover project credentials in both language directions (including
+actual TypeScript credential CLI issuance), immediate invalidation, authenticated
+HTTP ownership gates, records, leases, node writers, complete session append
+validation, cross-language sequence/CAS races, held-read wake/timeout/cancellation,
+and restart continuity. Raw tokens remain only in test process memory and private
+pipes. Sanitized evidence is written to `.ab/proa-protocol-store/checkpoint-proof.json`.
+This report explicitly states `fullBuildStoreContract: false`: the unchanged
+full shared suite, historical-client fixtures and dispatch proof are still required.

@@ -364,3 +364,27 @@ a failed reconnect leaves the slot retryable, and a changed schema marker refuse
 reuse. The real-store test terminates all four reader backends, verifies all four
 PIDs are replaced, retains the healthy build's accumulator/cursor, and checks schema
 refusal again after disconnection. No query is transparently retried mid-transaction.
+
+## JSON machine branch: negotiate before extracting
+
+The native protocol checkpoint uses a separate Axum router constructor from the
+Proa browser branch. Machine requests need their release/protocol decision before
+bearer authentication, indirect ownership before body parsing, and JSON for
+unknown methods and failures. A fallback request handler makes that ordering
+explicit; typed Axum body/path extractors can otherwise answer with their own
+text or status before the protocol gate runs. Browser cookie/origin middleware
+must stay outside this branch when the normal server is eventually merged.
+No Proa page or normal-server routing changed in this checkpoint.
+
+The request future must own its authorization header before awaiting a database
+read: borrowing the full `Request<Body>` across that await makes the future
+non-Send and prevents Axum's Handler implementation. A second practical pitfall
+is the conformance clock: freeze stored timestamps through a private test control
+channel, but measure held reads with Tokio's monotonic clock. Serializing the
+whole HTTP response behind clock synchronization deadlocks a held read waiting
+for a subsequent append; serialize only synchronization and request start.
+
+Reproduce with `bun tools/protocol-integration.ts`. The native proof uses two Rust
+processes and a TypeScript writer over isolated PostgreSQL/S3 services. It records
+sanitized checkpoint evidence under `.ab/proa-protocol-store/`, explicitly without
+claiming the complete shared BuildStore suite or rendered dashboard integration.

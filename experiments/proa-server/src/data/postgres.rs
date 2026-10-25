@@ -74,20 +74,25 @@ fn timestamp(row: &Row, name: &str) -> String {
         .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// Shared native-root TLS setup for independent reader and writer pools.
+pub(crate) fn connector() -> Result<MakeRustlsConnect, DataError> {
+    // Native roots (including SSL_CERT_FILE/SSL_CERT_DIR overrides) preserve
+    // platform trust without linking OpenSSL into the captured Proa binary.
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+    let config = rustls::ClientConfig::builder_with_provider(
+        rustls::crypto::aws_lc_rs::default_provider().into(),
+    )
+    .with_safe_default_protocol_versions()
+    .map_err(|_| DataError::Connection)?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    Ok(MakeRustlsConnect::new(config))
+}
+
 impl PostgresReader {
     pub async fn connect(url: &str) -> Result<Self, DataError> {
-        // Native roots (including SSL_CERT_FILE/SSL_CERT_DIR overrides) preserve
-        // platform trust without linking OpenSSL into the captured Proa binary.
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
-        let config = rustls::ClientConfig::builder_with_provider(
-            rustls::crypto::aws_lc_rs::default_provider().into(),
-        )
-        .with_safe_default_protocol_versions()
-        .map_err(|_| DataError::Connection)?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-        let tls = MakeRustlsConnect::new(config);
+        let tls = connector()?;
         let mut connections = Vec::new();
         for _ in 0..4 {
             connections.push(Mutex::new(Self::open(url, tls.clone()).await?));
@@ -143,7 +148,7 @@ impl PostgresReader {
         Self::preflight_client(&mut client).await
     }
 
-    async fn preflight_client(client: &mut Client) -> Result<(), DataError> {
+    pub(crate) async fn preflight_client(client: &mut Client) -> Result<(), DataError> {
         let tx = client
             .build_transaction()
             .read_only(true)

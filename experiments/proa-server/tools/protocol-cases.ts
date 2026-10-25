@@ -29,7 +29,12 @@ route('GET', '/builds', [200], 'BuildRecord[] filtered by principal')
 route('POST', '/builds', [201], 'BuildRecord; authenticated identity is allocated by server')
 route('POST', '/repos', [200], 'RepoRecord')
 for (const scope of ['/builds/:slug', '/repos/:repo', '/sessions/:id']) {
-  route('GET', scope, [200], 'scope record')
+  route(
+    'GET',
+    scope,
+    [200],
+    scope.startsWith('/sessions') ? 'SessionRecord or null' : 'scope record',
+  )
   route('POST', `${scope}/events`, [201], 'stored event')
   route('GET', `${scope}/events`, [200], 'event[]; since and bounded wait')
   route('POST', `${scope}/deposits`, [201], 'event and artifact metadata')
@@ -86,7 +91,7 @@ for (const scope of [
 ]) {
   route('GET', `${scope}/:stream`, [200], 'StreamRecord')
   route('GET', `${scope}/:stream/chunks`, [200], 'StreamRead; since and bounded wait')
-  route('POST', `${scope}/:stream/chunks`, [201], 'StreamChunk[]')
+  route('POST', `${scope}/:stream/chunks`, [201], 'StreamChunk')
   route('POST', `${scope}/:stream/close`, [200], 'closed StreamRecord')
 }
 export const protocolCases: readonly ProtocolCase[] = cases

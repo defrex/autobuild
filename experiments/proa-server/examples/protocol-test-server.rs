@@ -1,0 +1,75 @@
+//! Isolated protocol harness executable. Clock control and open auth are private
+//! to this test entry, never environment switches in the production binary.
+use chrono::{DateTime, Utc};
+use proa_server::protocol::{
+    router::{router, Authority, MachineState},
+    store::Store,
+};
+use serde_json::{json, Value};
+use std::{
+    io::Write,
+    sync::{Arc, Mutex},
+};
+use tokio::io::{AsyncBufReadExt, BufReader};
+
+fn output(value: Value) -> anyhow::Result<()> {
+    println!("{value}");
+    std::io::stdout().flush()?;
+    Ok(())
+}
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let url = std::env::var("AB_POSTGRES_URL")?;
+    let parsed = url::Url::parse(&url)?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "postgres" | "postgresql")
+            && !parsed
+                .query_pairs()
+                .any(|(key, _)| matches!(key.as_ref(), "host" | "hostaddr" | "service"))
+            && ["127.0.0.1", "localhost", "[::1]"].contains(&parsed.host_str().unwrap_or(""))
+            && parsed.path().starts_with("/proa_protocol_"),
+        "protocol test database must be an isolated loopback database"
+    );
+    // Retention is explicit startup input; artifact storage will consume it when
+    // that family is integrated. Never silently pretend it has been applied.
+    if std::env::var("PROA_TEST_RETENTION").is_ok() {
+        anyhow::bail!("protocol retention support not implemented");
+    }
+    let now = Arc::new(Mutex::new(Utc::now()));
+    let clock = now.clone();
+    let store =
+        Arc::new(Store::connect(&url, Arc::new(move || *clock.lock().expect("test clock"))).await?);
+    let authority = if std::env::var("PROA_TEST_AUTH").as_deref() == Ok("project") {
+        Authority::Project
+    } else {
+        Authority::Open
+    };
+    let app = router(MachineState { store, authority });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let mut server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+    output(json!({"ready":true,"port":port}))?;
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    loop {
+        tokio::select! {
+            ended = &mut server => { ended??; anyhow::bail!("test server exited before control EOF"); }
+            line = lines.next_line() => {
+                let Some(line) = line? else { break; };
+                let command: Value = serde_json::from_str(&line)?;
+                let timestamp = DateTime::parse_from_rfc3339(command["now"].as_str().ok_or_else(|| anyhow::anyhow!("missing test time"))?)?.with_timezone(&Utc);
+                *now.lock().expect("test clock") = timestamp;
+                output(json!({"ok":true}))?;
+            }
+        }
+    }
+    let _ = stop.send(());
+    server.await??;
+    Ok(())
+}
