@@ -12,6 +12,10 @@ You never push — the push is plumbing that happens when you finish.
 
 Guidance is an external operator answer, from the operator agent or a human.
 
+Scratch output, downloaded references, probes, and temporary scripts belong under `.ab/`
+(prefer the current `$AB_CONTEXT_DIR` when appropriate), never at the worktree
+root, and must not be committed. Manifest-directed artifact paths remain authoritative.
+
 ## Session shape
 
 1. Run `ab context`. Read the manifest path printed by the command (normally

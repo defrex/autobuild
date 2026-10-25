@@ -54,6 +54,13 @@ parent but not the last confirmed contribution base; it is not elapsed time or
 poll count. Samples are invalidated by replay or re-parenting. A stale node
 cannot verify or land; inventory and child landings continue while it collects.
 
+Restack and reconcile publication reject tracked modifications with the existing
+clean-worktree error. Nonignored untracked files do not block publication and
+remain unpublished and untouched; each publication that encounters them records
+a path-bearing `observation.recorded` followup, deduplicated by operation,
+transaction, candidate SHA and exact path list on recovery. The phase-terminal
+D5 clean-worktree rule for `ab done` remains unchanged.
+
 Before replacement the kernel publishes retained tips, displaced heads and the
 temporary change under immutable exact archive refs. `restack.*` facts record
 preparation, replay, intent, archived replacement, contention and completion.

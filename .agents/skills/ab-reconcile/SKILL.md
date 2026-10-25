@@ -22,6 +22,10 @@ integration owner's. `ab done` retains the item and records its receipt; trusted
 kernel plumbing advances the remaining stack after the session ends. Do not
 publish, collapse the node, choose another item, or rewrite the public branch.
 
+Scratch output, downloaded references, probes, and temporary scripts belong under `.ab/`
+(prefer the current `$AB_CONTEXT_DIR` when appropriate), never at the worktree
+root, and must not be committed. Manifest-directed artifact paths remain authoritative.
+
 ## Session shape
 
 1. Run `ab context`. Read the printed manifest and its `materialized` paths for

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { seedStore, BUILD, BRANCH } from '../cli/testkit'
@@ -688,6 +688,168 @@ for (const stage of ['prepared', 'conflicted'] as const) {
       expect(await git(['show', '-s', '--format=%P', headSha])).toBe(target)
     } finally {
       await rm(root, { recursive: true, force: true })
+    }
+  })
+}
+
+for (const automatic of [true, false]) {
+  test(`${automatic ? 'automatic restack' : 'reconcile'} publishes with untracked evidence`, async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'ab-untracked-'))
+    async function git(args: string[]) {
+      const result = await bunExec(['git', ...args], { cwd })
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    async function commit(name: string, content: string) {
+      await writeFile(join(cwd, name), content)
+      await git(['add', name])
+      await git(['commit', '-qm', name])
+      return git(['rev-parse', 'HEAD'])
+    }
+    try {
+      await git(['init', '-q', '-b', 'main'])
+      await git(['config', 'user.name', 'Test'])
+      await git(['config', 'user.email', 'test@example.invalid'])
+      await git(['config', 'commit.gpgsign', 'false'])
+      const base = await commit('.gitignore', 'ignored-scratch\n')
+      await git(['checkout', '-qb', BRANCH])
+      await commit('feature', 'feature\n')
+      await git(['checkout', '-q', 'main'])
+      const target = await commit('upstream', 'upstream\n')
+      await git(['checkout', '-q', BRANCH])
+      const paths = [' experiments probe \n.html', 'experiments_probe.html']
+      for (const path of [...paths, 'ignored-scratch'])
+        await writeFile(join(cwd, path), 'scratch bytes')
+      const store = await seedStore()
+      await store.putArtifact(BUILD, {
+        kind: 'pr-description',
+        content: 'Build change\n',
+      })
+      if (!automatic)
+        await store.append(BUILD, {
+          actor: KERNEL,
+          type: 'reconcile.started',
+          payload: { attempt: 1, baseSha: target },
+        })
+      const deps = {
+        store,
+        slug: BUILD,
+        workspacePath: cwd,
+        exec: bunExec,
+        forge: new LocalGitForge(),
+        ...(automatic
+          ? {
+              automatic: {
+                trigger: 'verify-entry' as const,
+                cycle: 1,
+                observation: 1,
+                message: `Build change\n\nAutobuild-Build: ${BUILD}\n`,
+              },
+            }
+          : {}),
+      }
+      const transaction = await prepareRestack(deps, {
+        attempt: 1,
+        branch: BRANCH,
+        oldBase: base,
+        targetBase: target,
+        id: 'untracked-1',
+      })
+      const headSha = await git(['rev-parse', 'HEAD'])
+      const intent = {
+        ...transaction,
+        headSha,
+        conflicted: false,
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }
+      if (deps.automatic) {
+        const { attempt: _, ...prepared } = transaction
+        await store.append(BUILD, {
+          actor: KERNEL,
+          type: 'restack.publish-intended',
+          payload: { ...prepared, ...deps.automatic, headSha },
+        })
+      } else {
+        await store.append(BUILD, {
+          actor: KERNEL,
+          type: 'reconcile.publish-intended',
+          payload: intent,
+        })
+      }
+      await validateRestack(deps, transaction, headSha)
+      expect(
+        (await store.getEvents(BUILD)).filter((e) => e.type === 'observation.recorded'),
+      ).toHaveLength(0)
+      const replace = deps.forge.rewrite!.replace.bind(deps.forge.rewrite)
+      let replacements = 0
+      deps.forge.rewrite!.replace = async (input) => {
+        replacements++
+        return replace(input)
+      }
+      for (const staged of [false, true]) {
+        await writeFile(join(cwd, 'feature'), 'tracked dirt')
+        if (staged) await git(['add', 'feature'])
+        await expect(publishRestack(deps, intent)).rejects.toThrow(
+          'reconcile publication requires a clean worktree',
+        )
+        expect(replacements).toBe(0)
+        await git(['reset', '--hard', headSha])
+      }
+      const exec = deps.exec
+      deps.exec = async (cmd, options) => {
+        if (cmd.includes('--others')) throw new Error('enumeration failed')
+        return exec(cmd, options)
+      }
+      await expect(publishRestack(deps, intent)).rejects.toThrow('enumeration failed')
+      deps.exec = exec
+      const append = store.append.bind(store)
+      store.append = async (slug, event) => {
+        if (event.type === 'observation.recorded') throw new Error('observation deposit failed')
+        return append(slug, event)
+      }
+      await expect(publishRestack(deps, intent)).rejects.toThrow('observation deposit failed')
+      store.append = append
+      expect(replacements).toBe(0)
+      expect(await publishRestack(deps, intent)).toEqual({ kind: 'published' })
+      expect(await publishRestack(deps, intent)).toEqual({ kind: 'published' })
+      expect(await git(['rev-parse', BRANCH])).toBe(headSha)
+      for (const path of paths) {
+        expect(await readFile(join(cwd, path), 'utf8')).toBe('scratch bytes')
+        expect(
+          (
+            await bunExec(['git', 'cat-file', '-e', `${headSha}:${path}`], {
+              cwd,
+            })
+          ).exitCode,
+        ).not.toBe(0)
+      }
+      let observations = (await store.getEvents(BUILD)).filter(
+        (e) => e.type === 'observation.recorded',
+      )
+      expect(observations).toHaveLength(1)
+      expect(observations[0]).toMatchObject({
+        actor: KERNEL,
+        payload: {
+          kind: 'followup',
+          files: paths,
+          refs: [automatic ? 'restack:untracked-1' : 'reconcile:untracked-1', headSha],
+        },
+      })
+      await writeFile(join(cwd, 'another probe'), 'more scratch')
+      await publishRestack(deps, intent)
+      observations = (await store.getEvents(BUILD)).filter((e) => e.type === 'observation.recorded')
+      expect(observations).toHaveLength(2)
+      await publishRestack(deps, { ...intent, id: 'untracked-2' })
+      expect(
+        (await store.getEvents(BUILD)).filter((e) => e.type === 'observation.recorded'),
+      ).toHaveLength(3)
+      for (const path of [...paths, 'another probe']) await rm(join(cwd, path))
+      await publishRestack(deps, { ...intent, id: 'clean-3' })
+      expect(
+        (await store.getEvents(BUILD)).filter((e) => e.type === 'observation.recorded'),
+      ).toHaveLength(3)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
     }
   })
 }

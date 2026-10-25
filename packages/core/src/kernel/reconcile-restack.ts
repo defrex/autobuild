@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -517,7 +518,7 @@ export async function validateRestack(
     if ((await deps.exec(['test', '-d', path], { cwd: deps.workspacePath })).exitCode === 0)
       throw new Error(`finish the Git ${directory} operation before completing reconcile`)
   }
-  if ((await output(deps, ['status', '--porcelain'])) !== '')
+  if ((await output(deps, ['status', '--porcelain', '--untracked-files=no'])) !== '')
     throw new Error('reconcile publication requires a clean worktree')
   if ((await output(deps, ['ls-files', '-u'])) !== '') throw new Error('unmerged files remain')
   const parents = await output(deps, ['show', '-s', '--format=%P', head])
@@ -552,6 +553,33 @@ export async function publishRestack(
   )
     throw new Error('rewrite target does not equal the authoritative reconcile start')
   await validateRestack(deps, intent, intent.headSha)
+  const files = (await git(deps, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout
+    .split('\0')
+    .filter((path) => path !== '')
+    .sort()
+  if (files.length > 0) {
+    const operation = deps.automatic === undefined ? 'reconcile' : 'restack'
+    const pathsHash = createHash('sha256').update(JSON.stringify(files)).digest('hex')
+    const id = `${operation}:${intent.id}:${intent.headSha}:untracked:${pathsHash}`
+    const { observations } = (await readBuildFacts(deps.store, deps.slug)).value
+    if (
+      !observations.some(
+        (entry) => entry.id === id && JSON.stringify(entry.files) === JSON.stringify(files),
+      )
+    ) {
+      await deps.store.append(deps.slug, {
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: {
+          id,
+          kind: 'followup',
+          summary: `Restack/reconcile publication excludes untracked files: ${files.map((path) => JSON.stringify(path)).join(', ')}`,
+          files,
+          refs: [`${operation}:${intent.id}`, intent.headSha],
+        },
+      })
+    }
+  }
   const archives = await archiveTips(deps, [intent.headSha])
   await deps.beforeRewrite?.()
   await suspendNativeLanding(deps, intent.id)

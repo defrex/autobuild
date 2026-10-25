@@ -681,6 +681,10 @@ step make the planner's `ab done` fail before `plan.completed` is appended.
 Repository-authored verify and finalize skills must run `ab context`, then read
 `"$AB_CONTEXT_DIR/context.json"` and the inputs under `$AB_CONTEXT_DIR`.
 Materialized keys are directory-relative; manifest path fields are workspace-relative.
+Scratch output, downloaded references, probes, and temporary scripts belong under `.ab/`
+(prefer the current `$AB_CONTEXT_DIR` when appropriate), never at the worktree
+root, and must not be committed. Manifest-directed artifact paths remain authoritative.
+Keep concurrent verifiers in their distinct context directories.
 
 An agent verify step is handed the build's pinned ticket assets under
 `$AB_CONTEXT_DIR/assets/` (listed in `$AB_CONTEXT_DIR/context.json`) as well as the spec. A verify skill
