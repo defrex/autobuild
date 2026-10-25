@@ -118,3 +118,33 @@ test('transport uses exact leases and refuses namespace policy errors before rep
   ])
   expect(commands.some((cmd) => cmd.some((arg) => arg.startsWith('refs/heads/')))).toBe(false)
 })
+
+for (const diagnostic of [
+  'fatal: unable to access: The requested URL returned error: 503',
+  'fatal: HTTP 502 Bad Gateway',
+  'Recv failure: Connection reset by peer',
+  'fatal: Operation timed out after 30000 milliseconds',
+  '! [rejected] ab/probe -> ab/probe (stale info)',
+  'fatal: Authentication failed',
+  'fatal: Permission denied',
+]) {
+  test(`network rewrite diagnostic: ${diagnostic}`, async () => {
+    const { isForgeFailure } = await import('../forge-failure')
+    const capability = gitRewrite(
+      async () => ({ exitCode: 128, stdout: '', stderr: diagnostic }),
+      false,
+    )
+    let failure: unknown
+    try {
+      await capability.snapshot({
+        workspacePath: '/repo',
+        branch: 'ab/probe',
+        destinationRef: 'refs/autobuild/reconcile/probe/head',
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(Error)
+    expect(isForgeFailure(failure)).toBe(!/rejected|Authentication|Permission/.test(diagnostic))
+  })
+}

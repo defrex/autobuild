@@ -46,6 +46,7 @@ import { stalledChains, type FindingChain } from './stall'
 // ── The decision contract ────────────────────────────────────────────────────
 
 export type WaitReason =
+  | 'publication-retry'
   | 'verify-stage'
   | 'mixed-version'
   | 'blocked'
