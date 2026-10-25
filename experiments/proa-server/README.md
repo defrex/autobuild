@@ -1,6 +1,6 @@
 # Proa server experiment
 
-Nonshipping Rust/Proa experiment, version 0.1.0. Builds and build detail read the shared TypeScript-owned store through native Rust projections, with GitHub operator sign-in and read-only live updates.
+Nonshipping Rust/Proa experiment, version 0.1.0. Builds and build detail read the shared TypeScript-owned store through native Rust projections, with GitHub operator sign-in, native operator controls and live updates.
 
 The visual authority is [design/ansi](design/ansi/README.md), pinned ticket asset
 **design / ansi / revision 1000000000**, including its reference HTML, 24 screenshots
@@ -26,15 +26,23 @@ From this directory:
 ```sh
 bun install --frozen-lockfile
 export PATH="$PWD/node_modules/.bin:$PATH"
+export CARGO_TARGET_DIR="$PWD/../../.ab/proa-dev-target"
 proa dev --no-restart
 # Or build and run the production executable:
-proa build --locked --artifact-out target/release/proa-server
-proa start
+proa build --locked --artifact-out ../../.ab/proa-dev-server
+../../.ab/proa-dev-server
 ```
 
 Both Proa dev and build regenerate ignored `public/styles.css` using the local
 Tailwind CLI. Do not install Tailwind globally or commit compiled CSS. Cargo.lock
 pins Rust resolution; use `--locked` for builds and tests.
+
+Keep manual Cargo output under the ignored root `.ab/` directory as above.
+The root documentation tests scan repository files, including ignored `target/`
+directories; a multi-gigabyte native build cache there can exceed their timeout.
+The automated gate already places its shared Cargo cache outside worktrees.
+If an earlier manual build left `target/` here, move that generated directory
+under root `.ab/` before running the root tests.
 
 Default binding is `127.0.0.1:3000`. Set `PORT=4567` to change the port and
 `PROA_HOST=::1` to change the IP address. Invalid/zero ports fail explicitly.
@@ -177,7 +185,7 @@ inside that project. Every normal GET is a complete snapshot with scripting off.
 A two-second progressive refresh has one request in flight, keeps the last good
 content on failure, and returns 304 for unchanged models. Build and transcript
 cursors are independent. Immutable artifact bytes have a bounded process cache.
-No TypeScript runs inside the server, and no page writes lifecycle state.
+No TypeScript runs inside the server. Browser forms and bearer API controls call the same native service and persist TypeScript-compatible facts through a separate write connection.
 
 The offline TypeScript projection oracle is regenerated with
 `bun tools/projection-fixtures.ts --write` and checked without writing by
@@ -198,3 +206,24 @@ to determine visibility. Metadata queries are included in capture's SQL evidence
 Artifact misses use per-object single flight, so a slow download does not block
 unrelated cache hits. Row callouts show the shared three-row preview, retaining
 paragraph breaks and linking to the complete detail text.
+
+## Operator port
+
+The native operator API serves the documented reads, controls, sessions, hosted
+tickets and HTTP tool registry. See [interoperability evidence](OPERATOR-PARITY.md)
+for the attribution exception and executable contracts. MCP transport is separate.
+
+Browser forms use fresh cookie admission, CSRF and canonical origin checks.
+Bearer routes check protocol/version identity before fresh project credentials or
+signed internal authority. `AB_STORE_SECRET` enables signed API credentials and
+is separate from `PROA_SESSION_SECRET`; bearer values never reach the browser.
+
+`PROA_POSTGRES_WRITE_URL` selects a separate writer connection, defaulting to the
+configured database URL. Give the reader SELECT-only access and the writer the
+mutation capabilities exercised by the integration provisioning. Neither
+connection initializes schema. S3/Vercel uploads precede artifact publication.
+
+Ordinary forms work without JavaScript. With JavaScript, those same forms replace
+server-rendered fragments while polling preserves drafts, focus and refusals.
+Abort and discard require explicit confirmation. The browser has no landing
+consent controls or ticket authoring pages.

@@ -12,6 +12,7 @@ import { PostgresProjectRegistry } from '../../../packages/postgres-store/src/pr
 import { buildCreatedWrite } from '../../../packages/core/src/store/contract'
 import { witnessEvent, schemas } from './fixture-core'
 import { withDataServices } from './data-services'
+import { seedExtendedBrowserControls, type ExtendedBrowserFixture } from './browser-extended-seed'
 
 export interface ReplayEvidence {
   timestampShiftMs: number
@@ -36,6 +37,8 @@ export interface SeedEvidence {
   producers: ReplayEvidence[]
   supplemental: string[]
   detail: { project: string; slug: string }
+  controls: Record<string, { project: string; slug: string }>
+  extendedControls: ExtendedBrowserFixture[]
 }
 const hash = () =>
   createHash('sha256')
@@ -203,6 +206,8 @@ export async function withCaptureSeed<T>(
     const database = `proa_capture_${suffix}`
     const role = `proa_capture_read_${suffix}`
     const password = crypto.randomUUID()
+    const controlRole = `proa_capture_write_${suffix}`
+    const controlPassword = crypto.randomUUID()
     const admin = new SQL(adminUrl, { max: 1 })
     const url = new URL(adminUrl)
     url.pathname = `/${database}`
@@ -210,6 +215,7 @@ export async function withCaptureSeed<T>(
     let writer: SQL | undefined
     let created = false
     let roleCreated = false
+    let controlRoleCreated = false
     try {
       await admin.unsafe(`CREATE DATABASE ${database}`)
       created = true
@@ -374,11 +380,119 @@ export async function withCaptureSeed<T>(
         source: 'agent',
         question: 'Should the stored frame remain attached?',
       })
+      const controls: SeedEvidence['controls'] = {}
+      for (const width of [1440, 390]) {
+        for (const theme of ['light', 'dark']) {
+          for (const state of ['answer', 'pausing', 'confirmation', 'refusal']) {
+            const controlSlug = `control-${width}-${theme}-${state}`
+            const created = buildCreatedWrite()
+            created.payload.repo = project
+            await store.createBuild({
+              slug: controlSlug,
+              repo: project,
+              ticket: { source: 'file', id: controlSlug, title: 'Operate a stored build' },
+              created,
+            })
+            const put = async (
+              type: keyof typeof schemas.build,
+              payload: Record<string, unknown>,
+            ) => {
+              const event = witnessEvent('build', type, schemas.build[type])
+              return store!.append(controlSlug, {
+                type,
+                actor: event.actor,
+                payload: { ...(event.payload as object), ...payload },
+              } as Parameters<BuildStore['append']>[1])
+            }
+            await put('runner.attached', { instance: `capture-${controlSlug}`, host: 'loopback' })
+            if (state === 'pausing') await put('build.pause-requested', {})
+            if (state === 'answer' || state === 'refusal')
+              await put('escalation.raised', {
+                id: `${controlSlug}-question`,
+                source: 'agent',
+                phase: 'implement',
+                question: 'Should the operator continue with the approved plan?',
+              })
+            controls[`builds-${width}-${theme}-control-${state}`] = { project, slug: controlSlug }
+          }
+        }
+      }
+      for (const mode of ['js', 'nojs'])
+        for (const state of [
+          'pause',
+          'cancel-pause',
+          'resume',
+          'abort',
+          'discard',
+          'guidance',
+          'retry',
+          'dismiss',
+        ]) {
+          const controlSlug = `proof-${mode}-${state}`
+          const created = buildCreatedWrite()
+          created.payload.repo = project
+          await store.createBuild({
+            slug: controlSlug,
+            repo: project,
+            ticket: { source: 'file', id: controlSlug, title: 'Browser control proof' },
+            created,
+          })
+          const put = async (
+            type: keyof typeof schemas.build,
+            payload: Record<string, unknown>,
+          ) => {
+            const event = witnessEvent('build', type, schemas.build[type])
+            return store!.append(controlSlug, {
+              type,
+              actor: event.actor,
+              payload: { ...(event.payload as object), ...payload },
+            } as Parameters<BuildStore['append']>[1])
+          }
+          if (state !== 'discard')
+            await put('runner.attached', { instance: controlSlug, host: 'loopback' })
+          if (state === 'cancel-pause') await put('build.pause-requested', {})
+          if (state === 'resume') await put('build.paused', {})
+          if (['guidance', 'retry', 'dismiss'].includes(state)) {
+            if (state === 'dismiss')
+              await put('code-review.verdict', {
+                round: 1,
+                verdict: 'revise',
+                findings: [
+                  {
+                    id: 'f_browser',
+                    severity: 'important',
+                    summary: 'Dismiss this finding',
+                    persists: [],
+                  },
+                ],
+              })
+            await put('escalation.raised', {
+              id: `${controlSlug}-question`,
+              source: 'agent',
+              phase: 'implement',
+              refs: state === 'dismiss' ? ['f_browser'] : [],
+              question: 'Continue the approved plan?',
+            })
+          }
+          controls[`proof-${mode}-${state}`] = { project, slug: controlSlug }
+        }
+      const extendedControls = await seedExtendedBrowserControls(writer, store)
       await admin.unsafe(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`)
       roleCreated = true
       await writer.unsafe(`GRANT CONNECT ON DATABASE ${database} TO ${role}`)
       await writer.unsafe(`GRANT USAGE ON SCHEMA public TO ${role}`)
       await writer.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role}`)
+      await admin.unsafe(`CREATE ROLE ${controlRole} LOGIN PASSWORD '${controlPassword}'`)
+      controlRoleCreated = true
+      await writer.unsafe(`GRANT CONNECT ON DATABASE ${database} TO ${controlRole}`)
+      await writer.unsafe(`GRANT USAGE ON SCHEMA public TO ${controlRole}`)
+      await writer.unsafe(
+        `GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO ${controlRole}`,
+      )
+      await writer.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${controlRole}`)
+      const controlUrl = new URL(url)
+      controlUrl.username = controlRole
+      controlUrl.password = controlPassword
       const readerUrl = new URL(url)
       readerUrl.username = role
       readerUrl.password = password
@@ -402,14 +516,25 @@ export async function withCaptureSeed<T>(
           'empty-project',
         ],
         detail: { project, slug },
+        controls,
+        extendedControls,
       }
       validateProvenance(evidence)
-      return await work({ ...environment, AB_POSTGRES_URL: readerUrl.href }, evidence, store)
+      return await work(
+        {
+          ...environment,
+          AB_POSTGRES_URL: readerUrl.href,
+          PROA_POSTGRES_WRITE_URL: controlUrl.href,
+        },
+        evidence,
+        store,
+      )
     } finally {
       await store?.close()
       await writer?.close()
       if (created) await admin.unsafe(`DROP DATABASE ${database} WITH (FORCE)`)
       if (roleCreated) await admin.unsafe(`DROP ROLE ${role}`)
+      if (controlRoleCreated) await admin.unsafe(`DROP ROLE ${controlRole}`)
       await admin.close()
     }
   })

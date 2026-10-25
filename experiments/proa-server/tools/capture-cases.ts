@@ -2,6 +2,7 @@ export const routes = {
   '/': 'html',
   '/builds/:slug': 'detail-html',
   '/refresh': 'endpoint',
+  '/controls': 'browser-control',
   '/frame': 'endpoint',
   '/index.md': 'representation',
   '/health': 'endpoint',
@@ -15,14 +16,25 @@ export const routes = {
 } as const
 export const frames = [1440, 390].flatMap((width) =>
   ['light', 'dark'].flatMap((theme) =>
-    ['closed', 'open', 'mixed', 'detail', 'sign-in', 'refused'].map((state) => ({
+    [
+      'closed',
+      'open',
+      'mixed',
+      'detail',
+      'sign-in',
+      'refused',
+      'control-answer',
+      'control-pausing',
+      'control-confirmation',
+      'control-refusal',
+    ].map((state) => ({
       id: `builds-${width}-${theme}-${state}`,
       route:
         state === 'sign-in'
           ? '/sign-in'
           : state === 'refused'
             ? '/auth/dev-session'
-            : state === 'detail'
+            : state === 'detail' || state.startsWith('control-')
               ? '/builds/:slug'
               : '/',
       width,
@@ -58,7 +70,13 @@ export function checkFrameMatrix(cases: typeof frames) {
     for (const width of [1440, 390])
       for (const theme of ['light', 'dark'])
         for (const state of kind === 'detail-html'
-          ? ['detail']
+          ? [
+              'detail',
+              'control-answer',
+              'control-pausing',
+              'control-confirmation',
+              'control-refusal',
+            ]
           : kind === 'html'
             ? ['closed', 'open']
             : kind === 'public-html'
@@ -109,9 +127,27 @@ export function probe(colors: string[], state: string, theme: string) {
     if (!text.includes(content)) failures.push(`Missing content: ${content}`)
   if (
     document.querySelector('h1')?.textContent !==
-    (publicPage ? 'Sign in' : state === 'detail' ? 'detail-case' : 'Builds')
+    (publicPage
+      ? 'Sign in'
+      : state === 'detail'
+        ? 'detail-case'
+        : state.startsWith('control-')
+          ? document.querySelector('[data-page=build-detail] h1')?.textContent
+          : 'Builds')
   )
     failures.push(publicPage ? 'Missing Sign in heading' : 'Missing Builds heading')
+  if (state.startsWith('control-')) {
+    for (const word of state === 'control-answer'
+      ? ['Guidance', 'Send guidance', 'Retry', 'Dismiss finding']
+      : state === 'control-pausing'
+        ? ['PAUSING', 'Cancel pause']
+        : state === 'control-confirmation'
+          ? ['Confirm abort', 'Cancel']
+          : ['has no open escalations to answer'])
+      if (!text.includes(word)) failures.push(`Missing control content: ${word}`)
+    if (document.querySelector('button[value="land"],button[value="hold"]'))
+      failures.push('Browser landing control')
+  }
   if (publicPage && document.querySelector('#account-trigger')) failures.push('Public account menu')
   if (state === 'refused' && !document.querySelector('[role="alert"]'))
     failures.push('Missing refusal alert')
