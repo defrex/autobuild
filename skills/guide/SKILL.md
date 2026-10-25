@@ -247,7 +247,11 @@ The distinctions that change an administrator's answer:
   accepted or revived by detection; a newly prepared attempt must pass preflight.
   Compatible generations drain: the predecessor releases terminal
   input/rendering and repository authority, then supervises only captured local
-  executions while the successor owns ticks and launches. Local and remote runners finish
+  executions while the successor owns ticks and launches. The presenting input
+  subscription reasserts raw termios on activation and every 100 ms, repairing
+  retired processes' exit-time restores on the next maintenance turn (subject
+  to event-loop delays). It cancels maintenance before release, suspension or
+  shutdown and restores prior raw/flow state, leaving the shell cooked. Local and remote runners finish
   their current phase, compare their immutable attach runtime with the accepted
   target using existing boundary facts, and durably request relaunch on mismatch.
   Remote recovery confirms whole-sandbox stop before recording an execution end
