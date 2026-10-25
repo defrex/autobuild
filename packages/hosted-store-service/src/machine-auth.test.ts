@@ -543,6 +543,15 @@ test('operator presence requires repository operator authority before reads or w
   })
   expect((await server.fetch(request(path, internal))).status).toBe(403)
 
+  const deletion = (bearer: string) =>
+    new Request(`https://test${path}/one`, {
+      method: 'DELETE',
+      headers: request(path, bearer).headers,
+    })
+  expect((await server.fetch(deletion(foreign.token))).status).toBe(403)
+  expect((await server.fetch(deletion(owner.token))).status).toBe(200)
+  expect((await server.fetch(deletion(owner.token))).status).toBe(200)
+  expect((await store.listOperatorPresence(A)).map((row) => row.id)).toEqual(['two'])
   let reads = 0
   let writes = 0
   store.listOperatorPresence = async () => {
@@ -550,6 +559,10 @@ test('operator presence requires repository operator authority before reads or w
     return []
   }
   store.upsertOperatorPresence = async () => {
+    writes++
+    throw new Error('unexpected')
+  }
+  store.removeOperatorPresence = async () => {
     writes++
     throw new Error('unexpected')
   }
@@ -567,6 +580,7 @@ test('operator presence requires repository operator authority before reads or w
         },
       },
     })
+    expect((await delegated.fetch(deletion('unused'))).status).toBe(403)
     for (const body of [undefined, identity]) {
       const response = await delegated.fetch(request(path, 'unused', body))
       expect(response.status).toBe(403)

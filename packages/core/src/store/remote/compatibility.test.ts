@@ -219,7 +219,20 @@ test('audit capability follows its introduction line independently of admission'
 })
 
 test('operator presence protocol rejects peers without the new required operations', () => {
-  expect(REMOTE_STORE_PROTOCOL_VERSION).toBe('5')
+  expect(REMOTE_STORE_PROTOCOL_VERSION).toBe('6')
   expect(clientIdentityError(AUTOBUILD_VERSION, '4')).toContain('unsupported protocol identity')
-  expect(clientIdentityError(AUTOBUILD_VERSION, '5')).toBeUndefined()
+  expect(clientIdentityError(AUTOBUILD_VERSION, '5')).toContain('unsupported protocol identity')
+  expect(clientIdentityError(AUTOBUILD_VERSION, '6')).toBeUndefined()
+})
+
+test('next minor withdrawal protocol retains published 1.0 protocol 4 only', () => {
+  for (const version of ['1.0.0', '1.0.1']) {
+    expect(clientIdentityError(version, '4', '1.1.0', '6')).toBeUndefined()
+    for (const protocol of ['5', '6'])
+      expect(clientIdentityError(version, protocol, '1.1.0', '6')).toContain(
+        'unsupported protocol identity',
+      )
+  }
+  expect(clientIdentityError('1.1.0', '6', '1.1.0', '6')).toBeUndefined()
+  expect(clientIdentityError('1.1.0', '6', '1.0.1', '4')).toContain('upgrade the service')
 })

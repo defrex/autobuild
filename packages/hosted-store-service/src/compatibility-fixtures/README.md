@@ -52,3 +52,14 @@ Their ticket-reference decoder is unchanged from the frozen v0.12 dependency.
 These clients send revision and comment capabilities, but no tree capability;
 contracts exercise populated node/target records through get, list, creation-key
 adoption and legacy updates while retaining strict tagged decoders.
+
+The next-minor 1.1/protocol-6 preparation retains published v1.0.0/v1.0.1
+clients on protocol 4. `store-v1.0.ts` freezes the standalone lease, repository
+position and tick-begin decoders verbatim from v1.0.1
+(f934de5144992084884909a5faeb6826a6b61fb5); these declarations are identical in
+v1.0.0. They have no runtime dependency beyond zod. The contract suite exercises
+those published requests against an explicit 1.1.0/protocol-6 service identity
+without modifying package versions, and rejects invented 1.0/protocol-5/6 peers.
+Protocol 5 was unreleased. Older 0.x fixtures remain for their existing explicit
+historical seam tests; they are outside the 1.x service's supported window and
+are not claimed as admitted clients.

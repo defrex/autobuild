@@ -35,7 +35,7 @@ bun ab build status example-build --json
 - Interactive `dispatch` shows the terminal dashboard.
 - A shell-capable agent follows progress and acts through the CLI, including `bun ab watch` and `bun ab wait`.
 - A standing CLI operator uses `bun ab watch --operator --json` after checking `bun ab repository status --json` for existing presence. It operates the builds the repository's dispatcher dispatches and adopts new ones.
-- Presence is advisory, allows multiple registrations, and is not exposed by MCP or the web app.
+- Presence is advisory, allows multiple registrations, and is not exposed by MCP or the web app. Termination attempts withdrawal; routine timeout/count re-arms keep the five-minute grace. SIGKILL and failed withdrawal rely on TTL expiry.
 - Dashboard and API share one lifecycle vocabulary.
 
 A local CLI can use a remote Store:

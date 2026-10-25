@@ -1187,7 +1187,12 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
-  async upsertOperatorPresence(repo: string, input: OperatorIdentity): Promise<OperatorPresence> {
+  async upsertOperatorPresence(
+    repo: string,
+    input: OperatorIdentity,
+    signal?: AbortSignal,
+  ): Promise<OperatorPresence> {
+    signal?.throwIfAborted()
     if (!repo) throw new Error('repo is required')
     const identity = operatorIdentitySchema.parse(input)
     const row = this.sqlite
@@ -1197,6 +1202,11 @@ export class SqliteBuildStore implements BuildStore {
       RETURNING repo,id,host,pid,started_at AS startedAt,heartbeat_at AS heartbeatAt`)
       .get(repo, identity.id, identity.host, identity.pid, identity.startedAt, this.now())
     return row as OperatorPresence
+  }
+
+  async removeOperatorPresence(repo: string, id: string): Promise<void> {
+    id = operatorIdentitySchema.shape.id.parse(id)
+    this.sqlite.query('DELETE FROM operator_presence WHERE repo=?1 AND id=?2').run(repo, id)
   }
 
   async listOperatorPresence(repo: string): Promise<OperatorPresence[]> {

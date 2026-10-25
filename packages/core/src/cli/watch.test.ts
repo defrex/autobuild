@@ -1,3 +1,4 @@
+import { RemoteBuildStore } from '../store/remote/client'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 /**
  * `ab watch` tests. The pure layer (globs, cursor codec, durations, cadence,
@@ -3015,7 +3016,10 @@ describe('advisory operator watches', () => {
       operator: true,
       since: cursor,
       now: clock,
-      signal: alreadyAborted(),
+      timeout: '1',
+      delay: async () => {
+        clock.advance(1000)
+      },
       operatorIdentity: {
         host: 'host-b',
         pid: 20,
@@ -3139,14 +3143,13 @@ describe('advisory operator watches', () => {
     expect(writes).toBe(1)
   })
 
-  test.each(['count', 'abort', 'error'] as const)(
+  test.each(['count', 'error'] as const)(
     'final renewal on %s preserves the primary outcome when cleanup fails',
     async (mode) => {
       const store = makeStore()
       await seedRunningBuild(store, 'presence')
       const h = harness(store, {
         operator: true,
-        ...(mode === 'abort' ? { signal: alreadyAborted() } : {}),
         ...(mode === 'count' ? { count: 1 } : {}),
         onTick: async () => {
           if (mode === 'error') throw new Error('primary error')
@@ -3198,7 +3201,7 @@ test('operator flag routes through the CLI and scope failures use stderr exit 1'
     },
   }
   expect(await runCli(['watch', '--operator', '--json'], deps)).toBe(0)
-  expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
+  expect(await store.listOperatorPresence(REPO)).toHaveLength(0)
   for (const args of [
     ['watch', 'named', '--operator'],
     ['watch', 'named', '--repository', '--operator'],
@@ -3271,4 +3274,189 @@ test('operator heartbeat runs while remote event reads are held with a large int
   signal.abort()
   await running
   expect(h.err).toEqual([])
+})
+
+test('termination withdraws once and a cursor re-arm registers the same identity', async () => {
+  const store = makeStore()
+  const controller = new AbortController()
+  const h = harness(store, {
+    operator: true,
+    signal: controller.signal,
+    onTick: () => {
+      controller.abort('SIGINT')
+      controller.abort('SIGINT')
+    },
+  })
+  let removals = 0
+  const remove = store.removeOperatorPresence.bind(store)
+  store.removeOperatorPresence = async (...args) => {
+    removals++
+    await remove(...args)
+  }
+  await abWatch(h.base)
+  expect(await store.listOperatorPresence(REPO)).toEqual([])
+  expect(removals).toBe(1)
+  const cursor = JSON.parse(h.out.at(-1)!).cursor
+  const identity = decodeCursor(cursor, { store: decodeCursorStore(cursor), repo: REPO }).operator!
+  const resumed = harness(store, { operator: true, since: cursor, timeout: '1' })
+  await abWatch(resumed.base)
+  expect(await store.listOperatorPresence(REPO)).toEqual([expect.objectContaining(identity)])
+  expect(h.err).toEqual([])
+})
+
+test('termination diagnoses a failed withdrawal once without failing the watch', async () => {
+  const store = makeStore()
+  const controller = new AbortController()
+  store.removeOperatorPresence = async () => {
+    throw new Error('offline')
+  }
+  const h = harness(store, {
+    operator: true,
+    signal: controller.signal,
+    onTick: () => controller.abort('SIGTERM'),
+  })
+  await abWatch(h.base)
+  expect(h.err).toHaveLength(1)
+  expect(h.err[0]).toContain('operator withdrawal failed')
+  expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
+})
+
+test('shutdown budget includes held reads, heartbeat cancellation, removal and closure', async () => {
+  const store = makeStore()
+  const controller = new AbortController()
+  let registered!: () => void
+  const ready = new Promise<void>((resolve) => {
+    registered = resolve
+  })
+  const upsert = store.upsertOperatorPresence.bind(store)
+  store.upsertOperatorPresence = async (...args) => {
+    const row = await upsert(...args)
+    registered()
+    return row
+  }
+  store.listBuilds = async () => new Promise(() => {})
+  store.close = async () => new Promise(() => {})
+  let removals = 0
+  store.removeOperatorPresence = async () => {
+    removals++
+    return new Promise(() => {})
+  }
+  const h = harness(store, { operator: true, signal: controller.signal })
+  const pending = abWatch(h.base)
+  await ready
+  const start = Date.now()
+  controller.abort('SIGTERM')
+  await pending
+  expect(Date.now() - start).toBeLessThan(2_800)
+  expect(removals).toBe(1)
+  expect(h.err.filter((line) => line.includes('operator withdrawal failed'))).toHaveLength(1)
+})
+
+test('termination cancels and drains a heartbeat before removal so it cannot recreate presence', async () => {
+  const store = makeStore()
+  const controller = new AbortController()
+  const upsert = store.upsertOperatorPresence.bind(store)
+  const order: string[] = []
+  let writes = 0
+  store.upsertOperatorPresence = async (repo, identity, signal) => {
+    if (++writes === 1) return upsert(repo, identity)
+    order.push('heartbeat started')
+    await new Promise<void>((resolve) =>
+      signal!.addEventListener(
+        'abort',
+        () => {
+          order.push('cancelled')
+          resolve()
+        },
+        { once: true },
+      ),
+    )
+    const row = await upsert(repo, identity)
+    order.push('heartbeat drained')
+    return row
+  }
+  const remove = store.removeOperatorPresence.bind(store)
+  store.removeOperatorPresence = async (...args) => {
+    order.push('removed')
+    await remove(...args)
+  }
+  const h = harness(store, {
+    operator: true,
+    signal: controller.signal,
+    heartbeatDelay: async () => {},
+    onTick: () => controller.abort('SIGTERM'),
+  })
+  await abWatch(h.base)
+  expect(order).toEqual(['heartbeat started', 'cancelled', 'heartbeat drained', 'removed'])
+  expect(await store.listOperatorPresence(REPO)).toEqual([])
+  expect(writes).toBe(2)
+})
+
+test.each([404, 405])(
+  'watch termination silently tolerates an unsupported withdrawal route (%s)',
+  async (status) => {
+    const store = makeStore()
+    const remote = new RemoteBuildStore({
+      url: 'http://old-service',
+      fetchFn: (async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('', { status })) as typeof fetch,
+    })
+    store.removeOperatorPresence = remote.removeOperatorPresence.bind(remote)
+    const controller = new AbortController()
+    const h = harness(store, {
+      operator: true,
+      signal: controller.signal,
+      onTick: () => controller.abort('SIGTERM'),
+    })
+    await abWatch(h.base)
+    expect(h.err).toEqual([])
+    expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
+  },
+)
+
+test.each(['initial', 'final'] as const)(
+  'termination cancels a pending %s renewal before withdrawal',
+  async (stage) => {
+    const store = makeStore()
+    const controller = new AbortController()
+    const upsert = store.upsertOperatorPresence.bind(store)
+    let writes = 0
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    store.upsertOperatorPresence = async (repo, identity, signal) => {
+      const row = await upsert(repo, identity)
+      if (++writes === (stage === 'initial' ? 1 : 2)) {
+        started()
+        await new Promise<void>((_resolve, reject) =>
+          signal!.addEventListener('abort', () => reject(new Error('cancelled renewal')), {
+            once: true,
+          }),
+        )
+      }
+      return row
+    }
+    const h = harness(store, { operator: true, signal: controller.signal, timeout: '1' })
+    const pending = abWatch(h.base)
+    await ready
+    const start = Date.now()
+    controller.abort('SIGTERM')
+    await pending
+    expect(Date.now() - start).toBeLessThan(500)
+    expect(await store.listOperatorPresence(REPO)).toEqual([])
+    expect(h.err).toEqual([])
+  },
+)
+
+test('a termination before resumed watch initialization withdraws the cursor registration', async () => {
+  const store = makeStore()
+  const first = harness(store, { operator: true, timeout: '1' })
+  await abWatch(first.base)
+  expect(await store.listOperatorPresence(REPO)).toHaveLength(1)
+  const since = JSON.parse(first.out.at(-1)!).cursor
+  const resumed = harness(store, { operator: true, since, signal: alreadyAborted() })
+  await abWatch(resumed.base)
+  expect(await store.listOperatorPresence(REPO)).toEqual([])
+  expect(resumed.err).toEqual([])
 })

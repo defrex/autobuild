@@ -1260,3 +1260,51 @@ test('operator presence wire shapes, strict validation and bounded writes', asyn
   await expect(store.upsertOperatorPresence('acme/repo', { ...identity, pid: 0 })).rejects.toThrow()
   expect(calls).toHaveLength(2)
 })
+
+test('operator withdrawal encodes identities, validates success and only ignores missing routes', async () => {
+  const { store, calls } = makeStore([{ body: { ok: true } }])
+  await store.removeOperatorPresence('org/repo ?', 'id/ ?')
+  expect(calls[0]!.method).toBe('DELETE')
+  expect(calls[0]!.url).toBe(
+    'http://store.test/repos/org%2Frepo%20%3F/operator-presence/id%2F%20%3F',
+  )
+  for (const status of [404, 405]) {
+    const h = makeStore([{ status, body: { kind: 'not-found', error: 'old service' } }])
+    await h.store.removeOperatorPresence('repo', 'id')
+    expect(h.calls).toHaveLength(1)
+  }
+  for (const status of [401, 403, 409, 500]) {
+    const h = makeStore([{ status, body: { kind: 'auth', error: 'denied' } }])
+    await expect(h.store.removeOperatorPresence('repo', 'id')).rejects.toThrow()
+    expect(h.calls).toHaveLength(1)
+  }
+  for (const body of [{}, { ok: false }, { ok: true, extra: true }])
+    await expect(makeStore([{ body }]).store.removeOperatorPresence('repo', 'id')).rejects.toThrow()
+})
+
+test('operator withdrawal and heartbeat propagate cancellation to HTTP', async () => {
+  const store = new RemoteBuildStore({
+    url: 'http://store.test',
+    fetchFn: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal
+      expect(signal).toBeInstanceOf(AbortSignal)
+      return new Promise<Response>((_resolve, reject) => {
+        if (signal!.aborted) reject(signal!.reason)
+        else signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+      })
+    }) as typeof fetch,
+  })
+  for (const operation of ['remove', 'upsert']) {
+    const controller = new AbortController()
+    const pending =
+      operation === 'remove'
+        ? store.removeOperatorPresence('repo', 'one', controller.signal)
+        : store.upsertOperatorPresence(
+            'repo',
+            { id: 'one', host: 'host', pid: 1, startedAt: new Date().toISOString() },
+            controller.signal,
+          )
+    controller.abort(new Error('deadline'))
+    await expect(pending).rejects.toThrow('deadline')
+  }
+})

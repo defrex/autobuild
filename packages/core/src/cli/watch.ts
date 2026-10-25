@@ -1,3 +1,4 @@
+import { WatchLifetime } from './watch-lifetime'
 import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { OPERATOR_HEARTBEAT_MS, operatorIdentitySchema } from '../store/operator-presence'
@@ -75,7 +76,7 @@ import {
   type RemotePollRunner,
 } from './remote-poll'
 import { buildInRepository, isRemoteStoreRef, normalizeGitRemoteUrl } from './repo-state'
-import { withAmbientReadStore, type StoreOpener } from './store-opening'
+import { withAmbientReadStore, type OpenedStoreContext, type StoreOpener } from './store-opening'
 
 export const WATCH_USAGE =
   'usage: ab watch [<slug>...] [--repository] [--operator] [--event <glob>]... [--since <cursor>] ' +
@@ -560,6 +561,7 @@ export interface AbWatchOpts {
   env: Record<string, string | undefined>
   exec: Exec
   stdout: (line: string) => void
+  flushStdout?: () => Promise<void>
   stderr: (line: string) => void
   /** Positional build slugs; none means every nonterminal build in the repo. */
   slugs?: readonly string[]
@@ -582,7 +584,7 @@ export interface AbWatchOpts {
   now?: () => Date
   /** Injectable tick-gap sleep so tests drive ticks deterministically. */
   delay?: (ms: number, signal?: AbortSignal) => Promise<void>
-  /** Stop signal; the generic sessionless SIGINT handler aborts it. */
+  /** Termination signal from SIGINT/TERM/HUP or stdout EPIPE; ordinary completion does not abort it. */
   signal?: AbortSignal
 }
 
@@ -648,15 +650,17 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
     usage: WATCH_USAGE,
   })
 
+  const lifetime = new WatchLifetime(opts.signal, opts.stderr)
   await withAmbientReadStore(
     {
+      closeDeadline: lifetime.deadline.signal,
       targetRepo: opts.targetRepo,
       env: opts.env,
       exec: opts.exec,
       ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
       ...(opts.openStore !== undefined ? { openStore: opts.openStore } : {}),
     },
-    async (context) => {
+    lifetime.limitCallback(async (context: OpenedStoreContext) => {
       const { store, repo, storeRef, checkout } = context
       const { exec } = opts
       const interval = intervalMs ?? watchSelection(storeRef).intervalMs
@@ -695,22 +699,26 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       const heartbeatStop = new AbortController()
       let heartbeatTask: Promise<void> | undefined
       if (operator) {
-        await store.upsertOperatorPresence(repo, operator)
+        try {
+          await lifetime.register(store, repo, operator)
+        } catch (error) {
+          if (!lifetime.terminated) throw error
+        }
         heartbeatTask = (async () => {
           let reported = false
           let nextHeartbeatAt = now().getTime() + OPERATOR_HEARTBEAT_MS
-          while (!heartbeatStop.signal.aborted) {
+          while (!heartbeatStop.signal.aborted && !lifetime.terminated) {
             await (opts.heartbeatDelay ?? defaultDelay)(
               Math.max(0, nextHeartbeatAt - now().getTime()),
-              heartbeatStop.signal,
+              AbortSignal.any([heartbeatStop.signal, lifetime.writes.signal]),
             )
-            if (heartbeatStop.signal.aborted) break
+            if (heartbeatStop.signal.aborted || lifetime.terminated) break
             nextHeartbeatAt = now().getTime() + OPERATOR_HEARTBEAT_MS
             try {
-              await store.upsertOperatorPresence(repo, operator)
+              await lifetime.renew()
               reported = false
             } catch (error) {
-              if (!reported)
+              if (!reported && !lifetime.terminated)
                 opts.stderr(
                   `ab watch: operator heartbeat failed (${String(error)}); retrying at next heartbeat`,
                 )
@@ -1290,20 +1298,31 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
 
         const finalCursor = countCursor ?? encodeCurrent()
-        if (opts.json === true) {
+        // SIGTERM/HUP previously used the process default and could not emit a
+        // final cursor. SIGINT retains its existing orderly cursor output.
+        const outputClosed =
+          opts.signal?.aborted &&
+          ['SIGTERM', 'SIGHUP', 'EPIPE'].includes(String(opts.signal.reason))
+        if (opts.json === true && !outputClosed) {
           opts.stdout(JSON.stringify({ cursor: finalCursor }))
         }
+        await opts.flushStdout?.()
       } finally {
         heartbeatStop.abort()
-        await heartbeatTask
-        if (operator) {
+        await lifetime.limit(heartbeatTask ?? Promise.resolve())
+        if (operator && !lifetime.terminated) {
           try {
-            await store.upsertOperatorPresence(repo, operator)
+            await lifetime.renew()
           } catch (error) {
-            opts.stderr(`ab watch: final operator heartbeat failed (${String(error)})`)
+            if (!lifetime.terminated)
+              opts.stderr(`ab watch: final operator heartbeat failed (${String(error)})`)
           }
         }
+        await lifetime.finish()
       }
-    },
-  )
+    }),
+  ).finally(async () => {
+    await lifetime.finish()
+    lifetime.close()
+  })
 }
