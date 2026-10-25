@@ -868,3 +868,58 @@ test('every generic callback and discovery rechecks admission with the same toke
   store.admitted = async () => false
   expect((await call('repositories.list')).status).toBe(403)
 })
+
+test('merge listing aliases and both control actions preserve repository denial and authenticated attribution', async () => {
+  for (const [name, extra] of [
+    ['merges.list', {}],
+    ['landings.list', {}],
+    ['builds.control', { slug: 'demo', action: 'merge' }],
+    ['builds.control', { slug: 'demo', action: 'land' }],
+  ] as const) {
+    for (const allowed of [true, false]) {
+      let delegated: Request | undefined
+      const ep = endpoint(fakeAuth(), {
+        delegate: async (input, init) => {
+          delegated = new Request(input, init)
+          return Response.json({ ok: true })
+        },
+      })
+      const repo = allowed ? 'https://github.com/owner/repo' : 'https://github.com/owner/other'
+      const response = await ep.fetch(
+        new Request('https://operator.example/mcp', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            authorization: 'Bearer any',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 42,
+            method: 'tools/call',
+            params: { name, arguments: { repo, ...extra } },
+          }),
+        }),
+      )
+      const body = (await jsonOf(response)) as { result: { isError?: boolean } }
+      if (!allowed) {
+        expect(body.result.isError).toBe(true)
+        expect(delegated).toBeUndefined()
+      } else {
+        expect(body.result.isError).toBeUndefined()
+        expect(new URL(delegated!.url).pathname).toEndWith(`/tools/${name}`)
+        expect(
+          verifyToken(
+            env.AB_STORE_SECRET,
+            delegated!.headers.get('authorization')!.replace(/^Bearer /, ''),
+            VERIFIED_AT,
+          ),
+        ).toMatchObject({
+          internalOperator: { user: 'ada@example.com', repo },
+          via: { kind: 'mcp', client: 'Claude web' },
+        })
+        expect(await delegated!.json()).toEqual({ repo, ...extra })
+      }
+    }
+  }
+})

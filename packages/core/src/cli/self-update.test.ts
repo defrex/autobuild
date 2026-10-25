@@ -45,7 +45,7 @@ async function installFixture(
   await mkdir(globalBin)
   await writeFile(
     join(owner, 'autobuild.toml'),
-    'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    'merge = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
   )
   await writeFile(
     join(dist, 'package.json'),
@@ -388,7 +388,7 @@ describe('distribution self-update orchestration', () => {
     await mkdir(target)
     await writeFile(
       join(target, 'autobuild.toml'),
-      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      'merge = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
     )
     await Bun.$`git init -q`.cwd(target)
     await Bun.$`git config user.name 'Upgrade Test'`.cwd(target)
@@ -573,7 +573,7 @@ describe('distribution self-update orchestration', () => {
     await mkdir(target)
     await writeFile(
       join(target, 'autobuild.toml'),
-      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      'merge = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
     )
     let updates = 0
     let resolverFactories = 0
@@ -793,7 +793,7 @@ for (const mode of ['merge-only', 'handoff', 'fallback'] as const) {
     await mkdir(target)
     await writeFile(
       join(target, 'autobuild.toml'),
-      'landing = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
+      'merge = []\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
     )
     await mkdir(join(fixture.dist, 'skills', 'plan'))
     await writeFile(

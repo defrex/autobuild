@@ -110,7 +110,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: `integration-consent-pending-${size}`,
     width: size === 'wide' ? 1440 : 390,
     height: 4400,
-    requires: ['Landing awaits consent', 'Land', 'Hold'],
+    requires: ['Merge awaits consent', 'Merge', 'Hold'],
   })),
   ...['wide', 'narrow'].flatMap((size) => [
     {
@@ -206,7 +206,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       'implement',
       'code-review',
       'Verification',
-      'Landing',
+      'Merge',
     ],
   })),
   ...(['conflict', 'failed', 'ready-node'] as const).map((state) => ({
@@ -215,12 +215,12 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     height: 3000,
     requires: [
       'Verification',
-      'Landing',
+      'Merge',
       ...(state === 'conflict'
         ? ['src/a file.ts']
         : state === 'failed'
           ? ['repair child']
-          : ['press l, or ab land']),
+          : ['press l, or ab merge']),
     ],
   })),
   {
@@ -229,12 +229,12 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     height: 2300,
     requires: [
       'integration into',
-      'landed',
+      'merged',
       'building',
       'queued',
       'children unknown',
       'unit failed',
-      'ready to land into',
+      'ready to merge into',
       'NODE-3',
     ],
   },
@@ -242,13 +242,13 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'integration-narrow',
     width: 390,
     height: 4400,
-    requires: ['integration into', 'unit failed', 'ready to land into', 'land(consent)'],
+    requires: ['integration into', 'unit failed', 'ready to merge into', 'merge(consent)'],
   },
   {
     id: 'integration-dimmed',
     width: 1440,
     height: 2500,
-    requires: ['integration into', 'unit failed', 'ready to land into'],
+    requires: ['integration into', 'unit failed', 'ready to merge into'],
   },
 
   {
@@ -400,13 +400,13 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'builds-parked-no-consent-wide',
     width: 1440,
     height: 1300,
-    requires: ['merge(waiting)', 'Landing awaits consent', 'ab land complete-dashboard-evidence'],
+    requires: ['merge(waiting)', 'Merge awaits consent', 'ab merge complete-dashboard-evidence'],
     forbids: [
       'BLOCKED',
       'QUEUED',
       '(held)',
-      'landing not ready',
-      'landing policy pending',
+      'merge not ready',
+      'merge policy pending',
       'use l on the build row',
     ],
   },
@@ -1282,7 +1282,7 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     '- [ ] Compare every light/dark variant to ANSI and the applicable pinned reference. Both grounds use the packaged Atkinson Hyperlegible Next and JetBrains Mono fonts.',
     '- [ ] Title-first rows retain ticket, slug, status, all facts and steps. Current teal, done green, provisional amber, pending slack; timing is quiet.',
     '- [ ] Escalations show the complete red question, explanation, one answer composer, and full-bleed phone treatment with full-width primary answer.',
-    '- [ ] Landing consent is amber on ground with Land/Hold. No optimistic success or unconfirmed abort.',
+    '- [ ] Merge consent is amber on ground with Merge/Hold. No optimistic success or unconfirmed abort.',
     '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
     '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',
     '',

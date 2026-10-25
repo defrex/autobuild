@@ -2,8 +2,8 @@
 
 A node collects related work into one finite delivery to its parent. Write its
 ticket as a charter: why the integration matters, what observable conditions
-make the whole done, and where and how it lands under the repository's effective
-landing policy. Keep the usual spec sections: what and why, checkable acceptance
+make the whole done, and where and how it merges under the repository's effective
+merge policy. Keep the usual spec sections: what and why, checkable acceptance
 criteria, out of scope, and evidence. Put evolving feature specifics in children.
 
 For example, a charter can aim for a coherent account-management flow, complete
@@ -44,11 +44,11 @@ failed cycle. Children retain their specs, claims and targets.
 
 Open children, including triage, backlog and ready tickets, keep the node
 incomplete. Once complete, the node must pass verification on its exact head and
-parent and satisfy its configured landing gates. Landing completes the node and
+parent and satisfy its configured merge gates. Merge completes the node and
 closes admission; use a new node for a later delivery. Consent requirements depend
 on the effective policy.
 
-See [integration trees](integration-tree.md#collect-verify-and-land) for provenance
+See [integration trees](integration-tree.md#collect-verify-and-merge) for provenance
 and completion details, [revision restrictions](integration-tree.md#operator-node-spec-revisions)
-for when a replacement is accepted, and [landing policy](landing-policy.md) for
-landing and consent rules.
+for when a replacement is accepted, and [merge policy](merge-policy.md) for
+merge and consent rules.

@@ -735,7 +735,7 @@ test('a1. code review keeps its recorded cut when implementation absorbs target 
   const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
   const staleLocalSha = await git(['rev-parse', 'refs/heads/main'], h.origin)
   const branchCut = await h.advanceRemote(
-    { 'remote-only.txt': 'landed before dispatch\n' },
+    { 'remote-only.txt': 'merged before dispatch\n' },
     'base: remote-only change',
   )
   expect(branchCut).not.toBe(staleLocalSha)
@@ -940,7 +940,7 @@ test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and comp
   expect(typesOf(final)).not.toContain('escalation.raised')
 }, 30_000)
 
-test('local-git defers for missing identity, then lands under repository identity after retry', async () => {
+test('local-git defers for missing identity, then merges under repository identity after retry', async () => {
   const configToml = CONFIG_TOML.replace('capacity = 2', 'capacity = 2\nforge = "local-git"')
   const h = await track(
     makeHarness({
@@ -2954,7 +2954,7 @@ test('h3. unresolved observation origin holds and then releases a ready proposal
     payload: {
       id: 'obs-origin-followup',
       kind: 'followup',
-      summary: 'Follow-up that depends on the originating implementation landing.',
+      summary: 'Follow-up that depends on the originating implementation merge.',
     },
   })
   await h.store.append('originating-implementation', {

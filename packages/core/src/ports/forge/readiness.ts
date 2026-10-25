@@ -40,7 +40,7 @@ const inventory: readonly [ReadinessKey, string][] = [
   ['linear-history', 'Enable Require linear history on protected root and node target branches.'],
   [
     'root-freshness',
-    'Require branches to be up to date before merging on the root, with nonempty required checks enforced for all actors; otherwise root landing is best-effort rather than fenced.',
+    'Require branches to be up to date before merging on the root, with nonempty required checks enforced for all actors; otherwise root merge is best-effort rather than fenced.',
   ],
 ]
 export function readinessChecks(

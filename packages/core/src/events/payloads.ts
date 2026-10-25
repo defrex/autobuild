@@ -491,7 +491,7 @@ export const eventPayloadSchemas = {
     })
     .refine(
       (value) => value.commandSeq !== undefined || value.decisionSeq !== undefined,
-      'landing intent requires decisionSeq or legacy commandSeq',
+      'merge intent requires decisionSeq or legacy commandSeq',
     ),
   'integration.landed': z.strictObject({
     operation: z.string().optional(),

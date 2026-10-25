@@ -103,7 +103,7 @@ describe('agent-driven ab init', () => {
       'ab resume',
       'ab abort',
       'ab hold',
-      'ab land',
+      'ab merge',
       'ab ticket',
     ]) {
       expect(operate).toContain(command)

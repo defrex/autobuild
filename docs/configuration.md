@@ -267,7 +267,7 @@ These fields hot-reload:
 | `ticketScanIntervalSeconds` | Next tick; evaluates elapsed time against the new interval. |
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
-| `[landing]` (ordered `[[landing]]` rules) | Dispatcher-owned policy; next new readiness decision. Existing decisions retain their sampled rule. |
+| `[merge]` (ordered `[[merge]]` rules) | Dispatcher-owned policy; next new readiness decision. Existing decisions retain their sampled rule. |
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's selection applies unless unknown names require default-all fallback, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
@@ -567,30 +567,34 @@ runtime's optional one-shot capability serves slug naming and lazy upgrade
 conflict resolution; when absent, each caller retains its existing safe
 fallback.
 
-## `[[landing]]`
+## `[[merge]]`
 
-An ordered list of strict landing rules. Predicates within one rule are ANDed;
+An ordered list of strict merge rules. Predicates within one rule are ANDed;
 the first matching rule wins. Omitted predicates match everything. With no
 matching rule, leaves default to `auto` and nodes to `consent`.
 
-<!-- configuration-reference:landing -->
+The deprecated `[[landing]]` spelling accepts identical rules and emits a warning.
+Do not declare both spellings, even as empty arrays. `ab upgrade` migrates the
+old key without changing policy values or order. See [deprecated spellings](merge-policy.md#deprecated-spellings).
 
-#### `landing`
+<!-- configuration-reference:merge -->
 
-**TOML key:** `landing`
+#### `merge`
+
+**TOML key:** `merge`
 
 - **Type:** `array of strict table`
-- **Default:** `[]`
+- **Default:** `omitted`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Ordered landing rules; the first matching rule controls consent.
+**Description:** Ordered merge rules; the first matching rule controls consent.
 
 **Constraints:** None beyond the input type.
 
-#### `landing[].into`
+#### `merge[].into`
 
-**TOML key:** `landing[].into`
+**TOML key:** `merge[].into`
 
 - **Type:** `string`
 - **Default:** `omitted`
@@ -601,9 +605,9 @@ matching rule, leaves default to `auto` and nodes to `consent`.
 
 **Constraints:** into must be root, node, or a nonblank node ticket id
 
-#### `landing[].from`
+#### `merge[].from`
 
-**TOML key:** `landing[].from`
+**TOML key:** `merge[].from`
 
 - **Type:** `"leaf" | "node"`
 - **Default:** `omitted`
@@ -614,9 +618,9 @@ matching rule, leaves default to `auto` and nodes to `consent`.
 
 **Constraints:** None beyond the input type.
 
-#### `landing[].label`
+#### `merge[].label`
 
-**TOML key:** `landing[].label`
+**TOML key:** `merge[].label`
 
 - **Type:** `string`
 - **Default:** `omitted`
@@ -627,20 +631,20 @@ matching rule, leaves default to `auto` and nodes to `consent`.
 
 **Constraints:** label must be nonblank (labels match exactly, including case)
 
-#### `landing[].mode`
+#### `merge[].mode`
 
-**TOML key:** `landing[].mode`
+**TOML key:** `merge[].mode`
 
 - **Type:** `"auto" | "consent"`
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Choose automatic landing or require recorded consent.
+**Description:** Choose automatic merge or require recorded consent.
 
 **Constraints:** None beyond the input type.
 
-<!-- configuration-reference:/landing -->
+<!-- configuration-reference:/merge -->
 
 For example, put a rule with `into = "root"` and `mode = "consent"`
 before a catch-all rule with `mode = "auto"` to request consent only at the
@@ -649,10 +653,10 @@ match the build's frozen destination, rather than the ticket's current parent.
 
 A readiness decision retains the complete matched rule and index (or an explicit
 default), source kind, destination and sampled labels. Later policy edits do not
-rewrite this provenance. Landing policy belongs to the live dispatcher config;
+rewrite this provenance. Merge policy belongs to the live dispatcher config;
 it is excluded from pinned pipeline settings and integration verification inputs.
-See [worked landing configurations and forge requirements](landing-policy.md),
-[operating controls](#landing-policy), and
+See [worked merge configurations and forge requirements](merge-policy.md),
+[operating controls](#merge-policy), and
 [migration from 0.x](migration-1.0.md).
 
 ## `[pr]`
@@ -1207,7 +1211,7 @@ local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
 recording completion; PR API work stays local. If that acknowledgement is lost
-after the push lands, the next launch observes the exact remote branch head and
+after the push merges, the next launch observes the exact remote branch head and
 records the missing completion before allowing a replacement phase to run. If
 the commit is absent, release of the old workspace abandons its request and the
 replacement reruns the phase. Before every guest runner launch, the provider
@@ -1366,7 +1370,7 @@ Enabled steps still follow plan selection and path rules. Excluded steps record
 and a reason naming the setting. Dashboards and PR summaries call this
 "skipped by post-reconcile policy"; it is never a pass. Forge-side required
 checks and branch protections still gate merge. For excluded steps, merged code
-is not re-verified, so breakage that only exists in the combination can land.
+is not re-verified, so breakage that only exists in the combination can merge.
 
 
 `[verify].steps` defines the configured universe and execution order. It is
@@ -2520,7 +2524,7 @@ invariants, not additional configuration fields.
 node ticket id. `ab ticket update <id> --target <node-id>` changes it;
 `--no-target` clears it and `--kind work` resets kind. Omitted update fields
 preserve values. Claimed work targets cannot change: abort and re-dispatch.
-Open nodes can reparent under the guarded protocol, revoking land consent.
+Open nodes can reparent under the guarded protocol, revoking merge consent.
 
 File tickets persist the fields in frontmatter; hosted tickets store them with
 project-scoped transactional validation. Linear maps kind to the exact `node`
@@ -3141,8 +3145,8 @@ configuration. The setup prompt instead asks the agent to review and improve
 the existing config.
 
 Re-running init still maintains the `.autobuild/` ignore rule and skill
-installation. `ab upgrade` migrates an absent landing policy from the target
-repository journal; explicit landing arrays are preserved. See
+installation. `ab upgrade` migrates an absent merge policy from the target
+repository journal; explicit merge arrays are preserved. See
 [migration from 0.x](migration-1.0.md). By default it first updates a recognized
 Bun installation — from the npm registry
 for a registry install, or from GitHub Releases for a `github:` install — and
@@ -3214,12 +3218,12 @@ poll. Editing TOML cannot change them.
 
 The opposite flag forms for each dispatch setting are mutually exclusive.
 Omitting both writes nothing and reuses the durable value. Per-build
-pause/resume and landing controls are separate facts and do not alter these
-repository settings; landing authorization follows `[[landing]]`. Pause all and
+pause/resume and merge controls are separate facts and do not alter these
+repository settings; merge authorization follows `[[merge]]`. Pause all and
 resume all write two facts each — the
 repository pause first, then intake — so a partial failure still leaves the
 repository at least as quiesced as asked; `ab pause --all` reports on stderr
-which of them landed when a walk stops partway. The current release has no TOML
+which of them merged when a walk stops partway. The current release has no TOML
 field for either the harvest gate or the repository pause, and no command that
 sets the repository pause on its own without also moving intake; inspect the
 harvest gate with `ab harvest status`.
@@ -3254,16 +3258,16 @@ set or copy them into `.env`; the runner stamps them for each session.
 
 Forge and agent credentials remain adapter-owned. The `local-git` forge uses no
 credentials or network access: it keeps durable PR records under private Git
-refs, leaves each work build at `refs/heads/ab/<slug>`, and lands root leaves by
-squash under the recorded landing authorization. Node landings use guarded
-fast-forwards; see [landing methods](landing-policy.md#landing-methods).
+refs, leaves each work build at `refs/heads/ab/<slug>`, and merges root leaves by
+squash under the recorded merge authorization. Node merges use guarded
+fast-forwards; see [merge methods](merge-policy.md#merge-methods).
 The squash author and committer come from the
 repository's ordinary Git identity, as resolved for a plain `git commit`; the
-landing is always unsigned even when `commit.gpgsign` is enabled. If Git cannot
+merge is always unsigned even when `commit.gpgsign` is enabled. If Git cannot
 resolve that identity, the PR remains open and `ab build status <slug>` names
 `user.name` / `user.email` setup commands; dispatcher ticks retry automatically
 after you configure them. A dirty checked-out base does not by itself
-block the landing: tracked and untracked work on paths untouched by the squash
+block the merge: tracked and untracked work on paths untouched by the squash
 survives.
 If the squash would overwrite your work, the PR remains open, `ab build
 status <slug>` shows a path-bearing observation, and later dispatcher ticks retry
@@ -3420,37 +3424,39 @@ credentials travel through the separate transient execution-auth argument, never
 through serialized execution identity. Existing plugins that forwarded
 `storeToken` must migrate to this callback and fail closed if it is unavailable.
 
-## Landing policy
+## Merge policy
 
-The [`[[landing]]` table](#landing) defines ordered authorization rules and
-readiness provenance. See [landing policy](landing-policy.md) for examples,
+The [`[[merge]]` table](#merge) defines ordered authorization rules and
+readiness provenance. See [merge policy](merge-policy.md) for examples,
 merge methods and forge capability requirements.
 
-`ab hold <slug>` durably suppresses landing and revokes previous consent, even
-before readiness. `ab land <slug>` requires readiness, clears hold, and consents
-to this build/node landing into its effective destination. Consent survives head
+`ab hold <slug>` durably suppresses merge and revokes previous consent, even
+before readiness. `ab merge <slug>` requires readiness, clears hold, and consents
+to this build/node merge into its effective destination. Consent survives head
 replacement, restacking, verification and re-finalization until another hold or
 completion. Accepted node reparenting revokes consent; holds survive.
-It is consent to the landing, not approval of an immutable diff.
+It is consent to the merge, not approval of an immutable diff.
 Commands and acknowledgements are sequence-correlated; hold acknowledgement
-requires confirmed native cancellation, while land acknowledgement accepts
+requires confirmed native cancellation, while merge acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available
-through the MCP/operator build-control tools. The terminal uses `l` for land and
-`o` for hold on the selected landing. The hosted web app offers **Land** and
-**Hold** on a landing awaiting consent, with the same durable acknowledgements
-and merge gates. It does not provide a landing-policy editor.
+through the MCP/operator build-control tools. The terminal uses `l` for merge and
+`o` for hold on the selected merge. The hosted web app offers **Merge** and
+**Hold** on a merge awaiting consent, with the same durable acknowledgements
+and merge gates. It does not provide a merge-policy editor.
 
 The repository auto-merge default and its fan-out are retired. Historical events
 still replay; explicit old per-build commands map to consent/hold until a new
-landing command supersedes them, while old default seeds confer no consent.
+merge command supersedes them, while old default seeds confer no consent.
 `ab upgrade` samples the target repository's configured journal and writes leaf
 auto for old ON, leaf consent for old OFF (including no fact), and node consent
-in either case. Explicit landing arrays remain byte-for-byte unchanged. Missing
+in either case. Explicit merge arrays remain byte-for-byte unchanged; deprecated
+`landing` arrays are renamed to `merge` without changing policy values or order,
+and without reading the legacy journal. Declaring both keys is an error. Missing
 configuration or unavailable journals fail with recovery guidance. Fresh init
 uses the no-rules fallback.
 
 Native auto-merge is reconciled on every janitor poll against durable desired
-landing state. It is disabled while held, unauthorized, unready, or replacement
+merge state. It is disabled while held, unauthorized, unready, or replacement
 publication is pending or just completed; enabling binds to the current head
 through the forge's expected-head guard. Every replacement publication confirms
 cancellation first, and its first following poll re-reads and reconciles native
@@ -3460,12 +3466,12 @@ poll reconciliation. This is an explicitly bounded failure model: native merge
 is used only behind a merge-blocking gate, and checks on a replacement head must
 take far longer than one poll interval, allowing cancellation before they pass.
 There is no durable native-effect reservation protocol. An undesired forge
-landing is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
+merge is classified from the kernel's last durable native application state, without changing provider contracts. A confirmed disabled
 state with no enable in flight or indeterminate means a deliberate human forge
-landing, which supplies consent. Record whether it overrode a hold: an unheld
-human landing needs no attention from your agent; overriding a hold is informational.
+merge, which supplies consent. Record whether it overrode a hold: an unheld
+human merge needs no attention from your agent; overriding a hold is informational.
 If native auto-merge was armed, or an enable was in flight or indeterminate,
-record a possible stale-enable landing as contrary to policy and notify your agent
+record a possible stale-enable merge as contrary to policy and notify your agent
 attention. Autobuild never rewrites the target to undo either outcome. Merge
 gates and the serialized node-writer publication rules remain authoritative.
 ### Failure budgets and own-build read deferrals

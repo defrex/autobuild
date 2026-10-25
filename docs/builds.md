@@ -1,7 +1,7 @@
 ---
 title: "One build, end to end"
 group: "concepts"
-description: "Follow a work ticket through planning, review, verification, pull request creation, and landing."
+description: "Follow a work ticket through planning, review, verification, pull request creation, and merge."
 label: "Builds"
 order: 2
 ---
@@ -65,7 +65,7 @@ After grooming, escalations are the judgment gates. A build parks with a recorde
 
 Your operator agent answers bounded questions from your instructions and brings unresolved product decisions to you. Restarting dispatch doesn't answer a question, and an answer doesn't force success.
 
-Landing consent is a separate policy decision your operator agent manages. Repositories can require it even for a green build; verification, forge checks, and merge gates still apply. See [integration and landing policy](integration-overview.md).
+Merge consent is a separate policy decision your operator agent manages. Repositories can require it even for a green build; verification, forge checks, and merge gates still apply. See [integration and merge policy](integration-overview.md).
 
 
 ## The reconcile epilogue

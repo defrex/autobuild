@@ -332,7 +332,7 @@ This capability is independent of revision and comment capabilities and of the
 client version. Without it, both fields are projected away, preserving historical
 strict decoders. Current hosted clients send all three capability headers and
 default absent kind to `work`. Unfiltered listing includes all ticket states and
-empty nodes for `ab ticket tree`; dispatch and landing behavior are unchanged.
+empty nodes for `ab ticket tree`; dispatch and merge behavior are unchanged.
 
 Completed ticket imports record `tickets.migration-recorded` in the selected
 BuildStore repository journal, with export identity, origin/destination adapter

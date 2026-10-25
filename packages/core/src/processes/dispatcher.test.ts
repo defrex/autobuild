@@ -103,7 +103,7 @@ function withReadyState(toml: string): string {
   // Older dispatcher scenarios explicitly wait for consent. Policy-default
   // behavior is covered by the landing-policy and declarative scenarios.
   if (!/(?:\[\[landing\]\]|^landing\s*=)/m.test(toml))
-    toml = `${toml}\n[[landing]]\nmode = "consent"\n`
+    toml = `${toml}\n[[merge]]\nmode = "consent"\n`
   if (/(^|\n)\s*readyState\s*=/.test(toml)) return toml
   if (/(^|\n)\[tickets\]/.test(toml)) {
     return toml.replace(/(^|\n)(\[tickets\][^\n]*\n)/, `$1$2readyState = "Ready"\n`)
@@ -1163,7 +1163,7 @@ releaseId = 42
     expect(h.launches).toEqual([])
   })
 
-  test('capacity 1, two ready tickets: second lands next tick after the first completes', async () => {
+  test('capacity 1, two ready tickets: second merges next tick after the first completes', async () => {
     const h = harness({
       tickets: [
         readyTicket('T-1', { title: 'First feature' }),
@@ -3879,7 +3879,7 @@ describe('Dispatcher janitor', () => {
     expect(applied?.payload).toEqual({ enabled: false })
   })
 
-  test('a cancellation landing after classification is caught by the last-moment event reload', async () => {
+  test('a cancellation merge after classification is caught by the last-moment event reload', async () => {
     const h = harness()
     const slug = await seedAwaitingPr(h)
     await h.store.append(slug, {
@@ -4000,7 +4000,7 @@ describe('Dispatcher janitor', () => {
     expect(hooks.forge.squashMergeCalls).toEqual([])
   })
 
-  test('fallback waits for finalize post-steps before landing', async () => {
+  test('fallback waits for finalize post-steps before merge', async () => {
     const h = harness({
       toml:
         '[finalize]\nsteps = ["release-notes"]\n' +
@@ -4028,7 +4028,7 @@ describe('Dispatcher janitor', () => {
   })
 
   test.each([false, true])(
-    'landing and native maintenance wait for post-reconcile verify (maintenance=%s)',
+    'merge and native maintenance wait for post-reconcile verify (maintenance=%s)',
     async (maintenance) => {
       const toml = [
         '[commands]',
@@ -9023,7 +9023,7 @@ describe('integration node dispatch', () => {
     expect(h.forge.opened).toHaveLength(0)
   })
 
-  test('node PR opens lazily, never auto-merges, and human landing completes ticket', async () => {
+  test('node PR opens lazily, never auto-merges, and human merge completes ticket', async () => {
     const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
     h.forge.remoteBranches.set('main', BASE_SHA)
     await h.dispatcher.tick()
@@ -9148,7 +9148,7 @@ describe('integration crash boundaries', () => {
 
 describe('integration review regressions', () => {
   test.each(['present', 'absent'] as const)(
-    'targeted leaf with unavailable frozen node defers and cancels native landing (%s)',
+    'targeted leaf with unavailable frozen node defers and cancels native merge (%s)',
     async (gate) => {
       const h = harness()
       const nodeBase = 'ab-node/parent'
@@ -9279,9 +9279,9 @@ test.each([true, false])(
   },
 )
 
-describe('declarative landing reconciliation', () => {
+describe('declarative merge reconciliation', () => {
   async function candidate(mode: 'auto' | 'consent' = 'consent') {
-    const h = harness({ toml: `[[landing]]\nmode = "${mode}"` })
+    const h = harness({ toml: `[[merge]]\nmode = "${mode}"` })
     const slug = await seedAwaitingPr(h)
     h.forge.setPrState(1, { state: 'open', mergeable: true })
     h.forge.setPrHeadSha(1, PR.headSha)
@@ -9291,7 +9291,7 @@ describe('declarative landing reconciliation', () => {
     return { ...h, slug, poll, state }
   }
   test.each([false, true])(
-    'automatic landing retries a real GitHub limit across restart (uncertain=%s)',
+    'automatic merge retries a real GitHub limit across restart (uncertain=%s)',
     async (uncertain) => {
       const h = await candidate('auto')
       const native = h.forge.setAutoMerge.bind(h.forge)
@@ -9330,7 +9330,7 @@ describe('declarative landing reconciliation', () => {
         store: h.store,
         forge: h.forge,
         wrapTickets: () => h.tickets,
-        toml: '[[landing]]\nmode = "auto"',
+        toml: '[[merge]]\nmode = "auto"',
       })
       await restarted.dispatcher.tick({ acceptNewWork: false })
       expect(await h.store.getEvents(h.slug)).toEqual(before)
@@ -9348,7 +9348,7 @@ describe('declarative landing reconciliation', () => {
   )
 
   test('consent queue polls read each PR once and write only to repair observed drift', async () => {
-    const h = harness({ toml: '[[landing]]\nmode = "consent"' })
+    const h = harness({ toml: '[[merge]]\nmode = "consent"' })
     for (let number = 1; number <= 4; number++) {
       const slug = await seedAwaitingPr(h, `queued-${number}`)
       if (number !== 1)
@@ -9499,7 +9499,7 @@ describe('declarative landing reconciliation', () => {
     expect(await h.store.getEvents(h.slug)).toEqual(events)
   })
   test.each(['deferred', 'error'] as const)(
-    'a %s mutation is cancelled and a later human landing over hold is informational',
+    'a %s mutation is cancelled and a later human merge over hold is informational',
     async (outcome) => {
       const h = await candidate('auto')
       const set = h.forge.setAutoMerge.bind(h.forge)
@@ -9530,7 +9530,7 @@ describe('declarative landing reconciliation', () => {
       expect(buildNeedsAttention(await h.store.getEvents(h.slug), await h.state())).toBe(false)
     },
   )
-  test('policy auto authorizes a ready leaf; consent waits for land and hold revokes it', async () => {
+  test('policy auto authorizes a ready leaf; consent waits for merge and hold revokes it', async () => {
     const auto = await candidate('auto')
     expect(
       mergeDecision(await auto.store.getEvents(auto.slug), new Date(0), await auto.state()),
@@ -9567,58 +9567,55 @@ describe('declarative landing reconciliation', () => {
     ['held human', true, false, 'human'],
     ['armed native', true, true, 'possible-stale-enable'],
     ['indeterminate native', true, 'pending', 'possible-stale-enable'],
-  ] as const)(
-    '%s forge landing uses durable native evidence',
-    async (_, held, native, expected) => {
-      const h = await candidate()
-      await h.poll() // records a confirmed native disable while awaiting consent
-      if (held)
-        await h.store.append(h.slug, {
-          actor: humanActor('operator'),
-          type: 'build.hold-requested',
-          payload: {},
-        })
-      if (native === true)
-        await h.store.append(h.slug, {
-          actor: KERNEL,
-          type: 'landing.native-applied',
-          payload: { enabled: true },
-        })
-      if (native === 'pending')
-        await h.store.append(h.slug, {
-          actor: DISPATCHER,
-          type: 'landing.native-enable-started',
-          payload: {},
-        })
-      const targetBefore = h.forge.remoteBranches.get('main')
-      h.forge.setPrState(1, { state: 'merged', sha: 'human-or-native' })
-      expect((await h.poll()).janitorFailed).toBe(0)
-      const state = await h.state()
-      expect(state.landing?.forgeMerge).toEqual({ classification: expected, overrodeHold: held })
-      expect(state.prState).toBe('merged')
-      expect(h.forge.remoteBranches.get('main')).toBe(targetBefore)
-      expect(h.forge.squashMergeCalls).toEqual([])
-      const events = await h.store.getEvents(h.slug)
-      expect(
-        events.filter(
-          (e) =>
-            e.type === 'observation.recorded' &&
-            e.payload.refs?.includes('landing-contrary-to-policy'),
-        ),
-      ).toHaveLength(expected === 'human' ? 0 : 1)
-      expect(buildNeedsAttention(events, state)).toBe(expected !== 'human')
-      expect(mergeDecision(events, new Date(0), state)?.reason ?? null).toBe(
-        expected === 'human'
-          ? null
-          : 'Landing contrary to policy: possible stale native enable; inspect the target',
-      )
-      expect(h.forge.autoMergeCalls).toHaveLength(0)
-      await h.poll()
-      expect(
-        (await h.store.getEvents(h.slug)).filter((e) => e.type === 'landing.forge-merged'),
-      ).toHaveLength(1)
-    },
-  )
+  ] as const)('%s forge merge uses durable native evidence', async (_, held, native, expected) => {
+    const h = await candidate()
+    await h.poll() // records a confirmed native disable while awaiting consent
+    if (held)
+      await h.store.append(h.slug, {
+        actor: humanActor('operator'),
+        type: 'build.hold-requested',
+        payload: {},
+      })
+    if (native === true)
+      await h.store.append(h.slug, {
+        actor: KERNEL,
+        type: 'landing.native-applied',
+        payload: { enabled: true },
+      })
+    if (native === 'pending')
+      await h.store.append(h.slug, {
+        actor: DISPATCHER,
+        type: 'landing.native-enable-started',
+        payload: {},
+      })
+    const targetBefore = h.forge.remoteBranches.get('main')
+    h.forge.setPrState(1, { state: 'merged', sha: 'human-or-native' })
+    expect((await h.poll()).janitorFailed).toBe(0)
+    const state = await h.state()
+    expect(state.landing?.forgeMerge).toEqual({ classification: expected, overrodeHold: held })
+    expect(state.prState).toBe('merged')
+    expect(h.forge.remoteBranches.get('main')).toBe(targetBefore)
+    expect(h.forge.squashMergeCalls).toEqual([])
+    const events = await h.store.getEvents(h.slug)
+    expect(
+      events.filter(
+        (e) =>
+          e.type === 'observation.recorded' &&
+          e.payload.refs?.includes('landing-contrary-to-policy'),
+      ),
+    ).toHaveLength(expected === 'human' ? 0 : 1)
+    expect(buildNeedsAttention(events, state)).toBe(expected !== 'human')
+    expect(mergeDecision(events, new Date(0), state)?.reason ?? null).toBe(
+      expected === 'human'
+        ? null
+        : 'Merge contrary to policy: possible stale native enable; inspect the target',
+    )
+    expect(h.forge.autoMergeCalls).toHaveLength(0)
+    await h.poll()
+    expect(
+      (await h.store.getEvents(h.slug)).filter((e) => e.type === 'landing.forge-merged'),
+    ).toHaveLength(1)
+  })
   test('enable finishing after cancellation is repaired immediately and on the next poll', async () => {
     const h = await candidate('auto')
     const set = h.forge.setAutoMerge.bind(h.forge)
@@ -9645,14 +9642,14 @@ describe('declarative landing reconciliation', () => {
     expect((await h.state()).landing?.native?.enabled).toBe(false)
   })
   test('policy changes preserve an earlier decision and replacement candidates preserve consent', async () => {
-    let config = parseConfig(withReadyState('[[landing]]\nmode = "consent"'))
+    let config = parseConfig(withReadyState('[[merge]]\nmode = "consent"'))
     const h = harness({ getConfig: () => config })
     const slug = await seedAwaitingPr(h)
     h.forge.setPrState(1, { state: 'open', mergeable: true })
     h.forge.setPrHeadSha(1, PR.headSha)
     await h.dispatcher.tick({ acceptNewWork: false })
     const decision = reduceBuild(await h.store.getEvents(slug)).landing!.decision!
-    config = parseConfig(withReadyState('[[landing]]\nmode = "auto"'))
+    config = parseConfig(withReadyState('[[merge]]\nmode = "auto"'))
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(reduceBuild(await h.store.getEvents(slug)).landing!.decision).toEqual(decision)
     const command = await h.store.append(slug, {

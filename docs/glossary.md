@@ -9,7 +9,7 @@ description: "Definitions for tickets, integration, execution boundaries, and ag
 
 ## Build
 
-One execution of a claimed ticket: an immutable slug and a durable event stream. Work builds run the [fixed pipeline](builds.md); node builds collect, verify and land contributions.
+One execution of a claimed ticket: an immutable slug and a durable event stream. Work builds run the [fixed pipeline](builds.md); node builds collect, verify and merge contributions.
 
 ## Ticket
 
@@ -21,11 +21,11 @@ The build's contract: intent, rationale, acceptance criteria, scope limits and e
 
 ## Node
 
-A finite integration build that collects child contributions, verifies its exact head against its parent and lands into it. Nodes nest and close when complete. See [integration trees](integration-overview.md).
+A finite integration build that collects child contributions, verifies its exact head against its parent and merges into it. Nodes nest and close when complete. See [integration trees](integration-overview.md).
 
 ## Target
 
-Where a ticket's work lands: a node ticket, or the configured root when omitted. Blockers, not targets, decide when work starts.
+Where a ticket's work merges: a node ticket, or the configured root when omitted. Blockers, not targets, decide when work starts.
 
 ## Seam
 
@@ -43,9 +43,9 @@ A deterministic check or evidence-judging agent that tests a build against its c
 
 A durable question or failure that parks work until answered with guidance or a retry through the [answer interface](operating.md#answer-and-pause).
 
-## Landing
+## Merge
 
-Guarded integration of a ready contribution into its destination, authorized by [landing policy](integration-overview.md#policy-authorizes-landing) and still subject to verification and forge gates.
+Guarded integration of a ready contribution into its destination, authorized by [merge policy](integration-overview.md#policy-authorizes-merge) and still subject to verification and forge gates.
 
 ## Restack
 
@@ -57,4 +57,4 @@ The agent phase that resolves conflicts in a kernel-prepared replay against a fr
 
 ## Operator agent
 
-Your external agent, working outside the pipeline through the CLI or connected tools. It writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, answers escalations and manages authorized landing; you supply intent and authority.
+Your external agent, working outside the pipeline through the CLI or connected tools. It writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, answers escalations and manages authorized merge; you supply intent and authority.

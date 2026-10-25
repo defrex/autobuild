@@ -481,7 +481,7 @@ const githubForgeContractFactory = async (
             (pr) => pr.state === 'MERGED' && pr.mergeCommit !== null,
           )
           if (!merged.mergeCommit) {
-            throw new Error(`GitHub PR #${number} merged without a landing SHA`)
+            throw new Error(`GitHub PR #${number} merged without a merge SHA`)
           }
           return merged.mergeCommit.oid
         },
@@ -519,7 +519,7 @@ describe.skipIf(!runLiveGitHub)('GitHub live port contracts (opt-in)', () => {
 // This probes the provider assumption required by serialized node landing before
 // production code relies on indirect PR recognition. The destination is a real
 // non-default ab-node/ branch; only the fixture's explicit scratch repo is used.
-describe.skipIf(!runLiveGitHub)('GitHub node fast-forward landing (manual opt-in)', () => {
+describe.skipIf(!runLiveGitHub)('GitHub node fast-forward merge (manual opt-in)', () => {
   test('a guarded destination fast-forward preserves identity and reconciles the PR best-effort', async () => {
     const h = await githubForgeContractFactory({ nodeBase: true })
     const cwd = h.workspacePath
@@ -532,7 +532,7 @@ describe.skipIf(!runLiveGitHub)('GitHub node fast-forward landing (manual opt-in
           'commit',
           '--amend',
           '-m',
-          `Node landing probe\n\nAutobuild-Build: ${slug}`,
+          `Node merge probe\n\nAutobuild-Build: ${slug}`,
         ],
         cwd,
       )
@@ -572,7 +572,7 @@ describe.skipIf(!runLiveGitHub)('GitHub node fast-forward landing (manual opt-in
         await h.forge.commentOnPr?.(
           cwd,
           pr.number,
-          `Landed by Autobuild at commit ${candidate}. Closing after guarded fast-forward.`,
+          `Merged by Autobuild at commit ${candidate}. Closing after guarded fast-forward.`,
         )
         await h.forge.closePr!(cwd, pr.number)
         expect((await h.forge.getPrState(cwd, pr.number)).state).toBe('closed')

@@ -47,7 +47,7 @@ again or edit product code. Parity means shared vocabulary and facts, not pixels
    teal steps, quiet timing, square ruled controls, opaque account menu with
    Theme choices, readable sign-in and connect, complete red escalation plus
    explanation, full-bleed phone answers and full-width primary controls,
-   amber landing consent on ground, no clipping, no fake loading facts, and
+   amber merge consent on ground, no clipping, no fake loading facts, and
    visible focus/pending/disabled/error states. Static captures prove
    presentation, not hydrated theme interaction. Confirm no surface tab words
    in the signed-in control line and retain the multi-repository selector.

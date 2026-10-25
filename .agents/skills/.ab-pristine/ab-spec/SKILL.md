@@ -17,15 +17,15 @@ session.
 ## Node tickets and targets
 
 Write a node ticket as a **charter**: the integration goal, checkable completion
-conditions for the whole, and its destination and landing expectations under the
+conditions for the whole, and its destination and merge expectations under the
 repository's effective policy. Put evolving feature specifics in child tickets.
 The charter still follows all four parts of the spec standard: what and why,
 verifiable acceptance criteria, out of scope, and evidence.
 
 For example: “Integrate a coherent account-management flow so users can manage
 their account in one place. Done means the child-delivered account settings and
-account closure flows work together and pass integration verification. Land the
-complete flow into its parent under the configured landing policy.” Record the
+account closure flows work together and pass integration verification. Merge the
+complete flow into its parent under the configured merge policy.” Record the
 scope exclusions and supporting evidence alongside these criteria; describe each
 flow's detailed requirements in its child spec.
 
@@ -56,8 +56,8 @@ the split is warranted under the standard's
 guidance, then explicitly choose root or a node before filing,
 including when fleshing out an existing ticket splits it into several tickets.
 Consult the shared destination criteria and read
-the repository's effective landing policy in `autobuild.toml`; explain the actual
-landing and consent flow to the human in plain terms. Ask the human when the
+the repository's effective merge policy in `autobuild.toml`; explain the actual
+merge and consent flow to the human in plain terms. Ask the human when the
 choice is unclear from grooming. Root is valid when each ticket can ship alone.
 Choosing root or a node never changes the requested workflow state or silently
 promotes tickets; the placement instructions below still apply.
