@@ -77,7 +77,6 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/events/` | Separate build, repository, and operator-session envelopes/catalogs, frozen payload schemas, actor validation, the `via` attribution marker | §15 |
 | `packages/core/src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `packages/core/src/store/session-reducer.ts` | The operator-session reducer: status, open turn, pending approval, wake settings and cursors, and the turn list, reduced purely from the session event log | §7.1.1 |
-| `packages/core/src/orchestrator/` | The embedded orchestrator's turn runner: the canonical-skill system prompt, durable conversation reconstruction, registry entries as AI SDK tools with the session's repository injected, gateway model resolution with the typed failure vocabulary, the approval-list configuration, and the CAS-guarded start/resume loop with budget suspension and step-boundary checkpoints | §7.1.2 |
 | `packages/core/src/store/` | BuildStore contract spanning builds, the repository journal, and operator sessions; interface-enforced build, operator-session, and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
 | `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, the Next.js operator web app (`app/`, `server.ts`, `next.config.ts`, `vercel.json`), tests, and deployment guide | §7.2, §18 |
@@ -88,7 +87,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification, awaited native identity observation and optional fresh-process native resume under `ports/runner/` | §3.2, §9, §13 |
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `packages/core/src/plugin-sdk/` | The sole supported `@defrex/autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
-| `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty, harvest trigger, and the last-step orchestrator resume/reap/wake pass, origin-mode-gated), orchestrator tick step, harvest deterministic core + runner | §3.3, §7.1.2, §12, §15.7 |
+| `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty, sandbox idle settlement and harvest trigger), harvest deterministic core + runner | §3.3, §7.1.2, §12, §15.7 |
 | `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the filesystem-only dispatch launcher and immutable generation cache, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
@@ -936,7 +935,7 @@ proven per tool by `operator/registry.contract.test.ts`. Every binding is genera
 from the table and never widens beyond the operator services: the shipped one is
 `packages/core/src/cli/mcp.ts` (`ab mcp`, a stdio MCP server over the registry that
 fails closed inside a phase, exactly as repository-wide `ab builds` does); the
-embedded orchestrator and later transports register from the same table. Checked-in
+hosted HTTP and MCP transports register from the same table. Checked-in
 risk classes live in `operator/annotations.ts` (SPEC §8.9).
 
 **Init and upgrade.** `packages/core/src/cli/init.ts` owns deterministic skill vendoring,
@@ -1562,7 +1561,7 @@ mappings; current-operation resolvers leave build records and old events intact.
 
 A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
 
-Default watch and new hosted wake settings include this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
+Default `ab watch` includes this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
 
 `packages/core/src/kernel/integration-state.ts` retains reported cycle identities and selects missing failures from exact receipts. `kernel/integration-attention.ts` owns their CAS append; `processes/build-runner.ts` reports after verification and `processes/dispatcher.ts` recovers missing facts before per-build janitor gates. The shared `cli/dashboard/model.ts` projects current failure as blocked attention for both frontends.
 

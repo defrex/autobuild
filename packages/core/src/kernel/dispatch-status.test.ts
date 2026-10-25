@@ -61,7 +61,7 @@ describe('reduceDispatchStatus', () => {
         run: 'run-a',
         queued: 4,
         observations: 2, // legacy replay field is accepted but display-owned
-        counters: { ...counters, creationWithheld: 1 },
+        counters: { ...counters, creationWithheld: 1, orchestratorSandboxFailures: 2 },
         janitorDiagnostics: ['janitor warning'],
         ticketDiagnostics: [],
         creationDiagnostics: ['ticket AUT-1: creation withheld'],
@@ -72,6 +72,8 @@ describe('reduceDispatchStatus', () => {
     ]
     const status = reduceDispatchStatus(events, 'run-a')
     expect(status.effectiveConfig).toEqual({ kind: 'dispatcher-effective-config', rev: 0 })
+    // Historical counters are accepted without affecting the current projection.
+    expect(events[2]?.payload).toMatchObject({ counters: { orchestratorSandboxFailures: 2 } })
     expect(status.queued).toBe(4)
     expect(status).not.toHaveProperty('observations')
     expect(status.creationWithheld).toBe(1)

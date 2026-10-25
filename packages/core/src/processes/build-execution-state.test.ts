@@ -1,3 +1,4 @@
+import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { Artifact } from '../store/types'
@@ -125,4 +126,21 @@ describe('effective build config verification policy', () => {
       }).verify.afterReconcile,
     ).toBe(true)
   })
+})
+
+test('reads pinned pre-removal configs without rewriting their artifact bytes', () => {
+  for (const enabled of [false, true]) {
+    const input = historicalEffectiveConfig(enabled)
+    const content = new TextEncoder().encode(JSON.stringify(input))
+    const pinned = { ...artifact({}), content }
+    expect(parseEffectiveBuildConfig(pinned).orchestrator.enabled).toBe(enabled)
+    expect(JSON.parse(new TextDecoder().decode(content))).toEqual(input)
+    ;(input.orchestrator as Record<string, unknown>).typo = true
+    expect(() =>
+      parseEffectiveBuildConfig({
+        ...pinned,
+        content: new TextEncoder().encode(JSON.stringify(input)),
+      }),
+    ).toThrow('invalid build-runner-effective-config')
+  }
 })

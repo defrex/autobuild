@@ -365,7 +365,7 @@ describe('repository event catalog', () => {
       run: 'dispatch-1',
       queued: 1,
       observations: 0,
-      counters: historicalCounters,
+      counters: { ...historicalCounters, orchestratorSandboxFailures: 2 },
       janitorDiagnostics: [],
       ticketDiagnostics: [],
       dependencyDiagnostics: [],

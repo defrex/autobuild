@@ -687,6 +687,10 @@ authority:
 
 ## 5. Operator-session operations
 
+Operator HTTP writes record facts only; they never start or resume an agent
+turn. Historical turn events and streams retain their validation and read
+contracts. External operator harnesses own execution and scheduling.
+
 Operator sessions are a third resource kind: durable orchestrator-conversation
 state keyed by repository and session owner (the human account in `operator`). They are hosted-only — local installs
 interact through the CLI and dashboard and never create one — but the resource
