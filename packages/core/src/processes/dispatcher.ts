@@ -4417,7 +4417,9 @@ export class Dispatcher {
           : facts.log.restack.intent
             ? { operation: 'restack' as const, id: facts.log.restack.intent.id }
             : undefined
-      if (retryIntent) {
+      // Publication waits must not prevent a replacement runner from
+      // acknowledging controls, including abort on an exhausted episode.
+      if (retryIntent && state.pendingCommands.length === 0) {
         try {
           await publicationRetryGate(
             { store: this.store, slug: record.slug, clock: this.deps.clock, actor: DISPATCHER },
