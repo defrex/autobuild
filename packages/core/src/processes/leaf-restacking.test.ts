@@ -1,3 +1,4 @@
+import { readVerifyPipeline } from '../config/pipeline-source'
 import { Dispatcher } from './dispatcher'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
@@ -22,7 +23,7 @@ import { BuildRunner, selectVerifyDiffBase } from './build-runner'
 import { readBuildFacts } from '../store/reduced-reads'
 import { settlePendingPublication } from '../cli/publication-settlement'
 
-const config = parseConfig(`
+const CONFIG_TOML = `
 [roles.default]
 runtime = "scripted"
 [tickets]
@@ -35,7 +36,8 @@ steps = ["unit"]
 [verify.unit]
 kind = "check"
 command = "test"
-`)
+`
+const config = parseConfig(CONFIG_TOML)
 for (const conflict of [false, true])
   for (const { remote, recovery } of [false, true].flatMap((remote) =>
     (!remote && conflict ? ['none', 'contention', 'pause'] : ['none']).map((recovery) => ({
@@ -62,6 +64,7 @@ for (const conflict of [false, true])
         await git(['config', 'user.email', 'test@example.invalid'])
         await git(['config', 'commit.gpgsign', 'false'])
         await git(['config', 'rerere.enabled', 'false'])
+        await file('autobuild.toml', CONFIG_TOML)
         const base = await file('base', 'base\n')
         await git(['checkout', '-qb', BRANCH])
         await file('feature', 'first\n')
@@ -128,6 +131,7 @@ for (const conflict of [false, true])
         const deps = {
           store: store.scopeBuild(BUILD),
           config,
+          ...(!conflict ? { readVerifyPipeline: () => readVerifyPipeline(cwd, bunExec) } : {}),
           runtimes: {
             scripted: {
               runner: new ScriptedAgentRunner({
@@ -429,6 +433,25 @@ for (const conflict of [false, true])
           [verification],
         )
         expect(await runner.step()).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+        if (!conflict) {
+          const events = await store.getEvents(BUILD)
+          expect(events.filter((event) => event.type === 'verify.config-captured')).toHaveLength(1)
+          expect(events.filter((event) => event.type === 'verify.config-superseded')).toHaveLength(
+            0,
+          )
+          expect(events.filter((event) => event.type === 'verify.completed')).toEqual([
+            verification,
+          ])
+          const pin = (await readBuildFacts(store, BUILD)).value.state.verify.configPin!
+          expect(pin.head).toBe(canonical)
+          expect(
+            (
+              await bunExec(['git', 'merge-base', '--is-ancestor', pin.source.commit!, rewritten], {
+                cwd,
+              })
+            ).exitCode,
+          ).toBe(1)
+        }
         await poll()
         const landing = (await readBuildFacts(store, BUILD)).value.state.landing!
         expect(landing.command?.seq).toBe(consent.seq)
@@ -442,6 +465,39 @@ for (const conflict of [false, true])
         expect(sessions).toBe(recovery === 'contention' ? 2 : conflict ? 1 : 0)
         expect(events.filter((e) => e.type === 'restack.completed')).toHaveLength(2)
         expect(await git(['rev-parse', `refs/autobuild/archive/${BUILD}/${oldHead}`])).toBe(oldHead)
+        if (!conflict) {
+          // Keeping completed evidence must not hide a pipeline change that
+          // arrives in a later clean waiting rewrite.
+          await git(['checkout', '-q', 'main'])
+          const configTarget = await file(
+            'autobuild.toml',
+            CONFIG_TOML.replaceAll('unit', 'renamed'),
+          )
+          await git(['checkout', '-q', BRANCH])
+          await store.append(BUILD, {
+            actor: KERNEL,
+            type: 'target.moved',
+            payload: { branch: 'main', sha: configTarget },
+          })
+          await poll()
+          expect(await runner.step()).toMatchObject({
+            kind: 'restack',
+            trigger: 'awaiting-landing',
+          })
+          if (remote) await settle()
+          expect(await runner.step()).toMatchObject({
+            kind: 'run-check',
+            step: 'renamed',
+            attempt: 2,
+          })
+          const refreshed = await store.getEvents(BUILD)
+          expect(
+            refreshed.filter((event) => event.type === 'verify.config-superseded'),
+          ).toHaveLength(1)
+          expect(refreshed.filter((event) => event.type === 'verify.config-captured')).toHaveLength(
+            2,
+          )
+        }
       } finally {
         await rm(cwd, { recursive: true, force: true })
       }

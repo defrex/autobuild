@@ -84,6 +84,13 @@ deposit a fresh corrected plan revision and retry. `plan-review` sees and
 reviews this block as part of the plan—there is no separate artifact or
 verdict.
 
+If the approved selection later names any step absent from the cycle's pinned
+configured universe, the entire selection falls back to all configured optional
+steps. The kernel records one observation per cycle and plan revision naming
+the unknown steps. Mandatory steps, path applicability and post-reconcile policy
+still apply. A valid selection continues to skip genuinely omitted optional
+steps. Strict validation when depositing a new plan is unchanged.
+
 ## What a plan contains
 
 - **Approach** — the shape of the change and why this shape, in a few

@@ -27,7 +27,7 @@ export interface DashboardBuildReader {
   listBuildsForRepo(repo: string): Promise<BuildRecord[]>
   getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]>
   listStreams?(scope: StreamScope): Promise<StreamRecord[]>
-  getArtifact?(slug: string, kind: string): Promise<Artifact | null>
+  getArtifact?(slug: string, kind: string, rev?: number): Promise<Artifact | null>
 }
 
 export interface DashboardPollSnapshot {
@@ -140,13 +140,19 @@ export class DashboardBuildPollCache {
    * (config absent); all failures are display-only. */
   private async readEffectiveConfig(
     slug: string,
+    pin?: BuildState['verify']['configPin'],
   ): Promise<
     { revision?: number; pipelineSource?: PipelineSourceMeta; config?: Config } | undefined
   > {
     const getArtifact = this.reader.getArtifact
     if (getArtifact === undefined) return undefined
     try {
-      const artifact = await getArtifact.call(this.reader, slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      const artifact = await getArtifact.call(
+        this.reader,
+        slug,
+        pin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+        pin?.artifact.rev,
+      )
       if (artifact === null) return undefined
       let config: Config | undefined
       try {
@@ -176,7 +182,7 @@ export class DashboardBuildPollCache {
   ): Promise<DashboardBuild | null> {
     const [streams, artifact] = await Promise.all([
       this.readStreams(record.slug),
-      this.readEffectiveConfig(record.slug),
+      this.readEffectiveConfig(record.slug, state.verify.configPin),
     ])
     const pinnedConfig =
       artifact?.config !== undefined ? composeBuildConfig(artifact.config, config) : undefined
