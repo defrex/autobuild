@@ -217,18 +217,17 @@ if (import.meta.main) {
       }
     } catch (error) {
       commandFailure = error
-      throw error
-    } finally {
-      try {
-        assertLockfileClean()
-      } catch (error) {
-        if (commandFailure)
-          throw new AggregateError(
-            [commandFailure, error],
-            'Verification command failed and Cargo.lock check failed',
-          )
-        throw error
-      }
     }
+    try {
+      assertLockfileClean()
+    } catch (error) {
+      if (commandFailure)
+        throw new AggregateError(
+          [commandFailure, error],
+          'Verification command failed and Cargo.lock check failed',
+        )
+      throw error
+    }
+    if (commandFailure) throw commandFailure
   } else console.log(await build(process.argv.includes('--capture-build')))
 }
