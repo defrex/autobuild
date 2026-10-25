@@ -1,8 +1,8 @@
 import { resolveContextDirectory } from '../context-directory'
 import {
-  collectNodeVerificationProvenance,
+  parseNodeVerificationContext,
   type NodeVerificationIndex,
-} from './node-verification-provenance'
+} from '../kernel/node-verification-context'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
 import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
@@ -514,29 +514,21 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   }
 
   if (isVerifyPhase(phase) && state.kind === 'node' && state.integration?.cycle) {
-    if (!gitWorkspace)
-      throw new Error('node verification provenance requires a Git workspace and exec')
-    const record = await store.getBuild(build)
-    if (!record) throw new Error(`node verification build ${build} is missing`)
-    const contributionBase =
-      state.nodeRestack?.contributionBoundaries?.[manifest.commitRange!.head] ??
-      state.nodeRestack?.contributionBase ??
-      state.nodeOpened?.sha
-    if (!contributionBase)
+    const cycle = state.integration.cycle
+    if (!cycle.context)
       throw new Error(
-        `node verification ${build} is missing its durable contribution boundary; restore node opening evidence`,
+        'node verification is missing prepared context input; prepare a new integration cycle',
       )
-    const { index, specs } = await collectNodeVerificationProvenance(
-      store,
-      record.repo,
-      manifest.commitRange!,
-      { exec: deps.exec!, workspacePath },
-      { contributionBase, foreignAliases: state.nodeRestack?.foreignAliases },
+    const artifact = await store.getArtifact(build, cycle.context.kind, cycle.context.rev)
+    if (!artifact) throw new Error('node verification prepared context artifact is missing')
+    const { index, specs } = parseNodeVerificationContext(
+      new TextDecoder().decode(artifact.content),
+      cycle,
     )
     for (const contribution of index.contributions) {
       contribution.specPath = await writeDerived(
         `contributions/${contribution.build}/spec.md`,
-        specs.get(contribution.build)!,
+        specs[contribution.build]!,
       )
     }
     const indexPath = await writeDerived(
