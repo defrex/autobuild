@@ -351,7 +351,11 @@ The journal records `dispatcher.target-prepared`, `dispatcher.yield-requested`,
 per-execution `dispatcher.drain-settled`, deadline changes and
 `dispatcher.handoff-completed`, plus rollback and hold-clear facts, correlated by predecessor run, successor run,
 launcher lineage, both runtimes and cached target. Legacy handoffs without a
-mode mean cutover. The launcher first binds the runtime-owned journal transport to its persisted
+mode mean cutover. Repository-following watch suppresses predecessor lease-loss
+observations only for a matching recorded stop or reducer-validated successor
+takeover, including while the predecessor drains. Handoff intent or release
+without takeover retains loss attention on expiry; successor loss and upgrade
+failure/rollback attention remain independent. The launcher first binds the runtime-owned journal transport to its persisted
 repository record, so rejected configuration edits cannot redirect readers away
 from the held run. It reads runtime-owned durable projections while generations overlap; it owns no store or operational authority and keeps each
 live runtime reserved. Overlap requires explicit launcher and target capabilities; unsupported
