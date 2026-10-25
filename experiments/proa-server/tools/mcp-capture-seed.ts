@@ -28,9 +28,7 @@ export async function seedConsentCapture(origin: string, capability: string, dat
       'browser-accept',
       'browser-deny',
     ]) {
-      const redirect = state.startsWith('browser-')
-        ? `${origin}/sign-in`
-        : 'http://127.0.0.1:8765/callback'
+      const redirect = 'http://127.0.0.1:8765/callback'
       const client = await (
         await fetch(`${origin}/api/auth/mcp/register`, {
           method: 'POST',

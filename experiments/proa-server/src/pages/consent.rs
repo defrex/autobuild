@@ -67,6 +67,11 @@ pub async fn handler(
     let code = query.consent_code.unwrap_or_default();
     let request = oauth::http::pending(&state, &code, &viewer).await;
     let unavailable = matches!(&request,Err(e) if *e=="temporarily_unavailable");
+    let callback_origin = request
+        .as_ref()
+        .ok()
+        .and_then(|(grant, _)| url::Url::parse(&grant.redirect).ok())
+        .map(|url| url.origin().ascii_serialization());
     let mut response = RouteResponse::ssr(RootDocument {
         project: None,
         projects: Vec::new(),
@@ -81,6 +86,12 @@ pub async fn handler(
         },
     })
     .into_response();
+    response.headers_mut().insert(
+        "content-security-policy",
+        crate::layouts::browser_csp(callback_origin.as_deref())
+            .parse()
+            .expect("validated origin forms a safe header"),
+    );
     response
         .headers_mut()
         .insert("cache-control", "no-store".parse().unwrap());

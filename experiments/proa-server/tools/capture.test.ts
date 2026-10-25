@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { captureFrames, decodePng, expectedConnectCaptureResponse } from './capture'
@@ -157,7 +157,8 @@ for (const [name, injection, expected] of [
       await expect(captureFrames(`http://127.0.0.1:${server.port}`, output)).rejects.toThrow(
         expected,
       )
-      await expect(readFile(join(output, 'profile/DevToolsActivePort'))).rejects.toThrow()
+      // Assert that the entire profile is absent, rather than rereading its cached port file.
+      await expect(stat(join(output, 'profile'))).rejects.toThrow()
     } finally {
       server.stop(true)
       await rm(output, { recursive: true, force: true })

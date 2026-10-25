@@ -951,7 +951,7 @@ operator consent, token/refresh and public JWKS boundaries. The OAuth migration
 owns a separate schema and never advances the product migration identity.
 A single locked state row makes code consumption and refresh rotation atomic
 across processes. This reduces implementation surface at the cost of serialized
-OAuth writes; it needs workload measurement before any production adoption.
+OAuth writes and MCP grant admission; it needs workload measurement before any production adoption.
 Signing keys are encrypted with the stable session secret, while opaque grants
 are indexed by digests. MCP rechecks resource, expiry, active grant and the email
 allowlist on every request, then invokes the existing native operator HTTP router
@@ -972,6 +972,17 @@ operator's exact MCP attribution. A successful final session took under a minute
 on this host. Earlier proof runs exposed missing test-seed effective config and
 an outdated ticket readback column; those are harness corrections, not client
 success evidence. Only the passing sanitized report/transcript was deposited.
+
+The final capture contains 96 frames, all opened for visual review, including
+28 consent states across two widths and themes. Native browser forms proved both
+cross-origin acceptance (code exchange and MCP admission) and denial. The first
+browser proof exposed self-only CSP blocking callback redirects after a form
+POST; consent now adds only the stored, validated callback origin to form-action.
+Other pages keep the original self-only policy. Capture compilation precedes
+seeding so an occupied build queue cannot expire short-lived pending grants.
+The differential MCP corpus covers 126 cases across all 33 advertised tools.
+The single-row OAuth transaction also serializes MCP grant admission, not just
+code/refresh consumption; it proves atomicity here, not production throughput.
 
 ## Proa node synthesis
 

@@ -38,8 +38,8 @@ pub fn router(state: AppState) -> Router {
         import_map: HashMap::new(),
         ssr_bundle: None,
     });
-    let security = SecurityHeadersConfig::new().with_content_security_policy(
-        "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    let security = SecurityHeadersConfig::new()
+        .with_content_security_policy(crate::layouts::browser_csp(None));
     let security = if state.auth.config.origin.scheme() == "https" {
         security.with_hsts_max_age_secs(31536000)
     } else {

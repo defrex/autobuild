@@ -28,12 +28,15 @@ interface Reply {
 }
 
 export async function capture() {
-  return withCaptureSeed((seedEnv, seed, store) => captureSeeded(seedEnv, seed, store))
+  // Build and wait for the Cargo gate before creating ten-minute connection grants.
+  const binary = await build(true)
+  return withCaptureSeed((seedEnv, seed, store) => captureSeeded(seedEnv, seed, store, binary))
 }
 async function captureSeeded(
   seedEnv: Record<string, string | undefined>,
   seed: SeedEvidence,
   store: BuildStore,
+  binary: string,
 ) {
   checkRoutes(
     await Bun.file(join(project, 'src/routes.rs')).text(),
@@ -63,7 +66,6 @@ async function captureSeeded(
       'Auth capture requires the supported server-issued loopback development session capability',
     )
   const capability = randomBytes(32).toString('hex')
-  const binary = await build(true)
   const output = await mkdtemp(join(root, '.ab/proa-frames-'))
   console.log(`Evidence: ${output}`)
   const reservation = Bun.serve({
@@ -251,7 +253,8 @@ export async function captureFrames(
   const profile = join(output, 'profile')
   const cleanup = () => {
     socket?.close()
-    browser?.kill()
+    // The profile is disposable; prevent late Chromium writes after cleanup.
+    browser?.kill('SIGKILL')
   }
   process.once('SIGTERM', cleanup)
   process.once('SIGINT', cleanup)
@@ -295,6 +298,7 @@ export async function captureFrames(
     let sequence = 0
     const pending = new Map<number, { resolve: (v: Reply) => void; reject: (e: Error) => void }>()
     const errors: string[] = []
+    let consentCallbackExpected = false
     const send = (method: string, params: Record<string, unknown> = {}): Promise<Reply> =>
       new Promise((resolve, reject) => {
         const id = ++sequence
@@ -334,6 +338,22 @@ export async function captureFrames(
         return
       }
       if (r.method === 'Fetch.requestPaused') {
+        if (
+          consentCallbackExpected &&
+          r.params.resourceType === 'Document' &&
+          r.params.request.url.startsWith('http://127.0.0.1:8765/callback?')
+        ) {
+          intercept('Fetch.fulfillRequest', {
+            requestId: r.params.requestId,
+            responseCode: 200,
+            responseHeaders: [{ name: 'Content-Type', value: 'text/html' }],
+            body: Buffer.from(
+              '<!doctype html><title>Agent callback</title><p>Returned to agent.</p>',
+            ).toString('base64'),
+          })
+          return
+        }
+
         // Chromium invents an implicit favicon request for pages with no icon.
         // It is not an application asset; leave explicit Image requests checked.
         if (
@@ -722,12 +742,14 @@ export async function captureFrames(
           if (await evaluate(`Boolean(document.querySelector('[data-consent-form]'))`)) break
           await Bun.sleep(30)
         }
+        consentCallbackExpected = true
         await evaluate(`document.querySelector('button[value="${decision}"]').click()`)
         let callback: URL | undefined
         for (let attempt = 0; attempt < 100; attempt++) {
           const current = new URL(String(await evaluate('location.href')))
           if (
-            current.pathname === '/sign-in' &&
+            current.origin === 'http://127.0.0.1:8765' &&
+            current.pathname === '/callback' &&
             (current.searchParams.has('code') || current.searchParams.has('error'))
           ) {
             callback = current
@@ -735,6 +757,7 @@ export async function captureFrames(
           }
           await Bun.sleep(30)
         }
+        consentCallbackExpected = false
         if (callback?.searchParams.get('state') !== 'proa-consent-browser')
           throw Error('Native consent form did not reach the bound callback')
         if (decision === 'accept') {
@@ -744,7 +767,7 @@ export async function captureFrames(
             body: new URLSearchParams({
               grant_type: 'authorization_code',
               client_id: auth.seed!.consent![`client-browser-${decision}`]!,
-              redirect_uri: `${origin}/sign-in`,
+              redirect_uri: 'http://127.0.0.1:8765/callback',
               code: callback.searchParams.get('code')!,
               code_verifier: 'v'.repeat(43),
               resource: `${origin}/mcp`,
@@ -770,6 +793,7 @@ export async function captureFrames(
         consentProof.push({
           decision,
           callbackBound: true,
+          crossOriginCallback: true,
           codeIssued: decision === 'accept',
           mcpAuthorized: decision === 'accept',
         })
