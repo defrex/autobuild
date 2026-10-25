@@ -31,3 +31,5 @@ pub mod js_postgres;
 pub mod js_date;
 
 mod js_postgres_diagnostics;
+
+pub mod tickets;

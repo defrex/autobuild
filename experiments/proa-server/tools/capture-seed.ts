@@ -1,5 +1,7 @@
 /** Isolated producer replay. Never imports the shared-database dev seed entry. */
 import { SQL } from 'bun'
+import { randomBytes } from 'node:crypto'
+import { PostgresConnectionStore } from '../../../packages/postgres-store/src/connections'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -39,6 +41,7 @@ export interface SeedEvidence {
   detail: { project: string; slug: string }
   controls: Record<string, { project: string; slug: string }>
   extendedControls: ExtendedBrowserFixture[]
+  connect?: Record<string, string>
 }
 const hash = () =>
   createHash('sha256')
@@ -477,6 +480,25 @@ export async function withCaptureSeed<T>(
           controls[`proof-${mode}-${state}`] = { project, slug: controlSlug }
         }
       const extendedControls = await seedExtendedBrowserControls(writer, store)
+      let connectionNow = new Date()
+      const connections = new PostgresConnectionStore(writer, () => connectionNow)
+      const connect: Record<string, string> = { entry: '', unknown: '0000000000', error: 'INVALID' }
+      for (const status of ['pending', 'approved', 'denied', 'expired']) {
+        connectionNow = new Date(Date.now() - (status === 'expired' ? 11 * 60_000 : 0))
+        const request = await connections.start({
+          repo: `https://github.com/capture/connect-${status}`,
+          credentialId: randomBytes(16).toString('hex'),
+          digest: randomBytes(32).toString('hex'),
+        })
+        connect[status] = request.code
+        if (status === 'approved' || status === 'denied')
+          await connections.decide(request.code, 'seed@example.com', status === 'approved')
+        if (status === 'expired') {
+          connectionNow = new Date()
+          await connections.lookup(request.code, 'seed@example.com')
+          connectionNow = new Date()
+        }
+      }
       await admin.unsafe(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`)
       roleCreated = true
       await writer.unsafe(`GRANT CONNECT ON DATABASE ${database} TO ${role}`)
@@ -518,6 +540,7 @@ export async function withCaptureSeed<T>(
         detail: { project, slug },
         controls,
         extendedControls,
+        connect,
       }
       validateProvenance(evidence)
       return await work(
