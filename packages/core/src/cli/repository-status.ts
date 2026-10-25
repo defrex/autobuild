@@ -1,3 +1,4 @@
+import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { OPERATOR_PRESENCE_TTL_MS, type OperatorPresence } from '../store/operator-presence'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../kernel/dispatch-upgrade'
@@ -324,7 +325,9 @@ export async function readRepositoryCapacity(
     const ref = facts.status.effectiveConfig
     const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
     if (artifact) {
-      const config = configSchema.parse(JSON.parse(new TextDecoder().decode(artifact.content)))
+      const config = configSchema.parse(
+        normalizeEffectiveConfigArtifact(JSON.parse(new TextDecoder().decode(artifact.content))),
+      )
       const builds: CapacityBuild[] = []
       const records = await store.listBuildsForRepo(repo)
       const digests = await store.getRepoBuildDigests(repo)

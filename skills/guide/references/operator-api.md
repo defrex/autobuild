@@ -73,8 +73,13 @@ archived status is terminal.
 
 Session state is a reduction of the session's event log, never a stored
 column; a `GET …/sessions/{sid}` response therefore always reflects the
-session's full history. The API never exposes raw session-event append: the
-turn runner (a later ticket) is the only producer of turn facts.
+session's full history. Message, explicit wake and approval writes return
+`{ok:true}` without turn or stream ids. They record facts only: the service
+never starts or resumes an agent, executes an approved call, or reaps a turn.
+New sessions have no inherited wake settings. Historical turn events and
+streams remain readable; an approval answer clears the matching pending
+approval without changing its suspended turn or stream. The API never exposes
+raw session-event append. External operator harnesses own agent execution.
 
 ## Reads
 

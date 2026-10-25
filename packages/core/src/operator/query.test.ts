@@ -1,3 +1,5 @@
+import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
+import { decodeEffectiveConfig, orchestratorConfig } from './query'
 import { describe, expect, test } from 'bun:test'
 import { composeBuildConfig } from '../config/live'
 import { parseConfig } from '../config/load'
@@ -1269,3 +1271,33 @@ test('repository-only handoff settlement and completion agree in snapshot and de
     expect(detail.dashboardRow?.status).toBe('running')
   }
 })
+
+for (const enabled of [false, true]) {
+  test(`both operator config readers accept historical snapshots enabled=${enabled}`, async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(REPO)
+    const input = historicalEffectiveConfig(enabled)
+    const content = JSON.stringify(input)
+    await store.putRepoArtifact(REPO, { kind: 'dispatcher-effective-config', content })
+    expect(
+      decodeEffectiveConfig(new TextEncoder().encode(content), 'legacy').orchestrator.enabled,
+    ).toBe(enabled)
+    const sandbox = await orchestratorConfig(store, REPO)
+    expect(sandbox?.orchestrator.enabled ?? false).toBe(enabled)
+    if (sandbox) expect(sandbox.orchestrator.sandbox.idleMinutes).toBe(7)
+    expect(
+      new TextDecoder().decode(
+        (await store.getRepoArtifact(REPO, 'dispatcher-effective-config'))!.content,
+      ),
+    ).toBe(content)
+    ;(input.orchestrator as Record<string, unknown>).typo = true
+    await store.putRepoArtifact(REPO, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify(input),
+    })
+    expect(() =>
+      decodeEffectiveConfig(new TextEncoder().encode(JSON.stringify(input)), 'bad'),
+    ).toThrow('invalid')
+    await expect(orchestratorConfig(store, REPO)).rejects.toThrow('invalid')
+  })
+}

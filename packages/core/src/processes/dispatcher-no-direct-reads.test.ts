@@ -9,7 +9,7 @@ import { join } from 'node:path'
  * frontend's tick-path journal reads go through its view too. A raw-store read
  * reintroduced into either file fails here, naming the line.
  *
- * `orchestrator-tick.ts` and the operator sandbox service are handed the view
+ * The operator sandbox service is handed the view
  * and read through whatever store they are given, so they cannot be told apart
  * by text; the counting tests in `dispatcher.test.ts` prove them behaviorally.
  */

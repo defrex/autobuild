@@ -23,17 +23,9 @@
  * only — the operator function never reads them, so it never carries the
  * multi-megabyte tarball.
  *
- * It also appends `skills/operate/SKILL.md` — the canonical `ab-operate`
- * skill the embedded orchestrator reads at runtime through
- * `distributionPath` (AUT-342) — to BOTH function bundles that execute
- * turns: the operator route's trace (message and answer invocations run
- * there) and the dispatch route's trace (the tick's resume and wake passes
- * run the turn loop inside `/api/dispatch`, which otherwise traces only
- * `.autobuild-dist/**`). A dynamic fs read is invisible to tracing, so
- * without these appends the system prompt could not load in production while
- * every in-process test passed. Both entries are computed the same relative
- * way, and the step fails loudly when a trace file or the skill file is
- * missing — a deployment can never silently ship without the skill.
+ * The legacy operate-skill trace entries remain for packaging compatibility.
+ * Neither route executes operator turns; external harnesses load their own
+ * instructions. Removing these redundant entries is independent cleanup.
  */
 import { createHash } from 'node:crypto'
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -45,8 +37,7 @@ export interface EnsureOptions {
   distDir?: string
   /** Distribution manifest to carry; defaults to the file provisioning reads. */
   manifest?: string
-  /** Canonical operate skill to carry; defaults to the distribution tree the
-   * turn runner reads at runtime. */
+  /** Legacy canonical operate skill entry carried for packaging compatibility. */
   skill?: string
   log?: (message: string) => void
 }
@@ -59,7 +50,7 @@ export interface EnsureResult {
   appended: boolean
   /** Whether the manifest entry was appended to the dispatch route's trace. */
   manifestAppended: boolean
-  /** The canonical operate skill file carried into the turn-executing bundles. */
+  /** The canonical operate skill file carried into the legacy function bundles. */
   skill: string
   /** Route names whose trace got the skill appended ('dispatch', 'operator'). */
   skillAppended: string[]
@@ -68,8 +59,7 @@ export interface EnsureResult {
 const DIST_DIRECTORY = '.autobuild-dist'
 const TRACE_FILE = 'route.js.nft.json'
 const ROUTE_DIRECTORY = join('server', 'app', 'api', 'dispatch')
-/** The operator route — message and approval-answer invocations run turns
- * inside this function bundle. */
+/** The operator HTTP route; retained legacy skill trace entry. */
 const OPERATOR_ROUTE_DIRECTORY = join('server', 'app', 'operator', '[[...path]]')
 
 async function findArchive(root: string): Promise<string> {
@@ -121,7 +111,7 @@ async function readTrace(path: string): Promise<string[]> {
 }
 
 /** Append the packed distribution archive, the distribution manifest, and the
- * canonical operate skill to the turn-executing routes' trace files — the
+ * legacy canonical operate skill to the routes' trace files — the
  * archive and manifest to the dispatch route's trace only, the skill to both. */
 export async function ensureDistributionArchiveInTrace({
   root = process.cwd(),
@@ -142,15 +132,14 @@ export async function ensureDistributionArchiveInTrace({
     await stat(skill)
   } catch {
     throw new Error(
-      `missing canonical operate skill ${skill} — the orchestrator's system prompt ` +
-        'cannot load in production without it',
+      `missing canonical operate skill ${skill} — required by the legacy trace contract`,
     )
   }
   // Each route declares the trace entries it requires, matching the intent
   // recorded in packages/hosted-store-service/next.config.ts: the archive and
   // the manifest belong to the dispatch route alone (the operator function
-  // never reads them), while both turn-executing routes carry the operate
-  // skill (AUT-342).
+  // never reads them), while both routes retain the legacy operate
+  // skill trace entry.
   const routes: {
     name: string
     directory: string

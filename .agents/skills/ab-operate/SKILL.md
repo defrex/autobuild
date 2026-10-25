@@ -1,6 +1,6 @@
 ---
 name: ab-operate
-description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control landing consent, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or inside the hosted service with the operator tool registry.
+description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control landing consent, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or from an external connected agent using the operator tool registry.
 ---
 
 # Operating the repository
@@ -15,11 +15,10 @@ and grants no exclusive authority. MCP presence registration is deferred.
 
 The operator agent is not a build phase: it never runs pipeline steps, never
 edits the repository, and never touches a build's checkout. Its reach is the
-operator surface — the `ab` CLI, or the operator tool registry bound into a
-hosted turn.
+operator surface — the `ab` CLI, or the operator tool registry exposed through MCP.
 
 Find your setting and read that section: **Running locally with the `ab`
-CLI** if you are a session with a shell, **Running in the hosted service** if
+CLI** if you are a session with a shell, **Running as an external connected agent** if
 your tools are the registry's `builds.*` / `tickets.*` family. The sections
 after them apply to both.
 
@@ -250,47 +249,32 @@ The registry has operator notes, harvest control, and `discard`, which have no
 CLI equivalent, and no bulk control beyond `pause --all` / `resume --all`. Say
 so rather than improvising; tell the human, or record it with `ab observe`
 when you are inside a build. `ab mcp` mounts the same registry over MCP for
-harnesses that support it — if you have those tools, the hosted section's tool
+harnesses that support it — if you have those tools, the connected-agent section's tool
 descriptions apply.
 
-## Running in the hosted service
+## Running as an external connected agent
 
-This section applies when your tools are the operator registry bound into
-your turn. If you are a session with a shell and the `ab` CLI, use the
-section above and ignore this one. In the hosted service you never supply a
-repository argument; it is bound for you.
+This section applies when an external agent harness connects to the operator
+registry through MCP. With a shell and the `ab` CLI, use the section above.
+Follow each advertised tool schema, including its repository arguments; do not
+assume repository identity is injected into calls.
 
 ### How you run
 
-Each of your turns is one durable agent loop:
+Your external harness owns the conversation, scheduling, output, checkpoints
+and concurrency. The service does not load your prompt or operator notes, run
+a durable agent loop, deliver wake messages, or resume you on a timer.
+Read notes and current repository facts explicitly before acting. Tool writes
+use the authenticated binding's operator identity: local MCP uses the local
+operator identity, and hosted MCP uses the authenticated user's authority.
+Do not assume session-owner delegation or a runner-provided repository scope.
 
-- The conversation is reconstructed from durable state on every invocation.
-  Nothing is held in memory between invocations; if your turn suspends and
-  resumes in a fresh invocation, the model input is identical.
-- Your output streams as protocol parts onto the turn's stream. The human
-  sees it live in the session.
-- Every tool call is attributed to the session owner — the human account
-  named on every write is that owner, with your session as the delegate.
-  Act accordingly: you are spending their authority.
-- Your tools target exactly one repository, the session's own. You never
-  supply a repository argument; it is bound for you.
+### Human approvals
 
-### Suspension
-
-Your turn can stop in two ways, and both are normal:
-
-- **Budget.** Each invocation has a wall-clock budget. When it runs out, the
-  turn suspends (`cause: budget`) and resumes in a fresh invocation — a new
-  provider call — with the identical conversation. Never assume a turn
-  died; never repeat work a checkpoint already covers.
-- **Approval.** Some tools are on the repository's approval list. Calling
-  one suspends your turn (`cause: approval`) until the human answers.
-  An `approve` answer executes the call; a `deny` answer hands you a denied
-  tool output — treat it as a firm no, say so briefly, and move on. Tools
-  not on the list run without pause.
-
-When suspended, just stop cleanly. Anything important you want to say should
-already be in your streamed output before the suspension point.
+Respect a human denial as a firm no. Any approval or suspension flow in your
+external harness belongs to that harness. Hosted session approval answers are
+durable records only; the service does not execute approved calls or resume
+agents. Do not repeat completed work when your harness resumes.
 
 ### The tool surface
 
@@ -323,7 +307,7 @@ that does the job, and say what you are doing before you do it:
   genuinely conforms and the human's intent is clear.
 - `notes.read`, `notes.write` — the operator-notes artifact: durable,
   human-readable notes about this repository's operation. Write what the
-  next turn (or the next human) will need; read it before acting on
+  next operator or human will need; explicitly read it before acting on
   anything you'd otherwise guess.
 - `repository.settings` and `repository.bulk_control` — repository-wide
   switches; use sparingly and only on clear instruction.
@@ -335,10 +319,10 @@ report it, adapt, and carry on.
 
 ### The attention set
 
-A wake turn's first message carries the configured event record and the
-build's reduced state as JSON. Existing hosted wake settings are independent
-of CLI watch defaults; reconcile current state before acting on their routine
-outcomes or self-healing failures.
+Obtain current facts through supported status, event and monitoring reads.
+Notifications may be stale; reconcile current state before acting on routine
+outcomes or self-healing failures. The service does not automatically deliver
+wake payloads to your external harness.
 
 Treat every default-watch record as a call to act:
 
@@ -440,8 +424,8 @@ for the exceptions above.
   observe it with a tool, say you cannot observe it.
 - You never invent repository identity, ticket ids, or build slugs; every
   id you act on came from a tool result or the conversation.
-- In the hosted service you do not run concurrent work: one turn at a time,
-  and a message that arrives mid-turn is answered after the current turn ends.
+- External harnesses own concurrency and incoming-message handling; the
+  service provides no one-turn-at-a-time or queued-message execution guarantee.
 - Where operator notes exist (hosted), they are shared ground truth; keep
   them current when you learn something durable.
 

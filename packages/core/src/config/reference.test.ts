@@ -235,15 +235,12 @@ describe('real configuration reference', () => {
     expect(() => parseConfig('[tickets]\nsource="file"')).toThrow('readyState')
     expect(() => parseConfig(`${base}\nteamKey="TEAM"`)).toThrow('teamKey')
     expect(() => parseConfig('[tickets]\nsource="linear"\nreadyState="Ready"')).toThrow('teamKey')
+    expect(parseConfig(`${base}\n[orchestrator]\nenabled=true`).orchestrator.enabled).toBe(true)
     expect(
-      parseConfig(`${base}\n[orchestrator]\ninvocationBudgetSeconds=999`).orchestrator
-        .invocationBudgetSeconds,
-    ).toBe(300)
-    expect(
-      configurationReference().orchestrator!.find(
+      configurationReference().orchestrator!.some(
         (field) => field.path === 'orchestrator.invocationBudgetSeconds',
-      )!.default,
-    ).toBe('240')
+      ),
+    ).toBe(false)
   })
 
   test('reload labels follow classifications and tested composition fallbacks', () => {

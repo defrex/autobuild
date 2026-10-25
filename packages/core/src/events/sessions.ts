@@ -58,7 +58,7 @@ const turnTriggerSchema = z.discriminatedUnion('kind', [
 ])
 
 /** Matches the transcript usage shape (harvest.session.ended, §15.3). The
- * turn runner records the AI SDK's totalUsage token counts plus the step
+ * historical runner recorded the AI SDK's totalUsage token counts plus the step
  * count. Old `turn.completed` events without `steps` still reduce. */
 const usageSchema = z.strictObject({
   inputTokens: z.number().int().nonnegative(),
@@ -85,12 +85,12 @@ export const sessionEventPayloadSchemas = {
   'session.created': z.strictObject({ title: z.string().min(1).optional() }),
   /** A human operator's message. */
   'message.posted': z.strictObject({ text: z.string().min(1) }),
-  /** Which attention events may start a turn. Possibly empty: empty means
-   * no wake sources (message-only). */
+  /** Explicit durable wake settings. Historical execution used these filters;
+   * current writes never start turns. */
   'session.wake-set': z.strictObject({
     globs: z.array(z.string().min(1)).max(100),
   }),
-  /** The (later turn runner's) start of one turn on its stream. A wake
+  /** The historical start of one turn on its stream. A wake
    * turn additionally carries the delivered input — the attention event
    * record and, for a build wake, the build's reduced state, frozen at wake
    * time — so a later invocation reconstructs the identical user message
@@ -172,8 +172,8 @@ export interface SessionEventWrite<T extends SessionEventType = SessionEventType
 
 /** Which actor kinds may emit each event type — the session catalog's Actor
  * column, enforced at validation exactly as for builds (§15.3). Humans create,
- * message, configure wakes, answer approvals, and archive; the agent (the
- * embedded orchestrator's turn runner) owns the turn lifecycle. */
+ * message, configure wakes, answer approvals, and archive; historical turn
+ * lifecycle facts retain their agent attribution. */
 const allowedActorKinds: Record<SessionEventType, readonly ActorKind[]> = {
   'session.created': ['human'],
   'message.posted': ['human'],
