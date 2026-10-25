@@ -622,3 +622,66 @@ a.btn {
     grid-column: 1 / -1;
   }
 }
+
+/* Forms extend the pinned ANSI words, wells and inline sign-off. */
+.action-words {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px 24px;
+}
+.answer-form {
+  display: grid;
+  gap: 8px;
+  max-width: var(--measure);
+  margin-top: 24px;
+}
+.answer-form label,
+.control-signoff {
+  color: var(--slack);
+}
+.answer-form textarea {
+  width: 100%;
+  resize: vertical;
+  caret-color: var(--teal);
+}
+.control-error,
+.confirmation p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: var(--measure);
+}
+.control-signoff {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+[data-control-form][aria-busy="true"] {
+  color: var(--slack);
+}
+[data-control-form] button:disabled {
+  cursor: wait;
+  color: var(--slack);
+}
+
+.answer-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.answer-options button {
+  justify-self: start;
+}
+.answer-options input {
+  max-width: 12ch;
+}
+
+[data-answer-options] {
+  border: 0;
+  margin: 16px 0 0;
+  padding: 0;
+  min-width: 0;
+}
+[data-answer-options] legend {
+  padding: 0;
+  font-weight: 700;
+}

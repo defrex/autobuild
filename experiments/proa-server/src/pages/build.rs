@@ -19,6 +19,7 @@ pub struct BuildPage {
     observations: String,
     questions: Value,
     frames: Vec<FrameView>,
+    controls: super::controls::ControlState,
 }
 struct Artifacts<'a>(&'a Value);
 struct Sessions<'a>(&'a Value);
@@ -29,6 +30,10 @@ struct FrameView {
 }
 struct Frames<'a>(&'a [FrameView]);
 impl BuildPage {
+    pub fn with_controls(mut self, controls: super::controls::ControlState) -> Self {
+        self.controls = controls;
+        self
+    }
     pub fn new(value: Value) -> Self {
         let status = proa_server::dashboard::model::effective_status(&value["state"]);
         let back = link(text(&value["project"]), None);
@@ -68,6 +73,7 @@ impl BuildPage {
             observations,
             questions,
             frames,
+            controls: super::controls::ControlState::default(),
         }
     }
 }
@@ -150,6 +156,14 @@ impl<L: DataLoader> WebRenderSync<L> for BuildPage {
                 <p class="build-status m" data-status={self.status.as_str()}>
                     {self.status.as_str()}
                 </p>
+                {super::controls::BuildControls {
+                    state: &self.controls,
+                    project: text(&v["project"]),
+                    slug: text(&v["record"]["slug"]),
+                    status: &self.status,
+                    node: v["state"]["kind"] == "node",
+                    answer: !array(&v["state"]["openEscalations"]).is_empty(),
+                }}
                 <section data-escalations>
                     <h2>"Open escalations"</h2>
                     {super::home::Questions(&self.questions)}
@@ -193,7 +207,7 @@ impl DataLoader for DetailLoader {
         ))
     }
 }
-async fn load_detail(
+pub(crate) async fn load_detail(
     reader: std::sync::Arc<proa_server::data::reader::DataReader>,
     project: String,
     slug: String,
@@ -229,8 +243,9 @@ pub async fn handler(
             builds_href,
             project: Some(project),
             projects: Vec::new(),
-            viewer: Some(viewer),
-            content: BuildPage::new(value),
+            viewer: Some(viewer.clone()),
+            content: BuildPage::new(value)
+                .with_controls(super::controls::ControlState::signed_in(viewer)),
         })
         .into_response(),
         Err(error) => (StatusCode::NOT_FOUND, error.to_string()).into_response(),
