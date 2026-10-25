@@ -11,6 +11,11 @@ fn schemas() -> &'static Value {
             .expect("generated event schemas")
     })
 }
+/// Vocabulary filtering for display selectors over compact/adapted rows.
+/// Persisted lifecycle reads still pass the strict decoder below.
+pub(crate) fn known_event(scope: Scope, event_type: &str) -> bool {
+    schemas()[scope.name()].get(event_type).is_some()
+}
 /// Remove additive object fields recursively only where the producer has a
 /// closed object. The source envelope stays intact, including compatibility.
 fn project(schema: &Value, value: &mut Value) {

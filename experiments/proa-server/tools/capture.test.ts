@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { captureFrames, decodePng } from './capture'
-import { checkRoutes, checkFrameMatrix, frames, palette } from './capture-cases'
+import { checkRoutes, checkFrameMatrix, frames, palette, dataFontFallback } from './capture-cases'
 import { project } from './verify'
 
 test('route inventory rejects new and unsupported route declarations', async () => {
@@ -11,7 +11,7 @@ test('route inventory rejects new and unsupported route declarations', async () 
   expect(() => checkRoutes(source)).not.toThrow()
   expect(() => checkRoutes(`${source}\n.route("/new", get(page))`)).toThrow('Unclassified')
   expect(() => checkRoutes(`${source}\n.route(path, get(page))`)).toThrow('Unclassified')
-  expect(new Set(frames.map((f) => f.id)).size).toBe(16)
+  expect(new Set(frames.map((f) => f.id)).size).toBe(24)
   for (const width of [1440, 390])
     for (const theme of ['light', 'dark'])
       for (const state of ['open', 'closed'])
@@ -93,4 +93,13 @@ test('failed Chromium startup cleans its profile', async () => {
     else process.env.CHROMIUM_BIN = previous
     await rm(output, { recursive: true, force: true })
   }
+})
+
+test('only stored multilingual text permits corresponding fallback glyphs', () => {
+  expect(dataFontFallback('Noto Sans CJK JP', '日本語', true)).toBe(true)
+  expect(dataFontFallback('Noto Color Emoji', '☕️ 🇺🇸', true)).toBe(true)
+  expect(dataFontFallback('Noto Color Emoji', '☕️', false)).toBe(false)
+  expect(dataFontFallback('Noto Sans CJK JP', '　', true)).toBe(false)
+  expect(dataFontFallback('Noto Sans CJK JP', 'English', true)).toBe(false)
+  expect(dataFontFallback('serif', '日本語', true)).toBe(false)
 })
