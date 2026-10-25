@@ -1,4 +1,5 @@
 pub mod build;
+pub mod controls;
 pub mod home;
 pub mod sign_in;
 pub fn duration(ms: i64) -> String {

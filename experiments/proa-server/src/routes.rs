@@ -50,7 +50,11 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/github", get(endpoints::auth::initiate))
         .route("/auth/github/callback", get(endpoints::auth::callback))
         .route("/auth/sign-out", post(endpoints::auth::sign_out))
+        .route("/controls", post(endpoints::controls::submit))
         // proa:explicit-routes:end
+        .layer(cross_origin)
+        .merge(proa_server::operator::http::router())
+        .merge(proa_server::operator::delegation::router())
         .nest_service("/static", static_assets::service())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -58,7 +62,6 @@ pub fn router(state: AppState) -> Router {
         ))
         .with_state(state)
         .layer(RouteContextLayer::new(manifest, metadata))
-        .layer(cross_origin)
         .layer(middleware::from_fn(endpoints::auth::privacy))
         .layer(SecurityHeadersLayer::new(security))
 }
