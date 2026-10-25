@@ -6,6 +6,12 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { abConnect, abDisconnect } from '../../../packages/core/src/cli/connect'
+import { HostedTicketSource } from '../../../packages/core/src/ports/tickets/remote'
+import {
+  AUTOBUILD_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION,
+} from '../../../packages/core/src/store/remote/version'
+import { PostgresTicketPolicyStore } from '../../../packages/postgres-store/src/ticket-policy'
 import { ProjectCredentials } from '../../../packages/core/src/cli/project-credentials'
 import { spawnExec } from '../../../packages/core/src/ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../../../packages/core/src/store/remote/client'
@@ -338,6 +344,80 @@ export async function connectIntegration(
       const cancelled =
         await sql`SELECT status FROM project_connections WHERE code=${cancelledCode!}`
       assert.equal(cancelled[0].status, 'denied')
+      // A ticket-only connection publishes the repository's complete hosted policy
+      // through the unchanged CLI before saving a usable project credential.
+      await writeFile(
+        join(checkout, 'autobuild.toml'),
+        [
+          '# preserve hosted ticket settings',
+          '[tickets]',
+          'source = "hosted"',
+          'teamKey = "FLOW"',
+          'triageState = "intake"',
+          'readyState = "queued"',
+          'claimedState = "working"',
+          'doneState = "shipped"',
+          'createState = "intake"',
+          'proposalState = "queued"',
+          'readyLabels = ["reviewed"]',
+          '',
+        ].join('\n'),
+      )
+      assert.equal(await new PostgresTicketPolicyStore(sql).get(repo), null)
+      await abConnect(origin, { ...options, tickets: true })
+      const hostedSaved = new ProjectCredentials(cliEnv).load(origin, repo)
+      assert.ok(hostedSaved)
+      const hostedText = await readFile(join(checkout, 'autobuild.toml'), 'utf8')
+      assert.ok(hostedText.startsWith('# preserve hosted ticket settings'))
+      assert.ok(hostedText.includes(`url = "${origin}"`))
+      assert.ok(!hostedText.includes('[store]'))
+      const expectedPolicy = {
+        version: 1,
+        tickets: {
+          source: 'hosted',
+          teamKey: 'FLOW',
+          triageState: 'intake',
+          readyState: 'queued',
+          claimedState: 'working',
+          doneState: 'shipped',
+          createState: 'intake',
+          proposalState: 'queued',
+          readyLabels: ['reviewed'],
+        },
+      }
+      assert.deepEqual(await new PostgresTicketPolicyStore(sql).get(repo), expectedPolicy)
+      const readPolicy = await fetch(`${origin}/tickets/policy`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${hostedSaved.token}`,
+          'content-type': 'application/json',
+          'x-autobuild-version': AUTOBUILD_VERSION,
+          'x-autobuild-protocol-version': REMOTE_STORE_PROTOCOL_VERSION,
+        },
+        body: JSON.stringify({ context: { repo, teamKey: 'FLOW' }, input: null }),
+      })
+      assert.equal(readPolicy.status, 200)
+      assert.deepEqual(await readPolicy.json(), expectedPolicy)
+      const hostedSource = new HostedTicketSource({
+        url: origin,
+        token: hostedSaved.token,
+        repo,
+        teamKey: 'FLOW',
+      })
+      const hostedTicket = await hostedSource.create({
+        title: 'Connected hosted ticket',
+        body: 'Policy published before authoring.',
+      })
+      assert.equal(hostedTicket.state, 'intake')
+      assert.equal((await hostedSource.get(hostedTicket.ref.id))?.title, hostedTicket.title)
+      const hostedRust = new RemoteBuildStore({ url: origin, token: hostedSaved.token }),
+        hostedTs = new RemoteBuildStore({ url: typescript.url.origin, token: hostedSaved.token })
+      assert.ok(await hostedRust.getRepo(repo))
+      assert.ok(await hostedTs.getRepo(repo))
+      await abDisconnect({ ...options, tickets: true })
+      assert.equal(new ProjectCredentials(cliEnv).load(origin, repo), undefined)
+      await assert.rejects(() => hostedRust.getRepo(repo), /unknown or revoked credential/)
+      await assert.rejects(() => hostedTs.getRepo(repo), /unknown or revoked credential/)
       // Revoked browser admission is checked freshly on the next JSON operation.
       const account = await fetch(`${origin}/connect`, { headers: { cookie } })
       const logoutCsrf = (await account.text()).match(/name="csrf" value="([^"]+)"/)?.[1]
@@ -379,7 +459,7 @@ export async function connectIntegration(
         originCsrfRefusal: true,
         restart: true,
         freshBrowserAdmission: true,
-        hostedPolicyPublication: false,
+        hostedPolicyPublication: true,
       }
     } finally {
       await stop()
