@@ -1046,3 +1046,11 @@ encoded/trimmed IDs, idempotence, neighboring rows, delegated/project refusal
 and identity-before-auth ordering. Historical persisted runner facts still
 replay. The established ticket-attribution exception remains; no new exclusion
 was introduced.
+
+The first complete native gate also exposed an obsolete database seed: direct
+TypeScript connection approval now requires a browser principal. The persistence
+proof supplies an explicit super-user principal and a registered project; capture
+does the same for its approved state. This retains the experiment's existing
+project-scoped approval boundary (the earlier connection entry deliberately
+omits organization selection) while using the current store API. The focused
+PostgreSQL/S3 interchange proof passed after that seed correction.
