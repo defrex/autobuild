@@ -525,3 +525,184 @@ test('a real local child suspends on shutdown and a new child resumes the native
     await rm(tmp, { recursive: true, force: true })
   }
 }, 25000)
+
+for (const kind of ['work', 'node'] as const) {
+  test(`real ${kind} child executes serialized stage members concurrently`, async () => {
+    const { writeFile } = await import('node:fs/promises')
+    const { integrationConfig } = await import('../kernel/integration-state')
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-child-stages-'))
+    const store = new MemoryBuildStore()
+    const slug = 'staged-child'
+    const ticket = { source: 'file', id: 'STAGES', title: 'Preserve stages' }
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(['git', ...args], { cwd: tmp })
+      if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr))
+      return new TextDecoder().decode(result.stdout).trim()
+    }
+    try {
+      git('init', '-q')
+      await writeFile(join(tmp, 'file'), 'base')
+      git('add', 'file')
+      git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'base')
+      const parent = git('rev-parse', 'HEAD')
+      await writeFile(join(tmp, 'file'), 'head')
+      git('-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qam', 'head')
+      const head = git('rev-parse', 'HEAD')
+      const config = parseConfig(`forge = "local-git"
+[roles.default]
+runtime = "pi"
+[tickets]
+source = "file"
+readyState = "ready"
+[commands]
+a = "touch a.started; sleep 1; test -f b.started"
+b = "touch b.started; sleep 1; test -f a.started"
+[verify]
+steps = [["a", "b"]]
+[verify.a]
+kind = "check"
+command = "a"
+always = true
+[verify.b]
+kind = "check"
+command = "b"
+always = true
+`)
+      await store.createBuild({ slug, repo: tmp, branch: `ab/${slug}`, ticket })
+      const seed = async (write: EventWrite) => {
+        await store.append(slug, write)
+      }
+      await seed({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket, repo: tmp, baseBranch: 'main', kind },
+      })
+      await seed({
+        actor: DISPATCHER,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'fake',
+          ref: tmp,
+          path: tmp,
+          branch: `ab/${slug}`,
+          base: { source: 'remote', sha: parent },
+        },
+      })
+      if (kind === 'node') {
+        await seed({ actor: DISPATCHER, type: 'node.opened', payload: { sha: parent } })
+        await seed({
+          actor: DISPATCHER,
+          type: 'node.compared',
+          payload: { headSha: head, parentSha: parent, ahead: 1 },
+        })
+        await seed({
+          actor: DISPATCHER,
+          type: 'integration.observed',
+          payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+        })
+        await seed({
+          actor: DISPATCHER,
+          type: 'integration.prepared',
+          payload: { id: 'stage-cycle', head, parent, config: integrationConfig(config) },
+        })
+      } else {
+        await seed({
+          actor: DISPATCHER,
+          type: 'spec.imported',
+          payload: { artifact: { kind: 'spec', rev: 0 }, ticket },
+        })
+        await store.putArtifact(slug, { kind: 'spec', content: '# Preserve stages' })
+        await store.putArtifact(slug, { kind: 'plan', content: '# Run both checks' })
+        await seed({
+          actor: agentActor('plan', 'seed'),
+          type: 'plan.completed',
+          payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+        })
+        await seed({
+          actor: agentActor('plan-review', 'seed'),
+          type: 'plan-review.verdict',
+          payload: {
+            round: 1,
+            verdict: 'approve',
+            findings: [],
+            artifact: { kind: 'plan-review', rev: 0 },
+          },
+        })
+        await seed({
+          actor: agentActor('implement', 'seed'),
+          type: 'implement.completed',
+          payload: {
+            round: 1,
+            commits: { base: parent, head },
+            artifact: { kind: 'implement-notes', rev: 0 },
+          },
+        })
+        const approval = await store.append(slug, {
+          actor: agentActor('code-review', 'seed'),
+          type: 'code-review.verdict',
+          payload: {
+            round: 1,
+            verdict: 'approve',
+            findings: [],
+            artifact: { kind: 'code-review', rev: 0 },
+          },
+        })
+        await seed({
+          actor: KERNEL,
+          type: 'restack.completed',
+          payload: { ...leafTransaction, branch: `ab/${slug}`, cycle: approval.seq, headSha: head },
+        })
+      }
+      await store.putArtifact(slug, {
+        kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+        content: effectiveBuildConfigContent(config),
+      })
+      const append = store.append.bind(store)
+      let completed = 0
+      store.append = async (build, write) => {
+        const event = await append(build, write)
+        if (write.type === 'verify.completed' && ++completed === 2) {
+          await append(build, {
+            actor: humanActor('test'),
+            type: 'build.pause-requested',
+            payload: {},
+          })
+        }
+        return event
+      }
+      const shutdown = new AbortController()
+      const timer = setTimeout(() => shutdown.abort(), 8000)
+      try {
+        await runBuildChild(
+          { slug, storeRef: 'memory', instance: 'stage-child', workspaceRef: tmp },
+          {},
+          () => store,
+          { shutdownSignal: shutdown.signal },
+        )
+      } finally {
+        clearTimeout(timer)
+      }
+      const events = await store.getEvents(slug)
+      const starts = events.filter((e) => e.type === 'verify.started')
+      const finishes = events.filter((e) => e.type === 'verify.completed')
+      expect(starts).toHaveLength(2)
+      expect(finishes).toHaveLength(2)
+      expect(Math.max(...starts.map((e) => e.seq))).toBeLessThan(
+        Math.min(...finishes.map((e) => e.seq)),
+      )
+      for (const event of finishes) {
+        expect(event.payload).toMatchObject({ outcome: 'pass' })
+        if (kind === 'node')
+          expect(event.payload).toMatchObject({
+            restackId: 'stage-cycle',
+            headSha: head,
+            baseSha: parent,
+          })
+      }
+      expect(events.at(-1)?.type).toBe('build.paused')
+    } finally {
+      await store.close()
+      await rm(tmp, { recursive: true, force: true })
+    }
+  }, 12_000)
+}
