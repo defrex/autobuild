@@ -43,12 +43,25 @@ impl Scope<'_> {
 /// Four independent read-only connections let unrelated scopes advance concurrently.
 /// Transactions never share a connection, including during schema preflight.
 pub struct PostgresReader {
-    connections: Vec<Connection>,
+    connections: Vec<Mutex<Connection>>,
+    url: String,
+    tls: MakeRustlsConnect,
     next: AtomicUsize,
 }
 struct Connection {
-    client: Mutex<Client>,
+    client: Client,
     task: tokio::task::JoinHandle<()>,
+}
+impl std::ops::Deref for Connection {
+    type Target = Client;
+    fn deref(&self) -> &Client {
+        &self.client
+    }
+}
+impl std::ops::DerefMut for Connection {
+    fn deref_mut(&mut self) -> &mut Client {
+        &mut self.client
+    }
 }
 impl Drop for Connection {
     fn drop(&mut self) {
@@ -77,42 +90,60 @@ impl PostgresReader {
         let tls = MakeRustlsConnect::new(config);
         let mut connections = Vec::new();
         for _ in 0..4 {
-            // tokio-postgres still interprets the URL's sslmode; no mode is
-            // rewritten and a negotiated TLS connection verifies its peer.
-            let (client, connection) = tokio_postgres::connect(url, tls.clone())
-                .await
-                .map_err(|_| DataError::Connection)?;
-            let task = tokio::spawn(async move {
-                let _ = connection.await;
-            });
-            connections.push(Connection {
-                client: Mutex::new(client),
-                task,
-            });
+            connections.push(Mutex::new(Self::open(url, tls.clone()).await?));
         }
         let result = Self {
             connections,
+            url: url.to_owned(),
+            tls,
             next: AtomicUsize::new(0),
         };
         result.preflight().await?;
         Ok(result)
     }
 
-    async fn client(&self) -> MutexGuard<'_, Client> {
+    async fn open(url: &str, tls: MakeRustlsConnect) -> Result<Connection, DataError> {
+        // The URL's sslmode and certificate validation apply on every reconnect.
+        let (client, connection) = tokio_postgres::connect(url, tls)
+            .await
+            .map_err(|_| DataError::Connection)?;
+        let task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let mut result = Connection { client, task };
+        Self::preflight_client(&mut result.client).await?;
+        Ok(result)
+    }
+
+    async fn client(&self) -> Result<MutexGuard<'_, Connection>, DataError> {
         let index = self.next.fetch_add(1, Ordering::Relaxed) % self.connections.len();
+        let mut selected = None;
         for offset in 0..self.connections.len() {
-            if let Ok(client) = self.connections[(index + offset) % self.connections.len()]
-                .client
-                .try_lock()
+            if let Ok(client) =
+                self.connections[(index + offset) % self.connections.len()].try_lock()
             {
-                return client;
+                selected = Some(client);
+                break;
             }
         }
-        self.connections[index].client.lock().await
+        let mut client = match selected {
+            Some(client) => client,
+            None => self.connections[index].lock().await,
+        };
+        // Replacement stays under the slot lock, so concurrent callers cannot
+        // race reconnection. Failed connects leave a closed slot retryable.
+        if client.is_closed() {
+            *client = Self::open(&self.url, self.tls.clone()).await?;
+        }
+        Ok(client)
     }
 
     pub async fn preflight(&self) -> Result<(), DataError> {
-        let mut client = self.client().await;
+        let mut client = self.client().await?;
+        Self::preflight_client(&mut client).await
+    }
+
+    async fn preflight_client(client: &mut Client) -> Result<(), DataError> {
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -161,7 +192,7 @@ impl PostgresReader {
     }
 
     pub async fn projects(&self) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client().await;
+        let mut client = self.client().await?;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -221,7 +252,7 @@ impl PostgresReader {
         scope: Scope<'_>,
         after: i64,
     ) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client().await;
+        let mut client = self.client().await?;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -264,7 +295,7 @@ impl PostgresReader {
     }
 
     pub async fn builds(&self, repo: &str) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client().await;
+        let mut client = self.client().await?;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -285,7 +316,7 @@ impl PostgresReader {
     }
 
     pub async fn sessions(&self, repo: &str) -> Result<Vec<Value>, DataError> {
-        let mut client = self.client().await;
+        let mut client = self.client().await?;
         let tx = client
             .build_transaction()
             .read_only(true)
@@ -311,7 +342,7 @@ impl PostgresReader {
         kind: &str,
         revision: Option<i64>,
     ) -> Result<Option<Value>, DataError> {
-        let mut client = self.client().await;
+        let mut client = self.client().await?;
         let tx = client
             .build_transaction()
             .read_only(true)

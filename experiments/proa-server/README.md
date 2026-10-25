@@ -108,3 +108,10 @@ answers; `fixtures/manifest.json` lists producers, versions, catalogs and source
 hashes. Identical scope/log inputs share one case with every origin retained as an
 alias. Rust parity compares full and chunked replay, including prefixes and empty
 suffixes.
+
+Unreadable append-only scopes cache their deterministic decoding failure until cache
+clear or restart. Repeated polls return that same scoped error without fetching the
+failed suffix or any later appends; successful neighboring scopes keep advancing.
+Closed PostgreSQL pool connections reconnect on subsequent reads and pass the same
+read-only schema preflight before reuse. A disconnect during a query can still
+fail that request; subsequent polls retry with a replacement connection.

@@ -296,6 +296,29 @@ export async function integration(
     assert.equal(states.find((v: { slug: string }) => v.slug === 'unknown').status, 'unreadable')
     assert.equal(states.find((v: { slug: string }) => v.slug === 'healthy').status, 'readable')
     assert.equal(await snapshot(), before, 'Rust changed TypeScript-owned tables')
+    // An append-only unreadable stream stays poisoned, including after appends:
+    // repeated project polls must not fetch its failed suffix again.
+    const failedCounts = await value({ op: 'counts' })
+    const unknownQueries = failedCounts.filter(
+      (v: { scope: string }) => v.scope === 'build:unknown',
+    )
+    assert.deepEqual(
+      unknownQueries.map((v: { rows: number }) => v.rows),
+      [2],
+    )
+    await writer`INSERT INTO events (build, seq, ts, actor, type, payload) VALUES ('unknown', 3, now(), ${JSON.stringify({ kind: 'kernel' })}::jsonb, 'future.appended', '{}'::jsonb)`
+    for (let poll = 0; poll < 3; poll++) {
+      const again = await value({ op: 'project' })
+      assert.deepEqual(
+        again.find((v: { slug: string }) => v.slug === 'unknown'),
+        states.find((v: { slug: string }) => v.slug === 'unknown'),
+      )
+    }
+    assert.deepEqual(
+      (await value({ op: 'counts' })).filter((v: { scope: string }) => v.scope === 'build:unknown'),
+      unknownQueries,
+    )
+
     await store.append('healthy', sampleEventWrite('second'))
     const concurrent = await value({ op: 'concurrent', id: 'healthy' })
     assert.deepEqual(concurrent[0], concurrent[1])
@@ -311,13 +334,62 @@ export async function integration(
       counts.slice(-3).map((v: { rows: number }) => v.rows),
       [1, 0, 0],
     )
+    // Kill all four actual reader backends. Each slot must reconnect while
+    // retaining its independent cached reduction and suffix cursor.
+    const oldBackends = await writer`SELECT pid FROM pg_stat_activity WHERE usename = ${role}`
+    assert.equal(oldBackends.length, 4)
+    await writer`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ${role}`
+    for (let poll = 0; poll < 8; poll++) {
+      let reply: { error?: string; value?: unknown } = await rust.request({
+        op: 'build',
+        repo,
+        id: 'healthy',
+      })
+      for (let retry = 0; reply.error && retry < 20; retry++) {
+        await Bun.sleep(25)
+        reply = await rust.request({ op: 'build', repo, id: 'healthy' })
+      }
+      assert.equal(reply.error, undefined)
+      assert.deepEqual(reply.value, concurrent[0])
+    }
+    const newBackends = await writer`SELECT pid FROM pg_stat_activity WHERE usename = ${role}`
+    assert.equal(newBackends.length, 4)
+    assert(
+      newBackends.every(
+        (row: { pid: number }) => !oldBackends.some((old: { pid: number }) => old.pid === row.pid),
+      ),
+    )
     await value({ op: 'clear' })
     assert.deepEqual(await value({ op: 'build', id: 'healthy' }), concurrent[0])
+    for (let poll = 0; poll < 2; poll++)
+      assert.match(
+        (await rust.request({ op: 'build', repo, id: 'unknown' })).error,
+        /future.unknown.*seq 2/,
+      )
+    assert.deepEqual(
+      (await value({ op: 'counts' }))
+        .filter((v: { scope: string }) => v.scope === 'build:unknown')
+        .map((v: { rows: number }) => v.rows),
+      [2, 3],
+    )
+
     await rust.close()
     rust = undefined
     // A new process must replay with the same result.
     rust = await bridge(env, runtime, readerCommand)
     assert.deepEqual(await value({ op: 'build', id: 'healthy' }), concurrent[0])
+    for (let poll = 0; poll < 2; poll++)
+      assert.match(
+        (await rust.request({ op: 'build', repo, id: 'unknown' })).error,
+        /future.unknown.*seq 2/,
+      )
+    assert.deepEqual(
+      (await value({ op: 'counts' }))
+        .filter((v: { scope: string }) => v.scope === 'build:unknown')
+        .map((v: { rows: number }) => v.rows),
+      [3],
+    )
+
     await rust.close()
     rust = undefined
     const healthySession = await store.createSession({ repo, operator: 'independent' })
@@ -336,6 +408,35 @@ export async function integration(
     assert.deepEqual(await value({ op: 'session', id: healthySession.id }), {
       session: encodeReducerValue(reduceSession(await store.getSessionEvents(healthySession.id))),
     })
+    await store.createBuild({ slug: 'malformed', repo })
+    await writer`INSERT INTO events (build, seq, ts, actor, type, payload) VALUES ('malformed', 1, now(), ${JSON.stringify({ kind: 'kernel' })}::jsonb, 'build.created', '{}'::jsonb)`
+    const failedCommands = [
+      { op: 'repository', repo },
+      { op: 'session', repo, id: session.id },
+      { op: 'build', repo, id: 'malformed' },
+    ]
+    const firstErrors = []
+    for (const command of failedCommands) firstErrors.push((await rust.request(command)).error)
+    assert(firstErrors.every((error) => typeof error === 'string'))
+    const poisonedCounts = await value({ op: 'counts' })
+    for (let poll = 0; poll < 3; poll++) {
+      for (const [index, command] of failedCommands.entries())
+        assert.equal((await rust.request(command)).error, firstErrors[index])
+    }
+    assert.deepEqual(await value({ op: 'counts' }), poisonedCounts)
+    // Reconnection must also recheck the schema, never silently admit a changed marker.
+    await writer`UPDATE ab_schema_migrations SET version = 999 WHERE singleton = true`
+    await writer`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ${role}`
+    let refusal = await rust.request({ op: 'projects' })
+    for (
+      let retry = 0;
+      !String(refusal.error).includes('expected version 17, found 999') && retry < 20;
+      retry++
+    ) {
+      await Bun.sleep(25)
+      refusal = await rust.request({ op: 'projects' })
+    }
+    assert.match(refusal.error, /expected version 17, found 999/)
     await rust.close()
     rust = undefined
     await writer`UPDATE ab_schema_migrations SET version = 999 WHERE singleton = true`
@@ -364,7 +465,7 @@ export async function integration(
     }
 
     console.log(
-      'TS-write/Rust-read proof passed: binary artifacts, scope isolation, read-only tables, N=2 M=1 zero=0, concurrency, restart, schema refusal',
+      'TS-write/Rust-read proof passed: binary artifacts, scope isolation, read-only tables, N=2 M=1 zero=0, concurrency, restart, poisoned-scope zero-query polls, backend reconnection, schema refusal',
     )
     console.log(
       'Credentialed Vercel read proof unavailable unless explicitly provisioned; pinned-SDK wire tests run in Cargo suite',

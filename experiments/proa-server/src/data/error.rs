@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum DataError {
     #[error("PostgreSQL connection failed")]
     Connection,

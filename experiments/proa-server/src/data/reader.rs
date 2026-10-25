@@ -22,9 +22,13 @@ enum Key {
 struct Cached {
     cursor: i64,
     accumulator: Accumulator,
+    failure: Option<DataError>,
 }
 impl Cached {
     fn advance(&mut self, events: &[Value]) -> Result<(), DataError> {
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
         let mut cursor = self.cursor;
         for event in events {
             let next = event["seq"].as_i64().ok_or(DataError::Query)?;
@@ -34,7 +38,14 @@ impl Cached {
             cursor = next;
         }
         // The reducer commits its candidate only after the complete suffix succeeds.
-        self.accumulator.advance(events)?;
+        if let Err(error) = self.accumulator.advance(events) {
+            // Append-only history cannot repair an unreadable fact. Retain the
+            // failure without publishing a partial accumulator or replaying its suffix.
+            if matches!(error, DataError::Decode { .. }) {
+                self.failure = Some(error.clone());
+            }
+            return Err(error);
+        }
         self.cursor = cursor;
         Ok(())
     }
@@ -93,11 +104,15 @@ impl DataReader {
                 Arc::new(Mutex::new(Cached {
                     cursor: 0,
                     accumulator: Accumulator::new(reduce_scope),
+                    failure: None,
                 }))
             })
             .clone();
         // This lock covers fetching and folding: concurrent polls cannot fold the same suffix.
         let mut cached = entry.lock().await;
+        if let Some(error) = &cached.failure {
+            return Err(error.clone());
+        }
         let events = self.postgres.events(repo, scope, cached.cursor).await?;
         let mut queries = self.queries.lock().await;
         // Test/diagnostic evidence is bounded independently of long-lived accumulators.
@@ -172,13 +187,22 @@ mod tests {
         let mut cached = Cached {
             cursor: 0,
             accumulator: Accumulator::new(ReduceScope::Session),
+            failure: None,
         };
         let before = cached.accumulator.finish();
         let unknown = json!({"seq":1,"type":"unknown.future-event","payload":{},"ts":"2026-01-01T00:00:00.000Z","actor":{"kind":"system"},"session":"test"});
         assert!(cached.advance(&[unknown]).is_err());
         assert_eq!(cached.cursor, 0);
+        assert!(matches!(
+            cached.failure,
+            Some(DataError::Decode {
+                scope: "session",
+                seq: 1,
+                ..
+            })
+        ));
         assert_eq!(cached.accumulator.finish(), before);
-        cached.advance(&[]).unwrap();
+        assert!(cached.advance(&[]).is_err());
         assert_eq!(cached.accumulator.finish(), before);
     }
     #[test]
@@ -186,6 +210,7 @@ mod tests {
         let mut cached = Cached {
             cursor: 7,
             accumulator: Accumulator::new(ReduceScope::Build),
+            failure: None,
         };
         let before = cached.accumulator.finish();
         for seq in [json!(null), json!(7), json!(6)] {

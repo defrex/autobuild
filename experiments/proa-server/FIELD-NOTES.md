@@ -284,3 +284,21 @@ last redundant-validator optimization); final-gate timings remain in its ignored
 build evidence directory. Extra generated additive-field histories verified raw
 repository journals and opaque session fields against TypeScript. The server
 never loads oracle answers: only the generated event schema catalog is embedded.
+
+
+## Review round 2: unreadable streams and disconnected backends
+
+An unreadable append-only stream now retains its deterministic scoped decode error
+in the process cache. Further polls issue no event query, even after new facts are
+appended. Cache clear or process restart replays once and rediscovers the failure;
+the failed batch never publishes partial state or advances its successful cursor.
+The integration proof polls an unknown build through repeated project reads, then
+checks unchanged query instrumentation after an extra append. Repository, session
+and known-malformed build failures also retain their error without further reads.
+
+Closed PostgreSQL pool slots reconnect under the slot lock on subsequent reads.
+Replacement connections use the same TLS settings and SELECT-only schema preflight;
+a failed reconnect leaves the slot retryable, and a changed schema marker refuses
+reuse. The real-store test terminates all four reader backends, verifies all four
+PIDs are replaced, retains the healthy build's accumulator/cursor, and checks schema
+refusal again after disconnection. No query is transparently retried mid-transaction.
