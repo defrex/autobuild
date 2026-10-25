@@ -14,6 +14,13 @@ import { installPackedDistribution } from '../testing/packed-install'
 import { scanDependencies, treeDigest } from '../cli/dispatch-runtime-dependencies'
 import { spawnExec } from '../ports/workspace/git-worktree'
 
+// Installed files can share inodes with Bun's package cache. Unlink before
+// mutation so this fixture only changes its disposable installation.
+async function replaceInstalledFile(path: string, contents: string) {
+  await rm(path, { force: true })
+  await writeFile(path, contents)
+}
+
 async function run(
   args: string[],
   cwd: string,
@@ -68,7 +75,7 @@ for (const mode of ['package', 'source'])
         }),
       )
       if (mode === 'source')
-        await writeFile(
+        await replaceInstalledFile(
           join(installed, 'tsconfig.json'),
           JSON.stringify({
             compilerOptions: { paths: { '@defrex/autobuild/*': [outside] }, baseUrl: '.' },
@@ -229,9 +236,12 @@ readyState = "ready"
         )
         expect(started.payload).toMatchObject({ runtime: { source: { location: runtime.root } } })
         // Replace the invoking installation and every ancestor compiler alias.
-        await writeFile(mutableDependency, "throw new Error('MUTABLE DEPENDENCY LOADED')")
+        await replaceInstalledFile(
+          mutableDependency,
+          "throw new Error('MUTABLE DEPENDENCY LOADED')",
+        )
         if (mode === 'source')
-          await writeFile(
+          await replaceInstalledFile(
             join(installed, 'tsconfig.json'),
             JSON.stringify({
               compilerOptions: {
@@ -241,8 +251,11 @@ readyState = "ready"
               },
             }),
           )
-        await writeFile(join(installed, 'bin/ab.ts'), "throw new Error('MUTABLE INSTALL LOADED')")
-        await writeFile(
+        await replaceInstalledFile(
+          join(installed, 'bin/ab.ts'),
+          "throw new Error('MUTABLE INSTALL LOADED')",
+        )
+        await replaceInstalledFile(
           join(installed, 'packages/core/src/cli/binary-direct.ts'),
           "throw new Error('MUTABLE CORE LOADED')",
         )
