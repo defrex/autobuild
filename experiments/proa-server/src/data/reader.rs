@@ -26,6 +26,7 @@ struct Cached {
     restack: crate::dashboard::restack::RestackFacts,
     deferral: crate::dashboard::routing::DeferralFacts,
     failure: Option<DataError>,
+    api: super::api_facts::ApiFacts,
 }
 impl Cached {
     fn advance(&mut self, events: &[Value]) -> Result<(), DataError> {
@@ -53,6 +54,7 @@ impl Cached {
             self.display.advance(events);
             self.restack.advance(events);
             self.deferral.advance(events);
+            self.api.advance(events);
         }
         self.cursor = cursor;
         Ok(())
@@ -104,6 +106,9 @@ impl DataReader {
             streams: Mutex::new(HashMap::new()),
         })
     }
+    pub async fn blob_bytes(&self, hash: &str) -> Result<Vec<u8>, DataError> {
+        self.blobs.get(hash).await
+    }
     pub fn postgres(&self) -> &PostgresReader {
         &self.postgres
     }
@@ -141,6 +146,7 @@ impl DataReader {
                     restack: Default::default(),
                     deferral: Default::default(),
                     failure: None,
+                    api: Default::default(),
                 }))
             })
             .clone();
@@ -177,7 +183,7 @@ impl DataReader {
         }
         Ok((
             cached.accumulator.finish(),
-            serde_json::json!({"dashboard":cached.display.finish(),"restack":cached.restack.finish(),"deferral":cached.deferral.finish()}),
+            serde_json::json!({"dashboard":cached.display.finish(),"restack":cached.restack.finish(),"deferral":cached.deferral.finish(),"api":cached.api.finish()}),
             cached.cursor,
         ))
     }
@@ -368,6 +374,7 @@ mod tests {
             restack: Default::default(),
             deferral: Default::default(),
             failure: None,
+            api: Default::default(),
         };
         let before = cached.accumulator.finish();
         let unknown = json!({"seq":1,"type":"unknown.future-event","payload":{},"ts":"2026-01-01T00:00:00.000Z","actor":{"kind":"system"},"session":"test"});
@@ -394,6 +401,7 @@ mod tests {
             restack: Default::default(),
             deferral: Default::default(),
             failure: None,
+            api: Default::default(),
         };
         let before = cached.accumulator.finish();
         let display_before = cached.display.finish();

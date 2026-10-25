@@ -2387,6 +2387,7 @@ dependencies = [
  "cookie",
  "dotenvy",
  "flate2",
+ "hmac 0.12.1",
  "http-body-util",
  "icu_collator",
  "jsonschema",
@@ -2398,6 +2399,7 @@ dependencies = [
  "reqwest",
  "rustls 0.23.46",
  "rustls-native-certs",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3125,6 +3127,8 @@ version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash",
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

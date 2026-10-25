@@ -169,6 +169,9 @@ fn admitted() -> (app::AppState, String) {
         app::AppState {
             auth: std::sync::Arc::new(auth),
             data: None,
+            writer: None,
+            blobs: None,
+            operator_secret: None,
         },
         cookie.split(';').next().unwrap().to_owned(),
     )
@@ -189,6 +192,9 @@ async fn tcp_development_path_supplies_peer() {
     let app = routes::router(app::AppState {
         auth: std::sync::Arc::new(auth),
         data: None,
+        writer: None,
+        blobs: None,
+        operator_secret: None,
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/auth/dev-session", listener.local_addr().unwrap());
