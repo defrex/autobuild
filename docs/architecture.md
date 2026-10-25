@@ -1330,9 +1330,10 @@ and session settlement fence mutation. Transaction targets stay frozen while
 later moves coalesce. `publication.requested` carries automatic transaction
 identity through trusted remote teardown and publication. The runner settles
 local resolver intent only after its session ends. Verification facts
-cite the cycle's base/head. Clean waiting rewrites preserve verification while
-the config pin remains valid; config supersession independently starts a fresh
-cycle when build-owned content changes or known source ancestry is lost.
+cite the cycle's base/head. Clean waiting leaf rewrites preserve completed
+verification when build-owned config is unchanged, even when the old pin commit
+is no longer an ancestor. Changed config still supersedes while waiting.
+Ancestry gates cycles that run further steps; those cycles capture fresh config.
 Object packs retain newly introduced replay trees/blobs as well as commit bytes.
 
 GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in

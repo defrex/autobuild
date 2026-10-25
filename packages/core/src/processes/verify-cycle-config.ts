@@ -39,12 +39,18 @@ export async function refreshVerifyCycle(input: {
   read: VerifyPipelineReader
   exec: Exec
   workspacePath: string
+  /** A waiting leaf runs no further verifier; clean replay may retain its receipts. */
+  retainCompletedVerification?: boolean
 }): Promise<boolean> {
   const { store, slug, state, deployment } = input
   const observed = await input.read()
   const identity = buildConfigIdentity(observed.config)
   const pin = state.verify.configPin
   if (pin && pin.cycle === state.verify.cycleSince) {
+    // Ancestry gates execution, not historical evidence. A clean waiting-leaf
+    // replay replaces the canonical commit without changing the verified work.
+    // Content changes still supersede, and a future cycle captures before work.
+    if (input.retainCompletedVerification && identity === pin.identity) return false
     let ancestral = true
     if (pin.source.commit) {
       const result = await input.exec(

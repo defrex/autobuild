@@ -231,6 +231,10 @@ identity and truthful source metadata. Dirty worktree bytes carry
 build-owned sections and the known source commit's ancestry. A change or
 non-ancestor source records `verify.config-superseded` and starts a fresh cycle
 before constructing any further member. Already launched siblings settle first.
+A waiting leaf with completed verification retains its receipts after a clean
+rewrite when build-owned config is unchanged, even when the rewrite replaces
+the pin commit's ancestry. Changed config still supersedes while waiting; a
+future verification cycle always captures fresh config before running steps.
 Old pass/skip receipts cannot satisfy that cycle, and supersession creates no
 failure or failure-budget charge. Unchanged config on a descendant head retains
 its pin; every new cycle still rereads the checkout. Read, parse and Git evidence

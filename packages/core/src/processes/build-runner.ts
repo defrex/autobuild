@@ -1229,6 +1229,10 @@ export class BuildRunner {
           state: facts.state,
           deployment: config,
           read: this.deps.readVerifyPipeline,
+          retainCompletedVerification:
+            facts.state.kind !== 'node' &&
+            decision.kind === 'wait' &&
+            decision.reason === 'awaiting-pr',
           exec: this.deps.exec,
           workspacePath: this.deps.workspacePath,
         })

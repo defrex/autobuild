@@ -54,7 +54,7 @@ async function fixture() {
   })
   const store = full.scopeBuild('test')
   const state = async () => reduceBuild(await store.getEvents('test'))
-  const refresh = async (exec = spawnExec) =>
+  const refresh = async (exec = spawnExec, retainCompletedVerification = false) =>
     refreshVerifyCycle({
       store,
       slug: 'test',
@@ -63,6 +63,7 @@ async function fixture() {
       read: () => readVerifyPipeline(root, spawnExec),
       exec,
       workspacePath: root,
+      retainCompletedVerification,
     })
   return { root, git, commit, head, store, state, refresh }
 }
@@ -171,4 +172,25 @@ test('a config absent from the committed tree is truthfully captured as dirty', 
   await writeFile(join(f.root, 'autobuild.toml'), toml('ui-app'))
   await f.refresh()
   expect((await f.state()).verify.configPin!.source).toEqual({ ref: 'worktree-dirty' })
+})
+
+test('completed waiting leaves retain equal-config non-ancestor pins but still supersede changed config', async () => {
+  const f = await fixture()
+  await f.refresh()
+  const pin = (await f.state()).verify.configPin!
+  await f.git('checkout', '--orphan', 'waiting-rewrite')
+  await f.git('commit', '-m', 'clean waiting rewrite')
+  expect(await f.refresh(spawnExec, true)).toBe(false)
+  expect((await f.state()).verify.configPin).toEqual(pin)
+  // Waiting requires no ancestry evidence because it launches no step.
+  expect(
+    await f.refresh(async () => {
+      throw new Error('ancestry must not be read')
+    }, true),
+  ).toBe(false)
+  await f.commit(toml('ui-app'))
+  expect(await f.refresh(spawnExec, true)).toBe(true)
+  expect(
+    (await f.store.getEvents('test')).filter((event) => event.type === 'verify.config-superseded'),
+  ).toHaveLength(1)
 })
