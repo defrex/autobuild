@@ -1668,8 +1668,10 @@ accepted completion clears its handoff banner. Takeover, an overdue deadline
 and an empty outstanding set do not complete a handoff. Multiple unfinished
 generations remain visible; cutover does not mark builds draining.
 
-Integration list rows show parent commit distance (current or unknown when appropriate),
-name the destination and show children merged out of the
+Terminal list headers show `slug → destination +N` with dim distance; work
+steps follow immediately. Integration progress retains its bar and child counts.
+Web views keep their layout and share the suffix vocabulary.
+Integration list rows show children merged out of the
 known total, with the remainder split into building and queued. Cancelled
 children are excluded. Missing or diagnostic-bearing observations show
 `children unknown`; a successful empty enumeration shows `no children yet`.
@@ -2618,12 +2620,19 @@ primary quota, REST 304s and GraphQL calls. Transport failures and historical or
 legacy observations can remain unclassified; absent fields never imply zero.
 Shared requests are attributed to their first requester; cache hits count zero.
 
+Work target distance is advisory `target.distance` telemetry, sampled during
+normal target polls from exact build/target tips, never at render time. It
+counts destination commits absent from the build head (`BUILD..TARGET`).
+Detail target/Parent fields use the same suffix. Missing/stale samples display `+?`; zero and merged/closed states
+omit the suffix. This measurement never changes merge or restack decisions.
+
 ### Requesting node freshness
 
 `ab restack <node>` and `builds.restack {repo, slug}` record durable demand.
 Paused or blocked nodes wait for normal safety gates; leaves, terminal nodes
 and unopened nodes are refused. Collecting nodes may intentionally trail their
-parent; both dashboards show its commit distance, current, or unknown.
+parent; both dashboards show `+N` beside the destination, no suffix when
+current, or `+?` when unknown. Merged/closed builds omit the suffix.
 See [restacking timing and recovery](references/restacking.md) for the five
 automatic and explicit demand points, minimal presence paths and upgrade behavior.
 

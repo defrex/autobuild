@@ -1,3 +1,4 @@
+import { workTargetDistance } from './target-distance'
 import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { projectRollback, type DashboardRollback } from './rollback'
 import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
@@ -194,6 +195,7 @@ export interface DashboardBuild {
   }
   tree?: TreeProjection
   kind?: 'integration' | 'work'
+  targetDistance?: string
   target?: string
   integration?:
     | 'reparenting'
@@ -615,6 +617,8 @@ export function projectBuildFromFacts(
     return {
       slug: record.slug,
       ...buildVocabulary(state),
+      target: state.target?.ticket.id ?? state.baseBranch ?? config.baseBranch,
+      targetDistance: workTargetDistance(state, facts.log.restack),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
       integrationDetail: projectIntegrationDetail(
@@ -659,6 +663,9 @@ export function projectBuildFromFacts(
     return {
       slug: record.slug,
       ...buildVocabulary(state),
+      target: state.target?.ticket.id ?? state.baseBranch ?? config.baseBranch,
+      targetDistance:
+        state.kind === 'node' ? undefined : workTargetDistance(state, facts.log.restack),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
       integrationDetail: projectIntegrationDetail(
@@ -959,11 +966,11 @@ export function projectBuildFromFacts(
     verifyDrained &&
     postStepsDrained &&
     activePhase === undefined
-  // Merge-ready start = the log's last-event ts: once the build drains the
-  // engine parks on `wait{awaiting-pr}` and appends nothing, so `lastEvent.ts`
-  // is exactly when it became merge-ready, ticking like a running phase (AC 9).
+  // Advisory distance refreshes must not restart the merge waiting clock.
+  // Retain the last lifecycle activity when the engine parks awaiting its PR.
   // Frozen at that same ts when the build is not running.
-  const lastMs = state.lastEvent !== undefined ? Date.parse(state.lastEvent.ts) : 0
+  const activityAt = facts.log.restack.activityAt ?? state.lastEvent?.ts
+  const lastMs = activityAt === undefined ? 0 : Date.parse(activityAt)
   const mergeTiming: StepTiming | undefined = !mergeCurrent
     ? undefined
     : frozenNow !== undefined
@@ -1008,6 +1015,9 @@ export function projectBuildFromFacts(
   return {
     slug: record.slug,
     ...buildVocabulary(state),
+    target: state.target?.ticket.id ?? state.baseBranch ?? config.baseBranch,
+    targetDistance:
+      state.kind === 'node' ? undefined : workTargetDistance(state, facts.log.restack),
     tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
     integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
     integrationDetail: projectIntegrationDetail(record, state, facts.log.restack, config, pipeline),

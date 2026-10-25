@@ -1652,3 +1652,9 @@ Reads on an unknown repository return an empty collection. Status loads presence
 from fact reduction. Build/session/phase authority cannot register; remote routes
 require repository operator authority. Concurrent advisory registrations coexist.
 Unflagged watch and `ab wait` remain read-only; MCP and dashboards do not register.
+
+Dashboard destination distance is projected from durable `target.distance`
+(work) and `node.parent-distance` (integration) observations. Shared suffixes
+are `+N`, empty when current, and `+?` when unknown, suppressed after merge or
+close. Terminal headers reserve space for the destination before the slug;
+web views keep their own layout and share the wording.

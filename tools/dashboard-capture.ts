@@ -272,7 +272,7 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'held',
       'conflicted',
       'collect',
-      'integration →',
+      '→ main',
       'merged',
       'children unknown',
       'unit failed',
@@ -1072,7 +1072,7 @@ export async function prepareScenario(): Promise<E2eHarness> {
     // Capacity admission samples the stepping clock twice during the initial
     // tick. Preserve the established reconcile/landing evidence timestamps;
     // these frames exercise policy and layout rather than admission timing.
-    harness.clock.advance(-2000)
+    harness.clock.advance(-5000)
 
     // Seed a completed reconcile cycle with explicit policy evidence on the open PR.
     const slug = 'complete-dashboard-evidence'
@@ -1255,6 +1255,15 @@ async function seedHappyBuild(
     type: 'target.moved',
     payload: { branch: 'main', sha: target.stdout.trim() },
   })
+  const fixtureHead =
+    build.stage === 'implement'
+      ? (await spawnExec(['git', 'rev-parse', 'main~7'], { cwd: harness.origin })).stdout.trim()
+      : target.stdout.trim()
+  const added = await spawnExec(
+    ['git', 'worktree', 'add', '-b', `ab/${build.slug}`, workspacePath, fixtureHead],
+    { cwd: harness.origin },
+  )
+  if (added.exitCode !== 0) throw new Error(added.stderr)
   // Keep the established visual timeline when adding this observation fact.
   harness.clock.advance(-1000)
   await harness.store.append(build.slug, {
@@ -1476,6 +1485,19 @@ async function seedHappyBuild(
     }
   }
 
+  if (build.stage !== 'merged') {
+    await harness.store.append(build.slug, {
+      actor: DISPATCHER,
+      type: 'target.distance',
+      payload: {
+        branch: 'main',
+        sha: target.stdout.trim(),
+        head: fixtureHead,
+        count: build.stage === 'implement' ? 7 : 0,
+      },
+    })
+    harness.clock.advance(-1000)
+  }
   await harness.store.claimLease(build.slug, `sentinel-${build.slug}`, HAPPY_LEASE_TTL_MS)
   return observationSeq === undefined ? {} : { observationSeq }
 }
@@ -1488,6 +1510,23 @@ export async function prepareHappyScenario(): Promise<HappyScenario> {
   })
 
   try {
+    for (let i = 0; i < 7; i++) {
+      const committed = await spawnExec(
+        [
+          'git',
+          '-c',
+          'user.name=Capture',
+          '-c',
+          'user.email=capture@example.test',
+          'commit',
+          '--allow-empty',
+          '-m',
+          `Target advance ${i}`,
+        ],
+        { cwd: harness.origin },
+      )
+      if (committed.exitCode !== 0) throw new Error(committed.stderr)
+    }
     const observations: Array<{ build: string; seq: number }> = []
     // Repository settings are written BEFORE the builds: the ON default's seq
     // is what each build's seeded consent answers, so the capture's real

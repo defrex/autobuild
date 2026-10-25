@@ -67,6 +67,16 @@ export function leafRestackLog(): AbEvent[] {
       actor: KERNEL,
       payload: { branch: 'main', sha: leafTransaction.targetBase },
     },
+    {
+      type: 'target.distance',
+      actor: { kind: 'dispatcher' },
+      payload: {
+        branch: 'main',
+        sha: leafTransaction.targetBase,
+        head: leafTransaction.oldHead,
+        count: 2,
+      },
+    },
     { type: 'restack.prepared', actor: KERNEL, payload: leafTransaction },
     {
       type: 'restack.replayed',

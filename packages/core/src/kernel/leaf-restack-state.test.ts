@@ -82,10 +82,15 @@ test('verify failure appends implementation work and the next approval requires 
 })
 
 test('pre-PR conflicts use reconcile and cannot skip initial checks under afterReconcile=false', () => {
-  let log = event(leafRestackLog().slice(0, 8), 'restack.replayed', {
-    id: leafTransaction.id,
-    conflicted: true,
-  })
+  const prepared = leafRestackLog()
+  let log = event(
+    prepared.slice(0, prepared.findIndex((e) => e.type === 'restack.prepared') + 1),
+    'restack.replayed',
+    {
+      id: leafTransaction.id,
+      conflicted: true,
+    },
+  )
   expect(decideNext(log, config)).toMatchObject({ kind: 'run-phase', phase: 'reconcile', round: 1 })
   log = event(log, 'reconcile.started', {
     attempt: 1,
