@@ -7,3 +7,4 @@ pub mod events;
 pub mod postgres;
 pub mod reader;
 pub mod reducers;
+pub mod writer;

@@ -9,3 +9,13 @@ test('cache identity separates repositories but not worktree locations', () => {
   expect(cachePath('/other/.git', '/cache')).not.toBe(cachePath('/repo/.git', '/cache'))
   expect(cachePath('/repo/.git', '/cache')).toStartWith('/cache/')
 })
+
+test('operator checkpoint gates keep oracle drift and native write evidence mandatory', async () => {
+  const source = await Bun.file(new URL('./verify.ts', import.meta.url)).text()
+  for (const stage of [
+    'tools/operator-fixtures.ts',
+    'tools/writer-fixtures.ts',
+    'tools/operator-integration.ts',
+  ])
+    expect(source).toContain(`['bun', '${stage}']`)
+})

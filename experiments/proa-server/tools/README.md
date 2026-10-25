@@ -124,3 +124,20 @@ stream metadata transfers. It checks new-build discovery, terminal ancestors and
 a new live event under five seconds. `metadata:*` entries in SQL evidence report
 registry, discovery, stream and artifact metadata queries as well as returned row
 counts; these are separate from event suffixes and blob byte downloads.
+
+## Operator foundation checkpoint
+
+`bun tools/operator-fixtures.ts` checks the committed operator HTTP oracle against
+current TypeScript sources, identity rules and documentation. Regenerate deliberately
+with `--write`; `coverage.missing*` in `fixtures/operator-corpus.json` remains an
+explicit completion checklist. `bun tools/writer-fixtures.ts` checks the generated
+actor/classification policy; `--write` regenerates it. Rust session policy tests
+consume the oracle and compare exact refusals, actor/payload, write count and state.
+
+`bun tools/operator-integration.ts` provisions isolated PostgreSQL/S3 resources and
+runs the native `operator-proof` test bridge, then reads its actual writes through
+the TypeScript store. Its database roles are separate from the existing SELECT-only
+reader proof; denied writes must leave no durable event. This bridge is test tooling,
+not a production API or a proxy for Rust HTTP requests. Full HTTP route replay,
+browser mutation capture and the isolated dispatcher scheduling proof remain gates
+in [the staged parity checklist](../OPERATOR-PARITY.md).

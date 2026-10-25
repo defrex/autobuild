@@ -198,3 +198,10 @@ to determine visibility. Metadata queries are included in capture's SQL evidence
 Artifact misses use per-object single flight, so a slow download does not block
 unrelated cache hits. Row callouts show the shared three-row preview, retaining
 paragraph breaks and linking to the complete detail text.
+
+## Operator port
+
+Native operator foundations are being delivered in tested checkpoints. See
+[operator parity and remaining gates](OPERATOR-PARITY.md) for the current boundary,
+attribution exception and completion requirements. The browser dashboard remains
+read-only until its authenticated form transport is implemented.

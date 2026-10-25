@@ -107,6 +107,8 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'test', 'tools'],
         ['bun', join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '-p', 'tsconfig.json'],
         ['bun', 'tools/check-fixtures.ts'],
+        ['bun', 'tools/operator-fixtures.ts'],
+        ['bun', 'tools/writer-fixtures.ts'],
         ['bun', 'tools/projection-fixtures.ts'],
         ['proa', 'fmt', '--check', '--verify', 'src'],
         ['cargo', 'fmt', '--check'],
@@ -116,6 +118,7 @@ export async function build(capture = false): Promise<string> {
         ['proa', 'test', '--locked'],
         ['bun', 'tools/data-integration.ts'],
         ['bun', 'tools/data-dashboard-integration.ts'],
+        ['bun', 'tools/operator-integration.ts'],
       ]
   commands.push([
     'proa',

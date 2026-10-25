@@ -467,7 +467,7 @@ impl PostgresReader {
             .start()
             .await
             .map_err(|_| DataError::Query)?;
-        let rows = tx.query("SELECT id, repo, operator, title, created_at, updated_at FROM sessions WHERE repo = $1 ORDER BY created_at, id", &[&repo])
+        let rows = tx.query("SELECT id, repo, operator, title, created_at, updated_at FROM sessions WHERE repo = $1 ORDER BY created_at, creation_seq", &[&repo])
             .await.map_err(|_| DataError::Query)?;
         let result = rows.iter().map(|row| {
             let mut record = json!({ "id": row.get::<_, String>("id"), "repo": repo,

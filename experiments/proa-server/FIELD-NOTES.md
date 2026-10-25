@@ -481,3 +481,19 @@ both grounds and widths: callout paragraphs/previews, restored PR state, wrappin
 tree indentation, menu and detail remain readable. Final capture recorded 329
 reads including 260 metadata reads. Its logger now explicitly includes the
 Postgres module and capture fails if any expected metadata category is missing.
+
+## Operator controls: native foundation checkpoint
+
+The operator port keeps writes on a separate PostgreSQL connection; the existing
+reader transactions remain SELECT-only. Session policies are reusable library
+operations: the bearer and browser transports will supply verified identity and
+validated input. Native policy tests consume real TypeScript HTTP oracle cases,
+including the distinct archive and approval refusal texts, with complete ordered
+session facts and reduced post-state. The fixture inventory explicitly records
+unimplemented control coverage so source freshness cannot be mistaken for parity.
+
+This checkpoint changes no rendered surface. Proa forms, polling/mutation races
+and progressive enhancement have not yet been measured; their browser and visual
+proofs remain required before the build can finish. The ticket attribution gap
+`obs_675b94d9` is retained as an explicit TypeScript storage-parity exception rather
+than filled with a new experiment-only audit schema.
