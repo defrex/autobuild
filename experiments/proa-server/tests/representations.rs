@@ -6,8 +6,7 @@ use axum::{
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-#[path = "../src/app.rs"]
-mod app;
+use proa_server::app;
 #[path = "../src/components/mod.rs"]
 mod components;
 #[path = "../src/endpoints/mod.rs"]
@@ -35,7 +34,7 @@ async fn body(response: Response) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn canonical_and_explicit_markdown_share_one_page_policy() {
-    let app = routes::router(app::AppState);
+    let app = routes::router(app::AppState::default());
 
     let html = app
         .clone()
@@ -108,7 +107,7 @@ async fn canonical_and_explicit_markdown_share_one_page_policy() {
 
 #[tokio::test]
 async fn health_and_shell() {
-    let app = routes::router(app::AppState);
+    let app = routes::router(app::AppState::default());
     let health = app
         .clone()
         .oneshot(

@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["tools"],
+  "exclude": ["node_modules"],
+  "compilerOptions": { "incremental": false }
+}

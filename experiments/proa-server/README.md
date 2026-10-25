@@ -1,7 +1,8 @@
 # Proa server experiment
 
 Nonshipping Rust/Proa experiment, version 0.1.0. Only the Builds placeholder is
-implemented; there is no database, account, authentication or dispatcher connection.
+implemented. A read-only native data library connects to the TypeScript store;
+no page reads it yet, and there is no account or authentication connection.
 
 The visual authority is [design/ansi](design/ansi/README.md), pinned ticket asset
 **design / ansi / revision 1000000000**, including its reference HTML, 24 screenshots
@@ -15,7 +16,10 @@ Prerequisites:
 - Proa CLI **0.1.3**: `cargo install proa-cli --version 0.1.3 --locked`.
 - Bun (validated with 1.4.4) for local Tailwind **4.3.1** and @tailwindcss/cli **4.3.1**.
 - A native compiler/linker, C build tools and pkg-config for Rust dependencies
-  (validated on Linux with GCC and GNU ld). No database or credentials are needed.
+  (validated on Linux with GCC and GNU ld), plus OpenSSL development libraries.
+- An installed local PostgreSQL cluster for the full Rust gate. The gate starts
+  an existing cluster and provisions its own disposable database and local S3 service.
+  Offline shell development and capture need no database or credentials.
 - Chromium for manual visual captures (this host uses `/usr/bin/chromium`).
 
 From this directory:
@@ -68,3 +72,34 @@ Automated Rust and visual gates are described in [tools/README.md](tools/README.
 They capture the actual server and share ordinary Cargo artifacts across worktrees.
 Proa linked dependencies still rebuild for a new worktree; see the field notes.
 See [FIELD-NOTES.md](FIELD-NOTES.md) for measured tooling behavior.
+
+
+## Native data boundary
+
+With no database/blob environment the server starts its offline shell. To initialize
+`AppState.data`, set `AB_POSTGRES_URL` (or `DATABASE_URL`) and the blob variables used
+by the TypeScript service. Partial configuration fails. Schema version 17 and its
+checksum are checked before the listener binds; unknown versions refuse startup.
+The reader performs SELECTs in read-only transactions and never initializes schema,
+writes events or reads snapshots.
+
+S3: `AB_BLOB_BACKEND=s3`, `AB_S3_BUCKET`, `AB_S3_REGION`,
+`AB_S3_ACCESS_KEY_ID`, `AB_S3_SECRET_ACCESS_KEY`; optional `AB_S3_ENDPOINT`,
+`AB_S3_SESSION_TOKEN`, `AB_S3_FORCE_PATH_STYLE=true|false`. Vercel:
+`AB_BLOB_BACKEND=vercel`, `AB_VERCEL_BLOB_ACCESS=public|private`, and either
+`BLOB_READ_WRITE_TOKEN` or both `VERCEL_OIDC_TOKEN` and `BLOB_STORE_ID`.
+`AB_BLOB_PREFIX` is shared by both backends and normalized exactly as in TypeScript.
+See [the pinned provider contract](BLOB-CONTRACT.md).
+
+The library exposes project/build/session metadata, scoped artifact bytes, and
+finished build, repository and session reductions through `data::reader::DataReader`.
+Accumulators and sequence cursors survive across requests within the process;
+restart or eviction replays durable logs. Unknown or malformed build facts produce
+an unreadable build while healthy neighbors remain available. Repository and
+session read failures are explicit at their own scope. No public data route is added.
+
+From this directory, `bun tools/generate-fixtures.ts` executes the scripted core
+scenarios and compatibility producers and regenerates the corpus with current
+TypeScript reducer answers. `bun tools/check-fixtures.ts` independently checks
+source/catalog freshness and re-reduces committed logs without rewriting them.
+Rust parity compares full and chunked replay, including prefixes and empty suffixes.

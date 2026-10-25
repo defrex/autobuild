@@ -102,12 +102,14 @@ export async function build(capture = false): Promise<string> {
     ? []
     : [
         ['bun', 'test', 'tools'],
+        ['bun', 'tools/check-fixtures.ts'],
         ['proa', 'fmt', '--check', '--verify', 'src'],
         ['cargo', 'fmt', '--check'],
         ['proa', 'lint', 'src', '--deny', 'warnings'],
         ['cargo', 'clippy', '--locked', '--all-targets', '--', '-D', 'warnings'],
         ['cargo', 'test', '--locked'],
         ['proa', 'test', '--locked'],
+        ['bun', 'tools/data-integration.ts'],
       ]
   commands.push([
     'proa',
