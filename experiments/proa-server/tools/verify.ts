@@ -112,6 +112,7 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/operator-fixtures.ts'],
         ['bun', 'tools/request-fixtures.ts'],
         ['bun', 'tools/config-fixtures.ts'],
+        ['bun', 'tools/ticket-protocol-fixtures.ts'],
         ['bun', 'tools/api-read-fixtures.ts'],
         ['bun', 'tools/advanced-control-fixtures.ts'],
         ['bun', 'tools/registry-fixtures.ts'],

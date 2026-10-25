@@ -455,3 +455,10 @@ delegated GET is refused before presence lookup, with the source's exact text;
 POST retains the source's earlier mutation authorization and JSON-parse errors.
 These results are recorded in `routeParity`, `retentionEnvironment` and the
 authority proof's `presenceRefusals` in the family report.
+
+`bun tools/ticket-protocol-fixtures.ts` checks the source-pinned ticket request
+schema corpus (`--write` explicitly regenerates it). Its operation inventory
+requires a valid seed for every exported hosted ticket operation, and records
+strict-envelope, required-field, null and type diagnostics plus policy probes.
+This is a request-validation oracle only; it does not establish native ticket
+HTTP behavior, historical response compatibility or durable connect parity.
