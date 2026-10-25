@@ -584,3 +584,14 @@ only test-owned SQL triggers and a held signed upload proxy; native publication
 remains inert when a concurrent terminal fact or fence/tail guard wins. The
 isolated dispatcher proof also checks the real terminal renderer after native
 browser pause/resume, with no live dispatcher process management.
+
+### Live controls after an enhanced reply
+
+A fragment acknowledgment must not pin the controls section during later polls.
+Retain the operator's draft fields and refusal text within the fresh render;
+refresh lifecycle/repository actions from durable state. Expire success notices
+on the next full poll and retain a destructive confirmation only while its
+corresponding action is still offered. Capture now acknowledges a pause, appends
+the dispatcher acknowledgment, and requires Resume without navigation; it also
+checks later escalations, external intake changes, and refusal-plus-draft
+retention while action availability changes.

@@ -55,18 +55,45 @@
       for (const old of current.querySelectorAll(
         '[data-build-controls], [data-repository-controls]',
       )) {
-        if (
-          old.querySelector(
-            '[data-dirty], [data-control-error], [data-control-notice], [data-control-form="confirmation"]',
-          )
-        ) {
-          const replacement = next.querySelector(
-            old.matches('[data-build-controls]')
-              ? '[data-build-controls]'
-              : '[data-repository-controls]',
-          )
-          replacement?.replaceWith(old)
+        const replacement = next.querySelector(
+          old.matches('[data-build-controls]')
+            ? '[data-build-controls]'
+            : '[data-repository-controls]',
+        )
+        if (!replacement) continue
+        // Feedback and drafts belong to the operator; availability belongs to
+        // the latest server render. Never retain a whole controls section.
+        const error = old.querySelector('[data-control-error]')
+        if (error && !replacement.querySelector('[data-control-error]')) {
+          const heading = replacement.querySelector('h2')
+          if (heading) heading.after(error)
+          else replacement.prepend(error)
         }
+        const draft = old.querySelector('[data-control-form="answer"]')
+        if (draft && (draft.hasAttribute('data-dirty') || error)) {
+          const fresh = replacement.querySelector('[data-control-form="answer"]')
+          if (fresh) {
+            for (const field of draft.querySelectorAll('textarea, input:not([type="hidden"])')) {
+              const target = [...fresh.elements].find((node) => node.name === field.name)
+              if (target) target.value = field.value
+            }
+            fresh.dataset.dirty = 'true'
+          } else {
+            // Keep an unsent/refused draft readable after its escalation closes,
+            // without offering actions that the fresh state no longer permits.
+            for (const button of draft.querySelectorAll('button')) button.disabled = true
+            replacement.querySelector('.control-signoff')?.before(draft)
+          }
+        }
+        const confirmation = old.querySelector('[data-control-form="confirmation"]')
+        const action = confirmation?.querySelector('button[name="action"]')?.value
+        if (
+          action &&
+          [...replacement.querySelectorAll('button[name="action"]')].some(
+            (button) => button.value === `confirm-${action}`,
+          )
+        )
+          replacement.querySelector('[data-control-form="lifecycle"]')?.replaceWith(confirmation)
       }
     }
     current.replaceWith(next)

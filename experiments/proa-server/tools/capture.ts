@@ -432,6 +432,24 @@ export async function captureFrames(
                 `Boolean(document.querySelector('[data-control-form="confirmation"]'))`,
               )
         if (!preserved) throw Error(`Polling erased ${frame.state}`)
+        if (frame.state === 'control-refusal' && auth?.store && detail) {
+          await auth.store.append(detail.slug, {
+            actor: { kind: 'kernel' },
+            type: 'build.paused',
+            payload: {},
+          })
+          let refreshed = false
+          for (let i = 0; i < 150; i++) {
+            refreshed = Boolean(
+              await evaluate(
+                `Boolean(document.querySelector('button[value="resume"]')) && !document.querySelector('button[value="pause"]') && Boolean(document.querySelector('[data-control-error]')) && document.querySelector('#answer-text')?.value==='Keep this draft after the refusal'`,
+              ),
+            )
+            if (refreshed) break
+            await Bun.sleep(40)
+          }
+          if (!refreshed) throw Error('Refusal froze live action availability or lost its draft')
+        }
       }
       const result = await evaluate(
         `(${probe.toString()})(${JSON.stringify(palette(reference, frame.theme))},${JSON.stringify(frame.state)},${JSON.stringify(frame.theme)})`,
@@ -753,12 +771,54 @@ export async function captureFrames(
               throw Error(`Enhanced control did not render acknowledgment: ${action}`)
             if (!(await evaluate('document===window.__controlDocument')))
               throw Error(`Control reloaded document: ${action}`)
+            if (action === 'pause') {
+              await auth.store.append(fixture.slug, {
+                actor: { kind: 'kernel' },
+                type: 'build.paused',
+                payload: {},
+              })
+              let refreshed = false
+              for (let i = 0; i < 150; i++) {
+                refreshed = Boolean(
+                  await evaluate(
+                    `Boolean(document.querySelector('button[value="resume"]')) && !document.querySelector('button[value="cancel-pause"]') && !document.querySelector('[data-control-notice]')`,
+                  ),
+                )
+                if (refreshed) break
+                await Bun.sleep(40)
+              }
+              if (!refreshed) throw Error('Pause acknowledgment froze live controls before Resume')
+              if (!(await evaluate('document===window.__controlDocument')))
+                throw Error('Pause acknowledgment reloaded the document')
+              await auth.store.append(fixture.slug, {
+                actor: { kind: 'agent', role: 'implement', session: 'capture-later-question' },
+                type: 'escalation.raised',
+                payload: {
+                  id: 'capture-later-question',
+                  source: 'agent',
+                  phase: 'implement',
+                  refs: [],
+                  question: 'A later question',
+                },
+              })
+              let answerVisible = false
+              for (let i = 0; i < 150; i++) {
+                answerVisible = Boolean(
+                  await evaluate(`Boolean(document.querySelector('[data-control-form="answer"]'))`),
+                )
+                if (answerVisible) break
+                await Bun.sleep(40)
+              }
+              if (!answerVisible)
+                throw Error('A later escalation did not reveal its live answer form')
+            }
           }
           formProof.push({
             mode,
             action,
             events: delta.map((event) => event.type),
             identity: 'operator@example.com',
+            ...(mode === 'js' && action === 'pause' ? { acknowledgedPauseOffersResume: true } : {}),
           })
         }
       }

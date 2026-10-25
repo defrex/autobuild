@@ -128,6 +128,27 @@ export async function runExtendedBrowserProof(options: {
         true,
         `${label}: full reload`,
       )
+      if (fixture.action === 'intake') {
+        const enabled = !repositoryDelta.find((event) => event.type === 'dispatcher.intake-set')!
+          .payload.enabled
+        await store.appendRepo(fixture.project, {
+          actor: { kind: 'human', user: 'other@example.com' },
+          type: 'dispatcher.intake-set',
+          payload: { enabled },
+        })
+        let refreshed = false
+        for (let attempt = 0; attempt < 150; attempt++) {
+          refreshed = Boolean(
+            await driver.evaluate(
+              `document.querySelector('button[value="intake"]')?.textContent.trim()===${JSON.stringify(`Intake ${enabled ? 'ON' : 'OFF'}`)} && !document.querySelector('[data-control-notice]')`,
+            ),
+          )
+          if (refreshed) break
+          await Bun.sleep(40)
+        }
+        assert.ok(refreshed, `${label}: acknowledgment froze repository controls`)
+        assert.equal(await driver.evaluate('window.__extendedDocument===document'), true)
+      }
     }
     evidence.push({
       mode: fixture.mode,
