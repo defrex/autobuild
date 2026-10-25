@@ -28,8 +28,8 @@ The TypeScript producer creates a uniquely named database/SELECT-only role, writ
 all three event and artifact scopes through the actual store, and invokes the native
 Rust reader. Cleanup closes clients and removes only that run's database, role,
 server and directory, including failure paths. Startup/teardown are bounded.
-No forge or live sandbox runner is needed. Capture alone remains offline and does
-not provision either service.
+No forge or live sandbox runner is needed. Seeded capture provisions both services
+in isolated loopback resources, with a SELECT-only Rust role.
 The proa-rust gate runs `bun test tools` from the experiment directory before
 Rust checks, so negative capture fixtures, route coverage and pipeline regressions
 are enforced for every applicable build. Capture-build mode only exports the
@@ -64,12 +64,17 @@ cases with every HTML route/state, 1440/390 widths and light/dark grounds. Suppl
 explicit seeded identifiers for parameterized routes, never guessed ids.
 
 Data contract: the native configured reader and the deliberately unconfigured shell
-are distinct modes. Proa's generated database layer remains `database.driver=none`;
-the native reader is initialized separately before binding. Current pages read no
-data, so capture starts in an isolated cwd with no inherited database/blob credentials
-and renders the unchanged shell. Source inventory rejects page-level data reads until a seeded data capture
-contract is supplied; auth uses the development issuer described below. The full gate's data proof is separate
-from pixel capture and never invents browser records.
+are distinct modes. Proa's generated database driver remains `none`: the native
+read-only adapter owns the SQL reads. `capture-seed.ts` imports both real root
+scenario producers and replays records, ordered events and exact artifact revisions
+into dedicated isolated projects before starting Rust. It adds nested nodes,
+root leaves, an unreadable neighbor, stored detail/frame and closed/live transcript
+cases. The printed inventory binds every frame to a project, build and producer,
+with source hashes, timestamp shifts, replay counts and artifact inventories.
+`sql-evidence.json` records actual native suffix reads and immutable downloads.
+Capture checks no-JS DOM snapshots, same-document event refresh within five seconds,
+live transcript suffixes and retained disclosures. Server and browser processes,
+databases, SELECT-only roles and S3 directories are cleaned on failure too.
 
 Corpus generation: `bun tools/generate-fixtures.ts` from the experiment executes
 scenario/compatibility producers, captures per-store logs and validates every event
@@ -103,3 +108,19 @@ callback replay, allowlist removal, cookie/session policy, CSRF, peer checks and
 the GitHub adapter's wire shapes/pagination. A real TCP test proves the development
 serve adapter supplies ConnectInfo. The gate retains Proa accessibility/performance
 checks and linked builds.
+
+The display projection has a separate offline oracle under
+`fixtures/projection.json.gz`. Regenerate it explicitly with
+`bun tools/projection-fixtures.ts --write`; check freshness without writing with
+`bun tools/projection-fixtures.ts`. It imports the TypeScript projection only
+at generation/check time. The native `projection_parity` test compares retained
+facts, projected rows, session stream metadata and Unicode cells. The full Rust gate also runs `data-dashboard-integration.ts`, which checks the
+real producer replay against native project/detail, stream and blob reads.
+
+The dashboard integration proof also creates 509 hidden completed builds and
+5,090 closed streams through the TS store. After warming, three idle polls must
+make no per-history-build reads, no repeated pinned-config reads, and no closed
+stream metadata transfers. It checks new-build discovery, terminal ancestors and
+a new live event under five seconds. `metadata:*` entries in SQL evidence report
+registry, discovery, stream and artifact metadata queries as well as returned row
+counts; these are separate from event suffixes and blob byte downloads.

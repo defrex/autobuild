@@ -16,6 +16,7 @@ pub fn router(state: AppState) -> Router {
     let (router, metadata) = router_from_spec(vec![
         // proa:route-specs:start
         Route::endpoint("/", get(pages::home::handler)),
+        Route::endpoint("/builds/:slug", get(pages::build::handler)),
         // proa:route-specs:end
     ]);
     let manifest = Arc::new(IslandManifest {
@@ -43,6 +44,8 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(endpoints::health::ready))
         // proa:explicit-routes:start
         .route("/index.md", get(pages::home::markdown))
+        .route("/refresh", get(endpoints::live::refresh))
+        .route("/frame", get(endpoints::live::frame))
         .route("/sign-in", get(endpoints::auth::sign_in))
         .route("/auth/github", get(endpoints::auth::initiate))
         .route("/auth/github/callback", get(endpoints::auth::callback))
