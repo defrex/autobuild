@@ -41,6 +41,7 @@ export interface SeedEvidence {
   detail: { project: string; slug: string }
   controls: Record<string, { project: string; slug: string }>
   extendedControls: ExtendedBrowserFixture[]
+  consent?: Record<string, string>
   connect?: Record<string, string>
 }
 const hash = () =>
@@ -114,7 +115,12 @@ export async function replay(
   for (const record of records) {
     const slug = aliases.get(record.slug)!
     stamp(record.createdAt)
-    await target.createBuild({ slug, repo: project, ticket: record.ticket, branch: record.branch })
+    await target.createBuild({
+      slug,
+      repo: project,
+      ticket: record.ticket,
+      branch: record.branch,
+    })
     const artifacts = []
     for (const meta of await source.listArtifacts(record.slug)) {
       const artifact = await source.getArtifact(record.slug, meta.kind, meta.revision)
@@ -143,7 +149,12 @@ export async function replay(
       if (!(await target.getArtifact(slug, artifact.kind, artifact.revision)))
         throw Error('Replayed artifact missing')
     }
-    builds.push({ source: record.slug, target: slug, events: events.length, artifacts })
+    builds.push({
+      source: record.slug,
+      target: slug,
+      events: events.length,
+      artifacts,
+    })
   }
   const { verify, finalize, ...root } = harness.config
   await target.appendRepoWithArtifacts(
@@ -224,6 +235,9 @@ export async function withCaptureSeed<T>(
       created = true
       await migratePostgres(url.href)
       writer = new SQL(url.href, { max: 1 })
+      await writer.unsafe(
+        readFileSync(resolve(import.meta.dir, '../migrations/001-oauth.sql'), 'utf8'),
+      )
       const registry = new PostgresProjectRegistry(writer)
       let time = new Date()
       const clock = (() => time) as Clock & { set(date: Date): void }
@@ -263,7 +277,10 @@ export async function withCaptureSeed<T>(
         created.payload.repo = project
         created.payload.kind = kind
         if (parent)
-          created.payload.target = { build: parent, ticket: { source: 'file', id: parent } }
+          created.payload.target = {
+            build: parent,
+            ticket: { source: 'file', id: parent },
+          }
         await store.createBuild({
           slug: name,
           repo: project,
@@ -282,7 +299,11 @@ export async function withCaptureSeed<T>(
       await store.createBuild({
         slug,
         repo: project,
-        ticket: { source: 'file', id: 'DETAIL-1', title: 'Inspect a stored build trail' },
+        ticket: {
+          source: 'file',
+          id: 'DETAIL-1',
+          title: 'Inspect a stored build trail',
+        },
         created: createdWrite,
       })
       const append = async (type: keyof typeof schemas.build, payload: Record<string, unknown>) => {
@@ -293,7 +314,10 @@ export async function withCaptureSeed<T>(
           payload: { ...(event.payload as object), ...payload },
         } as Parameters<BuildStore['append']>[1])
       }
-      await append('runner.attached', { instance: 'capture-detail', host: 'loopback' })
+      await append('runner.attached', {
+        instance: 'capture-detail',
+        host: 'loopback',
+      })
       const spec = await store.putArtifact(slug, {
         kind: 'spec',
         content: '# Stored spec\n\nRead the complete trail. <script>untrusted</script>',
@@ -302,8 +326,13 @@ export async function withCaptureSeed<T>(
         kind: 'plan',
         content: '# Stored plan\n\nServe read-only snapshots and suffix updates.',
       })
-      await append('spec.imported', { artifact: { kind: 'spec', rev: spec.revision } })
-      await append('plan.completed', { round: 1, artifact: { kind: 'plan', rev: plan.revision } })
+      await append('spec.imported', {
+        artifact: { kind: 'spec', rev: spec.revision },
+      })
+      await append('plan.completed', {
+        round: 1,
+        artifact: { kind: 'plan', rev: plan.revision },
+      })
       const frame = await store.putArtifact(slug, {
         kind: 'verify-frame',
         content: readFileSync(
@@ -334,7 +363,12 @@ export async function withCaptureSeed<T>(
         round: 1,
         verdict: 'revise',
         findings: [
-          { id: 'f_detail', severity: 'important', summary: 'Stored review finding', persists: [] },
+          {
+            id: 'f_detail',
+            severity: 'important',
+            summary: 'Stored review finding',
+            persists: [],
+          },
         ],
       })
       const stream = await store.createStream(
@@ -350,7 +384,11 @@ export async function withCaptureSeed<T>(
       })
       await store.appendStreamParts(stream.id, [
         { type: 'text-start', id: 'text' },
-        { type: 'text-delta', id: 'text', delta: 'Live transcript from the shared store.' },
+        {
+          type: 'text-delta',
+          id: 'text',
+          delta: 'Live transcript from the shared store.',
+        },
       ])
       const closed = await store.createStream(
         { kind: 'build', build: slug },
@@ -366,7 +404,11 @@ export async function withCaptureSeed<T>(
       await store.appendStreamParts(closed.id, [
         { type: 'start', messageId: 'closed-message' },
         { type: 'text-start', id: 'closed-text' },
-        { type: 'text-delta', id: 'closed-text', delta: 'A completed transcript from the store.' },
+        {
+          type: 'text-delta',
+          id: 'closed-text',
+          delta: 'A completed transcript from the store.',
+        },
         { type: 'text-end', id: 'closed-text' },
         { type: 'finish' },
       ])
@@ -393,7 +435,11 @@ export async function withCaptureSeed<T>(
             await store.createBuild({
               slug: controlSlug,
               repo: project,
-              ticket: { source: 'file', id: controlSlug, title: 'Operate a stored build' },
+              ticket: {
+                source: 'file',
+                id: controlSlug,
+                title: 'Operate a stored build',
+              },
               created,
             })
             const put = async (
@@ -407,7 +453,10 @@ export async function withCaptureSeed<T>(
                 payload: { ...(event.payload as object), ...payload },
               } as Parameters<BuildStore['append']>[1])
             }
-            await put('runner.attached', { instance: `capture-${controlSlug}`, host: 'loopback' })
+            await put('runner.attached', {
+              instance: `capture-${controlSlug}`,
+              host: 'loopback',
+            })
             if (state === 'pausing') await put('build.pause-requested', {})
             if (state === 'answer' || state === 'refusal')
               await put('escalation.raised', {
@@ -416,7 +465,10 @@ export async function withCaptureSeed<T>(
                 phase: 'implement',
                 question: 'Should the operator continue with the approved plan?',
               })
-            controls[`builds-${width}-${theme}-control-${state}`] = { project, slug: controlSlug }
+            controls[`builds-${width}-${theme}-control-${state}`] = {
+              project,
+              slug: controlSlug,
+            }
           }
         }
       }
@@ -437,7 +489,11 @@ export async function withCaptureSeed<T>(
           await store.createBuild({
             slug: controlSlug,
             repo: project,
-            ticket: { source: 'file', id: controlSlug, title: 'Browser control proof' },
+            ticket: {
+              source: 'file',
+              id: controlSlug,
+              title: 'Browser control proof',
+            },
             created,
           })
           const put = async (
@@ -452,7 +508,10 @@ export async function withCaptureSeed<T>(
             } as Parameters<BuildStore['append']>[1])
           }
           if (state !== 'discard')
-            await put('runner.attached', { instance: controlSlug, host: 'loopback' })
+            await put('runner.attached', {
+              instance: controlSlug,
+              host: 'loopback',
+            })
           if (state === 'cancel-pause') await put('build.pause-requested', {})
           if (state === 'resume') await put('build.paused', {})
           if (['guidance', 'retry', 'dismiss'].includes(state)) {
@@ -482,7 +541,11 @@ export async function withCaptureSeed<T>(
       const extendedControls = await seedExtendedBrowserControls(writer, store)
       let connectionNow = new Date()
       const connections = new PostgresConnectionStore(writer, () => connectionNow)
-      const connect: Record<string, string> = { entry: '', unknown: '0000000000', error: 'INVALID' }
+      const connect: Record<string, string> = {
+        entry: '',
+        unknown: '0000000000',
+        error: 'INVALID',
+      }
       for (const status of ['pending', 'approved', 'denied', 'expired']) {
         connectionNow = new Date(Date.now() - (status === 'expired' ? 11 * 60_000 : 0))
         const request = await connections.start({
@@ -512,6 +575,10 @@ export async function withCaptureSeed<T>(
         `GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO ${controlRole}`,
       )
       await writer.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${controlRole}`)
+      await writer.unsafe(`GRANT USAGE ON SCHEMA proa_oauth TO ${controlRole}`)
+      await writer.unsafe(
+        `GRANT SELECT, UPDATE ON ALL TABLES IN SCHEMA proa_oauth TO ${controlRole}`,
+      )
       const controlUrl = new URL(url)
       controlUrl.username = controlRole
       controlUrl.password = controlPassword
