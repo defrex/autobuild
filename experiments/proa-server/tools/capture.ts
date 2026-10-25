@@ -17,11 +17,13 @@ interface Reply {
 export async function capture() {
   checkRoutes(await Bun.file(join(project, 'src/routes.rs')).text())
   const config = await Bun.file(join(project, 'proa.config.json')).json()
-  const sources = await Array.fromAsync(new Bun.Glob('src/**/*.rs').scan({ cwd: project }))
+  const sources = await Array.fromAsync(
+    new Bun.Glob('src/{pages,endpoints}/**/*.rs').scan({ cwd: project }),
+  )
   const source = (await Promise.all(sources.map((p) => Bun.file(join(project, p)).text()))).join(
     '\n',
   )
-  if (config.database.driver !== 'none' || /sqlx|postgres|DATABASE_URL/i.test(source))
+  if (config.database.driver !== 'none' || /sqlx|postgres|DATABASE_URL|state\.data/i.test(source))
     throw Error('Unsupported database capability; add a seed adapter; see tools/README.md')
   if (
     !source.includes('x-proa-dev-capability') ||

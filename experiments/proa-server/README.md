@@ -1,7 +1,8 @@
 # Proa server experiment
 
 Nonshipping Rust/Proa experiment, version 0.1.0. Only the Builds placeholder is
-implemented, with Rust-owned GitHub operator sign-in. There is no database or dispatcher connection.
+implemented, with Rust-owned GitHub operator sign-in and a read-only native data library
+connecting to the TypeScript store. No page reads data yet.
 
 The visual authority is [design/ansi](design/ansi/README.md), pinned ticket asset
 **design / ansi / revision 1000000000**, including its reference HTML, 24 screenshots
@@ -15,7 +16,11 @@ Prerequisites:
 - Proa CLI **0.1.3**: `cargo install proa-cli --version 0.1.3 --locked`.
 - Bun (validated with 1.4.4) for local Tailwind **4.3.1** and @tailwindcss/cli **4.3.1**.
 - A native compiler/linker, C build tools and pkg-config for Rust dependencies
-  (validated on Linux with GCC and GNU ld). No database or credentials are needed.
+  (validated on Linux with GCC and GNU ld). PostgreSQL TLS uses Rust TLS
+  with the host trust roots; no dynamic OpenSSL library is required.
+- An installed local PostgreSQL cluster for the full Rust gate. The gate starts
+  an existing cluster and provisions its own disposable database and local S3 service.
+  Offline shell development and capture need no database or credentials.
 - Chromium for manual visual captures (this host uses `/usr/bin/chromium`).
 
 From this directory:
@@ -123,3 +128,45 @@ in browser HTML. Development issuance uses an Axum ConnectInfo serve adapter wit
 SIGINT/SIGTERM handling and a 30-second drain, because Proa's serve helper does not
 supply socket peer metadata. This path uses the exported binary and does not provide
 Proa's development reload injection.
+
+
+## Native data boundary
+
+With no database/blob environment the server starts its offline shell. To initialize
+`AppState.data`, set `AB_POSTGRES_URL` (or `DATABASE_URL`) and the blob variables used
+by the TypeScript service. Partial configuration fails. Schema version 17 and its
+checksum are checked before the listener binds; unknown versions refuse startup.
+The reader performs SELECTs in read-only transactions and never initializes schema,
+writes events or reads snapshots.
+
+S3: `AB_BLOB_BACKEND=s3`, `AB_S3_BUCKET`, `AB_S3_REGION`,
+`AB_S3_ACCESS_KEY_ID`, `AB_S3_SECRET_ACCESS_KEY`; optional `AB_S3_ENDPOINT`,
+`AB_S3_SESSION_TOKEN`, `AB_S3_FORCE_PATH_STYLE=true|false`. Vercel:
+`AB_BLOB_BACKEND=vercel`, `AB_VERCEL_BLOB_ACCESS=public|private`, and either
+`BLOB_READ_WRITE_TOKEN` or both `VERCEL_OIDC_TOKEN` and `BLOB_STORE_ID`.
+`AB_BLOB_PREFIX` is shared by both backends and normalized exactly as in TypeScript.
+See [the pinned provider contract](BLOB-CONTRACT.md).
+
+The library exposes project/build/session metadata, scoped artifact bytes, and
+finished build, repository and session reductions through `data::reader::DataReader`.
+Accumulators and sequence cursors survive across requests within the process;
+restart or eviction replays durable logs. Unknown or malformed build facts produce
+an unreadable build while healthy neighbors remain available. Repository and
+session read failures are explicit at their own scope. No public data route is added.
+
+From this directory, `bun tools/generate-fixtures.ts` executes the scripted core
+scenarios and compatibility producers and regenerates the corpus with current
+TypeScript reducer answers. `bun tools/check-fixtures.ts` independently checks
+source/catalog freshness and re-reduces committed logs without rewriting them.
+The losslessly compressed `fixtures/corpus.json.gz` contains logs and oracle
+answers; `fixtures/manifest.json` lists producers, versions, catalogs and source
+hashes. Identical scope/log inputs share one case with every origin retained as an
+alias. Rust parity compares full and chunked replay, including prefixes and empty
+suffixes.
+
+Unreadable append-only scopes cache their deterministic decoding failure until cache
+clear or restart. Repeated polls return that same scoped error without fetching the
+failed suffix or any later appends; successful neighboring scopes keep advancing.
+Closed PostgreSQL pool connections reconnect on subsequent reads and pass the same
+read-only schema preflight before reuse. A disconnect during a query can still
+fail that request; subsequent polls retry with a replacement connection.
