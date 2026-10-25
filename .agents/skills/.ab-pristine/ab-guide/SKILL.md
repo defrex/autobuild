@@ -685,7 +685,7 @@ visual and reference outcomes, not on implementation, and judge the result
 against it.
 
 Node `verify:*` context additionally exposes `nodeVerification`: the frozen
-range, a JSON index path, contribution build slugs, current stored ticket
+range, a JSON index path, contribution build slugs, preparation-time stored ticket
 identities, event-authorized spec revisions and spec paths, and their commits.
 The index maps every commit in the range using build identity trailers,
 including earlier-cycle contributions and merge side history. Commits without
@@ -696,7 +696,14 @@ Their full messages express maintainer-authorized intent: judge quality and
 consistency, and never fail them solely for lacking a covering spec. Other node
 changes are authorized when covered by the node spec or the spec
 of the contribution introducing it; use the commit mapping to find that spec.
-Missing or ambiguous provenance fails hydration. Leaf context is unchanged.
+The dispatcher collects these inputs with repository authority before launching
+verification and atomically deposits a node-owned `node-verification-context`
+artifact cited by exact revision in `integration.prepared`. Contributor specs
+freeze at preparation; resumed and concurrent verifiers read the same cycle input.
+Hydration reads only that node-owned artifact and grants no general contributor
+read authority. Missing or ambiguous provenance prevents preparation; missing,
+corrupt or mismatched prepared inputs fail hydration. Historical agent cycles
+without a citation require a new integration cycle. Leaf context is unchanged.
 
 An agent verify step selects `[roles.<step>]` by its **logical step name** —
 the name in `[verify].steps`, not the skill it runs. An agent finalize

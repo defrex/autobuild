@@ -1166,3 +1166,118 @@ test('operator revision retries failed node verification on the same head withou
     await h.cleanup()
   }
 })
+
+for (const mode of ['success', 'bare', 'cas', 'lease', 'missing', 'check-only'] as const) {
+  test(`dispatcher prepares node inputs with ${mode}`, async () => {
+    const { readFile } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const manifests: { build: string; specs: string[] }[] = []
+    const h = await makeHarness({
+      localGitForge: true,
+      configToml:
+        mode === 'check-only'
+          ? CONFIG_TOML
+          : CONFIG_TOML.replace('steps = ["unit"]', 'steps = ["unit", "visual"]') +
+            '\n[verify.visual]\nkind = "agent"\nskill = "visual"\n',
+      handlers: {
+        ...happyHandlers(),
+        visual: async (cli) => {
+          await cli.run(['context'])
+          const manifest = JSON.parse(
+            await readFile(join(cli.ws, '.ab/verify-visual/context.json'), 'utf8'),
+          )
+          if (manifest.nodeVerification) {
+            const specs = await Promise.all(
+              manifest.nodeVerification.contributions.map((c: { specPath: string }) =>
+                readFile(join(cli.ws, c.specPath), 'utf8'),
+              ),
+            )
+            manifests.push({ build: cli.env.build!, specs })
+          }
+          await cli.run(['verdict', 'pass'])
+        },
+      },
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Integration node' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Child change' }), target: 'NODE' },
+      ],
+    })
+    try {
+      await h.dispatcher.tick()
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'NODE')!
+      const child = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'CHILD')!
+      await h.runLatest()
+      const childState = reduceBuild(await h.events(child.slug))
+      await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+        buildSlug: child.slug,
+      })
+      if (mode === 'lease') h.store.renewNodeWriter = async () => false
+      if (mode === 'cas') h.store.appendWithArtifactsIfCurrent = async () => null
+      if (mode === 'missing') {
+        const get = h.store.getArtifact.bind(h.store)
+        h.store.getArtifact = async (slug, kind, rev) =>
+          slug === child.slug && kind === 'spec' ? null : get(slug, kind, rev)
+      }
+      let preparation = h.dispatcher
+      if (mode === 'bare') {
+        const { Dispatcher } = await import('../processes/dispatcher')
+        const { gitRewrite } = await import('../ports/forge/git-rewrite')
+        const { spawnExec } = await import('../ports/workspace/git-worktree')
+        const transport = gitRewrite(spawnExec, false)
+        const forge = new Proxy(h.forgeAdapter, {
+          get(target, key) {
+            if (key === 'kernelRewrite' || key === 'rewrite') return transport
+            if (key === 'kernelExec') return spawnExec
+            if (key === 'openPr')
+              return (input: Parameters<typeof target.openPr>[0]) =>
+                target.openPr({ ...input, workspacePath: h.origin })
+            const value = Reflect.get(target, key, target)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        })
+        preparation = new Dispatcher({
+          store: h.store,
+          tickets: h.tickets,
+          workspaces: h.workspaces,
+          forge,
+          config: h.config,
+          repo: h.origin,
+          repoOrigin: h.origin,
+          exec: spawnExec,
+          ids: h.ids,
+          clock: h.clock,
+          launchRunner: async () => 'scheduled',
+        })
+      }
+      await preparation.tick()
+      await preparation.tick()
+      if (mode === 'cas' || mode === 'lease' || mode === 'missing') {
+        expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(0)
+        expect(await h.store.listArtifacts(node.slug, 'node-verification-context')).toHaveLength(0)
+        expect(h.launched.some((entry) => entry.slug === node.slug)).toBe(false)
+        return
+      }
+      const cycle = reduceBuild(await h.events(node.slug)).integration!.cycle!
+      if (mode === 'check-only') {
+        expect(cycle.context).toBeUndefined()
+        expect(await h.store.listArtifacts(node.slug, 'node-verification-context')).toHaveLength(0)
+        return
+      }
+      expect(cycle.context?.kind).toBe('node-verification-context')
+      const input = await h.store.getArtifact(node.slug, cycle.context!.kind, cycle.context!.rev)
+      const frozen = JSON.parse(new TextDecoder().decode(input!.content))
+      expect(frozen.cycle).toBe(cycle.id)
+      expect(frozen.index.contributions.map((c: { build: string }) => c.build)).toContain(
+        child.slug,
+      )
+      if (mode === 'bare') return
+      await h.store.putArtifact(child.slug, { kind: 'spec', content: 'later unsanctioned deposit' })
+      await h.runLatest()
+      expect(manifests).toEqual([{ build: node.slug, specs: [frozen.specs[child.slug]] }])
+    } finally {
+      await h.cleanup()
+    }
+  })
+}

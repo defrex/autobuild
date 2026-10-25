@@ -1,4 +1,8 @@
 import {
+  NODE_VERIFICATION_CONTEXT,
+  prepareNodeVerificationContext,
+} from '../kernel/node-verification-context'
+import {
   nodeActivityKey,
   nodePollingSchedule,
   nodePollingUnsettled,
@@ -5469,6 +5473,12 @@ export class Dispatcher {
           return
         const exact = await forge.compareBranches(state.baseBranch!, record.branch!)
         if (exact.parentSha !== comparison.parentSha || exact.headSha !== comparison.headSha) return
+        const cycle = {
+          id: this.deps.ids('integration-cycle'),
+          parent: exact.parentSha,
+          head: exact.headSha,
+        }
+        let context: string | undefined
         await this.withKernelRepository(async (path) => {
           const head = await forge.rewrite!.snapshot({
             workspacePath: path,
@@ -5482,18 +5492,49 @@ export class Dispatcher {
             ref: `refs/autobuild/archive/${record.slug}/${head}`,
             sha: head,
           })
+          if (
+            config.verify.steps.some((step) => config.verify.stepConfigs[step]?.kind === 'agent')
+          ) {
+            const exec = forge.kernelExec ?? this.deps.exec
+            // Snapshot fetch brings the complete head ancestry, including merge sides.
+            // A parent may have advanced independently and need its own fetch.
+            const parent = await exec(['git', 'cat-file', '-e', `${exact.parentSha}^{commit}`], {
+              cwd: path,
+            })
+            if (parent.exitCode !== 0) {
+              const fetched = await exec(['git', 'fetch', '--no-tags', 'origin', exact.parentSha], {
+                cwd: path,
+              })
+              if (fetched.exitCode !== 0)
+                throw new Error(`cannot fetch node verification parent: ${fetched.stderr}`)
+            }
+            context = await prepareNodeVerificationContext(
+              this.store,
+              record.repo,
+              cycle,
+              current,
+              { exec, workspacePath: path },
+            )
+          }
         })
         if (!(await this.store.renewNodeWriter(record.slug, holder))) return
-        await this.store.appendIfCurrent(record.slug, current.lastSeq, {
-          actor: DISPATCHER,
-          type: 'integration.prepared',
-          payload: {
-            id: this.deps.ids('integration-cycle'),
-            head: exact.headSha,
-            parent: exact.parentSha,
-            config: integrationConfig(config),
-          },
-        })
+        const prepared = await this.store.appendWithArtifactsIfCurrent(
+          record.slug,
+          current.lastSeq,
+          context === undefined ? [] : [{ kind: NODE_VERIFICATION_CONTEXT, content: context }],
+          (deposited) => ({
+            actor: DISPATCHER,
+            type: 'integration.prepared',
+            payload: {
+              ...cycle,
+              config: integrationConfig(config),
+              ...(deposited[0]
+                ? { context: { kind: NODE_VERIFICATION_CONTEXT, rev: deposited[0].revision } }
+                : {}),
+            },
+          }),
+        )
+        if (!prepared) return
       } finally {
         await this.store.releaseNodeWriter(record.slug, holder)
       }
