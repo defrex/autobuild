@@ -55,6 +55,9 @@ inspect the diff and not to decide applicability again.
    them. Every difference against the starting revision must still be expected
    by the spec; a failed capture or unexplained difference still fails. This
    supplemental comparison does not relax any visual criterion below.
+The verify-stages wide and narrow frames must show both running members in the
+existing pipeline row and identify a cancelled member as not run with its cause.
+
 5. Open **every** `.ab/web-dashboard-frames/*.png` with the image-capable file
    tool, both viewports. Judge the images themselves. The `.html` files are
    human evidence and may help identify a frame, but they are not a basis for
@@ -72,6 +75,8 @@ inspect the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put web-dashboard-frame:builds-verify-stages-wide:png .ab/web-dashboard-frames/builds-verify-stages-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-verify-stages-narrow:png .ab/web-dashboard-frames/builds-verify-stages-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-rollback-wide:png .ab/web-dashboard-frames/builds-rollback-wide.png --attach
    ab artifact put web-dashboard-frame:builds-rollback-narrow:png .ab/web-dashboard-frames/builds-rollback-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-handoff-wide:png .ab/web-dashboard-frames/builds-handoff-wide.png --attach

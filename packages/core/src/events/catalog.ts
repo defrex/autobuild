@@ -156,6 +156,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
 
   'verify.reconcile-policy-captured': ['kernel'],
   'verify.started': ['kernel'],
+  'verify.cancelled': ['kernel'],
+  'verify.stage-failed': ['kernel'],
   'verify.completed': ['kernel', 'agent'],
   'finalize.started': ['kernel'],
   'finalize.completed': ['kernel'],

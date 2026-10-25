@@ -100,9 +100,10 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 - **`implement ⇄ code-review`** — the implementer executes the approved plan,
   committing locally; a fresh reviewer reads the diff against spec and plan.
   Same loop shape.
-- **`verify:*`** — each step in `[verify].steps` runs as its own phase, in
-  order. A failing step sends the build back to `implement` with the report;
-  an explicit skip records why the step did not apply and advances.
+- **`verify:*`** — ordered stages, each containing one or more step phases.
+  Members run concurrently and the next stage waits for every pass or skip.
+  A failed stage sends every failed report to `implement` after its siblings
+  settle; an optional `failFast` failure cancels unfinished siblings.
 - **`finalize`** — the agent writes the PR description; the kernel opens the
   PR. `[finalize].steps` run afterward and are failure-tolerant. A
   content-producing step commits selected files locally and finishes clean;
@@ -133,7 +134,8 @@ criterion, or a stated invariant makes it material.
 
 **The grammar is fixed.** `verify:*` and `finalize:*` are the *only* extension
 points. There are no custom phases, no DAGs, no reordering — a repo extends
-autobuild by configuring verify and finalize steps, never by inventing stages.
+Autobuild by configuring verify stages and serial finalize steps. Ordered verify
+groups do not add workflow phases or arbitrary dependency graphs.
 If a request seems to need a new phase, say so rather than improvising one.
 
 **Observation harvest is not a build phase.** On each dispatch tick, dispatch
@@ -248,6 +250,9 @@ The distinctions that change an administrator's answer:
   executions while the successor owns ticks and launches. Local and remote runners finish
   their current phase, compare their immutable attach runtime with the accepted
   target using existing boundary facts, and durably request relaunch on mismatch.
+  Remote recovery confirms whole-sandbox stop before recording an execution end
+  or releasing its lease; command exit alone is insufficient. Stop failure defers
+  publication and replacement until teardown succeeds.
   Confirmed teardown has the neutral `relaunch` outcome; the current repository
   owner resumes from durable state on its runtime, even after an ownership gap.
   Equal or absent targets preserve normal execution. Unknown/incompatible
@@ -606,19 +611,55 @@ checks and branch protections still gate merge. For excluded steps, merged code
 is not re-verified, so breakage that only exists in the combination can land.
 
 
-`steps` orders the verify phases; each entry `"<step>"` becomes a
-`verify:<step>` phase and needs its own `[verify.<step>]` subtable. Those
+`steps` orders stages: a name is a singleton, an array groups concurrent
+members. Every name becomes a `verify:<step>` phase with its own table. Those
 subtables are part of this section — their fields are listed here.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `steps` | `[]` | array of nonempty strings | Ordered configured universe of verify phases. Each name must have a matching `[verify.<step>]` table. |
+| `steps` | `[]` | strings or nonempty arrays of names; no duplicate names | Ordered stages. Members start together; every pass or skip is required before the next stage. Each name needs a matching table. |
+| `failFast` | `false` | optional boolean on either verify kind | A failure cancels unfinished members of its stage, then tears down and relaunches the whole execution before implement. |
 | `kind` | — | **required**, `"check"` \| `"agent"` | Discriminator. `check` is deterministic (command + pass/fail, never an agent); `agent` runs a skill that returns `pass`, `fail`, or `skip`. |
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
 | `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-acceptance"`). |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
 | `afterReconcile` | repository: `true`; step: inherited | boolean | Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only. |
 | `always` | — | optional boolean | `true` makes the step unconditional and mandatory (a plan cannot deselect it); `false` is equivalent to omission. |
+
+### Choosing verify stages
+
+Run cheap gates early, and put deterministic checks before agents. Agent runs
+spend model budget, and an agent examining software that cannot build can produce misleading reports. Group
+independent failures to collect useful reports in one round trip. Keep steps
+that share mutable ports, databases, output directories or caches apart unless
+they are isolated; if they cannot run together in a developer terminal, they
+cannot run together here. CPU demand multiplies by build `capacity`; no cap
+limits stage size, so configuration is the entire concurrency budget.
+
+Use `failFast` when a failure invalidates sibling results, or when a failing
+step usually finishes much sooner than its siblings. Waiting costs the chance
+of this failure multiplied by siblings' remaining time; it saves the chance of
+an independent sibling failure multiplied by an implement/review/reverify round
+trip. Decide using actual failure and duration history, including checks that
+implementers already run before `done`. Give every agent its own inputs through
+`$AB_CONTEXT_DIR`, never fixed `.ab/` paths; concurrent verifiers share the
+workspace, not their context directories.
+
+Default failure waits for all siblings, including an escalated verifier's
+answer and rerun. Fail-fast cancellation supersedes only that occurrence's
+agent escalation, including late raises/answers; it is no longer answer-required
+and never delivers guidance into another occurrence. A cancelled member is not
+run, never passing evidence. Whole-execution teardown and replacement add a
+relaunch cost but prevent cancelled descendants from writing during implement.
+Restart reruns only members without outcomes, keeping the same attempt and every
+recorded outcome. One failed cycle spends one verify-attempt unit.
+
+`verify.stage-failed` is the decisive full-feedback receipt. The legacy
+`feedback.verify` object still names the first failed report; the implement
+manifest also lists all reports and not-run cancellations through its receipt
+reference, including on guidance rounds. Rounds without a referenced receipt
+have no cancellation list. Finalize receives historical reports but no
+`cancelledVerify` list; its evidence is the satisfied current cycle.
 
 A plan may begin with strict TOML front matter selecting the complete set of
 optional verification it warrants:
@@ -1878,9 +1919,11 @@ run. `finalize` and `reconcile` receive their own answers on their next attempt.
 In each of these routed cases, `ab context`
 writes the answer to `$AB_CONTEXT_DIR/guidance.json` in the build's workspace, and the
 receiving skill treats it as authoritative feedback for that round or attempt.
-A producer round's feedback is exclusive: on a guidance round
-`$AB_CONTEXT_DIR/guidance.json` replaces the reviewer's findings or a routed-back verify
-failure, so the answer has to carry what the agent needs. A bare retry writes no
+A producer round has one immediate feedback kind: on a guidance round,
+`$AB_CONTEXT_DIR/guidance.json` takes precedence over findings or the legacy
+single-report feedback. A referenced `verifyStageFailure` receipt remains
+available alongside guidance, with every failed report and cancelled/not-run
+member; it is not erased by feedback precedence. A bare retry writes no
 `$AB_CONTEXT_DIR/guidance.json` and displaces nothing: the resumed round still gets whatever
 the loop was already routing, such as the last review round's findings.
 
@@ -2023,10 +2066,14 @@ chronological order — the fastest way to see what a build actually just did.
 
 Verify progress covers the **current cycle** — the results since the latest
 code-review approve or reconcile. Implement and reconcile change the code, so a
-new cycle re-runs from the first step and earlier results describe code that no
+new cycle re-runs from the first stage and earlier results describe code that no
 longer exists. An empty step list next to `attempt 1` therefore means the cycle
 restarted, not that verify never ran. A skip renders as `SKIP` with its reason;
 JSON exposes `outcome: "skipped"` and `reason`, never a synthetic pass.
+Concurrent stages name every running verifier. Cancelled steps are shown as not
+run with their fail-fast cause; `ab wait --for phase=verify:<step>` matches any
+running member. Superseded escalation history remains available without an
+answer-required or blocked effect.
 `--json` and `--store <ref>` work the same here.
 
 Use `ab builds` to find the build; use `ab build status` to understand it.

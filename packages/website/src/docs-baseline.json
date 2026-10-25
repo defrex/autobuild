@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "dce631bd25eb121063e5a3dffb232596ac90f69f508dd358450b7e93c6bf46e0",
+    "textHash": "a14eca7b9ef5cd51b418317d4c82c8793160640637bcbf07dd8ea52bf899cb83",
     "headings": ["From a ticket to a change", "Where it fits", "Using these docs"],
     "code": []
   },
@@ -30,7 +30,7 @@
     "title": "One build, end to end",
     "group": "concepts",
     "description": "Follow a work ticket through planning, review, verification, pull request creation, and landing.",
-    "textHash": "771ee36d9a96ea73a4f13df24b861ce7a6a248a9e00a7d955e7a9d1d0486ff46",
+    "textHash": "e1e522154005b885c371f0169f84a5856cffbdf53593ee8394bdfdf19896a359",
     "headings": [
       "The spec is the contract",
       "Produce, then review",
@@ -138,7 +138,7 @@
     "title": "Verification",
     "group": "concepts",
     "description": "Configure verification gates, understand setup defaults, and collect evidence that your application meets its spec.",
-    "textHash": "61028f8071de9027e07dcd380bfd611bc10c422ba5502809fbd6f92b70331ec0",
+    "textHash": "4a0371296b00788ba8172aebf776609097724f2d885cbd22de4d30b32a09b703",
     "headings": [
       "Steps and outcomes",
       "Select what a build needs",
@@ -200,7 +200,7 @@
     "title": "Repository configuration",
     "group": "reference",
     "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, landing policy, and editable skills.",
-    "textHash": "ad8d736e7af38a9934f3599df7460506ae60efbae65dcb12ba70cb422093e293",
+    "textHash": "296fbeaacbc73068e8157ecd406b96acec953c084a0c33acf276689884d76d81",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",

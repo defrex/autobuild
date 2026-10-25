@@ -316,3 +316,28 @@ test('parent distance matches immutable base, parent and branch; unknown is not 
   state.nodeRestack.contributionBase = 'new-base'
   expect(row(state).parentDistance).toBe('parent distance unknown')
 })
+
+test('grouped node repair prompts wait for an exact settled receipt and name every failure', () => {
+  const s = verifying()
+  s.integration!.cycle!.config = JSON.stringify({
+    verify: { steps: ['lint', 'unit', 'e2e'], stages: [['lint', 'unit', 'e2e']] },
+  })
+  s.verify.results[0]!.outcome = 'fail'
+  expect(row(s).alert).toBeUndefined()
+  expect(row(s).steps.find((step) => step.label === 'verify')?.qualifier).toBe('0/3')
+  s.verifyStage.failures.push({
+    seq: 20,
+    cycle: 10,
+    attempt: 1,
+    stage: ['lint', 'unit', 'e2e'],
+    restackId: 'old-cycle',
+    headSha: 'head',
+    baseSha: 'base',
+    failed: [{ step: 'lint' }, { step: 'unit' }],
+    cancelled: [],
+  })
+  expect(row(s).alert).toBeUndefined()
+  s.verifyStage.failures[0]!.restackId = 'cycle'
+  expect(row(s).alert?.text).toBe('lint, unit failed — file a repair child targeting NODE-1')
+  expect(row(s).steps.find((step) => step.label === 'verify')?.qualifier).toBe('failed')
+})

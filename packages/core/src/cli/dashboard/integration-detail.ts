@@ -9,7 +9,7 @@ import {
   integrationCycleVerified,
 } from '../../kernel/integration-state'
 import { landingReady } from '../../kernel/landing-readiness'
-import { projectIntegrationRow } from './integration-row'
+import { projectIntegrationRow, integrationRepairSteps } from './integration-row'
 import { nodeLandingPolicyDisplay, nodeLandingRuleDisplay } from './landing-display'
 
 export interface IntegrationChild {
@@ -113,7 +113,7 @@ export function projectIntegrationDetail(
       results.findLast((r) => r.step === step)?.outcome ??
       'pending',
   }))
-  const failed = verifySteps.find((s) => s.outcome === 'fail')
+  const failed = integrationRepairSteps(state)
   const conflict =
     state.nodeRestack?.conflict ??
     (restack.active && restack.replay?.conflicted ? restack.replay : undefined)
@@ -134,8 +134,8 @@ export function projectIntegrationDetail(
     children,
     membershipKnown: !!observation && !observation.diagnostics.length,
     diagnostics: observation?.diagnostics ?? ['child membership unknown'],
-    verification: failed
-      ? `${failed.step} failed — file a repair child targeting ${record.ticket?.id ?? record.slug}`
+    verification: failed.length
+      ? `${failed.join(', ')} failed — file a repair child targeting ${record.ticket?.id ?? record.slug}`
       : !integrationComplete(state)
         ? `pending — runs on the node head against ${row.destination} once every child has landed`
         : current && integrationCycleVerified(state)

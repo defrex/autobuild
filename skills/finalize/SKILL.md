@@ -5,7 +5,7 @@ description: Prepare a green build's pull request description. Invoked by the bu
 
 # /ab-finalize <build>
 
-The build is green: plan approved, code approved, every verify step passed.
+The build is green: plan approved, code approved, every current verify gate passed or was explicitly skipped.
 You write the PR description; the kernel opens the PR when you finish (you
 never touch the forge).
 
@@ -13,7 +13,7 @@ Guidance is an external operator answer, from the operator agent or a human.
 
 ## Session shape
 
-1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md`, every verify report,
+1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md`, every verify report (including earlier failed cycles),
    the repo's PR template config if one exists, and — when a human answered an
    escalation this phase raised on an earlier attempt — `$AB_CONTEXT_DIR/guidance.json`,
    their answer to it.
@@ -24,7 +24,10 @@ Guidance is an external operator answer, from the operator agent or a human.
    - **How** — the approach actually taken (from the plan and the implement
      notes), including deviations from the plan.
    - **Verification** — which verify steps ran and what they proved; note
-     anything a human should re-check by hand.
+     anything a human should re-check by hand. Historical cancelled steps are
+     not-run evidence, never passes; describe the satisfied current cycle. The
+     finalize manifest omits `cancelledVerify`; earlier reports are historical,
+     not a list of unfinished current gates.
    - Follow the PR template if the context includes one.
    Do not paste the audit trail — the kernel's summary comment appends verdict
    history and links into the store.

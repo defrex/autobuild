@@ -1378,14 +1378,14 @@ There are two strict step variants:
 
 **TOML key:** `verify.steps`
 
-- **Type:** `array of string`
+- **Type:** `array of (string | array of string)`
 - **Default:** `[]`
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
 
-**Description:** Ordered names of the configured step tables. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
+**Description:** Ordered verify stages: a name is a singleton stage; a nonempty array runs its members concurrently. Names must be unique within and across stages. Names contain only ASCII letters, digits, ., _ and -, excluding "." and "..". Every listed step must have a table and every table must be listed.
 
-**Constraints:** Each item: minimum length 1
+**Constraints:** Each name is nonempty; each grouped stage contains at least one nonempty name. Names must be unique within and across stages.
 
 #### `verify.afterReconcile`
 
@@ -1438,6 +1438,19 @@ There are two strict step variants:
 **Description:** Name of an existing command in [commands]; required for check steps and forbidden for agent steps.
 
 **Constraints:** minimum length 1
+
+#### `verify.<step>.failFast` (kind = "check")
+
+**TOML key:** `verify.<step>.failFast`
+
+- **Type:** `boolean`
+- **Default:** `false (omission is preserved)`
+- **Required:** Optional when kind = "check"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
+
+**Constraints:** None beyond the input type.
 
 #### `verify.<step>.afterReconcile` (kind = "check")
 
@@ -1503,6 +1516,19 @@ There are two strict step variants:
 **Description:** Exact installed skill name; required for agent steps and forbidden for check steps.
 
 **Constraints:** minimum length 1
+
+#### `verify.<step>.failFast` (kind = "agent")
+
+**TOML key:** `verify.<step>.failFast`
+
+- **Type:** `boolean`
+- **Default:** `false (omission is preserved)`
+- **Required:** Optional when kind = "agent"
+- **Reload:** Hot: next dispatcher action captures the accepted value. Build-owned pipeline: captured from the build branch; later base-branch edits do not replace it. Workspace provisioning applies at the next build launch. A running invocation keeps its captured values.
+
+**Description:** Cancel unfinished members of this stage when this step fails. Defaults to false.
+
+**Constraints:** None beyond the input type.
 
 #### `verify.<step>.afterReconcile` (kind = "agent")
 
@@ -1678,18 +1704,31 @@ base-resolution failure is an infrastructure failure, never a permissive skip.
 
 ### Pass, fail, and skip
 
-A passing check or agent advances to the next step. An agent failure requires
-`ab verdict fail --report <file>`; the exact report is routed back to implement,
-and the failure consumes the verify retry budget in
-`policy.maxVerifyAttempts`. Check failures similarly retain command output as
-the implementation feedback.
+A passing check or agent satisfies its member of the current stage. The next
+stage starts only after every member has passed or been skipped; finalize
+starts after the last stage is satisfied.
+
+By default, a failure lets the stage's other members finish before routing the
+build to implement once with every failed member's report. Later stages do not
+run. An agent failure requires `ab verdict fail --report <file>`; check failures
+retain command output as implementation feedback. A failed cycle consumes one
+unit of the `policy.maxVerifyAttempts` retry budget, regardless of how many
+members failed.
+
+If a member configured with `failFast = true` fails, unfinished siblings are
+cancelled instead. Members that already reached an outcome keep it. Cancelled
+members are listed as not run, with their cancellation cause, in implement's
+context; cancellation does not satisfy a verification gate. See
+[verification outcomes](verification.md#steps-and-outcomes) for cancellation,
+escalation and recovery details.
 
 An agent may instead use `ab verdict skip --reason <text>` when the configured
 judgment genuinely does not apply. The trimmed reason must be nonblank, and no
 failure report is required. Plan and path exclusions are kernel-authored skips
-with deterministic reasons. Every skip satisfies that one step and advances,
-but remains distinct from a pass, does not mask another step's failure, and
-does not consume the failure retry budget.
+with deterministic reasons. Every skip satisfies only that member of the stage
+and remains distinct from a pass. It does not mask another member's failure or
+consume the failure retry budget; advancement still requires the whole stage
+to pass or skip.
 
 ## `[finalize]` and `[finalize.<step>]`
 

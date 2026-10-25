@@ -1,3 +1,4 @@
+import { verifyStagesCapture } from './verify-stages-capture'
 import { reportIntegrationFailures } from '../packages/core/src/kernel/integration-attention'
 import { rollbackCapture, ROLLBACK_AT } from './rollback-capture'
 import { handoffCapture } from './handoff-capture'
@@ -53,6 +54,7 @@ export interface FrameSpec {
   rollback?: boolean
   handoff?: boolean
   nativeSessions?: boolean
+  verifyStages?: boolean
   forgeReadiness?: boolean
   id: string
   scenario: CaptureScenario
@@ -296,6 +298,19 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     rows: 60,
     detail: { slug: 'complete-dashboard-evidence', scroll: 0 },
     requires: ['skipped by post-reconcile policy'],
+  },
+  {
+    id: 'verify-stages-wide',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 100,
+    verifyStages: true,
+    requires: [
+      'concurrent-verification',
+      'verify:unit',
+      'verify:integration',
+      'not run: cancelled by verify:unit',
+    ],
   },
   {
     id: 'headline-happy-wide',
@@ -1706,11 +1721,13 @@ async function capturePaint(
         spec.scenario === 'happy'
           ? (model.warningLines ?? []).filter((line) => !sentinelLeaseNotices.has(line))
           : []
-      const sourceModel = spec.rollback
-        ? rollbackCapture(model)
-        : spec.handoff
-          ? handoffCapture(model)
-          : model
+      const sourceModel = spec.verifyStages
+        ? verifyStagesCapture(model)
+        : spec.rollback
+          ? rollbackCapture(model)
+          : spec.handoff
+            ? handoffCapture(model)
+            : model
       const presented = {
         ...sourceModel,
         ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),
