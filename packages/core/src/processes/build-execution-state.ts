@@ -22,7 +22,11 @@ export function effectiveBuildConfigContent(config: Config): string {
   const { verify, finalize, ...root } = config
   return JSON.stringify({
     ...root,
-    verify: { steps: verify.steps, afterReconcile: verify.afterReconcile, ...verify.stepConfigs },
+    verify: {
+      steps: verify.stages ?? verify.steps,
+      afterReconcile: verify.afterReconcile,
+      ...verify.stepConfigs,
+    },
     finalize: { steps: finalize.steps, ...finalize.stepConfigs },
   })
 }
@@ -75,9 +79,7 @@ export function parseBuildConfigMetadata(artifact: Artifact): {
   }
 }
 
-/** True when two configs' build-owned sections differ — the guest's defensive
- * guard against a deposit that rewrites the pinned pipeline without a recorded
- * pipeline-source commit advance. */
+/** Compare only build-owned sections, independently of live deployment settings. */
 export function buildOwnedSectionsDiffer(a: Config, b: Config): boolean {
   return BUILD_OWNED_CONFIG_PATHS.some(
     (path) => JSON.stringify(a[path]) !== JSON.stringify(b[path]),

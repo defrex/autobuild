@@ -314,6 +314,7 @@ function referenceIndexLog(events: AbEvent[]): LogIndex {
     verifyCompleted,
     verifyStarted,
     maxVerifyAttemptEver,
+    verifyConfigBoundary: 0,
     lastReconcileCompletedSeq,
     lastImplementCompletedSeq,
     finalizeCompleted,

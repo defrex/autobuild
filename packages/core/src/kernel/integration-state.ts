@@ -99,7 +99,9 @@ export function integrationFailed(state: CycleState): boolean {
       )) &&
     state.verify.results.some(
       (result) =>
-        result.seq > cycle!.seq && result.restackId === cycle!.id && result.outcome === 'fail',
+        result.seq > Math.max(cycle!.seq, state.verify.cycleSince) &&
+        result.restackId === cycle!.id &&
+        result.outcome === 'fail',
     )
   )
 }
@@ -115,7 +117,7 @@ export function integrationVerified(
     config.verify.steps.every((step) =>
       state.verify.results.some(
         (result) =>
-          result.seq > cycle!.seq &&
+          result.seq > Math.max(cycle!.seq, state.verify.cycleSince) &&
           result.restackId === cycle!.id &&
           result.headSha === cycle!.head &&
           result.baseSha === cycle!.parent &&
@@ -158,7 +160,9 @@ export function integrationCycleVerified(state: BuildState): boolean {
       ...state,
       verify: {
         ...state.verify,
-        results: state.verify.results.filter((result) => result.seq > cycle.seq),
+        results: state.verify.results.filter(
+          (result) => result.seq > Math.max(cycle.seq, state.verify.cycleSince),
+        ),
       },
       integration: { ...state.integration, cycles: [cycle] },
     },

@@ -1,3 +1,5 @@
+import { readVerifyPipeline } from '../config/pipeline-source'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { newerFact, seedNewerMemoryFact } from '../testing/newer-writer'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -311,6 +313,7 @@ class OneShotPostAppendFaultStore extends MemoryBuildStore {
 }
 
 interface HarnessOptions {
+  readVerifyPipeline?: import('./verify-cycle-config').VerifyPipelineReader
   checkExec?: Exec
   store?: OneShotPostAppendFaultStore
   instance?: string
@@ -627,6 +630,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const br = new BuildRunner({
     store: store.scopeBuild(SLUG),
     config: selectedConfig,
+    readVerifyPipeline: options.readVerifyPipeline,
     ...(options.getConfig !== undefined ? { getConfig: options.getConfig } : {}),
     runtimes: {
       // `scripted` (the default runtime) serves the `m-` family so the routed
@@ -7933,6 +7937,8 @@ test('two agent verifiers start concurrently in one workspace with separate cont
   await seedPlanApproved(h.store)
   await seedCodeApproved(h.store)
   await h.br.attach()
+  await h.br.step() // types stage
+  await h.br.step() // unit stage
   const work = h.br.step()
   await started
   expect(new Set(contexts.map((c) => c.path)).size).toBe(2)
@@ -8091,3 +8097,107 @@ for (const interruption of ['crash', 'shutdown'] as const) {
     await recoveredStore.close()
   })
 }
+
+test('mid-verify checkout rename repins before constructing the removed member', async () => {
+  // The physical Git checkout exercises execution provenance; commands and agents
+  // retain the existing harness ports so launched skills can be asserted.
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const root = await mkdtemp(join(tmpdir(), 'runner-verify-repin-'))
+  try {
+    const git = async (...args: string[]) => {
+      const r = await spawnExec(['git', ...args], { cwd: root })
+      if (r.exitCode) throw new Error(r.stderr)
+      return r.stdout.trim()
+    }
+    await git('init', '-b', 'main')
+    await git('config', 'user.email', 'test@example.com')
+    await git('config', 'user.name', 'Test')
+    const old = CONFIG_TOML.replaceAll('e2e', 'web-dashboard')
+    await writeFile(join(root, 'autobuild.toml'), old)
+    await git('add', '.')
+    await git('commit', '-m', 'old pipeline')
+    const h = await makeHarness({
+      configToml: old,
+      readVerifyPipeline: () => readVerifyPipeline(root, spawnExec),
+    })
+    await seedPlanApproved(h.store, ['types', 'unit', 'web-dashboard'])
+    await seedCodeApproved(h.store)
+    expect(await h.br.step()).toMatchObject({ kind: 'run-check', step: 'types' })
+    const oldPin = (await readBuildFacts(h.store, SLUG)).value.state.verify.configPin!
+    await writeFile(join(root, 'autobuild.toml'), old.replaceAll('web-dashboard', 'ui-app'))
+    await git('add', '.')
+    await git('commit', '-m', 'restack brings renamed verifier')
+    const head = await git('rev-parse', 'HEAD')
+    expect(await h.br.step()).toMatchObject({ kind: 'record-verify-selection-drift' })
+    const state = (await readBuildFacts(h.store, SLUG)).value.state
+    expect(state.verify.configPin).toMatchObject({ head, source: { commit: head } })
+    expect(state.verify.configPin!.seq).toBeGreaterThan(oldPin.seq)
+    expect(await h.br.step()).toMatchObject({ kind: 'run-check', step: 'types' })
+    expect(await h.br.step()).toMatchObject({ kind: 'run-check', step: 'unit' })
+    expect(await h.br.step()).toMatchObject({
+      kind: 'run-agent-verify',
+      step: 'ui-app',
+      skill: 'ab-verify-ui-app',
+    })
+    const events = await h.store.getEvents(SLUG)
+    expect(
+      events.filter((e) => e.type === 'verify.started' && e.payload.step === 'web-dashboard'),
+    ).toHaveLength(0)
+    expect(
+      events.filter(
+        (e) => e.type === 'observation.recorded' && e.payload.summary.includes('web-dashboard'),
+      ),
+    ).toHaveLength(1)
+    expect(
+      events.filter((e) => e.type === 'verify.started' && e.payload.step === 'ui-app'),
+    ).toHaveLength(1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('config refresh waits for concurrent siblings and repins before the next stage', async () => {
+  const old = CONFIG_TOML.replace(
+    'steps = ["types", "unit", "e2e"]',
+    'steps = [["types", "unit"], "e2e"]',
+  )
+  let current = old
+  const h = await makeHarness({
+    configToml: old,
+    readVerifyPipeline: async () => ({
+      config: parseConfig(current),
+      head: 'a'.repeat(40),
+      meta: { ref: 'branch-head', commit: 'a'.repeat(40) },
+    }),
+    beforeExec: async (cmd) => {
+      if (cmd[2] === 'bun tsc --noEmit') current = old.replaceAll('e2e', 'ui-app')
+    },
+  })
+  await seedPlanApproved(h.store)
+  await seedCodeApproved(h.store)
+  expect(await h.br.step()).toMatchObject({ kind: 'run-verify-stage' })
+  let events = await h.store.getEvents(SLUG)
+  expect(events.filter((e) => e.type === 'verify.config-captured')).toHaveLength(1)
+  expect(
+    events
+      .filter((e) => e.type === 'verify.completed')
+      .map((e) => e.payload.step)
+      .sort(),
+  ).toEqual(['types', 'unit'])
+  expect(events.some((e) => e.type === 'verify.started' && e.payload.step === 'e2e')).toBe(false)
+  await h.br.step() // detects change, captures a fresh cycle, runs its first stage
+  events = await h.store.getEvents(SLUG)
+  expect(events.filter((e) => e.type === 'verify.config-captured')).toHaveLength(2)
+  expect(events.filter((e) => e.type === 'verify.config-superseded')).toHaveLength(1)
+  expect(
+    events
+      .filter((e) => e.type === 'verify.started')
+      .filter((e) => e.payload.attempt > 1)
+      .map((e) => e.payload.step)
+      .sort(),
+  ).toEqual(['types', 'types', 'unit', 'unit'])
+  expect(await h.br.step()).toMatchObject({
+    kind: 'run-verify-stage',
+    members: [{ kind: 'run-agent-verify', step: 'ui-app', skill: 'ab-verify-ui-app' }],
+  })
+})
