@@ -1,5 +1,5 @@
 /** Maintained native read-transport parity against actual TypeScript handlers.
- * This checkpoint does not claim writes, grants, legacy config or connect parity.
+ * This checkpoint does not claim grants, legacy config or connect parity.
  */
 import { SQL } from 'bun'
 import { strict as assert } from 'node:assert'
@@ -81,6 +81,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
           internalOperator: { repo, user: 'operator' },
           exp: Date.parse('2040-01-01'),
         })
+        let expectedSource = source
         const oracle = createTicketServer({
           secret,
           clock,
@@ -94,7 +95,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
               )
             if (!(await projects.has(selected)))
               throw new MachineAuthError(403, 'project not registered')
-            return source
+            return expectedSource
           },
         })
         native = await startProtocolServer({
@@ -108,6 +109,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
           'x-autobuild-version': AUTOBUILD_VERSION,
           'x-autobuild-protocol-version': REMOTE_STORE_PROTOCOL_VERSION,
         }
+        const createdIds = new Set<string>()
         const compare = async (
           operation: string,
           raw: string,
@@ -124,6 +126,16 @@ export async function ticketProtocolReadIntegration(executable: string) {
           const body = await actual.json()
           assert.deepEqual(body, await expected.json(), `${operation} parity`)
           assertions++
+          // Source clocks are not injectable in the TS adapter. Give newly
+          // created rows equivalent ordered fixture timestamps before list
+          // comparisons, rather than sorting away the protocol's row ordering.
+          if (operation === 'create' && actual.status === 201 && !createdIds.has(body.ref.id)) {
+            createdIds.add(body.ref.id)
+            const createdAt = new Date(
+              Date.parse('2030-01-01T00:00:00.000Z') + assertions,
+            ).toISOString()
+            await sql`UPDATE ab_tickets SET created_at=${createdAt} WHERE readable_id=${body.ref.id} AND repo IN (${repo},${foreign})`
+          }
           return body
         }
         const request = (
@@ -174,6 +186,210 @@ export async function ticketProtocolReadIntegration(executable: string) {
           400,
         )
         await compare('list-ready', request({ state: 'absent' }), {}, 400)
+        // Writes run against equivalent independent projects, preventing one
+        // service's mutation from manufacturing the other's expected result.
+        const mirror = new PostgresTicketSource(sql, { repo: foreign, teamKey: 'ENG' }, lifecycle)
+        await mirror.create({ title: 'First', body: '\nBody bytes  \n', labels: ['one'] })
+        await mirror.create({
+          title: 'Second',
+          body: 'Done ticket',
+          labels: ['two'],
+          blockedBy: [first.ref.id],
+        })
+        await mirror.transition(second.ref.id, 'done')
+        await mirror.comment(first.ref.id, 'A comment\n')
+        expectedSource = mirror
+        const revisionHeaders = { 'x-autobuild-ticket-revisions': '1' }
+        await compare('add-state', request({ name: 'review', about: ' Review work ' }))
+        await compare('states', request({}))
+        await compare('add-state', request({ name: 'review' }), {}, 400)
+        await compare('claim', request({ id: 'ENG-999' }))
+        await compare('claim', request({ id: second.ref.id }))
+        await compare('claim', request({ id: first.ref.id }))
+        await compare('claim', request({ id: first.ref.id }))
+        await compare('get', request({ id: first.ref.id }), revisionHeaders)
+        await compare('comment', request({ id: first.ref.id, body: 'Machine comment\n' }))
+        await compare('get', request({ id: first.ref.id }), revisionHeaders)
+        const comments = (await source.get(first.ref.id))!.comments!
+        assert.equal(comments.at(-1)!.body, 'Machine comment\n')
+        assert.equal((await source.get(first.ref.id))!.body, '\nBody bytes  \n')
+        assert.ok(Number.isFinite(Date.parse(comments.at(-1)!.createdAt)))
+        await compare('comment', request({ id: 'ENG-999', body: '' }), {}, 404)
+        await compare(
+          'update',
+          request({ id: first.ref.id, patch: { title: 'Updated', labels: ['one', 'extra'] } }),
+        )
+        await compare('get', request({ id: first.ref.id }), revisionHeaders)
+        await compare('update', request({ id: first.ref.id, patch: { body: '  ' } }), {}, 500)
+        await compare('transition', request({ id: first.ref.id, state: 'review' }))
+        await compare('add-blocker', request({ id: first.ref.id, blockerId: second.ref.id }))
+        await compare(
+          'add-blocker',
+          request({ id: first.ref.id, blockerId: first.ref.id }),
+          {},
+          500,
+        )
+        await compare('remove-blocker', request({ id: first.ref.id, blockerId: 'ENG-999' }))
+        const revision = (await source.get(first.ref.id))!.revision
+        await compare(
+          'mutate-if-revision',
+          request({
+            id: first.ref.id,
+            expectedRevision: revision,
+            mutation: { kind: 'update', patch: { body: 'Guarded body' } },
+          }),
+        )
+        await compare(
+          'mutate-if-revision',
+          request({
+            id: first.ref.id,
+            expectedRevision: revision,
+            mutation: { kind: 'transition', state: 'done' },
+          }),
+          {},
+          409,
+        )
+        const currentRevision = (await source.get(first.ref.id))!.revision
+        await compare(
+          'mutate-if-revision',
+          request({
+            id: first.ref.id,
+            expectedRevision: currentRevision,
+            mutation: { kind: 'blockers', operation: 'unblock', ids: [second.ref.id, 'ENG-999'] },
+          }),
+          {},
+          404,
+        )
+        await compare('get', request({ id: first.ref.id }), revisionHeaders)
+        assert.equal(
+          (await source.get(first.ref.id))!.revision,
+          currentRevision,
+          'failed guarded blocker batch is atomic',
+        )
+        await compare(
+          'mutate-if-revision',
+          request({
+            id: first.ref.id,
+            expectedRevision: currentRevision,
+            mutation: {
+              kind: 'blockers',
+              operation: 'unblock',
+              ids: [second.ref.id, second.ref.id],
+            },
+          }),
+        )
+        await compare(
+          'create',
+          request({
+            draft: { title: 'Requested', body: '' },
+            options: { requestedId: 'ENG-20', idempotencyKey: 'stable-create' },
+          }),
+          revisionHeaders,
+          201,
+        )
+        await compare(
+          'create',
+          request({
+            draft: { title: 'Adopt existing', body: 'ignored' },
+            options: { requestedId: 'ENG-22', idempotencyKey: 'stable-create' },
+          }),
+          revisionHeaders,
+          201,
+        )
+        await compare(
+          'create',
+          request({ draft: { title: 'Occupied', body: '' }, options: { requestedId: 'ENG-20' } }),
+          {},
+          500,
+        )
+        await compare(
+          'create',
+          request({
+            draft: { title: 'Foreign id allocates', body: 'text' },
+            options: { requestedId: 'OTHER-9' },
+          }),
+          revisionHeaders,
+          201,
+        )
+        await compare(
+          'create',
+          request({
+            draft: { title: 'Missing blocker', body: 'text', blockedBy: ['ENG-999'] },
+            options: { requestedId: 'ENG-9999' },
+          }),
+          {},
+          404,
+        )
+        await compare(
+          'create',
+          request({ draft: { title: 'After rollback', body: 'text' } }),
+          revisionHeaders,
+          201,
+        )
+        await compare(
+          'create',
+          request({ draft: { title: 'Node', body: 'node', kind: 'node' } }),
+          { ...revisionHeaders, 'x-autobuild-ticket-tree': '1' },
+          201,
+        )
+        await compare(
+          'create',
+          request({ draft: { title: 'Child', body: 'child', target: 'eng-23' } }),
+          { ...revisionHeaders, 'x-autobuild-ticket-tree': '1' },
+          201,
+        )
+        await compare('update', request({ id: 'ENG-23', patch: { kind: 'work' } }), {}, 400)
+        await compare('list-ready', request({}), {
+          ...revisionHeaders,
+          'x-autobuild-ticket-tree': '1',
+        })
+        const nativeOnly = async (operation: string, input: unknown) => {
+          const response = await native!.fetch(`${native!.url}/tickets/${operation}`, {
+            method: 'POST',
+            headers: { ...headers, ...revisionHeaders },
+            body: request(input),
+          })
+          return { status: response.status, body: await response.json() }
+        }
+        const racingCreates = await Promise.all(
+          [0, 1].map(() =>
+            nativeOnly('create', {
+              draft: { title: 'Concurrent create', body: 'one ticket' },
+              options: { idempotencyKey: 'concurrent-create' },
+            }),
+          ),
+        )
+        assert.deepEqual(
+          racingCreates[0],
+          racingCreates[1],
+          'duplicate native creates adopt one ticket',
+        )
+        const racingId = racingCreates[0]!.body.ref.id
+        const claims = await Promise.all([0, 1].map(() => nativeOnly('claim', { id: racingId })))
+        assert.deepEqual(
+          claims.map((r) => r.body.claimed).sort(),
+          [false, true],
+          'one competing claim wins',
+        )
+        const before = (await source.get(racingId))!
+        const guarded = await Promise.all(
+          ['left', 'right'].map((body) =>
+            nativeOnly('mutate-if-revision', {
+              id: racingId,
+              expectedRevision: before.revision,
+              mutation: { kind: 'update', patch: { body } },
+            }),
+          ),
+        )
+        assert.deepEqual(
+          guarded.map((r) => r.status).sort(),
+          [200, 409],
+          'one competing guarded write wins',
+        )
+        const after = (await source.get(racingId))!
+        assert.equal(BigInt(after.revision), BigInt(before.revision) + 1n)
+        assert.ok(['left', 'right'].includes(after.body))
+        assertions += 3
         await projects.remove(repo, 'ticket proof')
         await compare('get', request({ id: first.ref.id }), {}, 403)
       } finally {
@@ -188,6 +404,8 @@ export async function ticketProtocolReadIntegration(executable: string) {
       'states/get/list/dependencies match real TypeScript handler over shared PostgreSQL',
       'nullable get, unfiltered listing, alias lookup, ordered duplicate dependencies and all independent capability combinations',
       'project/admin admission, cross-project/internal refusal and authorization before JSON parsing',
+      'all 13 CRUD operations including prepared state/comment/claim, guarded conflict and blocker rollback, requested ids, creation adoption, counter rollback and node constraints',
+      'concurrent native duplicate creates, claims and guarded writes prove one durable winner via TypeScript reads',
     ],
   }
 }

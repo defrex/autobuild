@@ -72,6 +72,43 @@ export function ticketProtocolContract() {
       if (typeof value === 'string')
         probes.push([`empty-${key}`, { context, input: { ...input, [key]: '' } }])
     }
+    const nested = (name: string, input: unknown) => probes.push([name, { context, input }])
+    if (operation === 'update' || operation === 'create') {
+      const field = operation === 'create' ? 'draft' : 'patch'
+      for (const [name, value] of Object.entries({
+        empty: {},
+        unknown: { future: true },
+        kind: { kind: 'other' },
+        target: { target: ' \uFEFF' },
+        title: { title: '' },
+        labels: { labels: [1, null, 'valid'] },
+        nullable: { target: null },
+      }))
+        nested(`nested-${name}`, { ...input, [field]: value })
+    }
+    if (operation === 'create') {
+      for (const options of [
+        null,
+        {},
+        { requestedId: '' },
+        { requestedId: 1 },
+        { state: null },
+        { idempotencyKey: 1 },
+        { extra: true },
+      ])
+        nested(`options-${JSON.stringify(options)}`, { ...input, options })
+    }
+    if (operation === 'mutate-if-revision') {
+      for (const mutation of [
+        {},
+        { kind: 'other' },
+        { kind: 'update', patch: {} },
+        { kind: 'transition', state: '' },
+        { kind: 'blockers', operation: 'other', ids: [1] },
+        { kind: 'update', patch: { target: null } },
+      ])
+        nested(`mutation-${JSON.stringify(mutation)}`, { ...input, mutation })
+    }
     return probes.map(([name, request]) => {
       const result = schema.safeParse(request)
       return {

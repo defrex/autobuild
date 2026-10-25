@@ -6,7 +6,10 @@ use super::{
     router::MachineState,
     token::DelegationKind,
 };
-use crate::operator::{error::OperatorError, tickets::TicketService};
+use crate::operator::{
+    error::OperatorError,
+    tickets::{machine::MachineWriteError, TicketMutation, TicketService},
+};
 use axum::{
     body::to_bytes,
     extract::Request,
@@ -18,6 +21,21 @@ use serde_json::Value;
 
 mod schema;
 
+pub const OPERATIONS: [&str; 13] = [
+    "states",
+    "list-ready",
+    "get",
+    "dependency-states",
+    "add-state",
+    "claim",
+    "comment",
+    "transition",
+    "create",
+    "update",
+    "add-blocker",
+    "remove-blocker",
+    "mutate-if-revision",
+];
 pub const READ_OPERATIONS: [&str; 4] = ["states", "list-ready", "get", "dependency-states"];
 
 /// The caller has identified the release and authenticated the bearer, but has
@@ -29,16 +47,22 @@ pub async fn dispatch(
     parts: &[&str],
 ) -> Result<Response, ProtocolError> {
     let operation = parts.get(1).copied().unwrap_or("");
-    if req.method() != "POST" || parts.len() != 2 || !READ_OPERATIONS.contains(&operation) {
+    if req.method() != "POST" || parts.len() != 2 || !OPERATIONS.contains(&operation) {
         return Err(ProtocolError::new(
             404,
             "not-found",
             format!("no route: {} {}", req.method(), req.uri().path()),
         ));
     }
-    let principal =
-        principal.ok_or_else(|| ProtocolError::new(401, "auth", "missing bearer credential"))?;
-    authorize_read(&principal, operation)?;
+    let principal = match principal {
+        Some(principal) => Some(principal),
+        None => {
+            let authorization = super::wire::header_text(req.headers(), "authorization");
+            super::router::authenticate(state, authorization.as_deref()).await?
+        }
+    }
+    .ok_or_else(|| ProtocolError::new(401, "auth", "missing bearer credential"))?;
+    authorize_operation(&principal, operation)?;
     let projection = TicketProjection::from_headers(req.headers())?;
     let bytes = to_bytes(req.into_body(), usize::MAX)
         .await
@@ -46,6 +70,16 @@ pub async fn dispatch(
     let raw: Value = serde_json::from_slice(&bytes)
         .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
     schema::validate(operation, &raw)?;
+    if operation == "create"
+        && matches!(principal, Principal::Delegated(_))
+        && raw["input"]["options"].get("requestedId").is_some()
+    {
+        return Err(ProtocolError::new(
+            403,
+            "auth",
+            "only project or owner authority may request a ticket id",
+        ));
+    }
     let repo = repository(&principal, raw["context"]["repo"].as_str())?;
     principal.require_project(&repo)?;
     if !delegation::registered(&state.store, &repo.as_str().into()).await? {
@@ -93,18 +127,96 @@ pub async fn dispatch(
                 .await
                 .map_err(source_error)?
         }
-        _ => unreachable!("read operation checked"),
+        "add-state" => service
+            .add_state(
+                &repo,
+                &policy,
+                input["name"].as_str().unwrap(),
+                input["about"].as_str(),
+            )
+            .await
+            .map_err(source_error)?,
+        "claim" => {
+            serde_json::json!({"claimed":service.machine_claim(&repo,&policy,input["id"].as_str().unwrap(),state.store.now()).await.map_err(source_error)?})
+        }
+        "comment" => {
+            service
+                .machine_comment(
+                    &repo,
+                    input["id"].as_str().unwrap(),
+                    input["body"].as_str().unwrap(),
+                    state.store.now(),
+                )
+                .await
+                .map_err(source_error)?;
+            serde_json::json!({"ok":true})
+        }
+        "create" => {
+            let value = service
+                .machine_create(
+                    &repo,
+                    &policy,
+                    &input["draft"],
+                    &input["options"],
+                    state.store.now(),
+                )
+                .await
+                .map_err(source_error)?;
+            return Ok((StatusCode::CREATED, Json(projection.project(value))).into_response());
+        }
+        "update" | "transition" | "add-blocker" | "remove-blocker" | "mutate-if-revision" => {
+            let guarded = operation == "mutate-if-revision";
+            let mutation = if guarded { &input["mutation"] } else { input };
+            let kind = if guarded {
+                mutation["kind"].as_str().unwrap()
+            } else {
+                operation
+            };
+            let ids = if kind == "blockers" {
+                mutation["ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            } else {
+                vec![mutation["blockerId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()]
+            };
+            let write = match kind {
+                "update" => TicketMutation::Update(&mutation["patch"]),
+                "transition" => TicketMutation::Move(mutation["state"].as_str().unwrap()),
+                "blockers" | "add-blocker" | "remove-blocker" => TicketMutation::Block {
+                    ids: &ids,
+                    remove: kind == "remove-blocker" || mutation["operation"] == "unblock",
+                },
+                _ => unreachable!("validated mutation"),
+            };
+            match service.machine_mutate(&repo,&policy,input["id"].as_str().unwrap(),write,if guarded {input["expectedRevision"].as_str()} else {None},state.store.now()).await {
+                Ok(())=>(),
+                Err(MachineWriteError::Source(error))=>return Err(source_error(error)),
+                Err(MachineWriteError::Revision {id,expected,current})=>return Ok((StatusCode::CONFLICT,Json(serde_json::json!({"kind":"conflict","error":format!("ticket \"{id}\" changed: expected revision {expected}, current revision {current}"),"id":id,"expectedRevision":expected,"currentRevision":current}))).into_response()),
+            }
+            serde_json::json!({"ok":true})
+        }
+        _ => unreachable!("known operation checked"),
     };
     Ok((StatusCode::OK, Json(value)).into_response())
 }
 
-fn authorize_read(principal: &Principal, operation: &str) -> Result<(), ProtocolError> {
+fn authorize_operation(principal: &Principal, operation: &str) -> Result<(), ProtocolError> {
     principal.require_machine_access()?;
     if let Principal::Delegated(claims) = principal {
-        if !matches!(
-            claims.kind,
-            DelegationKind::HarvestRunner | DelegationKind::HarvestPhase
-        ) {
+        let read = READ_OPERATIONS.contains(&operation);
+        if !((read
+            && matches!(
+                claims.kind,
+                DelegationKind::HarvestRunner | DelegationKind::HarvestPhase
+            ))
+            || (operation == "create" && claims.kind == DelegationKind::HarvestRunner))
+        {
             return Err(ProtocolError::new(
                 403,
                 "auth",
@@ -119,21 +231,38 @@ fn authorize_read(principal: &Principal, operation: &str) -> Result<(), Protocol
 }
 
 fn source_error(error: OperatorError) -> ProtocolError {
-    // Source state-name mistakes are 400s; operator refusal envelopes never
-    // leak onto the machine wire. Configuration unavailability is a conflict.
-    if error
-        .error
-        .starts_with("database ticket source: unknown state")
-        || error
-            .error
-            .starts_with("database ticket source: ambiguous state")
+    let message = error.error;
+    if [
+        "database ticket source: invalid state name",
+        "database ticket source: a state purpose",
+        "database ticket source: state ",
+        "database ticket source: unknown state",
+        "database ticket source: ambiguous state",
+    ]
+    .iter()
+    .any(|prefix| message.starts_with(prefix))
+        || message == "kind must be work or node"
+        || message == "target must not be blank"
+        || message.starts_with("target ")
+            && (message.ends_with("is not a node") || message.ends_with("would create a cycle"))
+        || message.starts_with("cannot demote node: ticket ")
     {
-        return ProtocolError::validation(error.error);
+        return ProtocolError::validation(message);
     }
     if error.kind == "conflict" || error.code.as_deref() == Some("external-ticket-source") {
-        return ProtocolError::new(409, "conflict", error.error);
+        return ProtocolError::new(409, "conflict", message);
     }
-    ProtocolError::internal()
+    let lower = message.to_lowercase();
+    if lower.contains("unknown ticket")
+        || lower.contains("unknown issue")
+        || lower.contains("not found")
+    {
+        return ProtocolError::new(404, "not-found", message);
+    }
+    if error.kind == "internal" {
+        return ProtocolError::internal();
+    }
+    ProtocolError::new(500, "internal", message)
 }
 
 fn repository(principal: &Principal, selected: Option<&str>) -> Result<String, ProtocolError> {

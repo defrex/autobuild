@@ -7,6 +7,7 @@ use rand::RngCore;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use tokio_postgres::{Row, Transaction};
+pub mod machine;
 
 fn storage(_: impl std::fmt::Display) -> OperatorError {
     OperatorError::internal()

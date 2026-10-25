@@ -541,6 +541,182 @@
       ]
     },
     {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {}
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [],
+          "note": "No matching discriminator",
+          "discriminator": "kind",
+          "options": ["update", "transition", "blockers"],
+          "path": ["input", "mutation", "kind"],
+          "message": "Invalid discriminator value. Expected 'update' | 'transition' | 'blockers'"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"other\"}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "other"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [],
+          "note": "No matching discriminator",
+          "discriminator": "kind",
+          "options": ["update", "transition", "blockers"],
+          "path": ["input", "mutation", "kind"],
+          "message": "Invalid discriminator value. Expected 'update' | 'transition' | 'blockers'"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"update\",\"patch\":{}}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {}
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "mutation", "patch"],
+          "message": "update must name at least one field"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"transition\",\"state\":\"\"}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "transition",
+            "state": ""
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "mutation", "state"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"blockers\",\"operation\":\"other\",\"ids\":[1]}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "blockers",
+            "operation": "other",
+            "ids": [1]
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": ["block", "unblock"],
+          "path": ["input", "mutation", "operation"],
+          "message": "Invalid option: expected one of \"block\"|\"unblock\""
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "mutation", "ids", 0],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "mutate-if-revision",
+      "name": "mutation-{\"kind\":\"update\",\"patch\":{\"target\":null}}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "target": null
+            }
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "expectedRevision": "1",
+          "mutation": {
+            "kind": "update",
+            "patch": {
+              "target": null
+            }
+          }
+        }
+      }
+    },
+    {
       "operation": "list-ready",
       "name": "valid",
       "request": {
@@ -2737,6 +2913,422 @@
       ]
     },
     {
+      "operation": "create",
+      "name": "nested-empty",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {}
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-unknown",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "future": true
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "code": "unrecognized_keys",
+          "keys": ["future"],
+          "path": ["input", "draft"],
+          "message": "Unrecognized key: \"future\""
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-kind",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "kind": "other"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": ["work", "node"],
+          "path": ["input", "draft", "kind"],
+          "message": "Invalid option: expected one of \"work\"|\"node\""
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-target",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "target": " �"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "draft", "target"],
+          "message": "Invalid input"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-title",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": ""
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-labels",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "labels": [1, null, "valid"]
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "labels", 0],
+          "message": "Invalid input: expected string, received number"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "labels", 1],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "nested-nullable",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "target": null
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "title"],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "draft", "body"],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-null",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": null
+        }
+      },
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": ["input", "options"],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {}
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {}
+        }
+      }
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"requestedId\":\"\"}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "requestedId": ""
+          }
+        }
+      },
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": ["input", "options", "requestedId"],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"requestedId\":1}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "requestedId": 1
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "options", "requestedId"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"state\":null}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "state": null
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "options", "state"],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"idempotencyKey\":1}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "idempotencyKey": 1
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "options", "idempotencyKey"],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    {
+      "operation": "create",
+      "name": "options-{\"extra\":true}",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "draft": {
+            "title": "Ticket",
+            "body": "Body\n"
+          },
+          "options": {
+            "extra": true
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["extra"],
+          "path": ["input", "options"],
+          "message": "Unrecognized key: \"extra\""
+        }
+      ]
+    },
+    {
       "operation": "update",
       "name": "valid",
       "request": {
@@ -3095,6 +3687,184 @@
           "message": "Invalid input: expected object, received number"
         }
       ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-empty",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {}
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "patch"],
+          "message": "update must name at least one field"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-unknown",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "future": true
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "unrecognized_keys",
+          "keys": ["future"],
+          "path": ["input", "patch"],
+          "message": "Unrecognized key: \"future\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-kind",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "kind": "other"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": ["work", "node"],
+          "path": ["input", "patch", "kind"],
+          "message": "Invalid option: expected one of \"work\"|\"node\""
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-target",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "target": " �"
+          }
+        }
+      },
+      "issues": [
+        {
+          "code": "custom",
+          "path": ["input", "patch", "target"],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-title",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": ""
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "title": ""
+          }
+        }
+      }
+    },
+    {
+      "operation": "update",
+      "name": "nested-labels",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "labels": [1, null, "valid"]
+          }
+        }
+      },
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "patch", "labels", 0],
+          "message": "Invalid input: expected string, received number"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": ["input", "patch", "labels", 1],
+          "message": "Invalid input: expected string, received null"
+        }
+      ]
+    },
+    {
+      "operation": "update",
+      "name": "nested-nullable",
+      "request": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "target": null
+          }
+        }
+      },
+      "output": {
+        "context": {
+          "teamKey": "ENG",
+          "repo": "owner/repo"
+        },
+        "input": {
+          "id": "ENG-1",
+          "patch": {
+            "target": null
+          }
+        }
+      }
     },
     {
       "operation": "add-blocker",
