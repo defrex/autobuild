@@ -15,6 +15,11 @@ import { encodeReducerValue } from '../../../packages/core/src/store/reducer-val
 import { reduceBuild } from '../../../packages/core/src/kernel/reducer'
 import { reduceSession } from '../../../packages/core/src/store/session-reducer'
 import { withDataServices } from './data-services'
+import { mintToken } from '../../../packages/core/src/store/remote/token'
+import {
+  AUTOBUILD_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION,
+} from '../../../packages/core/src/store/remote/version'
 import { expected } from './fixture-core'
 
 const project = resolve(import.meta.dir, '..')
@@ -480,24 +485,99 @@ export async function integration(
       () => bridge(env, runtime, readerCommand),
       /expected version 17, found 999/,
     )
+    // Normal production composition keeps health available while refusing schema
+    // access. Private example flags must not open its bearer boundary.
+    const reservation = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() })
+    const port = reservation.port!
+    reservation.stop(true)
+    const secret = 'isolated-normal-server-secret'
     const startup = Bun.spawn([native.server], {
       cwd: runtime,
-      env: { ...env, PROA_HOST: '127.0.0.1', PORT: '65500' },
+      env: {
+        ...env,
+        AB_STORE_SECRET: secret,
+        PROA_HOST: '127.0.0.1',
+        PORT: String(port),
+        PROA_TEST_AUTH: 'open',
+      },
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    const startupTimeout = setTimeout(() => startup.kill(), 180000)
+    const origin = `http://127.0.0.1:${port}`
+    const identity = {
+      'x-autobuild-version': AUTOBUILD_VERSION,
+      'x-autobuild-protocol-version': String(REMOTE_STORE_PROTOCOL_VERSION),
+    }
+    const startupTimeout = setTimeout(() => startup.kill(), 30000)
     try {
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(startup.stdout).text(),
-        new Response(startup.stderr).text(),
-        startup.exited,
-      ])
-      assert.notEqual(code, 0)
-      assert.match(stderr, /expected version 17, found 999/)
-      assert.doesNotMatch(stdout, /Proa site listening/)
+      let healthy = false
+      for (let i = 0; i < 200; i++) {
+        if (startup.exitCode !== null) throw Error('Normal server exited before health')
+        try {
+          const response = await fetch(`${origin}/health`, {
+            headers: { 'x-autobuild-version': '0.0.0', authorization: 'Bearer retired' },
+          })
+          assert.equal(response.status, 200)
+          assert.equal(
+            ((await response.json()) as { protocolVersion: string }).protocolVersion,
+            REMOTE_STORE_PROTOCOL_VERSION,
+          )
+          healthy = true
+          break
+        } catch {}
+        await Bun.sleep(25)
+      }
+      assert.ok(healthy, 'normal health unavailable during schema refusal')
+      assert.equal((await fetch(`${origin}/readyz`)).status, 503)
+      const unauthenticated = await fetch(`${origin}/builds`, {
+        headers: { ...identity, origin: 'https://foreign.invalid', accept: 'text/html' },
+      })
+      assert.equal(unauthenticated.status, 401, 'private open flag must not affect production')
+      assert.ok(unauthenticated.headers.get('content-type')?.startsWith('application/json'))
+      assert.equal(unauthenticated.headers.get('location'), null)
+      const headers = {
+        ...identity,
+        authorization: `Bearer ${mintToken(secret, { version: 1, ownerAdmin: { user: 'proof' }, exp: Date.now() + 60000 })}`,
+      }
+      const refused = await fetch(`${origin}/builds`, { headers })
+      assert.equal(refused.status, 500)
+      assert.deepEqual(await refused.json(), { kind: 'internal', error: 'internal server error' })
+      // Failed initial preflight leaves the deferred slot retryable.
+      await writer`UPDATE ab_schema_migrations SET version = 17 WHERE singleton = true`
+      assert.equal((await fetch(`${origin}/readyz`)).status, 200)
+      const admitted = await fetch(`${origin}/builds`, { headers })
+      assert.equal(admitted.status, 200)
+      assert.ok(Array.isArray(await admitted.json()))
     } finally {
       clearTimeout(startupTimeout)
+      startup.kill()
+      const timer = setTimeout(() => startup.kill('SIGKILL'), 5000)
+      try {
+        await startup.exited
+      } finally {
+        clearTimeout(timer)
+      }
+      // Consume but never persist process output (configuration can contain secrets).
+      await Promise.all([new Response(startup.stdout).text(), new Response(startup.stderr).text()])
+    }
+    const missingSecret = Bun.spawn([native.server], {
+      cwd: runtime,
+      env: { ...env, AB_STORE_SECRET: '  ', PROA_HOST: '127.0.0.1', PORT: String(port) },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const secretTimer = setTimeout(() => missingSecret.kill(), 10000)
+    try {
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(missingSecret.stdout).text(),
+        new Response(missingSecret.stderr).text(),
+        missingSecret.exited,
+      ])
+      assert.notEqual(code, 0)
+      assert.match(stderr, /AB_STORE_SECRET is required and must be nonblank/)
+      assert.doesNotMatch(stdout, /Proa site listening/)
+    } finally {
+      clearTimeout(secretTimer)
     }
 
     console.log(
