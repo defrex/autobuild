@@ -745,6 +745,7 @@ describe('abDispatch guards', () => {
     // origin mode *seeds* the disk walk with the scratch root rather than
     // merely failing a non-filesystem token.
     const origin = `git@github.com:acme/scratch-seeded-${randomUUID()}.git`
+    trackOrigin(origin)
     const scratch = join(
       tmpdir(),
       'autobuild',
