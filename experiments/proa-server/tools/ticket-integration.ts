@@ -1,5 +1,6 @@
 /** Native ticket writes read back through the unchanged TypeScript adapter. */
 import { SQL } from 'bun'
+import type { OperatorOperationWitness } from './operator-coverage-types'
 import { strict as assert } from 'node:assert'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -26,6 +27,37 @@ import { bridge } from './data-integration'
 import { withDataServices } from './data-services'
 import { createOperatorServer } from '../../../packages/hosted-store-service/src/operator-server'
 import { OperatorQueryError } from '../../../packages/core/src/operator/query'
+
+/** Declared probes are checked at the HTTP boundary and on successful replay completion. */
+export function ticketHttpScenarios() {
+  return [
+    ['create', 'POST', ''],
+    ['patch', 'PATCH', '/ENG-1'],
+    ['stale', 'PATCH', '/ENG-1'],
+    ['unknown-field', 'POST', ''],
+    ['refusal-state', 'GET', '?state=unknown'],
+    ['refusal-blank', 'PATCH', '/ENG-1'],
+    ['refusal-block', 'POST', '/ENG-1/block'],
+    ['refusal-unblock', 'POST', '/ENG-1/unblock'],
+    ['states', 'GET', '/states'],
+    ['list', 'GET', ''],
+    ['detail', 'GET', '/ENG-1'],
+    ['state-create', 'POST', '/states'],
+    ['states-readback', 'GET', '/states'],
+    ['move', 'POST', '/ENG-1/move'],
+    ['move-readback', 'GET', '/ENG-1'],
+    ['blocker-create', 'POST', ''],
+    ['block', 'POST', '/ENG-1/block'],
+    ['block-readback', 'GET', '/ENG-1'],
+    ['unblock', 'POST', '/ENG-1/unblock'],
+    ['unblock-readback', 'GET', '/ENG-1'],
+    ['revoked', 'GET', '/ENG-1'],
+  ].map(([name, method, path]) => ({
+    id: `ticket-http-${name}`,
+    method: method!,
+    path: `tickets${path}`,
+  }))
+}
 
 const project = resolve(import.meta.dir, '..')
 const config = {
@@ -105,9 +137,16 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
   let created = false,
     roleCreated = false
   const claims: string[] = []
+  const witnesses: OperatorOperationWitness[] = []
   let failure: unknown
   let evidence:
-    | { checkpoint: string; claims: string[]; httpParity: boolean; claimedNodeRetargeting: boolean }
+    | {
+        checkpoint: string
+        claims: string[]
+        httpParity: boolean
+        claimedNodeRetargeting: boolean
+        witnesses: OperatorOperationWitness[]
+      }
     | undefined
   try {
     await admin.unsafe(`CREATE DATABASE ${database}`)
@@ -496,15 +535,34 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
       'x-autobuild-protocol-version': '5',
       'content-type': 'application/json',
     }
-    const httpCall = async (method: string, path: string, body?: unknown) => {
+    const httpCall = async (name: string, method: string, path: string, body?: unknown) => {
+      const id = `ticket-http-${name}`
+      const declared = ticketHttpScenarios().find((item) => item.id === id)
+      assert.ok(declared, `undeclared HTTP probe ${id}`)
+      assert.equal(declared.method, method, id)
+      assert.equal(declared.path, `tickets${path}`, id)
+      assert.ok(!witnesses.some((item) => item.id === id), `duplicate HTTP probe ${id}`)
       const response = await fetch(
         `${ready.origin}/operator/v1/repos/${encodeURIComponent(httpRepo)}/tickets${path}`,
         { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
       )
       assert.equal(response.headers.get('content-type'), 'application/json;charset=utf-8')
-      return { status: response.status, body: await response.json() }
+      const result = { status: response.status, body: await response.json() }
+      witnesses.push({
+        suite: 'ticket-http',
+        id,
+        method,
+        path: `tickets${path}`,
+        requestBody: body,
+        status: result.status,
+        responseBody: result.body,
+      })
+      return result
     }
-    const createdHttp = await httpCall('POST', '', { title: 'HTTP native', body: '\n body \n' })
+    const createdHttp = await httpCall('create', 'POST', '', {
+      title: 'HTTP native',
+      body: '\n body \n',
+    })
     assert.equal(createdHttp.status, 201)
     const httpReadback = new PostgresTicketSource(
       sql,
@@ -518,7 +576,7 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
       blockers: [],
       build: null,
     })
-    const patchedHttp = await httpCall('PATCH', '/ENG-1', {
+    const patchedHttp = await httpCall('patch', 'PATCH', '/ENG-1', {
       title: 'HTTP patched',
       expectedRevision: '1',
     })
@@ -528,7 +586,10 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
       blockers: [],
       build: null,
     })
-    const staleHttp = await httpCall('PATCH', '/ENG-1', { title: 'stale', expectedRevision: '1' })
+    const staleHttp = await httpCall('stale', 'PATCH', '/ENG-1', {
+      title: 'stale',
+      expectedRevision: '1',
+    })
     assert.deepEqual(staleHttp, {
       status: 409,
       body: {
@@ -536,7 +597,11 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
         error: 'ticket "ENG-1" changed: expected revision 1, current revision 2',
       },
     })
-    const unknownHttp = await httpCall('POST', '', { title: 'bad', body: 'bad', unknown: true })
+    const unknownHttp = await httpCall('unknown-field', 'POST', '', {
+      title: 'bad',
+      body: 'bad',
+      unknown: true,
+    })
     assert.equal(unknownHttp.status, 400)
     assert.equal(unknownHttp.body.kind, 'validation')
 
@@ -557,11 +622,16 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
         statesFor: async () => (await httpReadback.listStates()).map((state) => state.name),
       },
     })
-    for (const [method, path, body] of [
-      ['GET', '?state=unknown', undefined],
-      ['PATCH', '/ENG-1', { title: ' ', body: ' ' }],
-      ['POST', '/ENG-1/block', { blockerIds: ['missing'], expectedRevision: '1' }],
-      ['POST', '/ENG-1/unblock', { blockerIds: ['missing'], expectedRevision: '1' }],
+    for (const [name, method, path, body] of [
+      ['refusal-state', 'GET', '?state=unknown', undefined],
+      ['refusal-blank', 'PATCH', '/ENG-1', { title: ' ', body: ' ' }],
+      ['refusal-block', 'POST', '/ENG-1/block', { blockerIds: ['missing'], expectedRevision: '1' }],
+      [
+        'refusal-unblock',
+        'POST',
+        '/ENG-1/unblock',
+        { blockerIds: ['missing'], expectedRevision: '1' },
+      ],
     ] as const) {
       const response = await tsTicketServer.fetch(
         new Request(
@@ -570,10 +640,64 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
         ),
       )
       assert.deepEqual(
-        await httpCall(method, path, body),
+        await httpCall(name, method, path, body),
         { status: response.status, body: await response.json() },
         `ticket refusal precedence ${path}`,
       )
+    }
+    // Read-only routes compare the actual TS HTTP registry over the same durable rows.
+    const compareHttpRead = async (name: string, path: string) => {
+      const expected = await tsTicketServer.fetch(
+        new Request(
+          `http://oracle.test/operator/v1/repos/${encodeURIComponent(httpRepo)}/tickets${path}`,
+          { headers },
+        ),
+      )
+      assert.deepEqual(await httpCall(name, 'GET', path), {
+        status: expected.status,
+        body: await expected.json(),
+      })
+    }
+    for (const [name, path] of [
+      ['states', '/states'],
+      ['list', ''],
+      ['detail', '/ENG-1'],
+    ] as const)
+      await compareHttpRead(name, path)
+    const customState = await httpCall('state-create', 'POST', '/states', {
+      name: 'waiting-http',
+      about: 'HTTP state proof',
+    })
+    assert.deepEqual(customState, {
+      status: 201,
+      body: {
+        state: { name: 'waiting-http', tickets: 0, about: 'HTTP state proof' },
+        created: true,
+      },
+    })
+    await compareHttpRead('states-readback', '/states')
+    for (const [name, path, body] of [
+      ['move', '/ENG-1/move', { state: 'ready', expectedRevision: '2' }],
+      ['block', '/ENG-1/block', { blockerIds: ['ENG-2'] }],
+      ['unblock', '/ENG-1/unblock', { blockerIds: ['ENG-2'] }],
+    ] as const) {
+      if (path.endsWith('/block')) {
+        const blocker = await httpCall('blocker-create', 'POST', '', {
+          title: 'HTTP blocker',
+          body: 'Blocker body',
+        })
+        assert.equal(blocker.status, 201)
+      }
+      const changed = await httpCall(name, 'POST', path, body)
+      assert.equal(changed.status, 200, path)
+      const expected = await tsTicketServer.fetch(
+        new Request(
+          `http://oracle.test/operator/v1/repos/${encodeURIComponent(httpRepo)}/tickets/ENG-1`,
+          { headers },
+        ),
+      )
+      assert.deepEqual(changed.body, await expected.json(), path)
+      await compareHttpRead(`${name}-readback`, '/ENG-1')
     }
     // Exercise production's published-policy fallback refusal with the same
     // typed query failure that service.ts emits for external ticket sources.
@@ -612,15 +736,21 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
       'Actual TypeScript HTTP refusal parity covers unknown listing state, aggregated blank patch issues, blocker-existence-before-revision precedence and external-source query errors',
     )
     await sql`UPDATE project_credentials SET revoked_at=now() WHERE id=${credential.credential.id}`
-    assert.equal((await httpCall('GET', '/ENG-1')).status, 401)
+    assert.equal((await httpCall('revoked', 'GET', '/ENG-1')).status, 401)
     claims.push(
       'Real authenticated Rust HTTP ticket creates and guarded updates persist through TypeScript; strict unknown-field rejection, stale refusal and next-request credential revocation hold',
     )
 
+    assert.deepEqual(
+      witnesses.map((item) => item.id),
+      ticketHttpScenarios().map((item) => item.id),
+      'complete ticket HTTP probe manifest',
+    )
     evidence = {
       checkpoint: 'native-ticket-storage',
       claims,
-      httpParity: false,
+      httpParity: true,
+      witnesses,
       claimedNodeRetargeting: true,
     }
     console.log(JSON.stringify(evidence))

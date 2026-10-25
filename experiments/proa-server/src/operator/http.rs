@@ -131,6 +131,21 @@ async fn execute(
     };
     let actor = principal.actor();
     match (method.as_str(), segments.as_slice()) {
+        ("POST", ["tools", name]) => Ok((
+            200,
+            super::registry::Registry {
+                state,
+                repo,
+                principal: &principal,
+                now,
+            }
+            .call(name, bytes)
+            .await?,
+        )),
+        ("GET", ["builds", slug]) => Ok((200, super::query::get(reader, repo, slug, now).await?)),
+        ("GET", ["dashboard"]) => Ok((200, super::query::dashboard(reader, repo, now).await?)),
+        ("GET", ["status"]) => Ok((200, super::query::status(reader, repo, now).await?)),
+        ("GET", ["harvest", "status"]) => Ok((200, super::query::harvest(reader, repo).await?)),
         ("GET", ["builds"]) => {
             let query = url::Url::parse(&format!("http://operator.invalid{uri}"))
                 .map_err(|_| OperatorError::internal())?;
@@ -209,7 +224,7 @@ async fn execute(
             Ok((
                 201,
                 session
-                    .create(repo, principal.user(), body["title"].as_str(), None, now)
+                    .create_configured(repo, principal.user(), body["title"].as_str(), now)
                     .await?,
             ))
         }

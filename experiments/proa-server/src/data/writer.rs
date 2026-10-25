@@ -22,6 +22,10 @@ pub enum WriteError {
     Connection,
     #[error("PostgreSQL write failed")]
     Storage,
+    // PostgreSQL's primary diagnostic only. Query text, details, connection
+    // strings and provider response bodies are never retained here.
+    #[error("{0}")]
+    Database(String),
     #[error(transparent)]
     Schema(#[from] DataError),
     #[error("{0}")]
@@ -32,6 +36,14 @@ pub enum WriteError {
     WrongProject,
     #[error("project not registered")]
     ProjectNotRegistered,
+}
+impl WriteError {
+    pub(crate) fn database(error: tokio_postgres::Error) -> Self {
+        error
+            .as_db_error()
+            .map(|error| Self::Database(error.message().to_owned()))
+            .unwrap_or(Self::Storage)
+    }
 }
 pub(crate) struct Connection {
     pub(crate) client: Client,
@@ -292,6 +304,13 @@ impl PostgresWriter {
     ) -> Result<Option<Value>, WriteError> {
         check_expected(expected)?;
         let write = validate_write(scope, write)?;
+        let database_error = |error| {
+            if scope == Scope::Session {
+                WriteError::Storage
+            } else {
+                WriteError::database(error)
+            }
+        };
         let (table, key, events, envelope_key) = match scope {
             Scope::Build => ("builds", "slug", "events", "build"),
             Scope::Repository => ("repo_streams", "repo", "repo_events", "repo"),
@@ -302,14 +321,14 @@ impl PostgresWriter {
             .client
             .transaction()
             .await
-            .map_err(|_| WriteError::Storage)?;
+            .map_err(database_error)?;
         let row = tx
             .query_opt(
                 &format!("SELECT repo FROM {table} WHERE {key} = $1 FOR UPDATE"),
                 &[&id],
             )
             .await
-            .map_err(|_| WriteError::Storage)?;
+            .map_err(database_error)?;
         let Some(row) = row else {
             return Err(WriteError::Missing {
                 scope: match scope {
@@ -330,10 +349,10 @@ impl PostgresWriter {
                 &[&id],
             )
             .await
-            .map_err(|_| WriteError::Storage)?
+            .map_err(database_error)?
             .get(0);
         if expected.is_some_and(|seq| seq != tail) {
-            tx.commit().await.map_err(|_| WriteError::Storage)?;
+            tx.commit().await.map_err(database_error)?;
             return Ok(None);
         }
         let seq = tail
@@ -344,18 +363,18 @@ impl PostgresWriter {
         let kind = write["type"].as_str().unwrap();
         let payload = &write["payload"];
         if scope == Scope::Session {
-            tx.execute("INSERT INTO session_events (session,seq,ts,actor,type,payload) VALUES ($1,$2,$3,$4,$5,$6)",&[&id,&seq,&now,actor,&kind,payload]).await.map_err(|_|WriteError::Storage)?;
+            tx.execute("INSERT INTO session_events (session,seq,ts,actor,type,payload) VALUES ($1,$2,$3,$4,$5,$6)",&[&id,&seq,&now,actor,&kind,payload]).await.map_err(|error| if scope == Scope::Session { WriteError::Storage } else { WriteError::database(error) })?;
         } else {
             let compatibility = write.get("compatibility");
-            tx.execute(&format!("INSERT INTO {events} ({envelope_key},seq,ts,actor,type,payload,compatibility) VALUES ($1,$2,$3,$4,$5,$6,$7)"),&[&id,&seq,&now,actor,&kind,payload,&compatibility]).await.map_err(|_|WriteError::Storage)?;
+            tx.execute(&format!("INSERT INTO {events} ({envelope_key},seq,ts,actor,type,payload,compatibility) VALUES ($1,$2,$3,$4,$5,$6,$7)"),&[&id,&seq,&now,actor,&kind,payload,&compatibility]).await.map_err(|error| if scope == Scope::Session { WriteError::Storage } else { WriteError::database(error) })?;
         }
         tx.execute(
             &format!("UPDATE {table} SET updated_at=$1 WHERE {key}=$2"),
             &[&now, &id],
         )
         .await
-        .map_err(|_| WriteError::Storage)?;
-        tx.commit().await.map_err(|_| WriteError::Storage)?;
+        .map_err(database_error)?;
+        tx.commit().await.map_err(database_error)?;
         let mut out = json!({envelope_key:id,"seq":seq,"ts":timestamp,"actor":actor,"type":kind,"payload":payload});
         if let Some(c) = write.get("compatibility") {
             out["compatibility"] = c.clone();

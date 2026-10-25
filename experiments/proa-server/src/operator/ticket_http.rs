@@ -20,7 +20,7 @@ pub fn body(bytes: &[u8], operation: &str) -> Result<Value, OperatorError> {
     super::request_schema::parse(schema, bytes)
 }
 
-async fn policy(
+pub(crate) async fn policy(
     service: &TicketService<'_>,
     reader: &DataReader,
     repo: &str,

@@ -87,6 +87,35 @@ fn enrich_build_liveness(record: &mut Value, row: &Row) {
     }
 }
 
+async fn readable_ticket_schema(tx: &Transaction<'_>) -> Result<bool, DataError> {
+    let present: bool = tx
+        .query_one(
+            "SELECT to_regclass('ab_ticket_schema_migrations') IS NOT NULL",
+            &[],
+        )
+        .await
+        .map_err(|_| DataError::Query)?
+        .get(0);
+    if !present {
+        return Ok(false);
+    }
+    Ok(tx
+        .query_opt(
+            "SELECT version FROM ab_ticket_schema_migrations WHERE singleton=true",
+            &[],
+        )
+        .await
+        .map_err(|_| DataError::Query)?
+        .is_some_and(|r| r.get::<_, i32>(0) >= 3))
+}
+fn projected_ticket(record: &mut Value, row: &Row) {
+    if let Some(id) = row.get::<_, Option<String>>("projected_ticket_id") {
+        if !record["ticket"].is_null() {
+            record["ticket"]["id"] = json!(id);
+        }
+    }
+}
+
 fn stream_parts(raw: Value) -> Result<Value, DataError> {
     // The TypeScript adapter accepts driver-decoded JSON and JSONB strings.
     let value = match raw {
@@ -253,13 +282,23 @@ impl PostgresReader {
             .start()
             .await
             .map_err(|_| DataError::Query)?;
-        let rows = tx.query("SELECT b.slug,b.ticket,b.branch,b.created_at,b.updated_at,b.heartbeat_at,b.lease_holder,b.lease_expires_at,(SELECT COALESCE(MAX(seq),0) FROM events WHERE build=b.slug) AS event_seq, false AS deleted FROM builds b LEFT JOIN jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) ON k.slug=b.slug WHERE b.repo=$1 AND (k.slug IS NULL OR b.updated_at <> k.updated::timestamptz OR EXISTS(SELECT 1 FROM events e WHERE e.build=b.slug AND e.seq>k.seq)) UNION ALL SELECT k.slug,NULL::jsonb,NULL::text,now(),now(),NULL::timestamptz,NULL::text,NULL::timestamptz,0::bigint,true FROM jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) WHERE NOT EXISTS(SELECT 1 FROM builds b WHERE b.repo=$1 AND b.slug=k.slug) ORDER BY 4,1", &[&repo,known]).await.map_err(|_|DataError::Query)?;
+        let projected = if readable_ticket_schema(&tx).await? {
+            "(SELECT readable_id FROM ab_tickets WHERE b.ticket->>'source'='hosted' AND repo=b.repo AND (id=b.ticket->>'id' OR lower(readable_id)=lower(b.ticket->>'id')) LIMIT 1)"
+        } else {
+            "NULL::text"
+        };
+        let query=format!("SELECT b.slug,b.ticket,b.branch,b.created_at,b.updated_at,b.heartbeat_at,b.lease_holder,b.lease_expires_at,(SELECT COALESCE(MAX(seq),0) FROM events WHERE build=b.slug) AS event_seq, false AS deleted,{projected} AS projected_ticket_id FROM builds b LEFT JOIN jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) ON k.slug=b.slug WHERE b.repo=$1 AND (k.slug IS NULL OR b.updated_at <> k.updated::timestamptz OR EXISTS(SELECT 1 FROM events e WHERE e.build=b.slug AND e.seq>k.seq)) UNION ALL SELECT k.slug,NULL::jsonb,NULL::text,now(),now(),NULL::timestamptz,NULL::text,NULL::timestamptz,0::bigint,true,NULL::text FROM jsonb_to_recordset($2::jsonb) AS k(slug text,seq bigint,updated text) WHERE NOT EXISTS(SELECT 1 FROM builds b WHERE b.repo=$1 AND b.slug=k.slug) ORDER BY 4,1");
+        let rows = tx
+            .query(&query, &[&repo, known])
+            .await
+            .map_err(|_| DataError::Query)?;
         let result = rows.iter().map(|row| {
             if row.get::<_,bool>("deleted") {return json!({"slug":row.get::<_,String>("slug"),"deleted":true});}
             let mut record = json!({"slug":row.get::<_,String>("slug"),"repo":repo,"createdAt":timestamp(row,"created_at"),"updatedAt":timestamp(row,"updated_at"),"eventSeq":row.get::<_,i64>("event_seq")});
             if let Some(ticket) = row.get::<_,Option<Value>>("ticket") {record["ticket"]=ticket;}
             if let Some(branch) = row.get::<_,Option<String>>("branch") {record["branch"]=json!(branch);}
             enrich_build_liveness(&mut record,row);
+            projected_ticket(&mut record,row);
             record
         }).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
@@ -379,14 +418,23 @@ impl PostgresReader {
             .start()
             .await
             .map_err(|_| DataError::Query)?;
-        let rows = tx.query("SELECT slug, repo, ticket, branch, created_at, updated_at, heartbeat_at,lease_holder,lease_expires_at FROM builds WHERE repo = $1 ORDER BY created_at, slug", &[&repo])
-            .await.map_err(|_| DataError::Query)?;
+        let readable = readable_ticket_schema(&tx).await?;
+        let query = if readable {
+            "SELECT b.*,t.readable_id AS projected_ticket_id FROM builds b LEFT JOIN LATERAL (SELECT readable_id FROM ab_tickets WHERE b.ticket->>'source'='hosted' AND repo=b.repo AND (id=b.ticket->>'id' OR lower(readable_id)=lower(b.ticket->>'id')) LIMIT 1) t ON true WHERE b.repo=$1 ORDER BY b.created_at,b.slug"
+        } else {
+            "SELECT *,NULL::text AS projected_ticket_id FROM builds WHERE repo=$1 ORDER BY created_at,slug"
+        };
+        let rows = tx
+            .query(query, &[&repo])
+            .await
+            .map_err(|_| DataError::Query)?;
         let result = rows.iter().map(|row| {
             let mut record = json!({ "slug": row.get::<_, String>("slug"), "repo": repo,
                 "createdAt": timestamp(row, "created_at"), "updatedAt": timestamp(row, "updated_at") });
             if let Some(ticket) = row.get::<_, Option<Value>>("ticket") { record["ticket"] = ticket; }
             if let Some(branch) = row.get::<_, Option<String>>("branch") { record["branch"] = json!(branch); }
             enrich_build_liveness(&mut record,row);
+            projected_ticket(&mut record,row);
             record
         }).collect();
         tx.commit().await.map_err(|_| DataError::Query)?;
@@ -402,11 +450,14 @@ impl PostgresReader {
             .start()
             .await
             .map_err(|_| DataError::Query)?;
+        let readable = readable_ticket_schema(&tx).await?;
+        let query = if readable {
+            "SELECT b.*,t.readable_id AS projected_ticket_id FROM builds b LEFT JOIN LATERAL (SELECT readable_id FROM ab_tickets WHERE b.ticket->>'source'='hosted' AND repo=b.repo AND (id=b.ticket->>'id' OR lower(readable_id)=lower(b.ticket->>'id')) LIMIT 1) t ON true WHERE b.repo=$1 AND b.slug=$2"
+        } else {
+            "SELECT *,NULL::text AS projected_ticket_id FROM builds WHERE repo=$1 AND slug=$2"
+        };
         let rows = tx
-            .query(
-                "SELECT ticket,branch,created_at,updated_at,heartbeat_at,lease_holder,lease_expires_at FROM builds WHERE repo=$1 AND slug=$2",
-                &[&repo, &slug],
-            )
+            .query(query, &[&repo, &slug])
             .await
             .map_err(|_| DataError::Query)?;
         let result=rows.first().map(|row|{
@@ -414,6 +465,7 @@ impl PostgresReader {
             if let Some(ticket)=row.get::<_,Option<Value>>("ticket"){value["ticket"]=ticket;}
             if let Some(branch)=row.get::<_,Option<String>>("branch"){value["branch"]=json!(branch);}
             enrich_build_liveness(&mut value,row);
+            projected_ticket(&mut value,row);
             value
         });
         tx.commit().await.map_err(|_| DataError::Query)?;
@@ -574,6 +626,83 @@ impl PostgresReader {
         )
         .await;
         Ok(result)
+    }
+}
+
+impl PostgresReader {
+    /// Mutable repository liveness is separate from durable event reduction.
+    pub async fn repository_record(&self, repo: &str) -> Result<Option<Value>, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        let row=tx.query_opt("SELECT repo,created_at,updated_at,heartbeat_at,lease_holder,lease_expires_at,tick FROM repo_streams WHERE repo=$1",&[&repo]).await.map_err(|_|DataError::Query)?;
+        let out=row.as_ref().map(|r|{let mut v=json!({"repo":repo,"createdAt":timestamp(r,"created_at"),"updatedAt":timestamp(r,"updated_at")});enrich_build_liveness(&mut v,r);if let Some(tick)=r.get::<_,Option<Value>>("tick"){v["tick"]=tick;}v});
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, "repository-record", usize::from(row.is_some()))
+            .await;
+        Ok(out)
+    }
+    pub async fn build_exists(&self, repo: &str, slug: &str) -> Result<bool, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        let exists = tx
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM builds WHERE slug=$1)",
+                &[&slug],
+            )
+            .await
+            .map_err(|_| DataError::Query)?
+            .get(0);
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, "build-existence", 1).await;
+        Ok(exists)
+    }
+    /// Correlate the current/last/held runs even when the bounded latest-run journal pruned an older holder.
+    pub async fn dispatcher_events(
+        &self,
+        repo: &str,
+        runs: &[String],
+    ) -> Result<Vec<Value>, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        let rows=tx.query("SELECT seq,ts,actor,type,payload FROM repo_events WHERE repo=$1 AND payload->>'run'=ANY($2::text[]) AND type IN ('dispatcher.run-started','dispatcher.run-stopped','dispatcher.runtime-recorded','dispatcher.tick-completed','dispatcher.tick-failed') ORDER BY seq",&[&repo,&runs]).await.map_err(|_|DataError::Query)?;
+        let out=rows.iter().map(|r|json!({"repo":repo,"seq":r.get::<_,i64>("seq"),"ts":timestamp(r,"ts"),"actor":r.get::<_,Value>("actor"),"type":r.get::<_,String>("type"),"payload":r.get::<_,Value>("payload")})).collect();
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, "dispatcher-correlations", rows.len())
+            .await;
+        Ok(out)
+    }
+}
+
+impl PostgresReader {
+    /// Terminal/observation gates are derived from event facts, never snapshots.
+    pub async fn api_build_digests(&self, repo: &str) -> Result<Vec<Value>, DataError> {
+        let mut client = self.client().await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| DataError::Query)?;
+        let rows=tx.query("SELECT b.slug,(SELECT type FROM events e WHERE e.build=b.slug AND type IN ('build.completed','build.aborted') ORDER BY seq DESC LIMIT 1) AS terminal,COALESCE((SELECT jsonb_agg(jsonb_build_object('seq',seq,'ts',ts) ORDER BY seq) FROM events e WHERE e.build=b.slug AND type='observation.recorded'),'[]'::jsonb) AS observations FROM builds b WHERE b.repo=$1 ORDER BY b.created_at,b.slug",&[&repo]).await.map_err(|_|DataError::Query)?;
+        let out=rows.iter().map(|r|{let mut v=json!({"slug":r.get::<_,String>("slug"),"observations":r.get::<_,Value>("observations")});if let Some(t)=r.get::<_,Option<String>>("terminal"){v["terminal"]=json!(if t=="build.completed"{"done"}else{"aborted"});}v}).collect();
+        tx.commit().await.map_err(|_| DataError::Query)?;
+        self.metadata_read(repo, "build-digests", rows.len()).await;
+        Ok(out)
     }
 }
 

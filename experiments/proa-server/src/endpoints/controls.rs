@@ -39,6 +39,9 @@ pub struct ControlForm {
     #[serde(default)]
     ceiling: String,
 }
+fn textarea_value(value: &str) -> String {
+    value.replace("\r\n", "\n").replace('\r', "\n")
+}
 fn accepted(slug: &str, action: &str, reply: &Value) -> bool {
     if [
         "guidance",
@@ -100,11 +103,16 @@ pub async fn submit(
     State(state): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     headers: HeaderMap,
-    Form(form): Form<ControlForm>,
+    Form(mut form): Form<ControlForm>,
 ) -> Response {
     if !super::auth::same_origin(&headers, &state) || form.csrf != viewer.csrf {
         return StatusCode::FORBIDDEN.into_response();
     }
+    // HTML native form encoding uses CRLF while textarea.value (and the
+    // enhanced FormData path) uses LF. Both transports must authorize the same
+    // logical textarea bytes; the JSON operator API keeps its raw body bytes.
+    form.text = textarea_value(&form.text);
+    form.body = textarea_value(&form.body);
     let (Some(reader), Some(writer)) = (&state.data, &state.writer) else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Data store unavailable").into_response();
     };
@@ -324,6 +332,17 @@ fn render_fragment(page: impl WebRenderSync<proa_core::NoLoader>, status: Status
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn textarea_line_endings_match_dom_values_without_trimming_body() {
+        assert_eq!(
+            textarea_value("  body\r\nline\rfinal\n  "),
+            "  body\nline\nfinal\n  "
+        );
+        assert_eq!(
+            textarea_value("\u{feff} body </textarea>"),
+            "\u{feff} body </textarea>"
+        );
+    }
     #[test]
     fn receipt_is_specific_and_answer_required_is_not_recorded_success() {
         let receipt = json!({"kind":"command","slug":"build","command":"resume","event":{}});

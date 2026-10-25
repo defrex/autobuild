@@ -29,6 +29,9 @@ export function requestContract() {
     { resolution: 'guidance', text: ' x ' },
     { resolution: 'review-round-ceiling', ceiling: 0 },
     { resolution: 'review-round-ceiling', ceiling: 1.5 },
+    { resolution: 'review-round-ceiling', ceiling: 9007199254740992 },
+    { resolution: 'review-round-ceiling', ceiling: -9007199254740992 },
+    { target: 3 },
     { resolution: 'revise-spec', origin: 'body', body: '', ceiling: 1 },
     { enabled: false },
     { enabled: 1 },
@@ -70,6 +73,9 @@ export async function checkRequestContract() {
 }
 if (import.meta.main) {
   if (process.argv.includes('--write'))
-    await Bun.write(path, `${JSON.stringify(requestContract(), null, 2)}\n`)
+    await Bun.write(
+      path,
+      `${JSON.stringify(requestContract(), null, 2).replace(/[^\x00-\x7f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)}\n`,
+    )
   else await checkRequestContract()
 }

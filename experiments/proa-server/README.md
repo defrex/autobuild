@@ -201,19 +201,21 @@ paragraph breaks and linking to the complete detail text.
 
 ## Operator port
 
-Native operator foundations are being delivered in tested checkpoints. See
-[operator parity and remaining gates](OPERATOR-PARITY.md) for the current boundary,
-attribution exception and completion requirements. Browser forms use fresh cookie admission, CSRF and canonical origin checks. Bearer
-routes use protocol/version admission and fresh project credentials or signed
-internal operator authority. `AB_STORE_SECRET` enables signed API credentials and
+The native operator API serves the documented reads, controls, sessions, hosted
+tickets and HTTP tool registry. See [interoperability evidence](OPERATOR-PARITY.md)
+for the attribution exception and executable contracts. MCP transport is separate.
+
+Browser forms use fresh cookie admission, CSRF and canonical origin checks.
+Bearer routes check protocol/version identity before fresh project credentials or
+signed internal authority. `AB_STORE_SECRET` enables signed API credentials and
 is separate from `PROA_SESSION_SECRET`; bearer values never reach the browser.
 
 `PROA_POSTGRES_WRITE_URL` selects a separate writer connection, defaulting to the
-configured database URL. Give the reader SELECT-only access and the writer only
-the tested mutation capabilities. Neither connection initializes schema. S3/Vercel
-uploads precede artifact metadata publication.
+configured database URL. Give the reader SELECT-only access and the writer the
+mutation capabilities exercised by the integration provisioning. Neither
+connection initializes schema. S3/Vercel uploads precede artifact publication.
 
 Ordinary forms work without JavaScript. With JavaScript, those same forms replace
-server-rendered fragments while polling preserves drafts and refusals. Abort and
-discard need explicit confirmation. The browser has no landing consent controls.
-The parity ledger identifies unfinished API surface and proofs.
+server-rendered fragments while polling preserves drafts, focus and refusals.
+Abort and discard require explicit confirmation. The browser has no landing
+consent controls or ticket authoring pages.

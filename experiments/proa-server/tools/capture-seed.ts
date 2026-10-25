@@ -12,6 +12,7 @@ import { PostgresProjectRegistry } from '../../../packages/postgres-store/src/pr
 import { buildCreatedWrite } from '../../../packages/core/src/store/contract'
 import { witnessEvent, schemas } from './fixture-core'
 import { withDataServices } from './data-services'
+import { seedExtendedBrowserControls, type ExtendedBrowserFixture } from './browser-extended-seed'
 
 export interface ReplayEvidence {
   timestampShiftMs: number
@@ -37,6 +38,7 @@ export interface SeedEvidence {
   supplemental: string[]
   detail: { project: string; slug: string }
   controls: Record<string, { project: string; slug: string }>
+  extendedControls: ExtendedBrowserFixture[]
 }
 const hash = () =>
   createHash('sha256')
@@ -474,6 +476,7 @@ export async function withCaptureSeed<T>(
           }
           controls[`proof-${mode}-${state}`] = { project, slug: controlSlug }
         }
+      const extendedControls = await seedExtendedBrowserControls(writer, store)
       await admin.unsafe(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`)
       roleCreated = true
       await writer.unsafe(`GRANT CONNECT ON DATABASE ${database} TO ${role}`)
@@ -514,6 +517,7 @@ export async function withCaptureSeed<T>(
         ],
         detail: { project, slug },
         controls,
+        extendedControls,
       }
       validateProvenance(evidence)
       return await work(

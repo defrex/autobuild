@@ -63,9 +63,11 @@ export async function replayNativeControls(options: {
           'x-autobuild-protocol-version': REMOTE_STORE_PROTOCOL_VERSION,
           'content-type': 'application/json',
         },
-        ...(fixture.scenario.body === undefined
-          ? {}
-          : { body: JSON.stringify(fixture.scenario.body) }),
+        ...(fixture.scenario.rawBody !== undefined
+          ? { body: fixture.scenario.rawBody }
+          : fixture.scenario.body === undefined
+            ? {}
+            : { body: JSON.stringify(fixture.scenario.body) }),
       },
     )
     const body: unknown = await response.json()

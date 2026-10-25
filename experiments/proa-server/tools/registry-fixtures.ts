@@ -31,6 +31,19 @@ export async function registryContract() {
     { repo: operatorRepo, expectedRevision: ' ', id: 'missing' },
     { repo: operatorRepo, id: 'missing', target: null },
   ]
+  samples.push(
+    { repo: operatorRepo, slug: 'missing', cursor: -1 },
+    { repo: operatorRepo, slug: 'missing', cursor: 0, waitSeconds: 31 },
+    { repo: operatorRepo, slug: 'missing', cursor: 0, waitSeconds: 1.5 },
+    { repo: operatorRepo, slug: 'missing', kind: 'spec', rev: -1 },
+    {
+      repo: operatorRepo,
+      slug: 'missing',
+      resolution: 'review-round-ceiling',
+      ceiling: 9007199254740992,
+    },
+    { repo: operatorRepo, id: 'missing', target: 3 },
+  )
   const cases = []
   for (const entry of registry.entries)
     for (const input of samples) {
@@ -51,6 +64,10 @@ export async function registryContract() {
     ['builds.events', { repo: operatorRepo, slug: 'missing', cursor: 0 }],
     ['builds.artifact', { repo: operatorRepo, slug: 'missing', kind: 'spec' }],
     ['builds.control', { repo: operatorRepo, slug: 'missing', action: 'pause' }],
+    ['notes.read', { repo: operatorRepo }],
+    ['notes.write', { repo: operatorRepo, document: 'notes\nbytes' }],
+    ['notes.read', { repo: operatorRepo }],
+    ['notes.write', { repo: operatorRepo, document: '\uFEFFnotes\nbytes' }],
     ['notes.read', { repo: operatorRepo }],
     ['notes.write', { repo: operatorRepo, document: 'notes\nbytes' }],
     ['notes.read', { repo: operatorRepo }],
@@ -85,6 +102,9 @@ export async function checkRegistryContract() {
 }
 if (import.meta.main) {
   if (process.argv.includes('--write'))
-    await Bun.write(path, `${JSON.stringify(await registryContract(), null, 2)}\n`)
+    await Bun.write(
+      path,
+      `${JSON.stringify(await registryContract(), null, 2).replace(/[^\x00-\x7f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)}\n`,
+    )
   else await checkRegistryContract()
 }

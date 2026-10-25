@@ -820,7 +820,7 @@
     "packages/postgres-store/src/tickets.integration.test.ts": "e7a66cdff5f52757f8936162bc2e3487bba66610d61698f548df9804c3b153e2",
     "packages/postgres-store/src/tickets.ts": "94619d80922dd507ce168aef671e2b6713f267d6ddc7738f5a881e8b1cb6f30a",
     "packages/postgres-store/src/vercel.ts": "4c6b8bad893ee6c00e882c400e4f0fb353a1c5c8b5a1da4bc6d1ba0bc7a59b19",
-    "experiments/proa-server/tools/api-read-fixtures.ts": "7ce3224c38aae0ba2404a8c9cf6482a41871f316d3c4a2fc9036d58e572996da"
+    "experiments/proa-server/tools/api-read-fixtures.ts": "191a819d7fe463328f634f3eeb3ecebbdd0f228b967f5e53c6dccc547992b2f8"
   },
   "now": "2026-09-02T00:00:00.000Z",
   "fixtures": [
@@ -1580,7 +1580,7 @@
       },
       "body": {
         "kind": "conflict",
-        "error": "effective config dispatcher-effective-config@0 is invalid: [\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]",
+        "error": "effective config dispatcher-effective-config@0 is invalid: [\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]",
         "code": "effective-config-unavailable"
       }
     },
@@ -5372,7 +5372,7 @@
             "children": [],
             "membershipKnown": false,
             "diagnostics": ["child membership unknown"],
-            "verification": "pending — runs on the node head against main once every child has landed",
+            "verification": "pending \u2014 runs on the node head against main once every child has landed",
             "verifySteps": [
               {
                 "step": "unit",
@@ -5383,7 +5383,7 @@
                 "outcome": "pending"
               }
             ],
-            "landing": "consent — default rule for integration builds: consent"
+            "landing": "consent \u2014 default rule for integration builds: consent"
           },
           "collectionIdentity": {
             "repo": "api-read/repository",
@@ -6563,7 +6563,7 @@
       },
       "body": {
         "kind": "conflict",
-        "error": "effective config dispatcher-effective-config@0 is invalid: [\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]",
+        "error": "effective config dispatcher-effective-config@0 is invalid: [\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tickets\",\n      \"readyState\"\n    ],\n    \"message\": \"[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \\\"ready\\\").\"\n  }\n]",
         "code": "effective-config-unavailable"
       }
     },
@@ -8976,7 +8976,7 @@
                 "children": [],
                 "membershipKnown": false,
                 "diagnostics": ["child membership unknown"],
-                "verification": "pending — runs on the node head against main once every child has landed",
+                "verification": "pending \u2014 runs on the node head against main once every child has landed",
                 "verifySteps": [
                   {
                     "step": "unit",
@@ -8987,7 +8987,7 @@
                     "outcome": "pending"
                   }
                 ],
-                "landing": "consent — default rule for integration builds: consent"
+                "landing": "consent \u2014 default rule for integration builds: consent"
               },
               "collectionIdentity": {
                 "repo": "api-read/repository",
@@ -12973,6 +12973,4830 @@
             }
           }
         ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "detail-handoff",
+        "seed": "handoff",
+        "path": "builds/api-read-build"
+      },
+      "seed": {
+        "builds": [
+          {
+            "record": {
+              "slug": "api-read-build",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-1",
+                "title": "API read seed"
+              },
+              "branch": "ab/api-read-build",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "main"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.attached",
+                "payload": {
+                  "instance": "read-instance",
+                  "host": "runner-host",
+                  "resumedFromSeq": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 3,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.runtime-recorded",
+                "payload": {
+                  "instance": "read-instance",
+                  "attachedSeq": 2,
+                  "runtime": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "advisory"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 4,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "workspace.provisioned",
+                "payload": {
+                  "provider": "test",
+                  "ref": "workspace",
+                  "branch": "ab/api-read-build",
+                  "base": {
+                    "source": "remote",
+                    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 5,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "spec.imported",
+                "payload": {
+                  "artifact": {
+                    "kind": "spec",
+                    "rev": 0
+                  },
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 6,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "plan.started",
+                "payload": {
+                  "round": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          }
+        ],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z"
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 4,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.target-prepared",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 5,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.yield-requested",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache",
+                "successor": "read-successor",
+                "mode": "drain",
+                "evidence": "verified candidate"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 6,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.handoff-started",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache",
+                "successor": "read-successor",
+                "mode": "drain",
+                "deadline": "2026-09-02T00:01:00.000Z",
+                "builds": [
+                  {
+                    "slug": "api-read-build",
+                    "instance": "read-instance"
+                  }
+                ]
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "detail": {
+          "slug": "api-read-build",
+          "kind": "work",
+          "target": "main",
+          "ticket": {
+            "source": "hosted",
+            "id": "ENG-1",
+            "title": "API read seed"
+          },
+          "status": "running",
+          "phase": "plan",
+          "round": 1,
+          "updatedAt": "2026-09-02T00:00:00.000Z",
+          "lease": {
+            "health": "none"
+          },
+          "progress": {
+            "lastEventAt": "2026-09-02T00:00:00.000Z",
+            "terminal": false
+          },
+          "runnerAttaches": [
+            {
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "instance": "read-instance",
+              "host": "runner-host",
+              "resumedFromSeq": 1,
+              "runtime": {
+                "version": "1.0.0",
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "source": {
+                  "kind": "source",
+                  "location": "/test/immutable-runtime"
+                }
+              }
+            }
+          ],
+          "tree": {
+            "kind": "work",
+            "target": {
+              "kind": "root",
+              "branch": "main"
+            },
+            "branch": "ab/api-read-build",
+            "restack": "idle",
+            "verification": {
+              "current": false,
+              "results": []
+            },
+            "ready": false,
+            "consent": false
+          },
+          "autoMerge": "off",
+          "openEscalations": [],
+          "suspendedSessions": [],
+          "sessionTotals": {},
+          "openSessions": [],
+          "observations": [],
+          "executionOpen": false,
+          "cleanupPending": false,
+          "verify": {
+            "attempt": 0,
+            "steps": []
+          },
+          "lastEvent": {
+            "type": "plan.started",
+            "seq": 6,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            }
+          }
+        },
+        "dashboardRow": {
+          "slug": "api-read-build",
+          "kind": "work",
+          "target": "main",
+          "tree": {
+            "kind": "work",
+            "target": {
+              "kind": "root",
+              "branch": "main"
+            },
+            "branch": "ab/api-read-build",
+            "restack": "idle",
+            "verification": {
+              "current": false,
+              "results": [],
+              "expectedSteps": ["unit", "smoke"]
+            },
+            "ready": false,
+            "consent": false
+          },
+          "collectionIdentity": {
+            "repo": "api-read/repository",
+            "source": "hosted",
+            "id": "ENG-1",
+            "status": "running",
+            "title": "API read seed",
+            "phase": "plan",
+            "createdAt": "2026-09-02T00:00:00.000Z"
+          },
+          "status": "running",
+          "alsoPaused": false,
+          "ticketId": "ENG-1",
+          "steps": [
+            {
+              "label": "plan",
+              "state": "current",
+              "count": 1,
+              "timing": {
+                "accumulatedMs": 0,
+                "runningSince": 1788307200000
+              }
+            },
+            {
+              "label": "plan-review",
+              "state": "pending",
+              "count": 1
+            },
+            {
+              "label": "implement",
+              "state": "pending"
+            },
+            {
+              "label": "code-review",
+              "state": "pending"
+            },
+            {
+              "label": "verify:unit",
+              "state": "pending"
+            },
+            {
+              "label": "verify:smoke",
+              "state": "pending"
+            },
+            {
+              "label": "finalize",
+              "state": "pending"
+            },
+            {
+              "label": "merge",
+              "state": "pending",
+              "qualifier": "waiting"
+            }
+          ],
+          "blockers": [],
+          "landing": {},
+          "autoMerge": "off",
+          "sessions": [],
+          "draining": true
+        }
+      }
+    },
+    {
+      "scenario": {
+        "id": "dashboard-handoff",
+        "seed": "handoff",
+        "path": "dashboard"
+      },
+      "seed": {
+        "builds": [
+          {
+            "record": {
+              "slug": "api-read-build",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-1",
+                "title": "API read seed"
+              },
+              "branch": "ab/api-read-build",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "main"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.attached",
+                "payload": {
+                  "instance": "read-instance",
+                  "host": "runner-host",
+                  "resumedFromSeq": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 3,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.runtime-recorded",
+                "payload": {
+                  "instance": "read-instance",
+                  "attachedSeq": 2,
+                  "runtime": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "advisory"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 4,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "workspace.provisioned",
+                "payload": {
+                  "provider": "test",
+                  "ref": "workspace",
+                  "branch": "ab/api-read-build",
+                  "base": {
+                    "source": "remote",
+                    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 5,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "spec.imported",
+                "payload": {
+                  "artifact": {
+                    "kind": "spec",
+                    "rev": 0
+                  },
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 6,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "plan.started",
+                "payload": {
+                  "round": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          }
+        ],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z"
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 4,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.target-prepared",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 5,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.yield-requested",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache",
+                "successor": "read-successor",
+                "mode": "drain",
+                "evidence": "verified candidate"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 6,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.handoff-started",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache",
+                "successor": "read-successor",
+                "mode": "drain",
+                "deadline": "2026-09-02T00:01:00.000Z",
+                "builds": [
+                  {
+                    "slug": "api-read-build",
+                    "instance": "read-instance"
+                  }
+                ]
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "generatedAt": "2026-09-02T00:00:00.000Z",
+        "model": {
+          "repo": "api-read/repository",
+          "handoffs": [
+            {
+              "run": "read-run",
+              "correlation": "read-correlation",
+              "from": {
+                "version": "1.0.0",
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "source": {
+                  "kind": "source",
+                  "location": "/test/immutable-runtime"
+                }
+              },
+              "to": {
+                "version": "1.0.1",
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "source": {
+                  "kind": "source",
+                  "location": "/test/immutable-runtime"
+                }
+              },
+              "mode": "drain",
+              "successor": "read-successor",
+              "deadline": "2026-09-02T00:01:00.000Z"
+            }
+          ],
+          "queued": 3,
+          "active": {
+            "current": 1,
+            "limit": 2
+          },
+          "capacity": {
+            "configured": 2,
+            "occupied": 1,
+            "effective": 2,
+            "borrowingNodes": []
+          },
+          "observations": {
+            "current": 0,
+            "limit": 5
+          },
+          "drained": false,
+          "repositoryPaused": false,
+          "defaultAutoMerge": false,
+          "harvestPaused": false,
+          "builds": [
+            {
+              "slug": "api-read-build",
+              "kind": "work",
+              "target": "main",
+              "tree": {
+                "kind": "work",
+                "target": {
+                  "kind": "root",
+                  "branch": "main"
+                },
+                "branch": "ab/api-read-build",
+                "restack": "idle",
+                "verification": {
+                  "current": false,
+                  "results": [],
+                  "expectedSteps": ["unit", "smoke"]
+                },
+                "ready": false,
+                "consent": false
+              },
+              "collectionIdentity": {
+                "repo": "api-read/repository",
+                "source": "hosted",
+                "id": "ENG-1",
+                "status": "running",
+                "title": "API read seed",
+                "phase": "plan",
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "status": "running",
+              "alsoPaused": false,
+              "ticketId": "ENG-1",
+              "steps": [
+                {
+                  "label": "plan",
+                  "state": "current",
+                  "count": 1,
+                  "timing": {
+                    "accumulatedMs": 0,
+                    "runningSince": 1788307200000
+                  }
+                },
+                {
+                  "label": "plan-review",
+                  "state": "pending",
+                  "count": 1
+                },
+                {
+                  "label": "implement",
+                  "state": "pending"
+                },
+                {
+                  "label": "code-review",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:unit",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:smoke",
+                  "state": "pending"
+                },
+                {
+                  "label": "finalize",
+                  "state": "pending"
+                },
+                {
+                  "label": "merge",
+                  "state": "pending",
+                  "qualifier": "waiting"
+                }
+              ],
+              "blockers": [],
+              "landing": {},
+              "autoMerge": "off",
+              "sessions": [],
+              "draining": true
+            }
+          ]
+        },
+        "settingsHeader": {
+          "intake": true,
+          "repositoryPaused": false,
+          "defaultAutoMerge": false,
+          "harvestPaused": false
+        }
+      }
+    },
+    {
+      "scenario": {
+        "id": "status-handoff",
+        "seed": "handoff",
+        "path": "status"
+      },
+      "seed": {
+        "builds": [
+          {
+            "record": {
+              "slug": "api-read-build",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-1",
+                "title": "API read seed"
+              },
+              "branch": "ab/api-read-build",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "main"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.attached",
+                "payload": {
+                  "instance": "read-instance",
+                  "host": "runner-host",
+                  "resumedFromSeq": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 3,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.runtime-recorded",
+                "payload": {
+                  "instance": "read-instance",
+                  "attachedSeq": 2,
+                  "runtime": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "advisory"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 4,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "workspace.provisioned",
+                "payload": {
+                  "provider": "test",
+                  "ref": "workspace",
+                  "branch": "ab/api-read-build",
+                  "base": {
+                    "source": "remote",
+                    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 5,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "spec.imported",
+                "payload": {
+                  "artifact": {
+                    "kind": "spec",
+                    "rev": 0
+                  },
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 6,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "plan.started",
+                "payload": {
+                  "round": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          }
+        ],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z"
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 4,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.target-prepared",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 5,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.yield-requested",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache",
+                "successor": "read-successor",
+                "mode": "drain",
+                "evidence": "verified candidate"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 6,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.handoff-started",
+              "payload": {
+                "correlation": "read-correlation",
+                "run": "read-run",
+                "lineage": "read-lineage",
+                "from": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "target": {
+                  "mode": "source",
+                  "key": "read-target",
+                  "source": "main",
+                  "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                },
+                "to": {
+                  "version": "1.0.1",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                },
+                "root": "/test/new-runtime",
+                "cacheId": "read-cache",
+                "successor": "read-successor",
+                "mode": "drain",
+                "deadline": "2026-09-02T00:01:00.000Z",
+                "builds": [
+                  {
+                    "slug": "api-read-build",
+                    "instance": "read-instance"
+                  }
+                ]
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "repo": "api-read/repository",
+        "operator": {
+          "registrations": []
+        },
+        "upgrades": {
+          "runs": {
+            "read-run": {
+              "outstanding": {
+                "api-read-build": "read-instance"
+              },
+              "drained": 0,
+              "suspended": 0,
+              "prepared": {
+                "repo": "api-read/repository",
+                "seq": 4,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "dispatcher.target-prepared",
+                "payload": {
+                  "correlation": "read-correlation",
+                  "run": "read-run",
+                  "lineage": "read-lineage",
+                  "from": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  },
+                  "target": {
+                    "mode": "source",
+                    "key": "read-target",
+                    "source": "main",
+                    "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                  },
+                  "to": {
+                    "version": "1.0.1",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  },
+                  "root": "/test/new-runtime",
+                  "cacheId": "read-cache"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              "request": {
+                "repo": "api-read/repository",
+                "seq": 5,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "dispatcher.yield-requested",
+                "payload": {
+                  "correlation": "read-correlation",
+                  "run": "read-run",
+                  "lineage": "read-lineage",
+                  "from": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  },
+                  "target": {
+                    "mode": "source",
+                    "key": "read-target",
+                    "source": "main",
+                    "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                  },
+                  "to": {
+                    "version": "1.0.1",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  },
+                  "root": "/test/new-runtime",
+                  "cacheId": "read-cache",
+                  "successor": "read-successor",
+                  "mode": "drain",
+                  "evidence": "verified candidate"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              "handoff": {
+                "repo": "api-read/repository",
+                "seq": 6,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "dispatcher.handoff-started",
+                "payload": {
+                  "correlation": "read-correlation",
+                  "run": "read-run",
+                  "lineage": "read-lineage",
+                  "from": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  },
+                  "target": {
+                    "mode": "source",
+                    "key": "read-target",
+                    "source": "main",
+                    "sha": "cccccccccccccccccccccccccccccccccccccccc"
+                  },
+                  "to": {
+                    "version": "1.0.1",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  },
+                  "root": "/test/new-runtime",
+                  "cacheId": "read-cache",
+                  "successor": "read-successor",
+                  "mode": "drain",
+                  "deadline": "2026-09-02T00:01:00.000Z",
+                  "builds": [
+                    {
+                      "slug": "api-read-build",
+                      "instance": "read-instance"
+                    }
+                  ]
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              "deadline": "2026-09-02T00:01:00.000Z"
+            }
+          },
+          "holds": {},
+          "lineages": {},
+          "rollbackIds": []
+        },
+        "dispatcher": {
+          "state": "absent",
+          "holder": null,
+          "expiredHolder": null,
+          "latestRun": {
+            "runtime": {
+              "version": "1.0.0",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": {
+                "kind": "source",
+                "location": "/test/immutable-runtime"
+              }
+            },
+            "run": "read-run",
+            "pid": 1234,
+            "host": "test-host",
+            "startedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": null,
+            "heartbeatAgeMs": null,
+            "leaseExpiresAt": null,
+            "lastTickAt": "2026-09-02T00:00:00.000Z",
+            "lastTickAgeMs": 0,
+            "lastTick": {
+              "outcome": "completed",
+              "counters": {
+                "forgeRequests": {
+                  "restPrimary": 6,
+                  "restNotModified": 1,
+                  "graphql": 0,
+                  "total": 7,
+                  "unattributed": 1,
+                  "builds": [
+                    {
+                      "build": "api-read-build",
+                      "requests": 6
+                    }
+                  ],
+                  "complete": true
+                },
+                "merged": 0,
+                "closed": 0,
+                "conflicted": 0,
+                "abandoned": 0,
+                "discarded": 0,
+                "janitorFailed": 0,
+                "recovered": 0,
+                "dispatchFailed": 0,
+                "resumed": 0,
+                "swept": 0,
+                "dispatched": 0,
+                "authored": 0,
+                "bounced": 0,
+                "claimRaces": 0,
+                "invalidTickets": 0,
+                "dependencyBlocked": 0,
+                "harvestStarted": 0,
+                "harvestResumed": 0,
+                "harvestCompleted": 0,
+                "harvestEscalated": 0,
+                "harvestFailed": 0
+              }
+            },
+            "stoppedAt": null,
+            "stop": null
+          },
+          "latestStoppedRun": null
+        },
+        "forgeRequests": {
+          "restPrimary": 6,
+          "restNotModified": 1,
+          "graphql": 0,
+          "total": 7,
+          "unattributed": 1,
+          "builds": [
+            {
+              "build": "api-read-build",
+              "requests": 6
+            }
+          ],
+          "complete": true
+        },
+        "forgeRequestHotspot": "api-read-build",
+        "intake": true,
+        "paused": false,
+        "defaultAutoMerge": false,
+        "sandboxes": [],
+        "publications": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "dashboard-settings",
+        "seed": "settings",
+        "path": "dashboard"
+      },
+      "seed": {
+        "builds": [],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z"
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 4,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "human",
+                "user": "operator@example.com"
+              },
+              "type": "dispatcher.intake-set",
+              "payload": {
+                "enabled": false
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 5,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "human",
+                "user": "operator@example.com"
+              },
+              "type": "dispatcher.pause-set",
+              "payload": {
+                "enabled": true
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 6,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "human",
+                "user": "operator@example.com"
+              },
+              "type": "dispatcher.auto-merge-default-set",
+              "payload": {
+                "enabled": true
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 7,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "kernel"
+              },
+              "type": "harvest.paused",
+              "payload": {},
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "generatedAt": "2026-09-02T00:00:00.000Z",
+        "model": {
+          "repo": "api-read/repository",
+          "queued": 3,
+          "active": {
+            "current": 0,
+            "limit": 2
+          },
+          "capacity": {
+            "configured": 2,
+            "occupied": 0,
+            "effective": 2,
+            "borrowingNodes": []
+          },
+          "observations": {
+            "current": 0,
+            "limit": 5
+          },
+          "drained": true,
+          "repositoryPaused": true,
+          "defaultAutoMerge": true,
+          "harvestPaused": true,
+          "builds": []
+        },
+        "settingsHeader": {
+          "intake": false,
+          "repositoryPaused": true,
+          "defaultAutoMerge": true,
+          "harvestPaused": true
+        }
+      }
+    },
+    {
+      "scenario": {
+        "id": "status-settings",
+        "seed": "settings",
+        "path": "status"
+      },
+      "seed": {
+        "builds": [],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z"
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 4,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "human",
+                "user": "operator@example.com"
+              },
+              "type": "dispatcher.intake-set",
+              "payload": {
+                "enabled": false
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 5,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "human",
+                "user": "operator@example.com"
+              },
+              "type": "dispatcher.pause-set",
+              "payload": {
+                "enabled": true
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 6,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "human",
+                "user": "operator@example.com"
+              },
+              "type": "dispatcher.auto-merge-default-set",
+              "payload": {
+                "enabled": true
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 7,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "kernel"
+              },
+              "type": "harvest.paused",
+              "payload": {},
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "repo": "api-read/repository",
+        "operator": {
+          "registrations": []
+        },
+        "upgrades": {
+          "runs": {},
+          "holds": {},
+          "lineages": {},
+          "rollbackIds": []
+        },
+        "dispatcher": {
+          "state": "absent",
+          "holder": null,
+          "expiredHolder": null,
+          "latestRun": {
+            "runtime": {
+              "version": "1.0.0",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": {
+                "kind": "source",
+                "location": "/test/immutable-runtime"
+              }
+            },
+            "run": "read-run",
+            "pid": 1234,
+            "host": "test-host",
+            "startedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": null,
+            "heartbeatAgeMs": null,
+            "leaseExpiresAt": null,
+            "lastTickAt": "2026-09-02T00:00:00.000Z",
+            "lastTickAgeMs": 0,
+            "lastTick": {
+              "outcome": "completed",
+              "counters": {
+                "forgeRequests": {
+                  "restPrimary": 6,
+                  "restNotModified": 1,
+                  "graphql": 0,
+                  "total": 7,
+                  "unattributed": 1,
+                  "builds": [
+                    {
+                      "build": "api-read-build",
+                      "requests": 6
+                    }
+                  ],
+                  "complete": true
+                },
+                "merged": 0,
+                "closed": 0,
+                "conflicted": 0,
+                "abandoned": 0,
+                "discarded": 0,
+                "janitorFailed": 0,
+                "recovered": 0,
+                "dispatchFailed": 0,
+                "resumed": 0,
+                "swept": 0,
+                "dispatched": 0,
+                "authored": 0,
+                "bounced": 0,
+                "claimRaces": 0,
+                "invalidTickets": 0,
+                "dependencyBlocked": 0,
+                "harvestStarted": 0,
+                "harvestResumed": 0,
+                "harvestCompleted": 0,
+                "harvestEscalated": 0,
+                "harvestFailed": 0
+              }
+            },
+            "stoppedAt": null,
+            "stop": null
+          },
+          "latestStoppedRun": null
+        },
+        "forgeRequests": {
+          "restPrimary": 6,
+          "restNotModified": 1,
+          "graphql": 0,
+          "total": 7,
+          "unattributed": 1,
+          "builds": [
+            {
+              "build": "api-read-build",
+              "requests": 6
+            }
+          ],
+          "complete": true
+        },
+        "forgeRequestHotspot": "api-read-build",
+        "intake": false,
+        "paused": true,
+        "defaultAutoMerge": true,
+        "sandboxes": [],
+        "publications": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "status-degraded",
+        "seed": "degraded",
+        "path": "status"
+      },
+      "seed": {
+        "builds": [],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z"
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 4,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.forge-degraded",
+              "payload": {
+                "forge": "github",
+                "message": "quota exhausted",
+                "resetAt": "2026-09-02T00:10:00.000Z",
+                "firstFailureAt": "2026-09-02T00:00:00.000Z"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 5,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.ticket-source-degraded",
+              "payload": {
+                "source": "hosted",
+                "operation": "ready-scan",
+                "message": "provider timeout",
+                "cause": "ready-scan-failed"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 6,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "human",
+                "user": "operator@example.com"
+              },
+              "type": "orchestrator.sandbox.provisioned",
+              "payload": {
+                "operator": "operator@example.com",
+                "environmentId": "sandbox-read",
+                "provider": "test",
+                "workspacePath": "/test/workspace"
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "repo": "api-read/repository",
+        "operator": {
+          "registrations": []
+        },
+        "upgrades": {
+          "runs": {},
+          "holds": {},
+          "lineages": {},
+          "rollbackIds": []
+        },
+        "dispatcher": {
+          "state": "absent",
+          "holder": null,
+          "expiredHolder": null,
+          "latestRun": {
+            "runtime": {
+              "version": "1.0.0",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": {
+                "kind": "source",
+                "location": "/test/immutable-runtime"
+              }
+            },
+            "run": "read-run",
+            "pid": 1234,
+            "host": "test-host",
+            "startedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": null,
+            "heartbeatAgeMs": null,
+            "leaseExpiresAt": null,
+            "lastTickAt": "2026-09-02T00:00:00.000Z",
+            "lastTickAgeMs": 0,
+            "lastTick": {
+              "outcome": "completed",
+              "counters": {
+                "forgeRequests": {
+                  "restPrimary": 6,
+                  "restNotModified": 1,
+                  "graphql": 0,
+                  "total": 7,
+                  "unattributed": 1,
+                  "builds": [
+                    {
+                      "build": "api-read-build",
+                      "requests": 6
+                    }
+                  ],
+                  "complete": true
+                },
+                "merged": 0,
+                "closed": 0,
+                "conflicted": 0,
+                "abandoned": 0,
+                "discarded": 0,
+                "janitorFailed": 0,
+                "recovered": 0,
+                "dispatchFailed": 0,
+                "resumed": 0,
+                "swept": 0,
+                "dispatched": 0,
+                "authored": 0,
+                "bounced": 0,
+                "claimRaces": 0,
+                "invalidTickets": 0,
+                "dependencyBlocked": 0,
+                "harvestStarted": 0,
+                "harvestResumed": 0,
+                "harvestCompleted": 0,
+                "harvestEscalated": 0,
+                "harvestFailed": 0
+              }
+            },
+            "stoppedAt": null,
+            "stop": null
+          },
+          "latestStoppedRun": null
+        },
+        "forgeRequests": {
+          "restPrimary": 6,
+          "restNotModified": 1,
+          "graphql": 0,
+          "total": 7,
+          "unattributed": 1,
+          "builds": [
+            {
+              "build": "api-read-build",
+              "requests": 6
+            }
+          ],
+          "complete": true
+        },
+        "forgeRequestHotspot": "api-read-build",
+        "intake": true,
+        "paused": false,
+        "defaultAutoMerge": false,
+        "forgeDegradation": {
+          "forge": "github",
+          "message": "quota exhausted",
+          "resetAt": "2026-09-02T00:10:00.000Z",
+          "firstFailureAt": "2026-09-02T00:00:00.000Z"
+        },
+        "ticketSourceDegradation": {
+          "source": "hosted",
+          "operation": "ready-scan",
+          "message": "provider timeout",
+          "cause": "ready-scan-failed"
+        },
+        "sandboxes": [
+          {
+            "operator": "operator@example.com",
+            "environmentId": "sandbox-read",
+            "provider": "test",
+            "state": "live",
+            "lastEvidenceAt": "2026-09-02T00:00:00.000Z"
+          }
+        ],
+        "publications": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "dashboard-capacity",
+        "seed": "capacity",
+        "path": "dashboard"
+      },
+      "seed": {
+        "builds": [
+          {
+            "record": {
+              "slug": "api-read-build",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-1",
+                "title": "API read seed"
+              },
+              "branch": "ab/api-read-build",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "main",
+                  "kind": "node"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.attached",
+                "payload": {
+                  "instance": "read-instance",
+                  "host": "runner-host",
+                  "resumedFromSeq": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 3,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.runtime-recorded",
+                "payload": {
+                  "instance": "read-instance",
+                  "attachedSeq": 2,
+                  "runtime": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "advisory"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 4,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "workspace.provisioned",
+                "payload": {
+                  "provider": "test",
+                  "ref": "workspace",
+                  "branch": "ab/api-read-build",
+                  "base": {
+                    "source": "remote",
+                    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 5,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "spec.imported",
+                "payload": {
+                  "artifact": {
+                    "kind": "spec",
+                    "rev": 0
+                  },
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 6,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "plan.started",
+                "payload": {
+                  "round": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 7,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "node.opening",
+                "payload": {
+                  "branch": "ab/api-read-build",
+                  "parent": "main",
+                  "sha": "node-opening"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 8,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "node.opened",
+                "payload": {
+                  "sha": "node-opening"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 9,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "node.compared",
+                "payload": {
+                  "parentSha": "node-opening",
+                  "headSha": "node-head",
+                  "ahead": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 10,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "integration.observed",
+                "payload": {
+                  "openChildren": [],
+                  "diagnostics": [],
+                  "contributions": ["collected-change"]
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 11,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "integration.prepared",
+                "payload": {
+                  "id": "read-cycle",
+                  "head": "node-head",
+                  "parent": "node-opening",
+                  "config": "{\"verify\":{\"steps\":[\"unit\",\"smoke\"],\"stepConfigs\":{\"unit\":{\"kind\":\"check\",\"command\":\"unit\"},\"smoke\":{\"kind\":\"check\",\"command\":\"smoke\"}},\"afterReconcile\":true},\"commands\":{\"unit\":\"bun test\",\"smoke\":\"true\"}}"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          },
+          {
+            "record": {
+              "slug": "api-read-build-child-1",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-2",
+                "title": "Paused descendant 1"
+              },
+              "branch": "ab/api-read-build-child-1",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build-child-1",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-2",
+                    "title": "Paused descendant 1"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "ab/api-read-build",
+                  "target": {
+                    "ticket": {
+                      "source": "hosted",
+                      "id": "ENG-1",
+                      "title": "API read seed"
+                    },
+                    "build": "api-read-build"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build-child-1",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "build.paused",
+                "payload": {},
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          },
+          {
+            "record": {
+              "slug": "api-read-build-child-2",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-3",
+                "title": "Paused descendant 2"
+              },
+              "branch": "ab/api-read-build-child-2",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build-child-2",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-3",
+                    "title": "Paused descendant 2"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "ab/api-read-build",
+                  "target": {
+                    "ticket": {
+                      "source": "hosted",
+                      "id": "ENG-1",
+                      "title": "API read seed"
+                    },
+                    "build": "api-read-build"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build-child-2",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "build.paused",
+                "payload": {},
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          },
+          {
+            "record": {
+              "slug": "api-read-build-child-3",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-4",
+                "title": "Paused descendant 3"
+              },
+              "branch": "ab/api-read-build-child-3",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build-child-3",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-4",
+                    "title": "Paused descendant 3"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "ab/api-read-build",
+                  "target": {
+                    "ticket": {
+                      "source": "hosted",
+                      "id": "ENG-1",
+                      "title": "API read seed"
+                    },
+                    "build": "api-read-build"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build-child-3",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "build.paused",
+                "payload": {},
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          }
+        ],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "lease": {
+              "holder": "read-run",
+              "expiresAt": "2026-09-02T00:00:30.000Z"
+            }
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "generatedAt": "2026-09-02T00:00:00.000Z",
+        "model": {
+          "repo": "api-read/repository",
+          "queued": 3,
+          "active": {
+            "current": 4,
+            "limit": 4
+          },
+          "capacity": {
+            "configured": 2,
+            "occupied": 4,
+            "effective": 4,
+            "borrowingNodes": ["api-read-build"]
+          },
+          "observations": {
+            "current": 0,
+            "limit": 5
+          },
+          "drained": false,
+          "repositoryPaused": false,
+          "defaultAutoMerge": false,
+          "harvestPaused": false,
+          "builds": [
+            {
+              "slug": "api-read-build",
+              "kind": "integration",
+              "target": "main",
+              "integration": "verifying",
+              "tree": {
+                "kind": "node",
+                "target": {
+                  "kind": "root",
+                  "branch": "main"
+                },
+                "branch": "ab/api-read-build",
+                "restack": "idle",
+                "verification": {
+                  "head": "node-head",
+                  "parent": "node-opening",
+                  "current": false,
+                  "results": [],
+                  "expectedSteps": ["unit", "smoke"]
+                },
+                "children": [],
+                "diagnostics": [],
+                "completeness": "complete",
+                "ready": false,
+                "consent": false
+              },
+              "integrationRow": {
+                "destination": "main",
+                "parentDistance": "parent distance unknown",
+                "openChildren": [],
+                "children": {
+                  "known": true,
+                  "landed": 1,
+                  "building": 0,
+                  "queued": 0,
+                  "total": 1
+                },
+                "verified": false,
+                "steps": [
+                  {
+                    "label": "spec",
+                    "state": "done"
+                  },
+                  {
+                    "label": "open",
+                    "state": "done"
+                  },
+                  {
+                    "label": "collect",
+                    "state": "done"
+                  },
+                  {
+                    "label": "verify",
+                    "state": "current",
+                    "qualifier": "0/2"
+                  },
+                  {
+                    "label": "land",
+                    "state": "pending",
+                    "qualifier": "consent"
+                  }
+                ]
+              },
+              "integrationDetail": {
+                "parentDistance": "parent distance unknown",
+                "destination": "main (the configured base branch)",
+                "branch": "ab/api-read-build",
+                "restack": "idle",
+                "children": [
+                  {
+                    "source": "hosted",
+                    "id": "collected-change",
+                    "builds": ["collected-change"],
+                    "title": "title unavailable",
+                    "state": "landed",
+                    "landed": true
+                  }
+                ],
+                "membershipKnown": true,
+                "diagnostics": [],
+                "verification": "pending on the current node head and destination",
+                "verifySteps": [
+                  {
+                    "step": "unit",
+                    "outcome": "pending"
+                  },
+                  {
+                    "step": "smoke",
+                    "outcome": "pending"
+                  }
+                ],
+                "landing": "consent \u2014 default rule for integration builds: consent"
+              },
+              "collectionIdentity": {
+                "repo": "api-read/repository",
+                "source": "hosted",
+                "id": "ENG-1",
+                "status": "collecting",
+                "title": "API read seed",
+                "phase": "plan",
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "status": "collecting",
+              "alsoPaused": false,
+              "ticketId": "ENG-1",
+              "steps": [
+                {
+                  "label": "spec",
+                  "state": "done"
+                },
+                {
+                  "label": "open",
+                  "state": "done"
+                },
+                {
+                  "label": "verifying",
+                  "state": "current"
+                },
+                {
+                  "label": "merge",
+                  "state": "pending",
+                  "qualifier": "waiting",
+                  "reason": "integration awaits verification"
+                }
+              ],
+              "blockers": [],
+              "landing": {},
+              "autoMerge": "off",
+              "sessions": []
+            },
+            {
+              "slug": "api-read-build-child-1",
+              "kind": "work",
+              "target": "ENG-1",
+              "tree": {
+                "kind": "work",
+                "target": {
+                  "kind": "node",
+                  "branch": "ab/api-read-build",
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "build": "api-read-build"
+                },
+                "branch": "ab/api-read-build-child-1",
+                "restack": "idle",
+                "verification": {
+                  "current": false,
+                  "results": [],
+                  "expectedSteps": ["unit", "smoke"]
+                },
+                "ready": false,
+                "consent": false
+              },
+              "collectionIdentity": {
+                "repo": "api-read/repository",
+                "source": "hosted",
+                "id": "ENG-2",
+                "targetBuild": "api-read-build",
+                "targetSource": "hosted",
+                "targetId": "ENG-1",
+                "status": "paused",
+                "title": "Paused descendant 1",
+                "phase": "paused",
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "status": "paused",
+              "alsoPaused": false,
+              "ticketId": "ENG-2",
+              "steps": [
+                {
+                  "label": "plan",
+                  "state": "pending"
+                },
+                {
+                  "label": "plan-review",
+                  "state": "pending"
+                },
+                {
+                  "label": "implement",
+                  "state": "pending"
+                },
+                {
+                  "label": "code-review",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:unit",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:smoke",
+                  "state": "pending"
+                },
+                {
+                  "label": "finalize",
+                  "state": "pending"
+                },
+                {
+                  "label": "merge",
+                  "state": "pending",
+                  "qualifier": "waiting"
+                }
+              ],
+              "blockers": [],
+              "landing": {},
+              "autoMerge": "off",
+              "sessions": []
+            },
+            {
+              "slug": "api-read-build-child-2",
+              "kind": "work",
+              "target": "ENG-1",
+              "tree": {
+                "kind": "work",
+                "target": {
+                  "kind": "node",
+                  "branch": "ab/api-read-build",
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "build": "api-read-build"
+                },
+                "branch": "ab/api-read-build-child-2",
+                "restack": "idle",
+                "verification": {
+                  "current": false,
+                  "results": [],
+                  "expectedSteps": ["unit", "smoke"]
+                },
+                "ready": false,
+                "consent": false
+              },
+              "collectionIdentity": {
+                "repo": "api-read/repository",
+                "source": "hosted",
+                "id": "ENG-3",
+                "targetBuild": "api-read-build",
+                "targetSource": "hosted",
+                "targetId": "ENG-1",
+                "status": "paused",
+                "title": "Paused descendant 2",
+                "phase": "paused",
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "status": "paused",
+              "alsoPaused": false,
+              "ticketId": "ENG-3",
+              "steps": [
+                {
+                  "label": "plan",
+                  "state": "pending"
+                },
+                {
+                  "label": "plan-review",
+                  "state": "pending"
+                },
+                {
+                  "label": "implement",
+                  "state": "pending"
+                },
+                {
+                  "label": "code-review",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:unit",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:smoke",
+                  "state": "pending"
+                },
+                {
+                  "label": "finalize",
+                  "state": "pending"
+                },
+                {
+                  "label": "merge",
+                  "state": "pending",
+                  "qualifier": "waiting"
+                }
+              ],
+              "blockers": [],
+              "landing": {},
+              "autoMerge": "off",
+              "sessions": []
+            },
+            {
+              "slug": "api-read-build-child-3",
+              "kind": "work",
+              "target": "ENG-1",
+              "tree": {
+                "kind": "work",
+                "target": {
+                  "kind": "node",
+                  "branch": "ab/api-read-build",
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "build": "api-read-build"
+                },
+                "branch": "ab/api-read-build-child-3",
+                "restack": "idle",
+                "verification": {
+                  "current": false,
+                  "results": [],
+                  "expectedSteps": ["unit", "smoke"]
+                },
+                "ready": false,
+                "consent": false
+              },
+              "collectionIdentity": {
+                "repo": "api-read/repository",
+                "source": "hosted",
+                "id": "ENG-4",
+                "targetBuild": "api-read-build",
+                "targetSource": "hosted",
+                "targetId": "ENG-1",
+                "status": "paused",
+                "title": "Paused descendant 3",
+                "phase": "paused",
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "status": "paused",
+              "alsoPaused": false,
+              "ticketId": "ENG-4",
+              "steps": [
+                {
+                  "label": "plan",
+                  "state": "pending"
+                },
+                {
+                  "label": "plan-review",
+                  "state": "pending"
+                },
+                {
+                  "label": "implement",
+                  "state": "pending"
+                },
+                {
+                  "label": "code-review",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:unit",
+                  "state": "pending"
+                },
+                {
+                  "label": "verify:smoke",
+                  "state": "pending"
+                },
+                {
+                  "label": "finalize",
+                  "state": "pending"
+                },
+                {
+                  "label": "merge",
+                  "state": "pending",
+                  "qualifier": "waiting"
+                }
+              ],
+              "blockers": [],
+              "landing": {},
+              "autoMerge": "off",
+              "sessions": []
+            }
+          ]
+        },
+        "settingsHeader": {
+          "intake": true,
+          "repositoryPaused": false,
+          "defaultAutoMerge": false,
+          "harvestPaused": false
+        }
+      }
+    },
+    {
+      "scenario": {
+        "id": "status-capacity",
+        "seed": "capacity",
+        "path": "status"
+      },
+      "seed": {
+        "builds": [
+          {
+            "record": {
+              "slug": "api-read-build",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-1",
+                "title": "API read seed"
+              },
+              "branch": "ab/api-read-build",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "main",
+                  "kind": "node"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.attached",
+                "payload": {
+                  "instance": "read-instance",
+                  "host": "runner-host",
+                  "resumedFromSeq": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 3,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "runner.runtime-recorded",
+                "payload": {
+                  "instance": "read-instance",
+                  "attachedSeq": 2,
+                  "runtime": {
+                    "version": "1.0.0",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source": {
+                      "kind": "source",
+                      "location": "/test/immutable-runtime"
+                    }
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "advisory"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 4,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "workspace.provisioned",
+                "payload": {
+                  "provider": "test",
+                  "ref": "workspace",
+                  "branch": "ab/api-read-build",
+                  "base": {
+                    "source": "remote",
+                    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 5,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "spec.imported",
+                "payload": {
+                  "artifact": {
+                    "kind": "spec",
+                    "rev": 0
+                  },
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-1",
+                    "title": "API read seed"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 6,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "plan.started",
+                "payload": {
+                  "round": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 7,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "node.opening",
+                "payload": {
+                  "branch": "ab/api-read-build",
+                  "parent": "main",
+                  "sha": "node-opening"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 8,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "node.opened",
+                "payload": {
+                  "sha": "node-opening"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 9,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "node.compared",
+                "payload": {
+                  "parentSha": "node-opening",
+                  "headSha": "node-head",
+                  "ahead": 1
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 10,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "integration.observed",
+                "payload": {
+                  "openChildren": [],
+                  "diagnostics": [],
+                  "contributions": ["collected-change"]
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build",
+                "seq": 11,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "integration.prepared",
+                "payload": {
+                  "id": "read-cycle",
+                  "head": "node-head",
+                  "parent": "node-opening",
+                  "config": "{\"verify\":{\"steps\":[\"unit\",\"smoke\"],\"stepConfigs\":{\"unit\":{\"kind\":\"check\",\"command\":\"unit\"},\"smoke\":{\"kind\":\"check\",\"command\":\"smoke\"}},\"afterReconcile\":true},\"commands\":{\"unit\":\"bun test\",\"smoke\":\"true\"}}"
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          },
+          {
+            "record": {
+              "slug": "api-read-build-child-1",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-2",
+                "title": "Paused descendant 1"
+              },
+              "branch": "ab/api-read-build-child-1",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build-child-1",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-2",
+                    "title": "Paused descendant 1"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "ab/api-read-build",
+                  "target": {
+                    "ticket": {
+                      "source": "hosted",
+                      "id": "ENG-1",
+                      "title": "API read seed"
+                    },
+                    "build": "api-read-build"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build-child-1",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "build.paused",
+                "payload": {},
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          },
+          {
+            "record": {
+              "slug": "api-read-build-child-2",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-3",
+                "title": "Paused descendant 2"
+              },
+              "branch": "ab/api-read-build-child-2",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build-child-2",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-3",
+                    "title": "Paused descendant 2"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "ab/api-read-build",
+                  "target": {
+                    "ticket": {
+                      "source": "hosted",
+                      "id": "ENG-1",
+                      "title": "API read seed"
+                    },
+                    "build": "api-read-build"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build-child-2",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "build.paused",
+                "payload": {},
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          },
+          {
+            "record": {
+              "slug": "api-read-build-child-3",
+              "repo": "api-read/repository",
+              "ticket": {
+                "source": "hosted",
+                "id": "ENG-4",
+                "title": "Paused descendant 3"
+              },
+              "branch": "ab/api-read-build-child-3",
+              "createdAt": "2026-09-02T00:00:00.000Z",
+              "updatedAt": "2026-09-02T00:00:00.000Z"
+            },
+            "events": [
+              {
+                "build": "api-read-build-child-3",
+                "seq": 1,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "dispatcher"
+                },
+                "type": "build.created",
+                "payload": {
+                  "ticket": {
+                    "source": "hosted",
+                    "id": "ENG-4",
+                    "title": "Paused descendant 3"
+                  },
+                  "repo": "api-read/repository",
+                  "baseBranch": "ab/api-read-build",
+                  "target": {
+                    "ticket": {
+                      "source": "hosted",
+                      "id": "ENG-1",
+                      "title": "API read seed"
+                    },
+                    "build": "api-read-build"
+                  }
+                },
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              },
+              {
+                "build": "api-read-build-child-3",
+                "seq": 2,
+                "ts": "2026-09-02T00:00:00.000Z",
+                "actor": {
+                  "kind": "kernel"
+                },
+                "type": "build.paused",
+                "payload": {},
+                "compatibility": {
+                  "writerVersion": "1.0.1",
+                  "classification": "decisive"
+                }
+              }
+            ],
+            "artifacts": []
+          }
+        ],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "lease": {
+              "holder": "read-run",
+              "expiresAt": "2026-09-02T00:00:30.000Z"
+            }
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "repo": "api-read/repository",
+        "operator": {
+          "registrations": []
+        },
+        "upgrades": {
+          "runs": {},
+          "holds": {},
+          "lineages": {},
+          "rollbackIds": []
+        },
+        "dispatcher": {
+          "state": "held",
+          "holder": {
+            "runtime": {
+              "version": "1.0.0",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": {
+                "kind": "source",
+                "location": "/test/immutable-runtime"
+              }
+            },
+            "run": "read-run",
+            "pid": 1234,
+            "host": "test-host",
+            "startedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAgeMs": 0,
+            "leaseExpiresAt": "2026-09-02T00:00:30.000Z",
+            "lastTickAt": "2026-09-02T00:00:00.000Z",
+            "lastTickAgeMs": 0,
+            "lastTick": {
+              "outcome": "completed",
+              "counters": {
+                "forgeRequests": {
+                  "restPrimary": 6,
+                  "restNotModified": 1,
+                  "graphql": 0,
+                  "total": 7,
+                  "unattributed": 1,
+                  "builds": [
+                    {
+                      "build": "api-read-build",
+                      "requests": 6
+                    }
+                  ],
+                  "complete": true
+                },
+                "merged": 0,
+                "closed": 0,
+                "conflicted": 0,
+                "abandoned": 0,
+                "discarded": 0,
+                "janitorFailed": 0,
+                "recovered": 0,
+                "dispatchFailed": 0,
+                "resumed": 0,
+                "swept": 0,
+                "dispatched": 0,
+                "authored": 0,
+                "bounced": 0,
+                "claimRaces": 0,
+                "invalidTickets": 0,
+                "dependencyBlocked": 0,
+                "harvestStarted": 0,
+                "harvestResumed": 0,
+                "harvestCompleted": 0,
+                "harvestEscalated": 0,
+                "harvestFailed": 0
+              }
+            },
+            "stoppedAt": null,
+            "stop": null
+          },
+          "expiredHolder": null,
+          "latestRun": {
+            "runtime": {
+              "version": "1.0.0",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": {
+                "kind": "source",
+                "location": "/test/immutable-runtime"
+              }
+            },
+            "run": "read-run",
+            "pid": 1234,
+            "host": "test-host",
+            "startedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAgeMs": 0,
+            "leaseExpiresAt": "2026-09-02T00:00:30.000Z",
+            "lastTickAt": "2026-09-02T00:00:00.000Z",
+            "lastTickAgeMs": 0,
+            "lastTick": {
+              "outcome": "completed",
+              "counters": {
+                "forgeRequests": {
+                  "restPrimary": 6,
+                  "restNotModified": 1,
+                  "graphql": 0,
+                  "total": 7,
+                  "unattributed": 1,
+                  "builds": [
+                    {
+                      "build": "api-read-build",
+                      "requests": 6
+                    }
+                  ],
+                  "complete": true
+                },
+                "merged": 0,
+                "closed": 0,
+                "conflicted": 0,
+                "abandoned": 0,
+                "discarded": 0,
+                "janitorFailed": 0,
+                "recovered": 0,
+                "dispatchFailed": 0,
+                "resumed": 0,
+                "swept": 0,
+                "dispatched": 0,
+                "authored": 0,
+                "bounced": 0,
+                "claimRaces": 0,
+                "invalidTickets": 0,
+                "dependencyBlocked": 0,
+                "harvestStarted": 0,
+                "harvestResumed": 0,
+                "harvestCompleted": 0,
+                "harvestEscalated": 0,
+                "harvestFailed": 0
+              }
+            },
+            "stoppedAt": null,
+            "stop": null
+          },
+          "latestStoppedRun": null
+        },
+        "forgeRequests": {
+          "restPrimary": 6,
+          "restNotModified": 1,
+          "graphql": 0,
+          "total": 7,
+          "unattributed": 1,
+          "builds": [
+            {
+              "build": "api-read-build",
+              "requests": 6
+            }
+          ],
+          "complete": true
+        },
+        "forgeRequestHotspot": "api-read-build",
+        "intake": true,
+        "paused": false,
+        "defaultAutoMerge": false,
+        "sandboxes": [],
+        "publications": [],
+        "capacity": {
+          "configured": 2,
+          "occupied": 4,
+          "effective": 4,
+          "borrowingNodes": ["api-read-build"]
+        }
+      }
+    },
+    {
+      "scenario": {
+        "id": "status-held-bad-config",
+        "seed": "held-bad-config",
+        "path": "status"
+      },
+      "seed": {
+        "builds": [],
+        "repository": {
+          "record": {
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "lease": {
+              "holder": "read-run",
+              "expiresAt": "2026-09-02T00:00:30.000Z"
+            }
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "e30="
+            }
+          ]
+        }
+      },
+      "status": 500,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "kind": "internal",
+        "error": "operator API is unavailable"
+      }
+    },
+    {
+      "scenario": {
+        "id": "status-tick-sample",
+        "seed": "tick-sample",
+        "path": "status"
+      },
+      "seed": {
+        "builds": [],
+        "repository": {
+          "record": {
+            "tick": {
+              "run": "read-run",
+              "finished": {
+                "outcome": "failed",
+                "error": "sampled failure",
+                "forgeRequests": {
+                  "total": 4,
+                  "unattributed": 0,
+                  "builds": [
+                    {
+                      "build": "api-read-build",
+                      "requests": 4
+                    }
+                  ],
+                  "complete": true
+                },
+                "run": "read-run",
+                "startedAt": "2026-09-02T00:00:00.000Z",
+                "completedAt": "2026-09-02T00:00:00.000Z"
+              }
+            },
+            "repo": "api-read/repository",
+            "createdAt": "2026-09-02T00:00:00.000Z",
+            "updatedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "lease": {
+              "holder": "read-run",
+              "expiresAt": "2026-09-02T00:00:30.000Z"
+            }
+          },
+          "events": [
+            {
+              "repo": "api-read/repository",
+              "seq": 1,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.run-started",
+              "payload": {
+                "run": "read-run",
+                "pid": 1234,
+                "host": "test-host",
+                "effectiveConfig": {
+                  "kind": "dispatcher-effective-config",
+                  "rev": 0
+                },
+                "roleWarnings": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "decisive"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 2,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.runtime-recorded",
+              "payload": {
+                "run": "read-run",
+                "startedSeq": 1,
+                "runtime": {
+                  "version": "1.0.0",
+                  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "source": {
+                    "kind": "source",
+                    "location": "/test/immutable-runtime"
+                  }
+                }
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "repo": "api-read/repository",
+              "seq": 3,
+              "ts": "2026-09-02T00:00:00.000Z",
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-completed",
+              "payload": {
+                "run": "read-run",
+                "queued": 3,
+                "counters": {
+                  "forgeRequests": {
+                    "restPrimary": 6,
+                    "restNotModified": 1,
+                    "graphql": 0,
+                    "total": 7,
+                    "unattributed": 1,
+                    "builds": [
+                      {
+                        "build": "api-read-build",
+                        "requests": 6
+                      }
+                    ],
+                    "complete": true
+                  },
+                  "merged": 0,
+                  "closed": 0,
+                  "conflicted": 0,
+                  "abandoned": 0,
+                  "discarded": 0,
+                  "janitorFailed": 0,
+                  "recovered": 0,
+                  "dispatchFailed": 0,
+                  "resumed": 0,
+                  "swept": 0,
+                  "dispatched": 0,
+                  "authored": 0,
+                  "bounced": 0,
+                  "claimRaces": 0,
+                  "invalidTickets": 0,
+                  "dependencyBlocked": 0,
+                  "harvestStarted": 0,
+                  "harvestResumed": 0,
+                  "harvestCompleted": 0,
+                  "harvestEscalated": 0,
+                  "harvestFailed": 0
+                },
+                "janitorDiagnostics": [],
+                "ticketDiagnostics": [],
+                "dependencyDiagnostics": []
+              },
+              "compatibility": {
+                "writerVersion": "1.0.1",
+                "classification": "advisory"
+              }
+            },
+            {
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-started",
+              "payload": {
+                "run": "read-run"
+              },
+              "repo": "api-read/repository",
+              "seq": 4,
+              "ts": "2026-09-02T00:00:00.000Z"
+            },
+            {
+              "actor": {
+                "kind": "dispatcher"
+              },
+              "type": "dispatcher.tick-failed",
+              "payload": {
+                "run": "read-run",
+                "error": "sampled failure"
+              },
+              "repo": "api-read/repository",
+              "seq": 5,
+              "ts": "2026-09-02T00:00:00.000Z"
+            }
+          ],
+          "artifacts": [
+            {
+              "meta": {
+                "repo": "api-read/repository",
+                "kind": "dispatcher-effective-config",
+                "revision": 0,
+                "blobRef": "49b94fcce23ebb3b148178208d7b27d34d0f346369ad9990941c75289db6f12c",
+                "metadata": {},
+                "createdAt": "2026-09-02T00:00:00.000Z"
+              },
+              "base64": "eyJ1cGdyYWRlIjp7ImF1dG9tYXRpYyI6dHJ1ZX0sImJhc2VCcmFuY2giOiJtYWluIiwiY2FwYWNpdHkiOjIsInRpY2tldFNjYW5JbnRlcnZhbFNlY29uZHMiOjYwLCJmb3JnZSI6ImdpdGh1YiIsInBsdWdpbnMiOltdLCJsYW5kaW5nIjpbXSwid29ya3NwYWNlIjp7InByb3ZpZGVyIjoiZ2l0LXdvcmt0cmVlIiwiY29uZmlnIjp7fX0sImNvbW1hbmRzIjp7InVuaXQiOiJidW4gdGVzdCIsInNtb2tlIjoidHJ1ZSJ9LCJyb2xlcyI6e30sInBvbGljeSI6eyJ1cGdyYWRlRHJhaW5TZWNvbmRzIjo5MDAsInNlc3Npb25CdWRnZXRTZWNvbmRzIjozNjAwLCJzdGFsbFJvdW5kcyI6MywibWF4VmVyaWZ5QXR0ZW1wdHMiOjMsIm1heERpc3BhdGNoQXR0ZW1wdHMiOjMsIm1heFNldHVwQXR0ZW1wdHMiOjMsIm1heEluZnJhc3RydWN0dXJlQXR0ZW1wdHMiOjMsIm1heFJlY29uY2lsZUF0dGVtcHRzIjozLCJtYXhSZXZpZXdSb3VuZHMiOjYsImhhcnZlc3RUaHJlc2hvbGQiOjUsImphbml0b3JGYWlsdXJlQXR0ZW50aW9uU2Vjb25kcyI6NjAwLCJub2RlSWRsZUFmdGVyU2Vjb25kcyI6NjAwLCJub2RlSWRsZVBvbGxTZWNvbmRzIjoxMjAsImphbml0b3JCYWNrb2ZmTWF4U2Vjb25kcyI6MzAwLCJoYXJ2ZXN0TWF4RHJpZnQiOjN9LCJvcmNoZXN0cmF0b3IiOnsiZW5hYmxlZCI6ZmFsc2UsInNhbmRib3giOnsiaWRsZU1pbnV0ZXMiOjMwLCJlbnZpcm9ubWVudFZhcmlhYmxlcyI6W119LCJpbnZvY2F0aW9uQnVkZ2V0U2Vjb25kcyI6MjQwLCJhcHByb3ZhbHMiOlsiYnVpbGRzLmNvbnRyb2w6YWJvcnQiLCJidWlsZHMuY29udHJvbDpkaXNjYXJkIiwiYnVpbGRzLmFuc3dlcjpyZXZpc2Utc3BlYyIsInNhbmRib3gucHVibGlzaCIsInRpY2tldHMubW92ZTpyZWFkeSJdfSwidGlja2V0cyI6eyJzb3VyY2UiOiJob3N0ZWQiLCJyZWFkeVN0YXRlIjoicmVhZHkiLCJ0ZWFtS2V5IjoiRU5HIn0sInZlcmlmeSI6eyJzdGVwcyI6WyJ1bml0Iiwic21va2UiXSwiYWZ0ZXJSZWNvbmNpbGUiOnRydWUsInVuaXQiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InVuaXQifSwic21va2UiOnsia2luZCI6ImNoZWNrIiwiY29tbWFuZCI6InNtb2tlIn19LCJmaW5hbGl6ZSI6eyJzdGVwcyI6W119fQ=="
+            }
+          ]
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json;charset=utf-8"
+      },
+      "body": {
+        "repo": "api-read/repository",
+        "operator": {
+          "registrations": []
+        },
+        "upgrades": {
+          "runs": {},
+          "holds": {},
+          "lineages": {},
+          "rollbackIds": [],
+          "authoritativeRun": "read-run"
+        },
+        "dispatcher": {
+          "state": "held",
+          "holder": {
+            "runtime": {
+              "version": "1.0.0",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": {
+                "kind": "source",
+                "location": "/test/immutable-runtime"
+              }
+            },
+            "run": "read-run",
+            "pid": 1234,
+            "host": "test-host",
+            "startedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAgeMs": 0,
+            "leaseExpiresAt": "2026-09-02T00:00:30.000Z",
+            "lastTickAt": "2026-09-02T00:00:00.000Z",
+            "lastTickAgeMs": 0,
+            "lastTick": {
+              "outcome": "failed",
+              "error": "sampled failure",
+              "forgeRequests": {
+                "total": 4,
+                "unattributed": 0,
+                "builds": [
+                  {
+                    "build": "api-read-build",
+                    "requests": 4
+                  }
+                ],
+                "complete": true
+              }
+            },
+            "stoppedAt": null,
+            "stop": null
+          },
+          "expiredHolder": null,
+          "latestRun": {
+            "runtime": {
+              "version": "1.0.0",
+              "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": {
+                "kind": "source",
+                "location": "/test/immutable-runtime"
+              }
+            },
+            "run": "read-run",
+            "pid": 1234,
+            "host": "test-host",
+            "startedAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAt": "2026-09-02T00:00:00.000Z",
+            "heartbeatAgeMs": 0,
+            "leaseExpiresAt": "2026-09-02T00:00:30.000Z",
+            "lastTickAt": "2026-09-02T00:00:00.000Z",
+            "lastTickAgeMs": 0,
+            "lastTick": {
+              "outcome": "failed",
+              "error": "sampled failure",
+              "forgeRequests": {
+                "total": 4,
+                "unattributed": 0,
+                "builds": [
+                  {
+                    "build": "api-read-build",
+                    "requests": 4
+                  }
+                ],
+                "complete": true
+              }
+            },
+            "stoppedAt": null,
+            "stop": null
+          },
+          "latestStoppedRun": null
+        },
+        "forgeRequests": {
+          "total": 4,
+          "unattributed": 0,
+          "builds": [
+            {
+              "build": "api-read-build",
+              "requests": 4
+            }
+          ],
+          "complete": true
+        },
+        "forgeRequestHotspot": "api-read-build",
+        "intake": true,
+        "paused": false,
+        "defaultAutoMerge": false,
+        "sandboxes": [],
+        "publications": [],
+        "capacity": {
+          "configured": 2,
+          "occupied": 0,
+          "effective": 2,
+          "borrowingNodes": []
+        }
       }
     }
   ]

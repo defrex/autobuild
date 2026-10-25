@@ -34,15 +34,28 @@ async fn handle(
     headers: HeaderMap,
     bytes: Bytes,
 ) -> axum::response::Response {
+    // Identity and issuance availability belong to the remote store router,
+    // whose failures use its application/json response convention. Once the
+    // delegation handler is entered its own JSON responses include charset.
+    let router_error = |error: OperatorError| {
+        let mut response = error.into_response();
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        response
+    };
+    if let Err(error) = protocol::check_identity(&headers) {
+        return router_error(error);
+    }
+    let (Some(reader), Some(writer), Some(secret)) = (
+        state.data.as_deref(),
+        state.writer.as_deref(),
+        state.operator_secret.as_deref(),
+    ) else {
+        return router_error(OperatorError::not_found("credential issuance unavailable"));
+    };
     let result = async {
-        protocol::check_identity(&headers)?;
-        let (Some(reader), Some(writer), Some(secret)) = (
-            state.data.as_deref(),
-            state.writer.as_deref(),
-            state.operator_secret.as_deref(),
-        ) else {
-            return Err(OperatorError::not_found("credential issuance unavailable"));
-        };
         let now = clock();
         let backend = NativeAuth { reader, writer };
         // Authentication intentionally precedes body decoding on this seam.
@@ -75,8 +88,8 @@ pub struct Target {
     pub lease_holder: Option<String>,
 }
 pub fn decode_target(bytes: &[u8]) -> Result<Target, OperatorError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| OperatorError::validation("invalid JSON"))?;
+    let value: Value = super::request_schema::decode_json(bytes)
+        .map_err(|_| OperatorError::validation("invalid JSON"))?;
     let invalid = || OperatorError::validation("invalid delegation target");
     let object = value.as_object().ok_or_else(invalid)?;
     let kind = value["kind"].as_str().ok_or_else(invalid)?;

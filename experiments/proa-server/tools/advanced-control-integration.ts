@@ -45,12 +45,26 @@ async function snapshotOrder(store: BuildStore, repo: string, slugs: string[]) {
       assert.ok(manifest, 'native snapshot manifest is readable through TypeScript')
       const decoded = JSON.parse(gunzipSync(manifest.content).toString('utf8')) as {
         files: { chunks: { kind: string }[] }[]
+        meta: {
+          repo: string
+          ticketId: string
+          kind: string
+          name: string
+          revision: number
+          layout: string
+          size: number
+          entries: unknown[]
+        }
       }
       for (const file of decoded.files) for (const chunk of file.chunks) kinds.push(chunk.kind)
       kinds.push(pin.snapshot.kind)
       // This is the actual core consumer and verifies manifest metadata,
       // chunk identities, byte lengths, hashes and the reconstructed asset.
       const record = await store.getBuild(slug)
+      assert.equal(decoded.meta.repo, repo, `${slug}: manifest repo`)
+      assert.equal(decoded.meta.ticketId, record!.ticket!.id, `${slug}: manifest ticket`)
+      for (const key of ['kind', 'name', 'revision', 'layout', 'size'] as const)
+        assert.equal(decoded.meta[key], pin[key], `${slug}: manifest ${key}`)
       await readAssetSnapshot(store, repo, record!.ticket!.id, pin)
     }
   }

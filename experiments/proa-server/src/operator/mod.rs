@@ -16,3 +16,13 @@ pub mod request_schema;
 pub mod ticket_target;
 
 pub mod delegation;
+
+pub mod completeness;
+pub mod read_detail;
+pub mod read_harvest;
+pub mod read_repository;
+
+pub mod registry;
+pub mod registry_views;
+
+pub mod config_schema;

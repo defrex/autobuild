@@ -56,6 +56,12 @@ type Seed =
   | 'harvest-multi'
   | 'harvest-suspended'
   | 'foreign'
+  | 'handoff'
+  | 'settings'
+  | 'degraded'
+  | 'capacity'
+  | 'held-bad-config'
+  | 'tick-sample'
 export interface ApiReadScenario {
   id: string
   seed: Seed
@@ -141,6 +147,16 @@ export function apiReadScenarios(): ApiReadScenario[] {
     'harvest-suspended',
   ] as Seed[])
     cases.push({ id: `harvest-${seed}`, seed, path: 'harvest/status' })
+  for (const [seed, paths] of [
+    ['handoff', [`builds/${apiReadSlug}`, 'dashboard', 'status']],
+    ['settings', ['dashboard', 'status']],
+    ['degraded', ['status']],
+    ['capacity', ['dashboard', 'status']],
+    ['held-bad-config', ['status']],
+    ['tick-sample', ['status']],
+  ] as const)
+    for (const path of paths)
+      cases.push({ id: `${path.startsWith('builds/') ? 'detail' : path}-${seed}`, seed, path })
   return cases
 }
 function json<T>(value: T): T {
@@ -183,7 +199,7 @@ export async function replayApiReadScenario(scenario: ApiReadScenario): Promise<
         content:
           seed === 'malformed-config'
             ? '{'
-            : seed === 'invalid-config'
+            : seed === 'invalid-config' || seed === 'held-bad-config'
               ? '{}'
               : effectiveBuildConfigContent(config),
       })
@@ -240,6 +256,10 @@ export async function replayApiReadScenario(scenario: ApiReadScenario): Promise<
     })
   }
   const hasBuild = ![
+    'held-bad-config',
+    'tick-sample',
+    'settings',
+    'degraded',
     'absent',
     'configured',
     'held',
@@ -267,7 +287,7 @@ export async function replayApiReadScenario(scenario: ApiReadScenario): Promise<
           repo,
           ticket,
           baseBranch: 'main',
-          ...(seed === 'integration' ? { kind: 'node' as const } : {}),
+          ...(['integration', 'capacity'].includes(seed) ? { kind: 'node' as const } : {}),
         },
       },
     })
@@ -395,7 +415,17 @@ export async function replayApiReadScenario(scenario: ApiReadScenario): Promise<
       await append(child, 'runner.attached', { instance: 'child-instance', host: 'runner-host' })
     }
   }
-  if (['held', 'expired', 'stopped', 'older-holder'].includes(seed)) {
+  if (
+    [
+      'held',
+      'expired',
+      'stopped',
+      'older-holder',
+      'held-bad-config',
+      'capacity',
+      'tick-sample',
+    ].includes(seed)
+  ) {
     if (seed === 'expired') clockAt -= 60000
     await store.claimRepoLease(apiReadRepo, 'read-run', 30000)
     await store.heartbeatRepo(apiReadRepo, 'read-run')
@@ -510,6 +540,145 @@ export async function replayApiReadScenario(scenario: ApiReadScenario): Promise<
       }
     }
   }
+  if (seed === 'tick-sample') {
+    await store.beginRepoTick(apiReadRepo, 'read-run')
+    await store.finishRepoTick(
+      apiReadRepo,
+      'read-run',
+      {
+        outcome: 'failed',
+        error: 'sampled failure',
+        forgeRequests: {
+          total: 4,
+          unattributed: 0,
+          builds: [{ build: apiReadSlug, requests: 4 }],
+          complete: true,
+        },
+      },
+      [
+        {
+          actor: { kind: 'dispatcher' },
+          type: 'dispatcher.tick-started',
+          payload: { run: 'read-run' },
+        },
+        {
+          actor: { kind: 'dispatcher' },
+          type: 'dispatcher.tick-failed',
+          payload: { run: 'read-run', error: 'sampled failure' },
+        },
+      ],
+    )
+  }
+  if (seed === 'settings') {
+    for (const [type, payload] of [
+      ['dispatcher.intake-set', { enabled: false }],
+      ['dispatcher.pause-set', { enabled: true }],
+      ['dispatcher.auto-merge-default-set', { enabled: true }],
+    ] as const)
+      await repository(type, payload, { kind: 'human', user: 'operator@example.com' })
+    await repository('harvest.paused', {}, { kind: 'kernel' })
+  }
+  if (seed === 'degraded') {
+    await repository('dispatcher.forge-degraded', {
+      forge: 'github',
+      message: 'quota exhausted',
+      resetAt: '2026-09-02T00:10:00.000Z',
+      firstFailureAt: operatorClock,
+    })
+    await repository('dispatcher.ticket-source-degraded', {
+      source: 'hosted',
+      operation: 'ready-scan',
+      message: 'provider timeout',
+      cause: 'ready-scan-failed',
+    })
+    await repository(
+      'orchestrator.sandbox.provisioned',
+      {
+        operator: 'operator@example.com',
+        environmentId: 'sandbox-read',
+        provider: 'test',
+        workspacePath: '/test/workspace',
+      },
+      { kind: 'human', user: 'operator@example.com' },
+    )
+  }
+  if (seed === 'handoff') {
+    const fact = {
+      correlation: 'read-correlation',
+      run: 'read-run',
+      lineage: 'read-lineage',
+      from: runtime,
+      to: { ...runtime, version: '1.0.1' },
+      target: { key: 'read-target', mode: 'source', source: 'main', sha: 'c'.repeat(40) },
+      root: '/test/new-runtime',
+      cacheId: 'read-cache',
+    }
+    await repository('dispatcher.target-prepared', fact)
+    await repository('dispatcher.yield-requested', {
+      ...fact,
+      successor: 'read-successor',
+      mode: 'drain',
+      evidence: 'verified candidate',
+    })
+    await repository('dispatcher.handoff-started', {
+      ...fact,
+      successor: 'read-successor',
+      mode: 'drain',
+      deadline: '2026-09-02T00:01:00.000Z',
+      builds: [{ slug: apiReadSlug, instance: 'read-instance' }],
+    })
+  }
+  if (seed === 'capacity') {
+    await append(
+      apiReadSlug,
+      'node.opening',
+      { branch: `ab/${apiReadSlug}`, parent: 'main', sha: 'node-opening' },
+      { kind: 'dispatcher' },
+    )
+    await append(apiReadSlug, 'node.opened', { sha: 'node-opening' }, { kind: 'dispatcher' })
+    await append(
+      apiReadSlug,
+      'node.compared',
+      { parentSha: 'node-opening', headSha: 'node-head', ahead: 1 },
+      { kind: 'dispatcher' },
+    )
+    await append(
+      apiReadSlug,
+      'integration.observed',
+      { openChildren: [], diagnostics: [], contributions: ['collected-change'] },
+      { kind: 'dispatcher' },
+    )
+    await append(apiReadSlug, 'integration.prepared', {
+      id: 'read-cycle',
+      parent: 'node-opening',
+      head: 'node-head',
+      config: JSON.stringify({ verify: config.verify, commands: config.commands }),
+    })
+    for (const index of [1, 2, 3]) {
+      const slug = `${apiReadSlug}-child-${index}`,
+        ticket = { source: 'hosted', id: `ENG-${index + 1}`, title: `Paused descendant ${index}` }
+      await store.createBuild({
+        slug,
+        repo: apiReadRepo,
+        ticket,
+        branch: `ab/${slug}`,
+        created: {
+          actor: { kind: 'dispatcher' },
+          type: 'build.created',
+          payload: {
+            repo: apiReadRepo,
+            ticket,
+            baseBranch: `ab/${apiReadSlug}`,
+            target: {
+              ticket: { source: 'hosted', id: 'ENG-1', title: 'API read seed' },
+              build: apiReadSlug,
+            },
+          },
+        },
+      })
+      await append(slug, 'build.paused', {})
+    }
+  }
   const builds = []
   for (const record of await store.listBuilds()) {
     const artifacts = []
@@ -588,7 +757,11 @@ export async function checkApiReadCorpus(): Promise<ApiReadCorpus> {
   return saved
 }
 if (import.meta.main) {
-  if (process.argv.includes('--write'))
-    await Bun.write(fixturePath, `${JSON.stringify(await generateApiReadCorpus(), null, 2)}\n`)
-  else await checkApiReadCorpus()
+  if (process.argv.includes('--write')) {
+    const encoded = JSON.stringify(await generateApiReadCorpus(), null, 2).replace(
+      /[^\x00-\x7F]/g,
+      (c) => `${String.fromCharCode(92)}u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    )
+    await Bun.write(fixturePath, `${encoded}\n`)
+  } else await checkApiReadCorpus()
 }

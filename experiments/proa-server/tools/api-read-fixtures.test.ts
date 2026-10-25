@@ -28,5 +28,7 @@ test('API read fixtures retain all four read surfaces and concrete failure/metad
 test('API read corpus matches exact current TypeScript response bytes and source hashes', async () => {
   const corpus = await checkApiReadCorpus()
   expect(corpus.fixtures).toHaveLength(apiReadScenarios().length)
-  for (const fixture of corpus.fixtures) expect(fixture.status).not.toBe(500)
+  for (const fixture of corpus.fixtures)
+    if (fixture.scenario.id === 'status-held-bad-config') expect(fixture.status).toBe(500)
+    else expect(fixture.status).not.toBe(500)
 })

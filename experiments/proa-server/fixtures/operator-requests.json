@@ -540,6 +540,29 @@
     {
       "name": "answerRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"too_big\",\n    \"maximum\": 9007199254740991,\n    \"note\": \"Integers must be within the safe integer range.\",\n    \"origin\": \"int\",\n    \"inclusive\": true,\n    \"path\": [\n      \"ceiling\"\n    ],\n    \"message\": \"Too big: expected int to be <=9007199254740991\"\n  }\n]"
+    },
+    {
+      "name": "answerRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"too_small\",\n    \"minimum\": -9007199254740991,\n    \"note\": \"Integers must be within the safe integer range.\",\n    \"origin\": \"int\",\n    \"inclusive\": true,\n    \"path\": [\n      \"ceiling\"\n    ],\n    \"message\": \"Too small: expected int to be >=-9007199254740991\"\n  },\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": false,\n    \"path\": [\n      \"ceiling\"\n    ],\n    \"message\": \"Too small: expected number to be >0\"\n  }\n]"
+    },
+    {
+      "name": "answerRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"text\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"target\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "answerRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -577,7 +600,7 @@
     {
       "name": "answerRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"text\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"text\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
     },
@@ -820,6 +843,29 @@
     {
       "name": "buildControlRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"abort\",\n      \"discard\",\n      \"land\",\n      \"hold\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'pause' | 'cancel-pause' | 'resume' | 'abort' | 'discard' | 'land' | 'hold'\"\n  }\n]"
+    },
+    {
+      "name": "buildControlRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"abort\",\n      \"discard\",\n      \"land\",\n      \"hold\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'pause' | 'cancel-pause' | 'resume' | 'abort' | 'discard' | 'land' | 'hold'\"\n  }\n]"
+    },
+    {
+      "name": "buildControlRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"abort\",\n      \"discard\",\n      \"land\",\n      \"hold\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'pause' | 'cancel-pause' | 'resume' | 'abort' | 'discard' | 'land' | 'hold'\"\n  }\n]"
+    },
+    {
+      "name": "buildControlRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -852,7 +898,7 @@
     {
       "name": "buildControlRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"abort\",\n      \"discard\",\n      \"land\",\n      \"hold\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'pause' | 'cancel-pause' | 'resume' | 'abort' | 'discard' | 'land' | 'hold'\"\n  }\n]"
     },
@@ -1095,6 +1141,29 @@
     {
       "name": "bulkControlRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "bulkControlRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "bulkControlRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "bulkControlRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -1127,7 +1196,7 @@
     {
       "name": "bulkControlRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -1370,6 +1439,29 @@
     {
       "name": "harvestControlRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"toggle-gate\",\n      \"run\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'toggle-gate' | 'run'\"\n  }\n]"
+    },
+    {
+      "name": "harvestControlRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"toggle-gate\",\n      \"run\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'toggle-gate' | 'run'\"\n  }\n]"
+    },
+    {
+      "name": "harvestControlRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"toggle-gate\",\n      \"run\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'toggle-gate' | 'run'\"\n  }\n]"
+    },
+    {
+      "name": "harvestControlRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -1402,7 +1494,7 @@
     {
       "name": "harvestControlRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [],\n    \"note\": \"No matching discriminator\",\n    \"discriminator\": \"action\",\n    \"options\": [\n      \"toggle-gate\",\n      \"run\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid discriminator value. Expected 'toggle-gate' | 'run'\"\n  }\n]"
     },
@@ -1645,6 +1737,29 @@
     {
       "name": "sessionApprovalRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"turn\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"toolCallId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"approve\",\n      \"deny\"\n    ],\n    \"path\": [\n      \"decision\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"approve\\\"|\\\"deny\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionApprovalRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"turn\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"toolCallId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"approve\",\n      \"deny\"\n    ],\n    \"path\": [\n      \"decision\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"approve\\\"|\\\"deny\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionApprovalRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"turn\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"toolCallId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"approve\",\n      \"deny\"\n    ],\n    \"path\": [\n      \"decision\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"approve\\\"|\\\"deny\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionApprovalRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -1677,7 +1792,7 @@
     {
       "name": "sessionApprovalRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"turn\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"toolCallId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"approve\",\n      \"deny\"\n    ],\n    \"path\": [\n      \"decision\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"approve\\\"|\\\"deny\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -1920,6 +2035,29 @@
     {
       "name": "sessionCreateRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionCreateRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionCreateRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionCreateRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -1952,7 +2090,7 @@
     {
       "name": "sessionCreateRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -2195,6 +2333,29 @@
     {
       "name": "sessionMessageRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"text\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionMessageRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"text\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionMessageRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"text\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionMessageRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -2227,7 +2388,7 @@
     {
       "name": "sessionMessageRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "output": {
         "text": "x"
@@ -2472,6 +2633,29 @@
     {
       "name": "sessionWakeRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"globs\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionWakeRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"globs\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionWakeRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"globs\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "sessionWakeRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -2504,7 +2688,7 @@
     {
       "name": "sessionWakeRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"globs\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -2747,6 +2931,29 @@
     {
       "name": "settingRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"enabled\"\n    ],\n    \"message\": \"Invalid input: expected boolean, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "settingRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"enabled\"\n    ],\n    \"message\": \"Invalid input: expected boolean, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "settingRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"enabled\"\n    ],\n    \"message\": \"Invalid input: expected boolean, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "settingRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -2781,7 +2988,7 @@
     {
       "name": "settingRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"expected\": \"boolean\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"enabled\"\n    ],\n    \"message\": \"Invalid input: expected boolean, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -3024,6 +3231,29 @@
     {
       "name": "ticketBlockerRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketBlockerRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketBlockerRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketBlockerRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -3056,7 +3286,7 @@
     {
       "name": "ticketBlockerRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -3299,6 +3529,29 @@
     {
       "name": "ticketCreateRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketCreateRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketCreateRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"target\"\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]"
+    },
+    {
+      "name": "ticketCreateRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -3331,7 +3584,7 @@
     {
       "name": "ticketCreateRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -3577,6 +3830,29 @@
     {
       "name": "ticketMoveRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketMoveRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketMoveRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketMoveRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -3609,7 +3885,7 @@
     {
       "name": "ticketMoveRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -3852,6 +4128,29 @@
     {
       "name": "ticketStateCreateRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketStateCreateRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketStateCreateRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketStateCreateRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -3884,7 +4183,7 @@
     {
       "name": "ticketStateCreateRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },
@@ -4127,6 +4426,29 @@
     {
       "name": "ticketUpdateRequestSchema",
       "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketUpdateRequestSchema",
+      "input": {
+        "resolution": "review-round-ceiling",
+        "ceiling": -9007199254740992
+      },
+      "error": "invalid request body: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "ticketUpdateRequestSchema",
+      "input": {
+        "target": 3
+      },
+      "error": "invalid request body: [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"target\"\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+    },
+    {
+      "name": "ticketUpdateRequestSchema",
+      "input": {
         "resolution": "revise-spec",
         "origin": "body",
         "body": "",
@@ -4159,7 +4481,7 @@
     {
       "name": "ticketUpdateRequestSchema",
       "input": {
-        "text": "� x �"
+        "text": "\ufeff x \ufeff"
       },
       "error": "invalid request body: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"text\\\"\"\n  }\n]"
     },

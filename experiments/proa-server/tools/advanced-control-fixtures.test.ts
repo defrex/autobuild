@@ -8,6 +8,7 @@ test('node landing and ticket spec revisions have complete immutable artifact or
       [
         'node-land-open-source-child',
         'node-land-frozen-child',
+        'node-land-uncovered-frozen-child',
         'node-land-empty',
         'node-land-source-mismatch',
       ].includes(fixture.id)

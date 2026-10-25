@@ -40,6 +40,7 @@ interface ControlScenario {
   seed: Seed
   path: string
   body?: unknown
+  rawBody?: string
   method?: string
 }
 export function controlScenarios(): ControlScenario[] {
@@ -94,6 +95,13 @@ export function controlScenarios(): ControlScenario[] {
       body: { resolution: 'dismiss' },
     },
     {
+      id: 'answer-review-limit-json-number',
+      seed: 'review-limit',
+      path: `builds/${slug}/answer`,
+      body: { resolution: 'review-round-ceiling', ceiling: 5 },
+      rawBody: '{"resolution":"review-round-ceiling","ceiling":5.0}',
+    },
+    {
       id: 'answer-review-limit',
       seed: 'review-limit',
       path: `builds/${slug}/answer`,
@@ -117,6 +125,7 @@ export function controlScenarios(): ControlScenario[] {
       body: { enabled: false },
     },
     { id: 'intake-toggle', seed: 'running', path: 'settings/intake/toggle' },
+    { id: 'intake-retired-toggle', seed: 'running', path: 'settings/auto-merge-default/toggle' },
     {
       id: 'intake-retired',
       seed: 'running',
@@ -124,7 +133,12 @@ export function controlScenarios(): ControlScenario[] {
       path: 'settings/auto-merge-default',
       body: { enabled: false },
     },
-    { id: 'harvest-toggle', seed: 'running', path: 'harvest/control', body: { action: 'toggle' } },
+    {
+      id: 'harvest-toggle',
+      seed: 'running',
+      path: 'harvest/control',
+      body: { action: 'toggle-gate' },
+    },
     {
       id: 'harvest-stale',
       seed: 'running',
@@ -146,7 +160,22 @@ export function controlScenarios(): ControlScenario[] {
       body: { action: 'resume' },
     },
   )
-  return scenarios
+  const toolScenarios = scenarios
+    .filter((s) => s.rawBody === undefined)
+    .map((scenario): ControlScenario => {
+      const body = { ...(scenario.body as Record<string, unknown> | undefined), repo: operatorRepo }
+      let name: string
+      if (scenario.path.startsWith('builds/')) {
+        name = `builds.${scenario.path.split('/')[2]}`
+        Object.assign(body, { slug })
+      } else if (scenario.path.startsWith('settings/')) {
+        name = 'repository.settings'
+        Object.assign(body, { setting: scenario.path.split('/')[1] })
+      } else if (scenario.path === 'bulk-control') name = 'repository.bulk_control'
+      else name = 'harvest.control'
+      return { ...scenario, id: `tool-${scenario.id}`, method: 'POST', path: `tools/${name}`, body }
+    })
+  return [...scenarios, ...toolScenarios]
 }
 export async function replayControlScenario(scenario: ControlScenario) {
   const store = new MemoryBuildStore({ clock })
@@ -273,7 +302,11 @@ export async function replayControlScenario(scenario: ControlScenario) {
       {
         method: scenario.method ?? 'POST',
         headers,
-        ...(scenario.body === undefined ? {} : { body: JSON.stringify(scenario.body) }),
+        ...(scenario.rawBody !== undefined
+          ? { body: scenario.rawBody }
+          : scenario.body === undefined
+            ? {}
+            : { body: JSON.stringify(scenario.body) }),
       },
     ),
   )

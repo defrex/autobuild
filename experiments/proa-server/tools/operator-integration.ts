@@ -3,16 +3,33 @@ import { SQL } from 'bun'
 import { createOperatorServer } from '../../../packages/hosted-store-service/src/operator-server'
 import { testProjects } from '../../../packages/hosted-store-service/src/testing/projects'
 import { replayNativeControls } from './control-integration'
+import { replayAdvancedControls } from './advanced-control-integration'
+import { replayNativeReads } from './api-read-integration'
+import { replayNativeRegistry } from './registry-integration'
+import { replayAnswerFailures } from './answer-failure-integration'
+import { replayRepositoryControls } from './repository-control-integration'
+import { replayNativeDelegation } from './delegation-integration'
+import { replaySessionConfiguration } from './session-config-integration'
+import { replayNativeRegistryDomains } from './registry-domain-integration'
+import { ticketIntegration } from './ticket-integration'
+import {
+  checkOperatorCoverage,
+  operatorSourceClosureHash,
+  operatorProofSourceHash,
+} from './operator-coverage'
+import type { OperatorCoverageEvidence, OperatorOperationWitness } from './operator-coverage-types'
 import { mintToken } from '../../../packages/core/src/store/remote/token'
 import {
   AUTOBUILD_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION,
 } from '../../../packages/core/src/store/remote/version'
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { openPostgresBuildStoreFromEnv } from '../../../packages/postgres-store/src/config'
+import { PostgresCredentialStore } from '../../../packages/postgres-store/src/credentials'
+import { PostgresProjectRegistry } from '../../../packages/postgres-store/src/projects'
 import { migratePostgres } from '../../../packages/postgres-store/src/schema'
 import { validateSessionEventWrite } from '../../../packages/core/src/events/sessions'
 import { validateEventWrite } from '../../../packages/core/src/events/catalog'
@@ -89,8 +106,53 @@ export async function operatorIntegration(
   adminUrl: string,
   environment: Record<string, string | undefined>,
   executable?: string,
+  selection?: {
+    readCases?: readonly string[]
+    skipAdvanced?: boolean
+    skipAnswerFailures?: boolean
+  },
 ) {
+  const proofSourcesSha256 = operatorProofSourceHash()
   const native = executable ?? (await buildOperatorNative(environment))
+  if (operatorProofSourceHash() !== proofSourcesSha256)
+    throw new Error('Native/proof sources changed during build; retry against stable sources')
+  const operationWitnesses: OperatorOperationWitness[] = []
+  const coverage: OperatorCoverageEvidence = {
+    format: 1,
+    sourceClosureSha256: operatorSourceClosureHash(),
+    proofSourcesSha256,
+    suites: {},
+    operationWitnesses,
+  }
+  const recordSuite = <
+    T extends
+      | readonly string[]
+      | { cases: readonly string[]; witnesses?: OperatorOperationWitness[] },
+  >(
+    name: string,
+    result: T,
+  ): T => {
+    const parsed: { cases: readonly string[]; witnesses?: OperatorOperationWitness[] } =
+      Array.isArray(result)
+        ? { cases: result }
+        : (result as { cases: readonly string[]; witnesses?: OperatorOperationWitness[] })
+    coverage.suites[name] = parsed.cases
+    if (parsed.witnesses) operationWitnesses.push(...parsed.witnesses)
+    return result
+  }
+  const readWitness = (id: string, path: string, status: number, responseBody: unknown) => {
+    coverage.suites['operator-reads'] = [
+      ...new Set([...(coverage.suites['operator-reads'] ?? []), id]),
+    ]
+    operationWitnesses.push({
+      suite: 'operator-reads',
+      id,
+      method: 'GET',
+      path: path.replace(/^\/operator\/v1\/repos\/[^/]+\//, ''),
+      status,
+      responseBody,
+    })
+  }
   const suffix = crypto.randomUUID().replaceAll('-', '')
   const database = `proa_operator_${suffix}`
   const writerRole = `proa_op_write_${suffix}`
@@ -104,6 +166,7 @@ export async function operatorIntegration(
   let store: Awaited<ReturnType<typeof openPostgresBuildStoreFromEnv>> | undefined
   let rust: Awaited<ReturnType<typeof bridge>> | undefined
   let readonly: Awaited<ReturnType<typeof bridge>> | undefined
+  const extraServers = new Set<() => Promise<void>>()
   let created = false
   const roles: string[] = []
   let failure: unknown
@@ -113,13 +176,14 @@ export async function operatorIntegration(
         claims: typeof operatorFoundationClaims
         sessionCases: string[]
         httpParity: boolean
-        dispatcherProof: boolean
+        coverage: OperatorCoverageEvidence
         httpSessionCases: string[]
         controlCases: string[]
         readCases: string[]
       }
     | undefined
   const terminate = () => {
+    for (const close of extraServers) void close()
     void rust?.close()
     void readonly?.close()
   }
@@ -137,11 +201,17 @@ export async function operatorIntegration(
       await sql.unsafe(`GRANT USAGE ON SCHEMA public TO ${role}`)
       await sql.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role}`)
     }
-    // Exact exercised writer capabilities. No DDL, deletes, ownership or broad table-write grant.
+    // Scoped writer capabilities, including retention and blocker relation deletes. No DDL or ownership.
     await sql.unsafe(
-      `GRANT INSERT, UPDATE ON sessions, session_events, builds, events, repo_streams, repo_events, repo_change_positions, artifacts TO ${writerRole}`,
+      `GRANT INSERT, UPDATE ON sessions, session_events, builds, events, repo_streams, repo_events, repo_change_positions, artifacts, repo_artifacts TO ${writerRole}`,
     )
     await sql.unsafe(`GRANT USAGE ON SEQUENCE sessions_creation_seq TO ${writerRole}`)
+    await sql.unsafe(`GRANT DELETE ON repo_artifacts TO ${writerRole}`)
+    await sql.unsafe(`GRANT UPDATE(last_used_at) ON project_credentials TO ${writerRole}`)
+    await sql.unsafe(
+      `GRANT INSERT,UPDATE ON ab_tickets,ab_ticket_counters,ab_ticket_states TO ${writerRole}`,
+    )
+    await sql.unsafe(`GRANT INSERT,DELETE ON ab_ticket_blockers TO ${writerRole}`)
     store = await openPostgresBuildStoreFromEnv(
       { ...environment, AB_POSTGRES_URL: databaseUrl.href },
       { clock },
@@ -446,7 +516,51 @@ export async function operatorIntegration(
     for (const repo of [operatorRepo, 'foreign/repo'])
       await sql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),${repo},'added','proof',${operatorClock})`
     const address = (await request({ op: 'http-address' })).value as string
-    const controlEvidence = await replayNativeControls({ sql, store, address })
+    const projectRegistry = new PostgresProjectRegistry(sql)
+    const credentialRepo = 'https://github.com/acme/native-first-use'
+    await projectRegistry.add(credentialRepo, 'test-owner')
+    const issued = await new PostgresCredentialStore(sql, projectRegistry).issue(
+      credentialRepo,
+      'owner@example.com',
+    )
+    const credentialHeaders = {
+      authorization: `Bearer ${issued.token}`,
+      'x-autobuild-version': AUTOBUILD_VERSION,
+      'x-autobuild-protocol-version': String(REMOTE_STORE_PROTOCOL_VERSION),
+      'content-type': 'application/json',
+    }
+    const firstUse = await fetch(
+      `${address}/operator/v1/repos/${encodeURIComponent(credentialRepo)}/settings/intake`,
+      { method: 'PUT', headers: credentialHeaders, body: JSON.stringify({ enabled: false }) },
+    )
+    assert.equal(
+      firstUse.status,
+      200,
+      'fresh native owner credential can update last-use metadata and write',
+    )
+    const firstUseBody = (await firstUse.json()) as { event: { actor: unknown } }
+    assert.deepEqual(firstUseBody.event.actor, { kind: 'human', user: 'owner@example.com' })
+    const [lastUse] =
+      await sql`SELECT last_used_at FROM project_credentials WHERE id=${issued.credential.id}`
+    assert.equal(new Date(lastUse.last_used_at).toISOString(), operatorClock)
+    const ownerFacts = await store.getRepoEvents(credentialRepo)
+    ownerFacts.forEach(validateRepositoryEventWrite)
+    assert.equal(ownerFacts.length, 1)
+    await sql`UPDATE project_credentials SET revoked_at=${operatorClock} WHERE id=${issued.credential.id}`
+    const revoked = await fetch(
+      `${address}/operator/v1/repos/${encodeURIComponent(credentialRepo)}/settings/intake`,
+      { method: 'PUT', headers: credentialHeaders, body: JSON.stringify({ enabled: true }) },
+    )
+    assert.equal(revoked.status, 401)
+    assert.equal(
+      (await store.getRepoEvents(credentialRepo)).length,
+      1,
+      'revocation rechecked without lifecycle write',
+    )
+    const controlEvidence = recordSuite(
+      'control',
+      await replayNativeControls({ sql, store, address }),
+    )
     const readOracle = createOperatorServer({
       store,
       projects: testProjects([operatorRepo]),
@@ -470,10 +584,13 @@ export async function operatorIntegration(
       )
       const actual = await fetch(`${address}${path}`, { headers: readHeaders })
       assert.equal(actual.status, expected.status)
-      assert.deepEqual(
-        await actual.json(),
-        await expected.json(),
-        `native builds ${scope} read parity`,
+      const body = await actual.json()
+      assert.deepEqual(body, await expected.json(), `native builds ${scope} read parity`)
+      readWitness(
+        scope === 'invalid' ? 'builds:invalid-scope' : `builds:${scope}`,
+        path,
+        actual.status,
+        body,
       )
     }
     await store.putArtifact('native-control', {
@@ -508,12 +625,75 @@ export async function operatorIntegration(
           expected.headers.get(key),
           `artifact ${suffix} ${key}`,
         )
+      const bytes = new Uint8Array(await actual.arrayBuffer())
       assert.deepEqual(
-        new Uint8Array(await actual.arrayBuffer()),
+        bytes,
         new Uint8Array(await expected.arrayBuffer()),
         `artifact ${suffix} bytes`,
       )
+      readWitness('artifacts:binary-revisions', path, actual.status, {
+        contentBase64: Buffer.from(bytes).toString('base64'),
+      })
     }
+    recordSuite(
+      'api-reads',
+      await replayNativeReads({ sql, store, address, include: selection?.readCases }),
+    )
+    recordSuite(
+      'advanced',
+      selection?.skipAdvanced ? [] : await replayAdvancedControls({ sql, store, address }),
+    )
+    const outcomeCases: string[] = [],
+      schemaCases: string[] = []
+    await replayNativeRegistry({ sql, store, address, outcomeCases, schemaCases })
+    recordSuite('registry', outcomeCases)
+    recordSuite('registry-schemas', schemaCases)
+    recordSuite('registry-domains', await replayNativeRegistryDomains({ sql, store, address }))
+    const spawnProofServer = async (overrides: Record<string, string | undefined>) => {
+      const spawned = await bridge({ ...writerEnv, ...overrides }, runtime, [native])
+      let closed = false
+      const close = async () => {
+        if (closed) return
+        closed = true
+        extraServers.delete(close)
+        await spawned.close()
+      }
+      extraServers.add(close)
+      try {
+        const address = (await spawned.request({ op: 'http-address' })).value as string
+        return { address, close }
+      } catch (error) {
+        await close()
+        throw error
+      }
+    }
+    recordSuite(
+      'repository-controls',
+      await replayRepositoryControls({ sql, store, address, witnesses: operationWitnesses }),
+    )
+    recordSuite(
+      'delegation',
+      await replayNativeDelegation({
+        sql,
+        store,
+        address,
+        spawnServer: ({ secret }) => spawnProofServer({ AB_STORE_SECRET: secret }),
+      }),
+    )
+    if (!selection?.skipAnswerFailures) {
+      const upstreamS3Endpoint = environment.AB_S3_ENDPOINT
+      if (!upstreamS3Endpoint) throw new Error('Answer failure proof requires isolated S3 endpoint')
+      const failureEvidence = await replayAnswerFailures({
+        sql,
+        store,
+        address,
+        upstreamS3Endpoint,
+        spawnServer: spawnProofServer,
+        witnesses: operationWitnesses,
+      })
+      recordSuite('answer-failures', failureEvidence)
+    }
+    recordSuite('session-config', await replaySessionConfiguration({ sql, store, address }))
     const httpStore = store
     const httpChecked: string[] = []
     for (const fixture of corpus.fixtures.filter((f) => f.scenario.route.includes('sessions'))) {
@@ -633,25 +813,61 @@ export async function operatorIntegration(
       )
       const actual = await fetch(`${address}${streamPath}${suffix}`, { headers: readHeaders })
       assert.equal(actual.status, expected.status)
-      assert.deepEqual(await actual.json(), await expected.json(), `session stream ${suffix}`)
+      const body = await actual.json()
+      assert.deepEqual(body, await expected.json(), `session stream ${suffix}`)
+      readWitness('sessions:open-closed-stream', `${streamPath}${suffix}`, actual.status, body)
     }
+    let responded = false
+    const held = fetch(`${address}${streamPath}?since=1&wait=2`, { headers: readHeaders }).then(
+      (response) => {
+        responded = true
+        return response
+      },
+    )
+    await Bun.sleep(100)
+    assert.equal(responded, false, 'open stream waits for a newer chunk')
+    await store.appendStreamParts(stream.id, [
+      { type: 'text-delta', id: 'text-1', delta: ' delayed' },
+    ])
+    const awakened = await held
+    assert.deepEqual(
+      await awakened.json(),
+      await store.readStream(stream.id, { since: 1 }),
+      'bounded stream wait observes actual later PostgreSQL chunk',
+    )
+    const deadline = Date.now()
+    const emptyWait = await fetch(`${address}${streamPath}?since=2&wait=1`, {
+      headers: readHeaders,
+    })
+    const waited = Date.now() - deadline
+    assert(waited >= 900 && waited < 2500, 'empty open stream returns at its one-second bound')
+    assert.deepEqual(await emptyWait.json(), await store.readStream(stream.id, { since: 2 }))
     await store.closeStream(stream.id, 'completed')
     const closedExpected = await readOracle.fetch(
       new Request(`http://oracle.invalid${streamPath}`, { headers: readHeaders }),
     )
     const closedActual = await fetch(`${address}${streamPath}`, { headers: readHeaders })
     assert.equal(closedActual.status, closedExpected.status)
+    const closedBody = await closedActual.json()
     assert.deepEqual(
-      await closedActual.json(),
+      closedBody,
       await closedExpected.json(),
       'closed session stream artifact metadata',
     )
+    readWitness('sessions:open-closed-stream', streamPath, closedActual.status, closedBody)
+    const ticketProof = await ticketIntegration(adminUrl, environment)
+    recordSuite('ticket-http', {
+      cases: ticketProof.witnesses.map((w) => w.id),
+      witnesses: ticketProof.witnesses,
+    })
+    recordSuite('operator-sessions', httpChecked)
+    if (!selection) await checkOperatorCoverage(coverage)
 
     evidence = {
-      checkpoint: 'native-http-controls',
+      checkpoint: 'native-operator-contract',
       claims: operatorFoundationClaims,
       sessionCases: checked,
-      httpParity: false,
+      httpParity: !selection,
       httpSessionCases: httpChecked,
       controlCases: controlEvidence,
       readCases: [
@@ -662,9 +878,22 @@ export async function operatorIntegration(
         'artifacts:binary-revisions',
         'sessions:open-closed-stream',
       ],
-      dispatcherProof: false,
+      coverage,
     }
-    console.log(JSON.stringify(evidence))
+    const output = resolve(project, '../../.ab/proa-operator-evidence')
+    await mkdir(output, { recursive: true })
+    const resultPath = resolve(output, 'results.json')
+    await Bun.write(resultPath, `${JSON.stringify(evidence, null, 2)}\n`)
+    await Bun.write(resolve(output, 'coverage.json'), `${JSON.stringify(coverage, null, 2)}\n`)
+    console.log(
+      JSON.stringify({
+        resultPath,
+        httpParity: evidence.httpParity,
+        suites: Object.fromEntries(
+          Object.entries(coverage.suites).map(([suite, cases]) => [suite, cases.length]),
+        ),
+      }),
+    )
   } catch (error) {
     failure = error
   } finally {
@@ -672,6 +901,7 @@ export async function operatorIntegration(
     process.removeListener('SIGTERM', terminate)
     const errors: unknown[] = []
     for (const close of [
+      ...extraServers,
       () => readonly?.close(),
       () => rust?.close(),
       () => store?.close(),

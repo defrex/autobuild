@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { withCaptureSeed, type SeedEvidence } from './capture-seed'
 import type { BuildStore } from '../../../packages/core/src/store/types'
 import { build, project, root } from './verify'
+import { runExtendedBrowserProof } from './browser-extended-proof'
 import {
   checkRoutes,
   checkFrameMatrix,
@@ -761,6 +762,30 @@ export async function captureFrames(
           })
         }
       }
+      const extendedProof = await runExtendedBrowserProof({
+        fixtures: auth.seed.extendedControls,
+        store: auth.store,
+        origin,
+        driver: {
+          scripts: async (enabled) => {
+            await send('Emulation.setScriptExecutionDisabled', { value: !enabled })
+          },
+          navigate: async (url) => {
+            await send('Page.navigate', { url })
+          },
+          click,
+          html: outerHtml,
+          evaluate,
+          type: async (selector, text) => {
+            await click(selector)
+            await send('Input.insertText', { text })
+          },
+        },
+      })
+      await Bun.write(
+        join(output, 'browser-extended-proof.json'),
+        JSON.stringify(extendedProof, null, 2),
+      )
       const admissionFixture = auth.seed.controls['proof-js-pause']!
       const cookieHeader = issued.headers
         .getSetCookie()

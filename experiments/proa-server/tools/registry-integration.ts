@@ -14,6 +14,8 @@ export async function replayNativeRegistry(options: {
   sql: SQL
   store: BuildStore
   address: string
+  outcomeCases?: string[]
+  schemaCases?: string[]
 }) {
   const corpus = await checkRegistryContract()
   const repo = 'registry/fixture'
@@ -35,7 +37,7 @@ export async function replayNativeRegistry(options: {
       { method: 'POST', headers, body: JSON.stringify(body) },
     )
   const checked: string[] = []
-  for (const entry of corpus.outcomes) {
+  for (const [index, entry] of corpus.outcomes.entries()) {
     const input = { ...entry.input, repo }
     const response = await call(entry.name, input)
     const body = await response.json()
@@ -47,8 +49,9 @@ export async function replayNativeRegistry(options: {
       assert.deepEqual(body, entry.result, entry.name)
     }
     checked.push(entry.name)
+    options.outcomeCases?.push(`${entry.name}:${index}`)
   }
-  for (const entry of corpus.cases) {
+  for (const [index, entry] of corpus.cases.entries()) {
     if (
       !('error' in entry) ||
       !entry.input ||
@@ -60,6 +63,7 @@ export async function replayNativeRegistry(options: {
     const response = await call(entry.name, { ...entry.input, repo })
     assert.equal(response.status, 400, entry.name)
     assert.deepEqual(await response.json(), { kind: 'validation', error: entry.error }, entry.name)
+    options.schemaCases?.push(`${entry.name}:${index}`)
   }
   const notes = await options.store.getRepoArtifact(repo, 'operator-notes')
   assert.ok(notes)

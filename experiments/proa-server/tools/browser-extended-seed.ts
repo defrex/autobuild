@@ -2,6 +2,7 @@
  * the oracle; each operation gets its own project so bulk writes cannot leak
  * into a neighbouring proof or screenshot. */
 import type { SQL } from 'bun'
+import type { Actor } from '../../../packages/core/src/events/envelope'
 import { resolve } from 'node:path'
 import { validateEventWrite, type EventWrite } from '../../../packages/core/src/events/catalog'
 import { validateRepositoryEventWrite } from '../../../packages/core/src/events/repository'
@@ -36,6 +37,7 @@ export interface ExtendedBrowserFixture {
   text?: string
   ceiling?: string
   expectedBuildTypes: string[]
+  expectedBuildActors: Actor[]
   expectedRepositoryTypes: string[]
 }
 function remap<T>(value: T, replacements: [string, string][]): T {
@@ -69,6 +71,7 @@ export async function seedExtendedBrowserControls(
         slug: ['review-round-ceiling', 'revise-body', 'revise-ticket'].includes(action) ? slug : '',
         button: action.startsWith('harvest-') ? 'harvest-run' : action,
         expectedBuildTypes: [],
+        expectedBuildActors: [],
         expectedRepositoryTypes: [],
       }
       const repositorySeed = api.fixtures.find(
@@ -154,6 +157,11 @@ export async function seedExtendedBrowserControls(
         }
         fixture.text = (source.request.body as { body: string }).body
         fixture.expectedBuildTypes = ['escalation.answered', 'spec.revised']
+        const seeded = source.seed.builds.find((build) => build.record!.slug === slug)!
+        fixture.expectedBuildActors = source.after.builds
+          .find((build) => build.record!.slug === slug)!
+          .events.slice(seeded.events.length)
+          .map((event) => event.actor)
       } else {
         const scenario =
           action === 'review-round-ceiling'
@@ -181,16 +189,21 @@ export async function seedExtendedBrowserControls(
           fixture.expectedBuildTypes = ['escalation.answered']
         } else if (action === 'pause-all') {
           fixture.expectedBuildTypes = ['build.pause-requested']
-          fixture.expectedRepositoryTypes = ['repository.pause-requested', 'dispatcher.intake-set']
+          fixture.expectedRepositoryTypes = ['dispatcher.pause-set', 'dispatcher.intake-set']
         } else if (action === 'resume-all') {
           fixture.expectedBuildTypes = ['build.resume-requested']
-          fixture.expectedRepositoryTypes = ['repository.resume-requested', 'dispatcher.intake-set']
+          fixture.expectedRepositoryTypes = ['dispatcher.pause-set', 'dispatcher.intake-set']
         } else if (action === 'intake') fixture.expectedRepositoryTypes = ['dispatcher.intake-set']
         else
           fixture.expectedRepositoryTypes = [
             action === 'harvest' ? 'harvest.pause-requested' : 'harvest.resume-requested',
           ]
       }
+      if (!fixture.expectedBuildActors.length)
+        fixture.expectedBuildActors = fixture.expectedBuildTypes.map(() => ({
+          kind: 'human',
+          user: 'operator@example.com',
+        }))
       result.push(fixture)
     }
   return result

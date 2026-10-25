@@ -542,3 +542,45 @@ The browser proof caught a DOM API trap: form controls named `action` shadow
 native no-JavaScript submission already follows the attribute. The CDP driver
 also waits for deferred scripts before enhanced clicks and reacquires nodes
 retired by a poll or navigation; neither timing is evidence of a server failure.
+
+Extended browser proofs exposed the other native-form boundary: HTML serializes
+textarea newlines as CRLF, whereas the enhanced path reads the DOM's LF value.
+Without adapter normalization the same supplied spec produced different immutable
+artifact bytes in the two modes. The browser adapter now recovers the DOM LF
+representation for textarea text/body only, preserving whitespace and all other
+characters. The JSON operator API continues to preserve its supplied bytes.
+
+The extended seeded browser run passed all 18 additional submissions against the
+actual native debug executable: intake, bulk pause/resume, harvest enablement,
+harvest run resume/acknowledgment, review ceiling, supplied spec revision and
+ticket spec revision in both script modes. Together with the baseline this is
+34 mutations and three unchanged auth/resource refusals. The proof checked
+ordered durable facts against the TypeScript validators and source actor
+sequence, exact specification bytes and asset metadata, and same-document
+enhanced acknowledgments. This development evidence is recorded separately
+from the linked Proa capture provenance.
+
+## Native mutations and contract completion
+
+The native port's completion check uses executed oracle cases, not route names.
+This distinction caught a misspelled registry tool whose requests otherwise
+looked like successful refusal coverage. A coverage result must have no missing
+routes, actions, answer variants, tools or executable suite cases, and its native
+and TypeScript source hashes must still match.
+
+JSON object order matters in two different places. Zod embeds ordered issue
+objects in error strings; preserving insertion order reproduces those bytes.
+Polling fingerprints remain canonical, so the reducer explicitly sorts their
+objects recursively. The full reducer corpus caught the interaction. Generated
+Unicode fixtures escape non-ASCII code points so staged formatting cannot replace
+an interior U+FEFF with a replacement character. Actual Bun Request.json rejects
+a leading BOM while the effective-config TextDecoder consumes it; their native
+adapters deliberately keep those different byte contracts. Integral JSON forms
+such as `5.0` normalize to the same integer as the TypeScript parser.
+
+Native snapshots are checked by TypeScript's real consumer, including multi-chunk
+binary files, zero-byte entries, directories and tombstones. Failure timing uses
+only test-owned SQL triggers and a held signed upload proxy; native publication
+remains inert when a concurrent terminal fact or fence/tail guard wins. The
+isolated dispatcher proof also checks the real terminal renderer after native
+browser pause/resume, with no live dispatcher process management.

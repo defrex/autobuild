@@ -109,6 +109,10 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/check-fixtures.ts'],
         ['bun', 'tools/operator-fixtures.ts'],
         ['bun', 'tools/request-fixtures.ts'],
+        ['bun', 'tools/config-fixtures.ts'],
+        ['bun', 'tools/api-read-fixtures.ts'],
+        ['bun', 'tools/advanced-control-fixtures.ts'],
+        ['bun', 'tools/registry-fixtures.ts'],
         ['bun', 'tools/control-fixtures.ts'],
         ['bun', 'tools/delegation-fixtures.ts'],
         ['bun', 'tools/query-fixtures.ts'],
@@ -123,7 +127,13 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/data-integration.ts'],
         ['bun', 'tools/data-dashboard-integration.ts'],
         ['bun', 'tools/operator-integration.ts'],
-        ['bun', 'tools/ticket-integration.ts'],
+        [
+          'bun',
+          'tools/operator-coverage.ts',
+          '--evidence',
+          join(root, '.ab/proa-operator-evidence/coverage.json'),
+        ],
+        ['bun', 'tools/dispatcher-integration.ts'],
       ]
   commands.push([
     'proa',

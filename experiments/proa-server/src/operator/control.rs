@@ -228,13 +228,17 @@ impl ControlService<'_> {
                     ));
                 }
                 if state["kind"] == "node" {
-                    // Hosted ticket completeness must be established separately
-                    // from a ready cycle. Never consent from the cycle alone.
-                    return Err(OperatorError::new(
-                        500,
-                        "internal",
-                        "operator API is unavailable",
-                    ));
+                    let policy = self
+                        .ticket_policy(repo)
+                        .await?
+                        .ok_or_else(OperatorError::internal)?;
+                    let observed = self.observe_completeness(repo, slug, &policy, now).await?;
+                    if !array(&observed["openChildren"]).is_empty()
+                        || !array(&observed["diagnostics"]).is_empty()
+                        || array(&observed["contributions"]).is_empty()
+                    {
+                        return Err(OperatorError::internal());
+                    }
                 }
             }
             let payload = if action == "land" {
@@ -459,7 +463,7 @@ impl ControlService<'_> {
             self.writer
                 .ensure_repo(repo, now)
                 .await
-                .map_err(|_| OperatorError::internal())?;
+                .map_err(|error| OperatorError::new(500, "internal", error.to_string()))?;
             self.writer
                 .append_repo(
                     repo,
@@ -467,7 +471,7 @@ impl ControlService<'_> {
                     now,
                 )
                 .await
-                .map_err(|_| OperatorError::internal())?;
+                .map_err(|error| OperatorError::new(500, "internal", error.to_string()))?;
             progress["pausedWritten"] = json!(true);
             self.writer
                 .append_repo(
@@ -476,14 +480,14 @@ impl ControlService<'_> {
                     now,
                 )
                 .await
-                .map_err(|_| OperatorError::internal())?;
+                .map_err(|error| OperatorError::new(500, "internal", error.to_string()))?;
             progress["intakeWritten"] = json!(true);
             let mut records = self
                 .reader
                 .postgres()
                 .builds(repo)
                 .await
-                .map_err(|_| OperatorError::internal())?;
+                .map_err(|error| OperatorError::new(500, "internal", error.to_string()))?;
             records.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
             for (index, record) in records.iter().enumerate() {
                 let slug = record["slug"].as_str().unwrap_or_default();
@@ -507,7 +511,7 @@ impl ControlService<'_> {
                             now,
                         )
                         .await
-                        .map_err(|_| OperatorError::internal())?
+                        .map_err(|error| OperatorError::new(500, "internal", error.to_string()))?
                         .is_some()
                     {
                         progress["slugs"].as_array_mut().unwrap().push(json!(slug));
@@ -530,7 +534,7 @@ impl ControlService<'_> {
         Ok(json!({"direction":direction,"slugs":progress["slugs"],"paused":paused,"intake":intake}))
     }
 }
-pub(super) fn random_uuid() -> String {
+pub(crate) fn random_uuid() -> String {
     let mut bytes = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     bytes[6] = (bytes[6] & 15) | 64;

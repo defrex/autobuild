@@ -1,92 +1,82 @@
-# Operator port checkpoints
+# Native operator interoperability
 
-This is the nonshipping Proa experiment. The operator-controls build is being
-implemented in committed checkpoints under operator guidance `esc_14572852`.
-These checkpoints do not relax the approved contract. Do not call `ab done` until
-the entire operator HTTP and browser surface and all interoperability evidence
-are complete.
+This nonshipping experiment implements the operator contract with native Rust
+policies and PostgreSQL/blob adapters. Authored changes stay inside
+`experiments/proa-server/`; TypeScript is an offline oracle and test consumer,
+never a production request subprocess. Immutable ANSI reference bytes remain
+unchanged.
 
-## Native foundations
+## Durable boundaries
 
-The first checkpoint adds source-pinned TypeScript HTTP oracle fixtures, a
-separate native write connection, API identity/authentication primitives, and
-session ownership/approval/archive policies. At that checkpoint the server still exposed
-only its read-only browser dashboard; those library primitives had no public
-operator routes or browser mutations. The SELECT-only reader pool stays separate.
+Bearer HTTP and cookie-authenticated browser forms invoke the same native domain
+operations. Build/repository/session facts are validated before append, with
+TypeScript-compatible actors, compatibility stamps, parent locks, sequences and
+compare-and-append behavior. The reader retains SELECT-only transactions; the
+writer has an independent connection and optional `PROA_POSTGRES_WRITE_URL`.
 
-`tools/operator-fixtures.ts --write` regenerates the oracle corpus from the
-actual TypeScript service. Without `--write` it checks source and behavioral
-drift. The corpus records the complete route/action/answer/tool inventory and
-explicit missing coverage. A refusal witness is not proof of a successful
-control's semantics. Rust policy tests replay the session subset; the native
-integration driver reads actual Rust-produced writes through the TypeScript
-store and event validators. Neither substitutes for the final real-HTTP replay.
+Uploads precede SQL artifact publication. Ticket snapshots preserve sampled
+revisions, binary bytes, empty files/directories, current tombstones and readable
+legacy identities. TypeScript's actual snapshot consumer reads the native chunks
+and gzip manifest and checks byte lengths/hashes. Referenced immutable snapshots
+are not removed by notes/config retention.
+
+Answers preserve sequential prefix and retry semantics. Idle node revisions use
+writer/runner fences and exact-tail guards. Landing reobserves live source/frozen
+children before the guarded consent write. Bulk control preserves hold, intake,
+then eligible build ordering and exact partial progress.
+
+## Executable evidence
+
+`tools/operator-integration.ts` collects native HTTP replay results and checks
+`tools/operator-coverage.ts` before reporting parity. The completion gate joins
+actual checked case IDs to source-derived oracle results, requires every case in
+every executable manifest, and binds evidence to both TypeScript and native/proof
+source hashes. Inventories, validation/auth failures and unknown-resource-only
+responses cannot establish operation coverage. All 33 routes, seven actions,
+six answer variants and 25 advertised HTTP tools require positive or applicable
+domain-refusal witnesses.
+
+The replay combines session/Unicode/JSON boundaries, strict source-generated Zod
+schemas, API detail/dashboard/repository/harvest projections, all build controls,
+node completeness, ticket spec/asset repinning, repository controls, delegation,
+hosted ticket mutations and generic registry dispatch. Reads include CLEANING,
+run-correlated effective config, runtime attaches, handoffs, telemetry, capacity,
+raw artifacts and bounded session streams. Config normalization and issue bytes
+are differentially checked over the actual source grammar and its nodes.
+
+Failure proofs use isolated SQL triggers and a local proxy forwarding signed
+requests to the real local S3 fixture. They exercise surviving answer prefixes,
+lazy authorized retry, failed uploads, terminalization during upload, node fence
+contention, tail movement and each partial bulk boundary. No production fault
+injection or generic event-write endpoint exists.
+
+`tools/dispatcher-integration.ts` runs the actual core Dispatcher and BuildRunner
+over a disposable PostgreSQL store and real temporary Git workspaces, with fake
+agent/forge edges. Native browser pause/resume facts stop and restart session
+scheduling. The actual terminal renderer records PAUSING, PAUSED and resumed
+RUNNING frames. It never controls the live repository dispatcher.
+
+## Browser evidence
+
+The capture renders 40 states at 1440/390 in both ANSI grounds. It submits the
+required detail and extended repository/answer controls with and without
+JavaScript (34 mutations), checks identity and exact durable actor sequences,
+requires destructive confirmation, and preserves drafts, refusal text, focus and
+caret across polls. CSRF, Origin and project refusals leave facts unchanged.
+Spec revision's deterministic fact is kernel-authored after the signed human
+answer; the proof compares the source actor sequence rather than relabeling it.
+No web landing consent or ticket authoring is offered.
+
+The final linked executable's hash, served asset hashes, frame review and browser
+proof are retained with ignored capture evidence. See `tools/README.md` for the
+commands and `FIELD-NOTES.md` for measured framework behavior.
 
 ## Attribution exception
 
-Ticket-row mutations must preserve TypeScript storage parity and still enforce
-the same authentication and authorization. They are an explicit exception to
-`docs/operator-api.md`'s claim that owner-purpose credentials attribute every
-write. Observation `obs_675b94d9` records this gap. Guidance forbids inventing a
-ticket audit record, repository artifact, or schema in this build. A durable
-ticket-attribution contract requires a maintainer product-design decision.
-Build and repository facts retain human identity and optional transport `via`;
-session facts name the signed user and never carry `via`.
-
-## Native HTTP and browser checkpoint
-
-The follow-up identity gap is fixed: TypeScript-generated ECMAScript trim cases
-include U+FEFF, U+0085, empty-after-trim and retained interior whitespace. Native
-session creation stores the normalized owner and the same creation actor.
-
-The server now exposes bearer sessions, build controls/answers/restack,
-intake/bulk/harvest mutations, hosted tickets, build lists, artifact bytes and
-session-turn streams. Browser controls use the same native policies, fresh cookie
-admission, CSRF and canonical origin; the separate reader remains SELECT-only.
-`PROA_POSTGRES_WRITE_URL` can select a distinct writer role. API routes have their
-own identity/auth layer and bypass browser redirects and origin middleware.
-
-The current executable proofs cover 77 real HTTP build/repository control cases,
-35 real HTTP session cases, list scopes, binary artifact revision boundaries,
-open/closed session streams, and TypeScript validation/reduction of native facts.
-Ticket proof checks native PostgreSQL rows, revisions, blocker batches, concurrent
-writers, restart readback, bearer HTTP writes/revocation, and claimed-node parent
-reservations against the actual TypeScript operation. Source-derived request
-schemas compare successful outputs and exact Zod refusal strings. Delegation
-issuance has 16 oracle/native policy cases, including exact signed token bytes.
-These are bounded claims, not proof of the entire operator contract.
-
-S3/Vercel artifact uploads precede SQL publication. Vercel upload wire tests cover
-both auth modes and failure privacy. The pinned provider contract is recorded in
-BLOB-CONTRACT.md. Native API/domain code never invokes TypeScript.
-
-Browser forms offer guidance/retry/dismiss, extended answer options,
-pause/cancel-pause/resume, explicit abort/discard confirmations, intake/bulk and
-harvest controls. JavaScript uses the same forms with SSR fragments and polling
-coordination. No browser landing controls or ticket authoring pages are added.
-The capture and end-to-end browser proof remain mandatory before completion.
-
-## Remaining completion gates
-
-- Complete API read projections: build detail/dashboardRow, dashboard, repository
-  status and harvest status, durable config validation and typed corrupt-config
-  errors, complete runtime attach provenance and cleaning visibility.
-- Complete the generic HTTP registry route through the same native operations;
-  MCP transport remains out of scope.
-- Complete node landing live ticket completeness and hosted spec/asset repinning,
-  and audit all answer transaction/race guards against the TypeScript helpers.
-  Multi-escalation prefixes, terminalization during preparation, retry recovery,
-  node fences and failed artifact publication need dedicated seam evidence.
-- Match configured session creation wake inheritance and exercise bounded
-  stream waits over real HTTP.
-- Replay delegation issuance over real HTTP with durable credential/lease/session
-  state; pure issuance token parity and separate lifecycle tests are not that proof.
-- Expand control/ticket differential coverage to all route/action/answer variants,
-  compatibility fixtures, failure injection, stale races and ordered partial bulk
-  progress. Do not treat positive leaf control cases as node-control coverage.
-- Establish the isolated real dispatcher pause/resume proof and terminal dashboard
-  evidence. This checkpoint does not run any live repository dispatcher operation.
-- Finish browser JS/no-JS mutation proof and inspect all 40 control-state frames
-  at both widths and grounds. Run every required root/native/tooling gate.
-
-`ab done` remains forbidden until every approved acceptance criterion is covered.
+Ticket-row mutations preserve TypeScript storage parity and enforce the same
+authentication/authorization. They are an explicit exception to the operator
+API's broad claim that every write records its owner identity. Observation
+`obs_675b94d9` records this existing product gap; guidance forbids inventing a
+ticket audit record, artifact or schema here. A durable ticket-attribution
+contract requires a maintainer product decision. Build/repository facts retain
+the signed human and optional transport `via`; session facts never carry `via`.

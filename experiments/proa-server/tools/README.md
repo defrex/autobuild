@@ -128,21 +128,68 @@ counts; these are separate from event suffixes and blob byte downloads.
 
 ## Operator contract proofs
 
-`bun tools/operator-fixtures.ts` checks the committed operator HTTP oracle against
-current TypeScript sources, identity rules and documentation. Regenerate deliberately
-with `--write`; `coverage.missing*` in `fixtures/operator-corpus.json` remains an
-explicit completion checklist. `bun tools/writer-fixtures.ts` checks the generated
-actor/classification policy; `--write` regenerates it. Rust policy tests
-consume the oracle and compare exact refusals, actor/payload, write count and state.
+`bun tools/operator-fixtures.ts` checks the source-pinned session/validation
+subcorpus, identity rules and documentation. Its historical `coverage.missing*`
+fields describe only that foundation corpus. The aggregate completion authority
+is `tools/operator-coverage.ts`, which combines all oracle and executable helper
+manifests. Generators check by default; `--write` regenerates deliberately.
+`tools/writer-fixtures.ts` checks the actor/classification catalog.
 
-`bun tools/operator-integration.ts` provisions isolated PostgreSQL/S3 resources and
-runs the native `operator-proof` test bridge, then reads its actual writes through
-the TypeScript store. Its database roles are separate from the existing SELECT-only
-reader proof; denied writes must leave no durable event. This bridge is test tooling,
-not a production API or a proxy for Rust HTTP requests. The HTTP replay and browser
-proofs exercise the real server separately. [The staged parity checklist](../OPERATOR-PARITY.md)
-distinguishes measured coverage from remaining full-surface and concurrency gates;
-a passing subset does not establish complete operator parity.
+`bun tools/operator-integration.ts` provisions isolated PostgreSQL/S3 resources,
+replays the actual Rust HTTP adapters and reads their bytes through the actual
+TypeScript stores, validators and reducers. A private test bridge seeds and probes
+storage foundations; it is never a production endpoint or request proxy. The
+combined replay includes the direct hosted-ticket HTTP/storage proof. Reader and
+writer roles are separate; narrowly granted retention/blocker deletes and
+credential-last-use updates are exercised explicitly.
+
+The command writes `.ab/proa-operator-evidence/results.json` and `coverage.json`.
+It checks native/proof and TypeScript source hashes, every required executed case,
+and zero missing routes/actions/answers/tools before reporting `httpParity: true`.
+Recheck the runtime evidence with:
+
+```sh
+bun tools/operator-coverage.ts --evidence ../../.ab/proa-operator-evidence/coverage.json
+```
+
+Validation, auth and unknown-resource-only refusals cannot qualify an operation;
+inventories and stale or skipped suites fail completion. Standalone helpers remain
+available for diagnosis. `bun tools/dispatcher-integration.ts` additionally proves
+native browser pause/resume changes actual core Dispatcher/BuildRunner scheduling
+and real terminal frames, using only disposable databases, Git workspaces and
+processes. [The interoperability ledger](../OPERATOR-PARITY.md) explains the
+attribution exception and boundaries.
+
+## Delegated credential HTTP proof
+
+`bun tools/delegation-integration.ts` provisions an isolated PostgreSQL/S3 store,
+starts the real native operator/delegation router, and compares its issuance
+responses with the TypeScript remote-store handler and machine authenticator
+against the same durable rows. It checks exact token and HMAC bytes, error bodies,
+media types, version/auth/body precedence, all principal classes, non-widening
+runner-to-phase grants, project removal, credential revocation and expiry,
+execution/session binding, suspension, replaced authorization and the exact
+terminal-grace boundary. Every Rust-issued token is decoded by TypeScript and
+refused operator authority. A second test-owned server proves the unconfigured
+issuance response. Issuance must leave build and repository event streams intact.
+
+## Operator API read proof
+
+`bun tools/api-read-fixtures.ts` checks the complete TypeScript-derived read
+response corpus and its source hashes; `--write` regenerates it deliberately.
+The cases cover build detail and nullable dashboard rows, the dashboard envelope,
+repository status, and harvest status. They retain exact refusal text, pinned
+pipeline metadata, runner runtime provenance, current verification cycles,
+CLEANING rows, dispatcher lease/tick correlations, handoffs, degradation,
+descendant-held capacity, durable settings, and harvest recovery/suspension.
+
+`bun tools/api-read-integration.ts` independently proves that the manifest's
+records, ordered facts and artifact bytes reproduce each response through the
+TypeScript PostgreSQL/S3 adapter. The main `operator-integration.ts` gate replays
+those same seeds through the actual native HTTP routes, compares entire bodies
+and response content types, and checks that reads neither create repository
+records nor change durable facts or lifecycle metadata. Only explicit test-owned
+resource/slug bindings change between corpus cases and the isolated database.
 
 ## Native hosted ticket proof
 
@@ -174,6 +221,14 @@ first steps write nothing and checks enhanced submissions retain the document.
 `browser-control-proof.json` records the actions and exact event kinds. The same
 run rejects wrong CSRF, foreign Origin and cross-project forms without writes.
 
+`browser-extended-proof.json` covers another 18 submissions: intake, bulk pause
+and resume, harvest enablement, harvest run resume and acknowledgment, review
+ceiling, supplied specification revision and ticket specification revision, each
+with JavaScript enabled and disabled. Isolated projects retain the real published
+ticket policy and artifact store. Assertions compare ordered, validator-accepted
+facts and source-derived actors, including kernel revision facts, exact spec
+bytes and repinned asset metadata. Together the two proofs exercise 34 mutations.
+
 Browser forms carry only the cookie session's CSRF token, project and slug. They
 share the native operator policies and strict answer schema; supplied identity
 fields never grant authority. Ordinary successful POSTs redirect with 303. Enhanced
@@ -181,3 +236,11 @@ POSTs request server-rendered HTML with `X-Proa-Fragment: 1`; a typed refusal is
 escaped inline with the draft retained. Polls preserve drafts, errors and pending
 confirmations, and responses from older polls cannot replace a mutation result.
 Landing consent remains API-only.
+
+`bun tools/config-fixtures.ts` checks the source-derived native configuration
+grammar and the separate test-only differential corpus. Regenerate deliberately
+with `--write`. The native decoder checks strict fields, defaults, open maps,
+named-step transforms, URL normalization and cross-field policy; the corpus
+compares normalized values and exact Zod issue bytes for whole configurations
+and every schema node. Only the small grammar is loaded at runtime. Malformed
+effective-config bytes retain the operator API's typed 409 conflict and label.

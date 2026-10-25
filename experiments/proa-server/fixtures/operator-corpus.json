@@ -4,7 +4,7 @@
   "manifest": {
     "sourceClosureSha256": "5ba42c297846e603d010f12a4809865c9540efeb3616414393a9733b2c58c410",
     "sourceFiles": 820,
-    "generatorSha256": "241ea286908eb05f1e38a548fb2e03d9bfcc9893a5e98ff8b95052650607a29a",
+    "generatorSha256": "4c0c9f5504831d71ca545567cd57d069aa6faec6d02923644bd849291a9d7fd0",
     "documentationSha256": "891b81de36b1225c40f8ea817cd590bd8174e29fad4462fc10b4dd8e508fdd51",
     "identity": {
       "version": "1.0.1",
@@ -29,15 +29,15 @@
         "owner": "owner@example.com"
       },
       {
-        "input": "�Owner@Example.com�",
+        "input": "\ufeffOwner@Example.com\ufeff",
         "owner": "Owner@Example.com"
       },
       {
-        "input": "Owner@Example.com",
-        "owner": "Owner@Example.com"
+        "input": "\u0085Owner@Example.com\u0085",
+        "owner": "\u0085Owner@Example.com\u0085"
       },
       {
-        "input": "� \t\n",
+        "input": "\ufeff \t\n",
         "error": "operator is required"
       },
       {
@@ -45,12 +45,12 @@
         "error": "operator is required"
       },
       {
-        "input": " Owner@Example.com ",
+        "input": "\u2007Owner@Example.com\u202f",
         "owner": "Owner@Example.com"
       },
       {
-        "input": "Owner�Name",
-        "owner": "Owner�Name"
+        "input": "Owner\ufeffName",
+        "owner": "Owner\ufeffName"
       }
     ],
     "bindings": {
@@ -505,6 +505,39 @@
             "method": "POST",
             "path": "sessions",
             "rawBody": "{"
+          },
+          "status": 400,
+          "headers": {
+            "content-type": "application/json;charset=utf-8"
+          },
+          "body": {
+            "kind": "validation",
+            "error": "request body is not valid JSON"
+          },
+          "sessions": []
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "id": "session-create-json-bom",
+        "route": "POST sessions",
+        "requests": [
+          {
+            "method": "POST",
+            "path": "sessions",
+            "rawBody": "\ufeff{\"title\":\"BOM session\"}"
+          }
+        ]
+      },
+      "bindings": [],
+      "seed": [],
+      "observations": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "sessions",
+            "rawBody": "\ufeff{\"title\":\"BOM session\"}"
           },
           "status": 400,
           "headers": {

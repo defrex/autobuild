@@ -451,15 +451,41 @@ impl ControlService<'_> {
             if !missing.is_empty() {
                 return Err(error("spec-nonconforming",format!("replacement spec from {} does not conform: missing {}; nothing was recorded and the build remains blocked",if ticket{"the build ticket"}else{"operator API body"},missing.join("; "))));
             }
-            // Ticket assets must be sampled with the body, never after its
-            // authorization. Until a hosted asset sampler is provided this
-            // path fails closed instead of publishing an unpinned revision.
-            if ticket && record["ticket"]["source"] == "hosted" {
-                return Err(error(
-                    "ticket-unavailable",
-                    "hosted ticket asset preparation is unavailable",
-                ));
-            }
+            let prepared_assets = if ticket {
+                let id = record["ticket"]["id"].as_str().unwrap_or_default();
+                if self.ticket_policy(repo).await?.is_some() {
+                    let repository = self
+                        .reader
+                        .repository(repo)
+                        .await
+                        .map_err(|_| OperatorError::internal())?;
+                    let reference = super::completeness::current_ref(
+                        &record["ticket"],
+                        &repository["repositoryReadFacts"]["ticketMigrations"]["migrations"],
+                        "database",
+                        slug,
+                    )
+                    .map_err(|_| OperatorError::internal())?;
+                    Some(
+                        crate::data::ticket_assets::snapshot(
+                            self.reader,
+                            self.writer,
+                            self.blobs.ok_or_else(OperatorError::internal)?,
+                            repo,
+                            reference["id"].as_str().unwrap_or_default(),
+                            now,
+                        )
+                        .await?,
+                    )
+                } else {
+                    if record["ticket"]["source"] == "hosted" {
+                        return Err(OperatorError::internal());
+                    }
+                    Some(crate::data::ticket_assets::sample_pins(self.writer, repo, id).await?)
+                }
+            } else {
+                None
+            };
             let metadata = if record["ticket"].is_null() {
                 json!({})
             } else {
@@ -473,14 +499,14 @@ impl ControlService<'_> {
                 .map_err(|_| OperatorError::internal())?;
             (
                 json!({"kind":"spec","rev":deposited["revision"]}),
-                if ticket { Some(json!([])) } else { None },
+                prepared_assets,
             )
         };
         if node {
             let holder = format!("spec-revision-{}", super::control::random_uuid());
             if !self
                 .writer
-                .claim_revision_fence(repo, slug, &holder, true)
+                .claim_revision_fence(repo, slug, &holder, true, now)
                 .await
                 .map_err(|_| OperatorError::internal())?
             {
@@ -491,7 +517,7 @@ impl ControlService<'_> {
             }
             let mut runner = false;
             let published:Result<Value,OperatorError>=async{
-                runner=self.writer.claim_revision_fence(repo,slug,&holder,false).await.map_err(|_|OperatorError::internal())?;
+                runner=self.writer.claim_revision_fence(repo,slug,&holder,false,now).await.map_err(|_|OperatorError::internal())?;
                 if !runner{return Err(error("inactive","Node runner is busy; retry the spec revision"));}
                 let fresh=self.state(repo,slug).await?;
                 node_revision_eligible(slug,&fresh)?;
@@ -505,14 +531,14 @@ impl ControlService<'_> {
             }.await;
             let release_runner = if runner {
                 self.writer
-                    .release_revision_fence(repo, slug, &holder, false)
+                    .release_revision_fence(repo, slug, &holder, false, now)
                     .await
             } else {
                 Ok(())
             };
             let release_writer = self
                 .writer
-                .release_revision_fence(repo, slug, &holder, true)
+                .release_revision_fence(repo, slug, &holder, true, now)
                 .await;
             release_runner.map_err(|_| OperatorError::internal())?;
             release_writer.map_err(|_| OperatorError::internal())?;

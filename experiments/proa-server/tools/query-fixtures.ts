@@ -29,18 +29,20 @@ export async function queryContract() {
       )
       .digest('hex'),
     now: operatorClock,
-    cases: corpus.fixtures.flatMap((f) =>
-      ['seed', 'after'].map((k) => {
-        const input = f[k as 'seed' | 'after']
-        const state = reduceBuild(input.events)
-        return {
-          id: `${f.scenario.id}:${k}`,
-          record: input.record,
-          state,
-          expected: summarizeFrom(input.record, state, now),
-        }
-      }),
-    ),
+    cases: corpus.fixtures
+      .filter((f) => !f.scenario.id.startsWith('tool-'))
+      .flatMap((f) =>
+        ['seed', 'after'].map((k) => {
+          const input = f[k as 'seed' | 'after']
+          const state = reduceBuild(input.events)
+          return {
+            id: `${f.scenario.id}:${k}`,
+            record: input.record,
+            state,
+            expected: summarizeFrom(input.record, state, now),
+          }
+        }),
+      ),
   }
 }
 if (import.meta.main) {

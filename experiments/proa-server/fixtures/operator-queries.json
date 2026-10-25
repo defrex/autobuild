@@ -15089,6 +15089,252 @@
       }
     },
     {
+      "id": "answer-review-limit-json-number:seed",
+      "record": {
+        "slug": "control-build",
+        "repo": "acme/widgets",
+        "createdAt": "2026-09-02T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z"
+      },
+      "state": {
+        "baseBranch": "main",
+        "pollingActivity": {
+          "build.created": "1",
+          "escalation.raised": "3"
+        },
+        "status": "blocked",
+        "round": 0,
+        "openEscalations": [
+          {
+            "id": "esc-rounds",
+            "phase": "plan-review",
+            "round": 4,
+            "source": "policy",
+            "policyCause": "review-round-limit",
+            "question": "round limit",
+            "seq": 3
+          }
+        ],
+        "answeredEscalations": [],
+        "reviewRoundCeilings": {},
+        "landing": {},
+        "autoMerge": {
+          "requested": false
+        },
+        "finalizeCompletedSeq": 0,
+        "finalizeSteps": [],
+        "lastEvent": {
+          "build": "control-build",
+          "seq": 3,
+          "ts": "2026-09-02T00:00:00.000Z",
+          "actor": {
+            "kind": "kernel"
+          },
+          "type": "escalation.raised",
+          "payload": {
+            "id": "esc-rounds",
+            "phase": "plan-review",
+            "round": 4,
+            "source": "policy",
+            "policyCause": "review-round-limit",
+            "question": "round limit"
+          },
+          "compatibility": {
+            "writerVersion": "1.0.1",
+            "classification": "decisive"
+          }
+        },
+        "lastSeq": 3,
+        "compatibility": {
+          "unknownFacts": 0,
+          "decisiveFacts": 0,
+          "lastSeq": 0,
+          "decisiveBoundary": 0,
+          "types": [],
+          "writerVersions": [],
+          "legacyVersionUnavailable": false,
+          "decisiveTypes": [],
+          "decisiveWriterVersions": [],
+          "decisiveLegacyVersionUnavailable": false
+        },
+        "compatibilityDeferredBoundary": 0,
+        "pinnedAssets": [],
+        "restartSince": 0,
+        "plan": {
+          "round": 0,
+          "approved": false
+        },
+        "implement": {
+          "round": 0
+        },
+        "codeReviewApproved": false,
+        "reviewFindings": {
+          "planReview": [],
+          "codeReview": []
+        },
+        "verify": {
+          "maxAttemptSeen": 0,
+          "results": [],
+          "cycleSince": 0
+        },
+        "reconcileAttempts": 0,
+        "observations": [],
+        "setupFailures": [],
+        "dispatchFailures": [],
+        "executions": [],
+        "infrastructureFailures": [],
+        "cleanupAttempts": [],
+        "pendingCommands": [],
+        "sessions": {
+          "totals": {},
+          "suspended": [],
+          "open": [],
+          "nativeHandles": {}
+        },
+        "failures": {}
+      },
+      "expected": {
+        "slug": "control-build",
+        "kind": "work",
+        "target": "main",
+        "status": "blocked",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "lease": {
+          "health": "none"
+        },
+        "progress": {
+          "lastEventAt": "2026-09-02T00:00:00.000Z",
+          "terminal": false
+        }
+      }
+    },
+    {
+      "id": "answer-review-limit-json-number:after",
+      "record": {
+        "slug": "control-build",
+        "repo": "acme/widgets",
+        "createdAt": "2026-09-02T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z"
+      },
+      "state": {
+        "baseBranch": "main",
+        "pollingActivity": {
+          "build.created": "1",
+          "escalation.raised": "3",
+          "escalation.answered": "4"
+        },
+        "status": "running",
+        "round": 0,
+        "openEscalations": [],
+        "answeredEscalations": [
+          {
+            "id": "esc-rounds",
+            "phase": "plan-review",
+            "round": 4,
+            "source": "policy",
+            "policyCause": "review-round-limit",
+            "question": "round limit",
+            "seq": 3,
+            "answer": "Operator requested a bare retry with no feedback",
+            "resolution": "retry",
+            "reviewRoundCeiling": 5,
+            "answeredSeq": 4
+          }
+        ],
+        "reviewRoundCeilings": {
+          "plan": 5
+        },
+        "landing": {},
+        "autoMerge": {
+          "requested": false
+        },
+        "finalizeCompletedSeq": 0,
+        "finalizeSteps": [],
+        "lastEvent": {
+          "build": "control-build",
+          "seq": 4,
+          "ts": "2026-09-02T00:00:00.000Z",
+          "actor": {
+            "kind": "human",
+            "user": "operator@example.com"
+          },
+          "type": "escalation.answered",
+          "payload": {
+            "id": "esc-rounds",
+            "answer": "Operator requested a bare retry with no feedback",
+            "resolution": "retry",
+            "reviewRoundCeiling": 5
+          },
+          "compatibility": {
+            "writerVersion": "1.0.1",
+            "classification": "decisive"
+          }
+        },
+        "lastSeq": 4,
+        "compatibility": {
+          "unknownFacts": 0,
+          "decisiveFacts": 0,
+          "lastSeq": 0,
+          "decisiveBoundary": 0,
+          "types": [],
+          "writerVersions": [],
+          "legacyVersionUnavailable": false,
+          "decisiveTypes": [],
+          "decisiveWriterVersions": [],
+          "decisiveLegacyVersionUnavailable": false
+        },
+        "compatibilityDeferredBoundary": 0,
+        "pinnedAssets": [],
+        "restartSince": 0,
+        "plan": {
+          "round": 0,
+          "approved": false
+        },
+        "implement": {
+          "round": 0
+        },
+        "codeReviewApproved": false,
+        "reviewFindings": {
+          "planReview": [],
+          "codeReview": []
+        },
+        "verify": {
+          "maxAttemptSeen": 0,
+          "results": [],
+          "cycleSince": 0
+        },
+        "reconcileAttempts": 0,
+        "observations": [],
+        "setupFailures": [],
+        "dispatchFailures": [],
+        "executions": [],
+        "infrastructureFailures": [],
+        "cleanupAttempts": [],
+        "pendingCommands": [],
+        "sessions": {
+          "totals": {},
+          "suspended": [],
+          "open": [],
+          "nativeHandles": {}
+        },
+        "failures": {}
+      },
+      "expected": {
+        "slug": "control-build",
+        "kind": "work",
+        "target": "main",
+        "status": "running",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "lease": {
+          "health": "none"
+        },
+        "progress": {
+          "lastEventAt": "2026-09-02T00:00:00.000Z",
+          "terminal": false
+        }
+      }
+    },
+    {
       "id": "answer-review-limit:seed",
       "record": {
         "slug": "control-build",
@@ -15902,6 +16148,218 @@
     },
     {
       "id": "intake-toggle:after",
+      "record": {
+        "slug": "control-build",
+        "repo": "acme/widgets",
+        "createdAt": "2026-09-02T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z"
+      },
+      "state": {
+        "baseBranch": "main",
+        "pollingActivity": {
+          "build.created": "1"
+        },
+        "status": "running",
+        "round": 0,
+        "openEscalations": [],
+        "answeredEscalations": [],
+        "reviewRoundCeilings": {},
+        "landing": {},
+        "autoMerge": {
+          "requested": false
+        },
+        "finalizeCompletedSeq": 0,
+        "finalizeSteps": [],
+        "lastEvent": {
+          "build": "control-build",
+          "seq": 2,
+          "ts": "2026-09-02T00:00:00.000Z",
+          "actor": {
+            "kind": "kernel"
+          },
+          "type": "runner.attached",
+          "payload": {
+            "instance": "test-runner",
+            "host": "test-host",
+            "resumedFromSeq": 0
+          },
+          "compatibility": {
+            "writerVersion": "1.0.1",
+            "classification": "decisive"
+          }
+        },
+        "lastSeq": 2,
+        "compatibility": {
+          "unknownFacts": 0,
+          "decisiveFacts": 0,
+          "lastSeq": 0,
+          "decisiveBoundary": 0,
+          "types": [],
+          "writerVersions": [],
+          "legacyVersionUnavailable": false,
+          "decisiveTypes": [],
+          "decisiveWriterVersions": [],
+          "decisiveLegacyVersionUnavailable": false
+        },
+        "compatibilityDeferredBoundary": 0,
+        "pinnedAssets": [],
+        "restartSince": 0,
+        "plan": {
+          "round": 0,
+          "approved": false
+        },
+        "implement": {
+          "round": 0
+        },
+        "codeReviewApproved": false,
+        "reviewFindings": {
+          "planReview": [],
+          "codeReview": []
+        },
+        "verify": {
+          "maxAttemptSeen": 0,
+          "results": [],
+          "cycleSince": 0
+        },
+        "reconcileAttempts": 0,
+        "observations": [],
+        "setupFailures": [],
+        "dispatchFailures": [],
+        "executions": [],
+        "infrastructureFailures": [],
+        "cleanupAttempts": [],
+        "pendingCommands": [],
+        "sessions": {
+          "totals": {},
+          "suspended": [],
+          "open": [],
+          "nativeHandles": {}
+        },
+        "failures": {}
+      },
+      "expected": {
+        "slug": "control-build",
+        "kind": "work",
+        "target": "main",
+        "status": "running",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "lease": {
+          "health": "none"
+        },
+        "progress": {
+          "lastEventAt": "2026-09-02T00:00:00.000Z",
+          "terminal": false
+        }
+      }
+    },
+    {
+      "id": "intake-retired-toggle:seed",
+      "record": {
+        "slug": "control-build",
+        "repo": "acme/widgets",
+        "createdAt": "2026-09-02T00:00:00.000Z",
+        "updatedAt": "2026-09-02T00:00:00.000Z"
+      },
+      "state": {
+        "baseBranch": "main",
+        "pollingActivity": {
+          "build.created": "1"
+        },
+        "status": "running",
+        "round": 0,
+        "openEscalations": [],
+        "answeredEscalations": [],
+        "reviewRoundCeilings": {},
+        "landing": {},
+        "autoMerge": {
+          "requested": false
+        },
+        "finalizeCompletedSeq": 0,
+        "finalizeSteps": [],
+        "lastEvent": {
+          "build": "control-build",
+          "seq": 2,
+          "ts": "2026-09-02T00:00:00.000Z",
+          "actor": {
+            "kind": "kernel"
+          },
+          "type": "runner.attached",
+          "payload": {
+            "instance": "test-runner",
+            "host": "test-host",
+            "resumedFromSeq": 0
+          },
+          "compatibility": {
+            "writerVersion": "1.0.1",
+            "classification": "decisive"
+          }
+        },
+        "lastSeq": 2,
+        "compatibility": {
+          "unknownFacts": 0,
+          "decisiveFacts": 0,
+          "lastSeq": 0,
+          "decisiveBoundary": 0,
+          "types": [],
+          "writerVersions": [],
+          "legacyVersionUnavailable": false,
+          "decisiveTypes": [],
+          "decisiveWriterVersions": [],
+          "decisiveLegacyVersionUnavailable": false
+        },
+        "compatibilityDeferredBoundary": 0,
+        "pinnedAssets": [],
+        "restartSince": 0,
+        "plan": {
+          "round": 0,
+          "approved": false
+        },
+        "implement": {
+          "round": 0
+        },
+        "codeReviewApproved": false,
+        "reviewFindings": {
+          "planReview": [],
+          "codeReview": []
+        },
+        "verify": {
+          "maxAttemptSeen": 0,
+          "results": [],
+          "cycleSince": 0
+        },
+        "reconcileAttempts": 0,
+        "observations": [],
+        "setupFailures": [],
+        "dispatchFailures": [],
+        "executions": [],
+        "infrastructureFailures": [],
+        "cleanupAttempts": [],
+        "pendingCommands": [],
+        "sessions": {
+          "totals": {},
+          "suspended": [],
+          "open": [],
+          "nativeHandles": {}
+        },
+        "failures": {}
+      },
+      "expected": {
+        "slug": "control-build",
+        "kind": "work",
+        "target": "main",
+        "status": "running",
+        "updatedAt": "2026-09-02T00:00:00.000Z",
+        "lease": {
+          "health": "none"
+        },
+        "progress": {
+          "lastEventAt": "2026-09-02T00:00:00.000Z",
+          "terminal": false
+        }
+      }
+    },
+    {
+      "id": "intake-retired-toggle:after",
       "record": {
         "slug": "control-build",
         "repo": "acme/widgets",

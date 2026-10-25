@@ -221,6 +221,11 @@ export function operatorScenarios(): OperatorScenario[] {
       one(`auth-${auth}`, 'GET sessions', { method: 'GET', path: 'sessions', auth }),
     ),
     one('invalid-json', 'POST sessions', { method: 'POST', path: 'sessions', rawBody: '{' }),
+    one('session-create-json-bom', 'POST sessions', {
+      method: 'POST',
+      path: 'sessions',
+      rawBody: '\uFEFF{"title":"BOM session"}',
+    }),
     one('session-create-unknown-field', 'POST sessions', {
       method: 'POST',
       path: 'sessions',
@@ -618,7 +623,10 @@ export async function checkOperatorCorpus(corpus: OperatorCorpus) {
 }
 if (import.meta.main) {
   if (process.argv.includes('--write')) {
-    writeFileSync(corpusPath, `${JSON.stringify(await generateOperatorCorpus(), null, 2)}\n`)
+    writeFileSync(
+      corpusPath,
+      `${JSON.stringify(await generateOperatorCorpus(), null, 2).replace(/[^\x00-\x7f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)}\n`,
+    )
   } else {
     await checkOperatorCorpus(JSON.parse(readFileSync(corpusPath, 'utf8')))
     console.log(

@@ -37,11 +37,13 @@ export const advancedScenarios = [
   'node-land-complete',
   'node-land-open-source-child',
   'node-land-frozen-child',
+  'node-land-uncovered-frozen-child',
   'node-land-empty',
   'node-land-source-mismatch',
   'revise-hosted-empty',
   'revise-hosted-file',
   'revise-hosted-tree',
+  'revise-hosted-chunk-boundaries',
   'revise-hosted-latest-and-removed',
   'revise-supplied-preserves-assets',
   'revise-no-ticket',
@@ -129,7 +131,13 @@ export async function advancedSnapshot(
     }),
   )
   const repository = await store.getRepoEvents(repo)
-  const manifestHashes: string[] = []
+  const manifestKinds = new Set(
+    builds.flatMap((build) =>
+      reduceBuild(build.events).pinnedAssets.flatMap((pin) =>
+        pin.snapshot ? [pin.snapshot.kind] : [],
+      ),
+    ),
+  )
   const repositoryArtifacts = await Promise.all(
     (await store.listRepoArtifacts(repo)).map(async (meta) => {
       const content = (await store.getRepoArtifact(repo, meta.kind, meta.revision))!.content
@@ -137,17 +145,11 @@ export async function advancedSnapshot(
       // their SHA256. Bind those dependencies only, while testing the actual hash.
       const actualHash = createHash('sha256').update(content).digest('hex')
       if (actualHash !== meta.blobRef) throw new Error('artifact bytes do not match metadata hash')
-      try {
+      if (manifestKinds.has(meta.kind)) {
         const decoded: unknown = JSON.parse(gunzipSync(content).toString('utf8'))
-        if (!manifestHashes.includes(meta.blobRef)) manifestHashes.push(meta.blobRef)
         return { meta, encoding: 'gzip-json' as const, content: decoded }
-      } catch {
-        return {
-          meta,
-          encoding: 'base64' as const,
-          content: Buffer.from(content).toString('base64'),
-        }
       }
+      return { meta, encoding: 'base64' as const, content: Buffer.from(content).toString('base64') }
     }),
   )
   // Store metadata sorts random kind names; creation order is the stable
@@ -301,6 +303,10 @@ export async function replayAdvancedScenario(id: AdvancedScenario) {
     }
     if (id === 'node-land-open-source-child')
       tickets.push(ticket('ENG-3', 'work', 'triage', 'ENG-1'))
+    if (id === 'node-land-uncovered-frozen-child') {
+      tickets.push(ticket('ENG-3', 'work', 'triage'))
+      await add('advanced-open', { source: 'file', id: 'OLD-3' }, 'work', 'advanced-build')
+    }
     if (id === 'node-land-frozen-child') {
       tickets.push(ticket('ENG-3', 'work', 'triage'))
       await add('advanced-open', { source: 'database', id: 'ENG-3' }, 'work', 'advanced-build')
@@ -347,6 +353,24 @@ export async function replayAdvancedScenario(id: AdvancedScenario) {
           type: 'file',
           path: 'reference.bin',
           base64: Buffer.from([0, 255, 10, 38]).toString('base64'),
+        },
+      ],
+    })
+  if (id === 'revise-hosted-chunk-boundaries')
+    assetSeeds.push({
+      ticketId: 'ENG-1',
+      kind: 'design',
+      name: 'reference',
+      layout: 'tree',
+      entries: [
+        { type: 'dir', path: 'empty-dir' },
+        { type: 'file', path: 'empty.bin', base64: '' },
+        {
+          type: 'file',
+          path: 'large.bin',
+          base64: Buffer.from(
+            Uint8Array.from({ length: 256 * 1024 + 1 }, (_, index) => index % 251),
+          ).toString('base64'),
         },
       ],
     })

@@ -1,5 +1,5 @@
 {
-  "sourceHash": "ab6132b1b11a63a07008240bec2abc8491420f42f11f3b2edb7ffe667ad930ee",
+  "sourceHash": "2d2b434863b0b2c9ff17ba9cda3a125a38e18cac8f218c0ef1a8b52721de8bbd",
   "clock": "2026-09-02T00:00:00.000Z",
   "schemas": {
     "landings.list": {
@@ -9,7 +9,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         }
       },
       "required": ["repo"],
@@ -22,7 +22,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         }
       },
       "required": ["repo"],
@@ -35,11 +35,11 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "scope": {
           "default": "active",
-          "description": "Which builds to include: \"active\" (running, paused, or blocked — the default), \"queued\", or \"all\".",
+          "description": "Which builds to include: \"active\" (running, paused, or blocked \u2014 the default), \"queued\", or \"all\".",
           "type": "string",
           "enum": ["active", "queued", "all"]
         }
@@ -54,7 +54,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "slug": {
           "type": "string",
@@ -72,7 +72,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "slug": {
           "type": "string",
@@ -87,7 +87,7 @@
         },
         "waitSeconds": {
           "default": 0,
-          "description": "Bounded wait: hold the call for at most this many seconds waiting for at least one new event before returning an empty page (0–30; 0 returns immediately).",
+          "description": "Bounded wait: hold the call for at most this many seconds waiting for at least one new event before returning an empty page (0\u201330; 0 returns immediately).",
           "type": "integer",
           "minimum": 0,
           "maximum": 30
@@ -103,7 +103,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "slug": {
           "type": "string",
@@ -132,7 +132,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "slug": {
           "type": "string",
@@ -150,7 +150,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "slug": {
           "type": "string",
@@ -160,7 +160,7 @@
         "action": {
           "type": "string",
           "enum": ["pause", "cancel-pause", "resume", "land", "hold", "abort", "discard"],
-          "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"land\" for landing consent or \"hold\" to withdraw consent — or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
+          "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"land\" for landing consent or \"hold\" to withdraw consent \u2014 or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
         }
       },
       "required": ["repo", "slug", "action"],
@@ -183,7 +183,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             },
             "slug": {
               "type": "string",
@@ -204,7 +204,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             },
             "slug": {
               "type": "string",
@@ -228,7 +228,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             },
             "slug": {
               "type": "string",
@@ -257,7 +257,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             },
             "slug": {
               "type": "string",
@@ -293,7 +293,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             },
             "slug": {
               "type": "string",
@@ -329,7 +329,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             },
             "slug": {
               "type": "string",
@@ -349,7 +349,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         }
       },
       "required": ["repo"],
@@ -362,7 +362,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "setting": {
           "type": "string",
@@ -384,7 +384,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "action": {
           "type": "string",
@@ -402,7 +402,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         }
       },
       "required": ["repo"],
@@ -421,7 +421,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             }
           },
           "required": ["action", "repo"],
@@ -441,7 +441,7 @@
             "repo": {
               "type": "string",
               "minLength": 1,
-              "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+              "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
             }
           },
           "required": ["action", "run", "repo"],
@@ -486,10 +486,10 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "state": {
-          "description": "Provider state to list; defaults to the effective triage state from the repository’s effective config.",
+          "description": "Provider state to list; defaults to the effective triage state from the repository\u2019s effective config.",
           "type": "string",
           "minLength": 1
         },
@@ -512,7 +512,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "id": {
           "type": "string",
@@ -568,7 +568,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         }
       },
       "required": ["title", "body", "repo"],
@@ -611,7 +611,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "id": {
           "type": "string",
@@ -641,7 +641,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "id": {
           "type": "string",
@@ -671,7 +671,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "id": {
           "type": "string",
@@ -692,12 +692,12 @@
         "state": {
           "type": "string",
           "minLength": 1,
-          "description": "Provider state to move the ticket into. Destructive: moving a ticket into the repository’s configured ready state queues it for dispatch."
+          "description": "Provider state to move the ticket into. Destructive: moving a ticket into the repository\u2019s configured ready state queues it for dispatch."
         },
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "id": {
           "type": "string",
@@ -715,7 +715,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         }
       },
       "required": ["repo"],
@@ -728,7 +728,7 @@
         "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
         },
         "document": {
           "type": "string",
@@ -846,6 +846,64 @@
       "error": "invalid input for tool \"landings.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "landings.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"landings.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "landings.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"landings.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "landings.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"landings.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "landings.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"landings.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "landings.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"landings.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "landings.list",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"landings.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "tickets.tree",
       "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -947,6 +1005,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.tree",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.tree",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.tree",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.tree",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.tree",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.tree",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"tickets.tree\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
@@ -1057,6 +1173,64 @@
       "error": "invalid input for tool \"builds.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "builds.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"builds.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"builds.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"builds.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"builds.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"builds.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.list",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"builds.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "builds.get",
       "error": "invalid input for tool \"builds.get\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -1159,6 +1333,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"builds.get\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"builds.get\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"builds.get\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"builds.get\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"builds.get\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"builds.get\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.get",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"builds.get\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
@@ -1271,6 +1503,64 @@
       "error": "invalid input for tool \"builds.events\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"cursor\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "builds.events",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"builds.events\": [\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": true,\n    \"path\": [\n      \"cursor\"\n    ],\n    \"message\": \"Too small: expected number to be >=0\"\n  }\n]"
+    },
+    {
+      "name": "builds.events",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"builds.events\": [\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_big\",\n    \"maximum\": 30,\n    \"inclusive\": true,\n    \"path\": [\n      \"waitSeconds\"\n    ],\n    \"message\": \"Too big: expected number to be <=30\"\n  }\n]"
+    },
+    {
+      "name": "builds.events",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"builds.events\": [\n  {\n    \"expected\": \"int\",\n    \"format\": \"safeint\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"waitSeconds\"\n    ],\n    \"message\": \"Invalid input: expected int, received number\"\n  }\n]"
+    },
+    {
+      "name": "builds.events",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"builds.events\": [\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"cursor\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.events",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"builds.events\": [\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"cursor\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.events",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"builds.events\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"cursor\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "builds.artifact",
       "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -1370,6 +1660,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.artifact",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.artifact",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.artifact",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.artifact",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": true,\n    \"path\": [\n      \"rev\"\n    ],\n    \"message\": \"Too small: expected number to be >=0\"\n  }\n]"
+    },
+    {
+      "name": "builds.artifact",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.artifact",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"builds.artifact\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
@@ -1480,6 +1828,64 @@
       "error": "invalid input for tool \"builds.restack\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "builds.restack",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"builds.restack\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.restack",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"builds.restack\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.restack",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"builds.restack\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.restack",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"builds.restack\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.restack",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"builds.restack\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.restack",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"builds.restack\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "builds.control",
       "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -1583,6 +1989,64 @@
       "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "builds.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "builds.control",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "builds.answer",
       "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
     },
@@ -1682,6 +2146,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"text\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "builds.answer",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"text\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "builds.answer",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"text\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "builds.answer",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"text\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "builds.answer",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"text\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "builds.answer",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"too_big\",\n    \"maximum\": 9007199254740991,\n    \"note\": \"Integers must be within the safe integer range.\",\n    \"origin\": \"int\",\n    \"inclusive\": true,\n    \"path\": [\n      \"ceiling\"\n    ],\n    \"message\": \"Too big: expected int to be <=9007199254740991\"\n  }\n]"
+    },
+    {
+      "name": "builds.answer",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"builds.answer\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"guidance\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"guidance\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"text\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"retry\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"retry\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"dismiss\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"dismiss\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"review-round-ceiling\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"review-round-ceiling\\\"\"\n        },\n        {\n          \"expected\": \"number\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"ceiling\"\n          ],\n          \"message\": \"Invalid input: expected number, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"body\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"body\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"revise-spec\"\n          ],\n          \"path\": [\n            \"resolution\"\n          ],\n          \"message\": \"Invalid input: expected \\\"revise-spec\\\"\"\n        },\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"ticket\"\n          ],\n          \"path\": [\n            \"origin\"\n          ],\n          \"message\": \"Invalid input: expected \\\"ticket\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"body\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"slug\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
     },
@@ -1791,6 +2313,64 @@
       "error": "invalid input for tool \"repository.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "repository.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"repository.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"repository.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"repository.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"repository.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"repository.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.status",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"repository.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "repository.settings",
       "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -1890,6 +2470,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"intake\"\n    ],\n    \"path\": [\n      \"setting\"\n    ],\n    \"message\": \"Invalid input: expected \\\"intake\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.settings",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"intake\"\n    ],\n    \"path\": [\n      \"setting\"\n    ],\n    \"message\": \"Invalid input: expected \\\"intake\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.settings",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"intake\"\n    ],\n    \"path\": [\n      \"setting\"\n    ],\n    \"message\": \"Invalid input: expected \\\"intake\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.settings",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"intake\"\n    ],\n    \"path\": [\n      \"setting\"\n    ],\n    \"message\": \"Invalid input: expected \\\"intake\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.settings",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"intake\"\n    ],\n    \"path\": [\n      \"setting\"\n    ],\n    \"message\": \"Invalid input: expected \\\"intake\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.settings",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"intake\"\n    ],\n    \"path\": [\n      \"setting\"\n    ],\n    \"message\": \"Invalid input: expected \\\"intake\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.settings",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"repository.settings\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"intake\"\n    ],\n    \"path\": [\n      \"setting\"\n    ],\n    \"message\": \"Invalid input: expected \\\"intake\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
@@ -2000,6 +2638,64 @@
       "error": "invalid input for tool \"repository.bulk_control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "repository.bulk_control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"repository.bulk_control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.bulk_control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"repository.bulk_control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.bulk_control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"repository.bulk_control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.bulk_control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"repository.bulk_control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.bulk_control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"repository.bulk_control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "repository.bulk_control",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"repository.bulk_control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"resume\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"resume\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "harvest.status",
       "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -2105,6 +2801,64 @@
       "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "harvest.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "harvest.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "harvest.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "harvest.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "harvest.status",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "harvest.status",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"harvest.status\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "harvest.control",
       "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received undefined\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
     },
@@ -2204,6 +2958,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"toggle-gate\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"toggle-gate\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"run\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"run\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"run\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "harvest.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"toggle-gate\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"toggle-gate\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"run\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"run\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"run\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"cursor\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "harvest.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"toggle-gate\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"toggle-gate\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"run\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"run\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"run\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "harvest.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"toggle-gate\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"toggle-gate\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"run\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"run\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"run\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"cursor\",\n            \"waitSeconds\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "harvest.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"toggle-gate\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"toggle-gate\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"run\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"run\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"run\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"kind\",\n            \"rev\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "harvest.control",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"toggle-gate\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"toggle-gate\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"resolution\",\n            \"ceiling\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"run\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"run\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"run\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"slug\",\n            \"resolution\",\n            \"ceiling\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    {
+      "name": "harvest.control",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"harvest.control\": [\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"toggle-gate\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"toggle-gate\\\"\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"run\"\n          ],\n          \"path\": [\n            \"action\"\n          ],\n          \"message\": \"Invalid input: expected \\\"run\\\"\"\n        },\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [\n            \"run\"\n          ],\n          \"message\": \"Invalid input: expected string, received undefined\"\n        },\n        {\n          \"code\": \"unrecognized_keys\",\n          \"keys\": [\n            \"id\",\n            \"target\"\n          ],\n          \"path\": [],\n          \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n        }\n      ]\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]"
     },
@@ -2313,6 +3125,64 @@
       "error": "invalid input for tool \"tickets.states\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "tickets.states",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.states\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.states",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.states\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.states",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.states\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.states",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.states\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.states",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.states\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.states",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"tickets.states\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "tickets.state.create",
       "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -2412,6 +3282,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.state.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.state.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.state.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.state.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.state.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.state.create",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"tickets.state.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
@@ -2521,6 +3449,64 @@
       "error": "invalid input for tool \"tickets.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "tickets.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.list",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"tickets.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "tickets.get",
       "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -2620,6 +3606,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.get",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.get",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"tickets.get\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
     },
@@ -2725,6 +3769,64 @@
         "target": null
       },
       "error": "invalid input for tool \"tickets.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"id\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.create\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"work\",\n      \"node\"\n    ],\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"work\\\"|\\\"node\\\"\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.create",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.create",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"tickets.create\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"target\"\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"body\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"id\\\"\"\n  }\n]"
     },
     {
       "name": "tickets.update",
@@ -2834,6 +3936,64 @@
       }
     },
     {
+      "name": "tickets.update",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.update\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.update",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.update\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.update",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.update\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.update",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.update\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"work\",\n      \"node\"\n    ],\n    \"path\": [\n      \"kind\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"work\\\"|\\\"node\\\"\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.update",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.update\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.update",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"tickets.update\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"target\"\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+    },
+    {
       "name": "tickets.block",
       "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -2933,6 +4093,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.block",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.block",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.block",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.block",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.block",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.block",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"tickets.block\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
     },
@@ -3040,6 +4258,64 @@
       "error": "invalid input for tool \"tickets.unblock\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "tickets.unblock",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.unblock\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.unblock",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.unblock\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.unblock",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.unblock\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.unblock",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.unblock\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.unblock",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.unblock\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.unblock",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"tickets.unblock\": [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"blockerIds\"\n    ],\n    \"message\": \"Invalid input: expected array, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "tickets.move",
       "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -3139,6 +4415,64 @@
         "repo": "acme/widgets",
         "id": "missing",
         "target": null
+      },
+      "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.move",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.move",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.move",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.move",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.move",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "tickets.move",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
       },
       "error": "invalid input for tool \"tickets.move\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"state\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"target\\\"\"\n  }\n]"
     },
@@ -3248,6 +4582,64 @@
       "error": "invalid input for tool \"notes.read\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"notes.read\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"notes.read\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"notes.read\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"notes.read\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"notes.read\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"notes.read\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
       "name": "notes.write",
       "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
     },
@@ -3352,6 +4744,64 @@
         "target": null
       },
       "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"document\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"document\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"document\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"document\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"document\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"document\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"notes.write\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"document\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     }
   ],
   "outcomes": [
@@ -3449,6 +4899,56 @@
       "result": {
         "document": "notes\nbytes",
         "revision": 0,
+        "metadata": {
+          "user": "operator@example.com"
+        }
+      }
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "document": "\ufeffnotes\nbytes"
+      },
+      "result": {
+        "revision": 1,
+        "blobRef": "10d7d70c44c249c33698ac63cea1c424c8c61ec5ba422737825c7f7f0400ac02",
+        "createdAt": "2026-09-02T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets"
+      },
+      "result": {
+        "document": "notes\nbytes",
+        "revision": 1,
+        "metadata": {
+          "user": "operator@example.com"
+        }
+      }
+    },
+    {
+      "name": "notes.write",
+      "input": {
+        "repo": "acme/widgets",
+        "document": "notes\nbytes"
+      },
+      "result": {
+        "revision": 2,
+        "blobRef": "77c13ecbc6da03547c4775958d6144b12d134aa2ce57aa21eb518339f3b20329",
+        "createdAt": "2026-09-02T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "notes.read",
+      "input": {
+        "repo": "acme/widgets"
+      },
+      "result": {
+        "document": "notes\nbytes",
+        "revision": 2,
         "metadata": {
           "user": "operator@example.com"
         }
