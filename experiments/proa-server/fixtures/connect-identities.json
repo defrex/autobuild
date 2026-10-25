@@ -1,0 +1,297 @@
+{
+  "format": 1,
+  "sources": {
+    "connection.ts": "ebebdad022f49a5492ad38dc7baa8051a5a737b51f3aa04846aebd084d815a75",
+    "kernel/origin.ts": "6d25aa72d5f9f01d29003fd101c1cfef0a3e0452a931acfc0067960bce638272"
+  },
+  "cases": [
+    {
+      "input": "",
+      "rejected": true
+    },
+    {
+      "input": " ",
+      "rejected": true
+    },
+    {
+      "input": "owner/repo",
+      "rejected": true
+    },
+    {
+      "input": "git@GitHub.com:Owner/Repo.git",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "github.com:Owner/Repo.git",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": " https://GitHub.com/Owner/Repo.git/ ",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "https://github.com/Owner/Repo.git",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "https://git@github.com/Owner/Repo",
+      "rejected": true
+    },
+    {
+      "input": "https://user:password@github.com/a/b",
+      "rejected": true
+    },
+    {
+      "input": "https://github.com/",
+      "rejected": true
+    },
+    {
+      "input": "https://github.com/a%20b",
+      "rejected": true
+    },
+    {
+      "input": "https://github.com/a?x",
+      "rejected": true
+    },
+    {
+      "input": "https://github.com/a#x",
+      "rejected": true
+    },
+    {
+      "input": "https://github.com:123/a/b",
+      "output": "https://github.com:123/a/b"
+    },
+    {
+      "input": "http://github.com/Owner/Repo.git",
+      "rejected": true
+    },
+    {
+      "input": "http://git@github.com/Owner/Repo",
+      "rejected": true
+    },
+    {
+      "input": "http://user:password@github.com/a/b",
+      "rejected": true
+    },
+    {
+      "input": "http://github.com/",
+      "rejected": true
+    },
+    {
+      "input": "http://github.com/a%20b",
+      "rejected": true
+    },
+    {
+      "input": "http://github.com/a?x",
+      "rejected": true
+    },
+    {
+      "input": "http://github.com/a#x",
+      "rejected": true
+    },
+    {
+      "input": "http://github.com:123/a/b",
+      "rejected": true
+    },
+    {
+      "input": "ssh://github.com/Owner/Repo.git",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "ssh://git@github.com/Owner/Repo",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "ssh://user:password@github.com/a/b",
+      "rejected": true
+    },
+    {
+      "input": "ssh://github.com/",
+      "rejected": true
+    },
+    {
+      "input": "ssh://github.com/a%20b",
+      "rejected": true
+    },
+    {
+      "input": "ssh://github.com/a?x",
+      "rejected": true
+    },
+    {
+      "input": "ssh://github.com/a#x",
+      "rejected": true
+    },
+    {
+      "input": "ssh://github.com:123/a/b",
+      "output": "https://github.com:123/a/b"
+    },
+    {
+      "input": "git://github.com/Owner/Repo.git",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "git://git@github.com/Owner/Repo",
+      "rejected": true
+    },
+    {
+      "input": "git://user:password@github.com/a/b",
+      "rejected": true
+    },
+    {
+      "input": "git://github.com/",
+      "rejected": true
+    },
+    {
+      "input": "git://github.com/a%20b",
+      "rejected": true
+    },
+    {
+      "input": "git://github.com/a?x",
+      "rejected": true
+    },
+    {
+      "input": "git://github.com/a#x",
+      "rejected": true
+    },
+    {
+      "input": "git://github.com:123/a/b",
+      "output": "https://github.com:123/a/b"
+    },
+    {
+      "input": "git+ssh://github.com/Owner/Repo.git",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "git+ssh://git@github.com/Owner/Repo",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "git+ssh://user:password@github.com/a/b",
+      "rejected": true
+    },
+    {
+      "input": "git+ssh://github.com/",
+      "rejected": true
+    },
+    {
+      "input": "git+ssh://github.com/a%20b",
+      "rejected": true
+    },
+    {
+      "input": "git+ssh://github.com/a?x",
+      "rejected": true
+    },
+    {
+      "input": "git+ssh://github.com/a#x",
+      "rejected": true
+    },
+    {
+      "input": "git+ssh://github.com:123/a/b",
+      "output": "https://github.com:123/a/b"
+    },
+    {
+      "input": "file://github.com/Owner/Repo.git",
+      "rejected": true
+    },
+    {
+      "input": "file://git@github.com/Owner/Repo",
+      "rejected": true
+    },
+    {
+      "input": "file://user:password@github.com/a/b",
+      "rejected": true
+    },
+    {
+      "input": "file://github.com/",
+      "rejected": true
+    },
+    {
+      "input": "file://github.com/a%20b",
+      "rejected": true
+    },
+    {
+      "input": "file://github.com/a?x",
+      "rejected": true
+    },
+    {
+      "input": "file://github.com/a#x",
+      "rejected": true
+    },
+    {
+      "input": "file://github.com:123/a/b",
+      "rejected": true
+    },
+    {
+      "input": "ftp://github.com/Owner/Repo.git",
+      "rejected": true
+    },
+    {
+      "input": "ftp://git@github.com/Owner/Repo",
+      "rejected": true
+    },
+    {
+      "input": "ftp://user:password@github.com/a/b",
+      "rejected": true
+    },
+    {
+      "input": "ftp://github.com/",
+      "rejected": true
+    },
+    {
+      "input": "ftp://github.com/a%20b",
+      "rejected": true
+    },
+    {
+      "input": "ftp://github.com/a?x",
+      "rejected": true
+    },
+    {
+      "input": "ftp://github.com/a#x",
+      "rejected": true
+    },
+    {
+      "input": "ftp://github.com:123/a/b",
+      "rejected": true
+    },
+    {
+      "input": "git:secret@github.com:a/b",
+      "rejected": true
+    },
+    {
+      "input": "C:/repo",
+      "rejected": true
+    },
+    {
+      "input": "github.com:/absolute",
+      "rejected": true
+    },
+    {
+      "input": "https://github.com/Owner/Repo.GIT",
+      "output": "https://github.com/Owner/Repo"
+    },
+    {
+      "input": "https://github.com/a//b///",
+      "output": "https://github.com/a//b"
+    },
+    {
+      "input": "https://github.com/a/../b",
+      "output": "https://github.com/b"
+    },
+    {
+      "input": "https://github.com/世界/仓库",
+      "rejected": true
+    },
+    {
+      "input": "https://github.com/a\\b",
+      "rejected": true
+    },
+    {
+      "input": "https://[::1]/a/b",
+      "output": "https://[::1]/a/b"
+    },
+    {
+      "input": "https://github.com:443/a/b",
+      "output": "https://github.com/a/b"
+    }
+  ]
+}
