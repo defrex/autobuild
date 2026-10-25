@@ -6,16 +6,11 @@ use axum::{
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-#[path = "../src/app.rs"]
-mod app;
-#[path = "../src/auth/mod.rs"]
-mod auth;
+use proa_server::{app, auth};
 #[path = "../src/components/mod.rs"]
 mod components;
 // The executable alone consumes address/from_env; integration constructs config directly.
-#[allow(dead_code)]
-#[path = "../src/config.rs"]
-mod config;
+use proa_server::config;
 #[path = "../src/endpoints/mod.rs"]
 mod endpoints;
 #[path = "../src/error.rs"]
@@ -173,6 +168,7 @@ fn admitted() -> (app::AppState, String) {
     (
         app::AppState {
             auth: std::sync::Arc::new(auth),
+            data: None,
         },
         cookie.split(';').next().unwrap().to_owned(),
     )
@@ -192,6 +188,7 @@ async fn tcp_development_path_supplies_peer() {
     auth.allowed = std::sync::Arc::new(|| vec!["operator@example.com".into()]);
     let app = routes::router(app::AppState {
         auth: std::sync::Arc::new(auth),
+        data: None,
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/auth/dev-session", listener.local_addr().unwrap());
