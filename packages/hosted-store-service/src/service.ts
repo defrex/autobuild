@@ -366,6 +366,13 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     return undefined
   }
 
+  if (
+    root === 'repos' &&
+    segments[2] === 'operator-presence' &&
+    segments.length === 4 &&
+    req.method === 'DELETE'
+  )
+    return 'store'
   if (root === 'repos' && segments[2] === 'operator-presence' && segments.length === 3) {
     return req.method === 'GET' || req.method === 'POST' ? 'store' : undefined
   }

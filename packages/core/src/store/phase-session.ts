@@ -321,6 +321,9 @@ export function scopeLocalStoreToPhaseSession(
     async upsertOperatorPresence(): Promise<never> {
       return admin('upsertOperatorPresence')
     },
+    async removeOperatorPresence(): Promise<never> {
+      return admin('removeOperatorPresence')
+    },
     async listOperatorPresence(repo: string) {
       own('listOperatorPresence', 'repo', repo)
       return store.listOperatorPresence(repo)

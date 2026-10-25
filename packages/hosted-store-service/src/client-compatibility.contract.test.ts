@@ -1,3 +1,4 @@
+import * as store10 from './compatibility-fixtures/store-v1.0'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
 import { testCredentials } from './testing/credentials'
@@ -472,5 +473,46 @@ for (const version of ['0.12.0', '0.13.0', '0.14.0'].filter(isSupported)) {
       kind: 'node',
       target: parent.ref.id,
     })
+  })
+}
+
+for (const version of ['1.0.0', '1.0.1']) {
+  test(`published ${version}/protocol-4 wire operations work against next-minor withdrawal service`, async () => {
+    const store = new MemoryBuildStore()
+    const server = createStoreServer({
+      store,
+      identity: { autobuildVersion: '1.1.0', protocolVersion: '6' },
+    })
+    const send = (path: string, body?: unknown) =>
+      server.fetch(request(path, version, body, admin, '4'))
+    const position = await send('/repos/repo/change-position')
+    expect(position.status).toBe(200)
+    expect(store10.repoChangePositionSchema.parse(await position.json())).toEqual({ position: '0' })
+    await store.ensureRepo('repo')
+    const claim = await send(
+      '/repos/repo/lease/claim',
+      store10.leaseClaimBodySchema.parse({ holder: 'published', ttlMs: 60_000 }),
+    )
+    expect(claim.status).toBe(200)
+    expect(store10.okResponseSchema.parse(await claim.json()).ok).toBe(true)
+    const heartbeat = await send(
+      '/repos/repo/lease/heartbeat',
+      store10.leaseHolderBodySchema.parse({ holder: 'published' }),
+    )
+    expect(store10.okResponseSchema.parse(await heartbeat.json()).ok).toBe(true)
+    const tick = await send('/repos/repo/tick/begin', { holder: 'published' })
+    expect(tick.status).toBe(200)
+    expect(store10.beginRepoTickResponseSchema.parse(await tick.json())).toBeString()
+    const highWater = await send('/repos/repo/high-water')
+    expect(store10.repoHighWaterSchema.parse(await highWater.json())).toEqual({ seq: 0 })
+    const release = await send('/repos/repo/lease/release', { holder: 'published' })
+    expect(store10.okResponseSchema.parse(await release.json()).ok).toBe(true)
+    for (const protocol of ['5', '6']) {
+      const rejected = await server.fetch(
+        request('/repos/repo/change-position', version, undefined, admin, protocol),
+      )
+      expect(rejected.status).toBe(409)
+      expect(store10.errorBodySchema.parse(await rejected.json()).kind).toBe('conflict')
+    }
   })
 }

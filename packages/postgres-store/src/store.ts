@@ -1052,10 +1052,16 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  async upsertOperatorPresence(repo: string, input: OperatorIdentity): Promise<OperatorPresence> {
+  async upsertOperatorPresence(
+    repo: string,
+    input: OperatorIdentity,
+    signal?: AbortSignal,
+  ): Promise<OperatorPresence> {
+    signal?.throwIfAborted()
     if (!repo) throw new Error('repo is required')
     const identity = operatorIdentitySchema.parse(input)
     return this.run(async (q) => {
+      signal?.throwIfAborted()
       const rows = await q`INSERT INTO operator_presence (repo,id,host,pid,started_at,heartbeat_at)
         VALUES (${repo},${identity.id},${identity.host},${identity.pid},${identity.startedAt},${this.now()})
         ON CONFLICT (repo,id) DO UPDATE SET host=EXCLUDED.host,pid=EXCLUDED.pid,
@@ -1070,6 +1076,13 @@ export class PostgresBuildStore implements BuildStore {
         startedAt: iso(row.started_at),
         heartbeatAt: iso(row.heartbeat_at),
       })
+    })
+  }
+
+  async removeOperatorPresence(repo: string, id: string): Promise<void> {
+    id = operatorIdentitySchema.shape.id.parse(id)
+    await this.run(async (q) => {
+      await q`DELETE FROM operator_presence WHERE repo=${repo} AND id=${id}`
     })
   }
 

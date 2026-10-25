@@ -720,7 +720,12 @@ export class MemoryBuildStore implements BuildStore {
 
   private readonly operators = new Map<string, Map<string, OperatorPresence>>()
 
-  async upsertOperatorPresence(repo: string, input: OperatorIdentity): Promise<OperatorPresence> {
+  async upsertOperatorPresence(
+    repo: string,
+    input: OperatorIdentity,
+    signal?: AbortSignal,
+  ): Promise<OperatorPresence> {
+    signal?.throwIfAborted()
     if (!repo) throw new Error('repo is required')
     const identity = operatorIdentitySchema.parse(input)
     let rows = this.operators.get(repo)
@@ -739,6 +744,11 @@ export class MemoryBuildStore implements BuildStore {
     }
     rows.set(identity.id, row)
     return { ...row }
+  }
+
+  async removeOperatorPresence(repo: string, id: string): Promise<void> {
+    id = operatorIdentitySchema.shape.id.parse(id)
+    this.operators.get(repo)?.delete(id)
   }
 
   async listOperatorPresence(repo: string): Promise<OperatorPresence[]> {

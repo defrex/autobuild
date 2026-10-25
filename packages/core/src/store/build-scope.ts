@@ -107,6 +107,9 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     async upsertOperatorPresence(): Promise<never> {
       throw new BuildScopeError(scope, 'upsertOperatorPresence')
     },
+    async removeOperatorPresence(): Promise<never> {
+      throw new BuildScopeError(scope, 'removeOperatorPresence')
+    },
     async listOperatorPresence(): Promise<never> {
       throw new BuildScopeError(scope, 'listOperatorPresence')
     },

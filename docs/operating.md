@@ -52,12 +52,16 @@ It writes advisory mutable presence, never events or a lease. Multiple operators
 may register; presence is no lock. Unflagged watches write nothing. Repository
 status lists live registrations with host, PID, start time and heartbeat age.
 Heartbeats run every 30 seconds; presence expires five minutes after the last
-successful heartbeat, including a final best-effort heartbeat on orderly exit.
+successful heartbeat, including a final best-effort heartbeat on orderly timeout
+or count completion. SIGINT, SIGTERM, SIGHUP and stdout EPIPE attempt withdrawal
+within about two seconds. Failures leave TTL expiry as the fallback; older services
+without withdrawal support fall back silently. SIGKILL still relies on TTL expiry.
 
 Re-arm with `bun ab watch --operator --json --since <watch-cursor>` using only
 the standing watch's own cursor. This preserves one ID and original start time
-across a re-arm gap of up to five minutes. Reconcile current and newly dispatched
-builds after arming and on timeout. Keep operating after the initial work ends,
+across a re-arm gap of up to five minutes. After termination withdraws presence,
+the same cursor re-registers the same ID and start time. Reconcile current and
+newly dispatched builds after arming and on timeout. Keep operating after the initial work ends,
 until you end or hand off the role. `wait` does not heartbeat or carry registration
 identity: a separate unflagged diagnostic wait/watch must never replace the
 standing monitor or supply its resume cursor. MCP presence is deferred.

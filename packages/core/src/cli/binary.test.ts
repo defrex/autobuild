@@ -1,3 +1,4 @@
+import { installWatchTermination } from './binary-lifecycle'
 import { describe, expect, test } from 'bun:test'
 import {
   installSessionlessSigintHandler,
@@ -80,25 +81,28 @@ describe('sessionless SIGINT ownership', () => {
     }
   })
 
-  test('dispatch keeps its SIGINT handler armed through repeated interrupts', () => {
-    const boundary = new FakeBoundary()
-    let stops = 0
-    const remove = installSessionlessSigintHandler(
-      'dispatch',
-      () => {
-        stops += 1
-      },
-      boundary,
-    )
+  test.each(['dispatch', 'watch'])(
+    '%s keeps its SIGINT handler armed through repeated interrupts',
+    (command) => {
+      const boundary = new FakeBoundary()
+      let stops = 0
+      const remove = installSessionlessSigintHandler(
+        command,
+        () => {
+          stops += 1
+        },
+        boundary,
+      )
 
-    boundary.emit('SIGINT')
-    boundary.emit('SIGINT')
-    expect(stops).toBe(2)
-    expect(boundary.listenerCount('SIGINT')).toBe(1)
+      boundary.emit('SIGINT')
+      boundary.emit('SIGINT')
+      expect(stops).toBe(2)
+      expect(boundary.listenerCount('SIGINT')).toBe(1)
 
-    remove()
-    expect(boundary.listenerCount('SIGINT')).toBe(0)
-  })
+      remove()
+      expect(boundary.listenerCount('SIGINT')).toBe(0)
+    },
+  )
 })
 
 describe('dispatch process terminal restoration', () => {
@@ -183,4 +187,18 @@ describe('dispatch process terminal restoration', () => {
     expect(boundary.listenerCount('exit')).toBe(0)
     expect(boundary.listenerCount('SIGTERM')).toBe(0)
   })
+})
+
+test('watch termination boundary removes exactly its own listeners after command completion', async () => {
+  const before = ['SIGTERM', 'SIGHUP'].map((signal) => process.listenerCount(signal))
+  const errors = process.stdout.listenerCount('error')
+  const hook = installWatchTermination(new AbortController())
+  expect(['SIGTERM', 'SIGHUP'].map((signal) => process.listenerCount(signal))).toEqual(
+    before.map((count) => count + 1),
+  )
+  expect(process.stdout.listenerCount('error')).toBe(errors + 1)
+  expect(await hook.complete(7)).toBe(7)
+  hook.close()
+  expect(['SIGTERM', 'SIGHUP'].map((signal) => process.listenerCount(signal))).toEqual(before)
+  expect(process.stdout.listenerCount('error')).toBe(errors)
 })

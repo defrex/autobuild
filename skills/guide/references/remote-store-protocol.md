@@ -40,7 +40,7 @@ headers, or available backend.
   `[store] url` (in that precedence order, before the local default); the shipped client appends the routes below.
 - Every `/builds`, `/repos`, and `/sessions` request sends
   `X-Autobuild-Version` with the exact client package version and
-  `X-Autobuild-Protocol-Version` with the remote protocol version (`5` in this
+  `X-Autobuild-Protocol-Version` with the remote protocol version (`6` in this
   distribution). Before authentication,
   body parsing, or resource lookup, the server validates the release-line window and known protocol identity.
   Unsupported or missing values receive `409 {"kind":"conflict","error":"…"}`;
@@ -1239,10 +1239,11 @@ Four shipped behaviors do not add `BuildStore` routes:
 - `RemoteBuildStore.close()` is a no-op. The remote server owns its backing
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
-  returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
-  "protocolVersion":"5", "supportedClientRange":{"minVersion":"0.9.0",
-  "maxVersionExclusive":"0.12.0"}}`. It reports HTTP-process availability and identity,
-  not a deeper backing-store transaction or migration check.
+  returns `200 {"ok":true,"autobuildVersion":"1.1.0",
+  "protocolVersion":"6", "supportedClientRange":{"minVersion":"1.0.0",
+  "maxVersionExclusive":"1.2.0"}}`. It reports HTTP-process availability and identity,
+  not a deeper backing-store transaction or migration check. The example shows
+  the target 1.1 release identity; the checkout still uses its installed package version.
 
 There is no push/WebSocket subscription protocol, repository listing, artifact
 deletion, or server deployment API. The one repo-scoped batch read is the
@@ -1370,7 +1371,7 @@ contracts and existing credentials are unchanged.
 
 ## Operator presence
 
-Protocol 5 adds `POST /repos/:repo/operator-presence` and `GET` of that collection.
+The presence collection uses `POST /repos/:repo/operator-presence` and `GET` of that collection.
 These require repository operator/admin authority; build, harvest and conversation
 credentials are rejected before presence lookup or mutation. No MCP tools are added.
 
@@ -1381,6 +1382,23 @@ start time, updating host/PID and stamping heartbeatAt from the adapter clock.
 Heartbeat never moves backward. The response is `{repo,id,host,pid,startedAt,heartbeatAt}`.
 GET returns those records ordered by ID, only where heartbeat age is less than
 300,000ms; an unknown repository returns `[]` without creating anything. Neither
-operation appends events, claims leases or requires a repository journal. Expired
+collection operation appends events, claims leases or requires a repository journal. Expired
 rows can be renewed under the same ID. Multiple concurrent registrations coexist;
 this is advisory liveness, with no election, lock or singleton semantics.
+
+Protocol 6 adds `DELETE /repos/:repo/operator-presence/:id`, with the same
+repository operator/admin authority and delegated credential refusal before lookup
+or mutation. The ID is one encoded segment with the same validation as POST.
+It returns `{ok:true}` even for an absent/expired ID or absent repository, removes
+only that repository/ID, and creates no journal, event or lease. A later POST
+re-registers the same ID. Watch withdrawal treats only 404/405 as an unsupported
+route and silently retains TTL expiry; authorization, transport and malformed
+success errors are diagnosed without failing the watch.
+
+This checkout prepares protocol 6 for the next minor line, 1.1. Published
+v1.0.0/v1.0.1 shipped protocol 4; protocol 5 never shipped. The release identity
+table retains `1.0 -> 4`, and a 1.1/protocol-6 service admits those published
+clients. A 1.0 service does not admit 1.1 clients; route fallback never bypasses
+peer admission. Package versions remain unchanged during feature preparation;
+the maintainer's later minor release command owns the version bump. Patches
+within a published release line must keep its protocol identity.

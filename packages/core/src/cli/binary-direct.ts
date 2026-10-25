@@ -26,6 +26,7 @@ import { systemClock } from '../store/types'
 import { resolveMainRepo } from './repo-state'
 
 import {
+  installWatchTermination,
   usesGenericSessionlessSigintHandler,
   installSessionlessSigintHandler,
   withDispatchTerminalRestore,
@@ -46,12 +47,20 @@ export async function runDirectBinary(
 
   delete process.env.AB_DISPATCH_GENERATION
 
+  let watchTermination: ReturnType<typeof installWatchTermination> | undefined
   const unscopedDeps = {
     workspacePath: process.cwd(),
     processEnv: process.env,
     exec: spawnExec,
     stdout: (line: string) => {
+      if (watchTermination) {
+        watchTermination.write(line)
+        return
+      }
       if (command !== 'dispatch' || ownsDispatchPresentation()) console.log(line)
+    },
+    flushStdout: async () => {
+      await watchTermination?.flush()
     },
     stderr: (line: string) => {
       if (command !== 'dispatch' || ownsDispatchPresentation()) console.error(line)
@@ -67,12 +76,13 @@ export async function runDirectBinary(
     // cleanly at the next tick boundary (§15.6-C: in-flight leases expire and
     // a future dispatch re-attaches).
     const controller = new AbortController()
+    if (command === 'watch') watchTermination = installWatchTermination(controller)
     const onSigint = (): void => controller.abort('SIGINT')
     const ownsSigint = usesGenericSessionlessSigintHandler(command)
     const terminal = processTerminal(process.stdout)
     const removeSigint = installSessionlessSigintHandler(command, onSigint)
     try {
-      return await withDispatchTerminalRestore(
+      const code = await withDispatchTerminalRestore(
         command,
         terminal,
         () =>
@@ -92,7 +102,9 @@ export async function runDirectBinary(
         process as unknown as TerminalRestoreProcess,
         (signal) => controller.abort(signal),
       )
+      return watchTermination ? await watchTermination.complete(code) : code
     } finally {
+      watchTermination?.close()
       removeSigint()
     }
   }
