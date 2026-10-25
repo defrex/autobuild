@@ -233,3 +233,25 @@ test('three harmless parked completions do not manufacture an escalation', async
     [],
   )
 })
+
+test('publication backoff failures cannot exhaust the empty-execution guard', () => {
+  const log: AbEvent[] = []
+  for (let attempt = 1; attempt <= 7; attempt++) {
+    log.push(start(`retry-${attempt}`))
+    log.push(
+      event(attempt === 7 ? 'publication.retry-exhausted' : 'publication.retry-scheduled', {
+        operation: 'restack',
+        rewriteId: 'r',
+        round: 1,
+        anchor: 0,
+        failure: attempt,
+        error: 'HTTP 503',
+        ...(attempt === 7 ? {} : { retryAt: '2026-01-01T00:01:00.000Z' }),
+      }),
+    )
+    log.push(end(`retry-${attempt}`))
+    expect(reducer.reduce(log).count).toBe(0)
+  }
+  expect(executionProgress['publication.retry-scheduled']).toBe('failure')
+  expect(executionProgress['publication.retry-exhausted']).toBe('failure')
+})
