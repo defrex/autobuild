@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import { CONTRACT_T0, MemoryBlobStore } from '@defrex/autobuild/plugin-sdk'
 
@@ -799,7 +800,7 @@ if (testUrl) {
 }
 
 // Project-ticket migration evidence uses real artifact bytes outside PostgreSQL.
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
@@ -1715,6 +1716,8 @@ import {
   TICKET_SCHEMA_CHECKSUM,
   TICKET_SCHEMA_VERSION,
 } from './schema'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 if (testUrl)
   test.each([2, 3])(

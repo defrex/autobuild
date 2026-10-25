@@ -1,3 +1,7 @@
+import {
+  temporaryDirectories as ownTempDirectories,
+  temporaryOriginScratch,
+} from '../testing/temp-directories'
 import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { RepositoryAttention } from '../kernel/repository-attention'
 import { reduceBuild } from '../kernel/reducer'
@@ -15,15 +19,15 @@ import { gitRewrite } from '../ports/forge/git-rewrite'
  * in one pass.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdir, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { configSchema } from '../config/schema'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
-import { abDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
+import { abDispatch as realAbDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
 import {
   dashboardContentWidth,
   detailScrollLimit,
@@ -95,6 +99,13 @@ import {
   type Cli,
   type SkillHandlers,
 } from '../scenarios/harness'
+
+const mkdtemp = ownTempDirectories(afterEach)
+const trackOrigin = temporaryOriginScratch(afterEach)
+const abDispatch: typeof realAbDispatch = async (options) => {
+  if (options.repository) trackOrigin(options.repository)
+  return realAbDispatch(options)
+}
 
 // The injected wire supplies a FakeTicketSource and ignores adapter details,
 // but `[tickets]` is still required to name the mandatory ready state. This
@@ -734,6 +745,7 @@ describe('abDispatch guards', () => {
     // origin mode *seeds* the disk walk with the scratch root rather than
     // merely failing a non-filesystem token.
     const origin = `git@github.com:acme/scratch-seeded-${randomUUID()}.git`
+    trackOrigin(origin)
     const scratch = join(
       tmpdir(),
       'autobuild',

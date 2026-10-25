@@ -876,14 +876,22 @@ describe('request credential threading and sandboxFor (AUT-584)', () => {
 
   test('sandboxFor wins over the static option and a disabled/unresolvable resolution releases nothing', async () => {
     const store = new MemoryBuildStore({ clock })
+    let staticDisposals = 0
+    let dynamicDisposals = 0
     const staticReleases: string[] = []
     const dynamicReleases: string[] = []
     const staticBackend = {
+      dispose: async () => {
+        staticDisposals++
+      },
       release: async (identity: string) => {
         staticReleases.push(identity)
       },
     }
     const dynamicBackend = {
+      dispose: async () => {
+        dynamicDisposals++
+      },
       release: async (identity: string) => {
         dynamicReleases.push(identity)
       },
@@ -911,6 +919,22 @@ describe('request credential threading and sandboxFor (AUT-584)', () => {
     await ada.archiveSession(repo, second.id)
     expect(dynamicReleases).toEqual(['Ada'])
     expect(staticReleases).toEqual([]) // sandboxFor wins
+    expect(dynamicDisposals).toBe(2)
+    // A forbidden archive still releases request-owned local scratch.
+    const bob = operatorClient(server, 'Bob')
+    const third = await ada.createSession(repo, { title: 'three' })
+    await expect(bob.archiveSession(repo, third.id)).rejects.toMatchObject({ status: 403 })
+    expect(dynamicDisposals).toBe(3)
+    expect(staticDisposals).toBe(0)
+    const staticServer = createOperatorServer({
+      projects: testProjects([repo]),
+      store,
+      secret,
+      clock,
+      sandbox: staticBackend as never,
+    })
+    await operatorClient(staticServer, 'Ada').archiveSession(repo, third.id)
+    expect(staticDisposals).toBe(0)
 
     // A disabled repository resolves to undefined: the archive still
     // succeeds and releases nothing (the dispatcher's idle settlement stops
@@ -928,7 +952,7 @@ describe('request credential threading and sandboxFor (AUT-584)', () => {
     const solo = await disabled.createSession(disabledRepo, { title: 'x' })
     await disabled.archiveSession(disabledRepo, solo.id)
     expect(dynamicReleases).toEqual(['Ada'])
-    expect(staticReleases).toEqual([])
+    expect(staticReleases).toEqual(['Ada'])
   })
 })
 

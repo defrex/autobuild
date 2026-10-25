@@ -22,34 +22,39 @@ interface ProbeEvidence {
 
 async function createLiveFixture(): Promise<LiveFixture> {
   const cwd = await mkdtemp(join(tmpdir(), 'ab-runner-live-contract-'))
-  const skillDir = join(cwd, '.agents', 'skills', 'ab-runner-contract')
-  const claudeSkills = join(cwd, '.claude', 'skills')
-  await mkdir(skillDir, { recursive: true })
-  await mkdir(claudeSkills, { recursive: true })
-  const skillPath = join(skillDir, 'SKILL.md')
-  await writeFile(
-    skillPath,
-    `---\nname: ab-runner-contract\ndescription: Live AgentRunner contract probe.\ndisable-model-invocation: true\n---\n\n# Runner contract probe\n\nImmediately use the bash tool to execute \`./contract-probe\` exactly once.\nWait for it to finish, then reply with the single word \`probed\`.\n`,
-  )
-  const claudeSkill = join(claudeSkills, 'ab-runner-contract')
   try {
-    await symlink(skillDir, claudeSkill, 'dir')
-  } catch {
-    await mkdir(claudeSkill, { recursive: true })
-    await copyFile(skillPath, join(claudeSkill, 'SKILL.md'))
-  }
+    const skillDir = join(cwd, '.agents', 'skills', 'ab-runner-contract')
+    const claudeSkills = join(cwd, '.claude', 'skills')
+    await mkdir(skillDir, { recursive: true })
+    await mkdir(claudeSkills, { recursive: true })
+    const skillPath = join(skillDir, 'SKILL.md')
+    await writeFile(
+      skillPath,
+      `---\nname: ab-runner-contract\ndescription: Live AgentRunner contract probe.\ndisable-model-invocation: true\n---\n\n# Runner contract probe\n\nImmediately use the bash tool to execute \`./contract-probe\` exactly once.\nWait for it to finish, then reply with the single word \`probed\`.\n`,
+    )
+    const claudeSkill = join(claudeSkills, 'ab-runner-contract')
+    try {
+      await symlink(skillDir, claudeSkill, 'dir')
+    } catch {
+      await mkdir(claudeSkill, { recursive: true })
+      await copyFile(skillPath, join(claudeSkill, 'SKILL.md'))
+    }
 
-  const evidencePath = join(cwd, 'contract-evidence.tsv')
-  const probePath = join(cwd, 'contract-probe')
-  await writeFile(
-    probePath,
-    `#!/bin/sh\nset -eu\nab_path="$(command -v ab)"\nif ab --help >/dev/null 2>&1; then help=0; else help=$?; fi\nprintf '%s\\t%s\\t%s\\t%s\\t%s\\n' "\${AB_CONTRACT_PHASE:-}" "\${AB_CONTRACT_RETAINED:-}" "\${AB_CONTRACT_COLLIDE:-}" "$ab_path" "$help" >> ${JSON.stringify(evidencePath)}\n`,
-  )
-  await chmod(probePath, 0o755)
-  return {
-    cwd,
-    evidencePath,
-    cleanup: () => rm(cwd, { recursive: true, force: true }),
+    const evidencePath = join(cwd, 'contract-evidence.tsv')
+    const probePath = join(cwd, 'contract-probe')
+    await writeFile(
+      probePath,
+      `#!/bin/sh\nset -eu\nab_path="$(command -v ab)"\nif ab --help >/dev/null 2>&1; then help=0; else help=$?; fi\nprintf '%s\\t%s\\t%s\\t%s\\t%s\\n' "\${AB_CONTRACT_PHASE:-}" "\${AB_CONTRACT_RETAINED:-}" "\${AB_CONTRACT_COLLIDE:-}" "$ab_path" "$help" >> ${JSON.stringify(evidencePath)}\n`,
+    )
+    await chmod(probePath, 0o755)
+    return {
+      cwd,
+      evidencePath,
+      cleanup: () => rm(cwd, { recursive: true, force: true }),
+    }
+  } catch (error) {
+    await rm(cwd, { recursive: true, force: true })
+    throw error
   }
 }
 

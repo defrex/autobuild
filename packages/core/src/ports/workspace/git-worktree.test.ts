@@ -1,3 +1,4 @@
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
 /**
  * Contract tests for the git-worktree Workspace adapter (SPEC §3.2, §7,
  * §15.6-C) — real git against throwaway repos; the exec seam is used only
@@ -5,13 +6,15 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { WorkspaceHandle } from '../types'
 import { describeWorkspaceProviderContract } from './contract'
 import { GitError, GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 /** Identity/signing pinned per-invocation so tests ignore user git config. */
 const GIT_ID = [
@@ -1556,7 +1559,8 @@ describe('GitWorktreeProvider operator sandbox', () => {
     // A bare origin so the push has a real network-style destination; the
     // worktree's origin remote carries the host's local forge configuration
     // exactly as a local build's finalize push does.
-    const origin = await mkdtemp(join(tmpdir(), 'ab-sandbox-publish-origin-'))
+    const origin = join(repo, 'publish-origin')
+    await mkdir(origin)
     await run(['git', 'init', '-q', '--bare', '-b', 'main', origin], repo)
     await run(['git', 'remote', 'add', 'origin', origin], repo)
     const identity = await provider.orchestratorSandbox.ensure({

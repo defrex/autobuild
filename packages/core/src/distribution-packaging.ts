@@ -66,10 +66,16 @@ export async function packageDistribution(
   root: string,
   exec: PackagingExec = spawnExec,
   signal?: AbortSignal,
+  filesystem: { mkdtemp(prefix: string): Promise<string>; rm: typeof rm } = { mkdtemp, rm },
 ): Promise<Uint8Array> {
-  const staging = await mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
-  const destination = await mkdtemp(join(tmpdir(), 'autobuild-pack-'))
+  const staging = await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
+  let destination: string | undefined
+  let failure: unknown
+  let failed = false
+  let bytes!: Uint8Array
+  let errors: unknown[] = []
   try {
+    destination = await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-'))
     // Pack from a staging copy of the repo's `files` set rather than the repo
     // root: the packed manifest must differ from the repo manifest (above), and
     // rewriting the repo manifest in place would leave a window where tracked
@@ -108,9 +114,24 @@ export async function packageDistribution(
     const archives = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
     if (archives.length !== 1)
       throw new Error('Autobuild packaging did not produce exactly one archive')
-    return new Uint8Array(await readFile(join(destination, archives[0]!)))
+    bytes = new Uint8Array(await readFile(join(destination, archives[0]!)))
+  } catch (error) {
+    failed = true
+    failure = error
   } finally {
-    await rm(staging, { recursive: true, force: true })
-    await rm(destination, { recursive: true, force: true })
+    const results = await Promise.allSettled(
+      [staging, destination]
+        .filter((path): path is string => path !== undefined)
+        .map((path) => filesystem.rm(path, { recursive: true, force: true })),
+    )
+    errors = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
   }
+  if (errors.length)
+    throw new AggregateError(
+      failed ? [failure, ...errors] : errors,
+      'Distribution packaging cleanup failed',
+      failed ? { cause: failure } : undefined,
+    )
+  if (failed) throw failure
+  return bytes
 }

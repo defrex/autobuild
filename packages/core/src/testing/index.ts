@@ -89,3 +89,5 @@ export {
   prepareNodeVerificationContext,
   NODE_VERIFICATION_CONTEXT,
 } from '../kernel/node-verification-context'
+
+export { temporaryDirectories, temporaryOriginScratch } from './temp-directories'

@@ -131,8 +131,8 @@
     "check:build": "bun tools/workspace-manifest-check.ts && bun tools/bin-mode-check.ts && bun tools/publish-contents-check.ts && bun tools/publish-imports-check.ts",
     "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
     "prepare": "husky",
-    "test": "bun test --path-ignore-patterns='**/*.integration.test.ts' packages/*/src tools bin packages/hosted-store-service/app",
-    "test:integration": "bun test $(find packages -name '*.integration.test.ts' -not -path '*/node_modules/*') && bun tools/hosted-service-packaging.ts",
+    "test": "bun tools/test-temp-leaks.ts unit",
+    "test:integration": "bun tools/test-temp-leaks.ts integration",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

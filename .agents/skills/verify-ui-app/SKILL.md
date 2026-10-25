@@ -6,6 +6,15 @@ disable-model-invocation: true
 
 # /verify-ui-app <build>
 
+Large scratch belongs under the session's `.ab/` directory (prefer `$AB_CONTEXT_DIR`),
+not `/tmp`: this includes ad-hoc PostgreSQL data/cluster directories, Cargo target
+directories, browser profiles, and database copies. Configure `PGDATA`,
+`CARGO_TARGET_DIR`, and explicit browser profile paths for those resources.
+Keep `TMPDIR` outside the worktree for test suites and commands that discover
+repositories or configuration through parent directories, including focused tests
+and Git probes. Do not relocate required installed tooling or retained evidence;
+manifest-directed artifact paths remain authoritative. Never commit scratch.
+
 The kernel selected this path-scoped step. Inspect the production views in
 `packages/hosted-store-service/app/` against `DESIGN.md` and the applicable
 pinned design references materialized by `ab context`. Do not decide applicability

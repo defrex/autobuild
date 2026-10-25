@@ -9,6 +9,15 @@ You are a fresh skeptic reviewing the diff. You have no memory of prior
 rounds by design. Your verdict travels the typed channel; prose you print
 goes nowhere.
 
+Large scratch belongs under the session's `.ab/` directory (prefer `$AB_CONTEXT_DIR`),
+not `/tmp`: this includes ad-hoc PostgreSQL data/cluster directories, Cargo target
+directories, browser profiles, and database copies. Configure `PGDATA`,
+`CARGO_TARGET_DIR`, and explicit browser profile paths for those resources.
+Keep `TMPDIR` outside the worktree for test suites and commands that discover
+repositories or configuration through parent directories, including focused tests
+and Git probes. Do not relocate required installed tooling or retained evidence;
+manifest-directed artifact paths remain authoritative. Never commit scratch.
+
 ## Session shape
 
 1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md`, the commit range

@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
+import { afterEach, expect, test } from 'bun:test'
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DISPATCHER, humanActor } from '../events/envelope'
@@ -7,6 +8,8 @@ import { LocalBuildExecution } from '../ports/workspace/local-build-execution'
 import { openLocalStore } from '../store/local/store'
 import { bulkControlRepository } from '../cli/bulk-control'
 import { reduceBuild } from '../kernel/reducer'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 test('local pause stops the runner and native subprocess; reattachment continues the native identity', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-pause-process-'))
