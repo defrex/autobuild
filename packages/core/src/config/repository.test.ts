@@ -26,6 +26,8 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     'ui-app',
     'ui-website',
     'docs',
+    'proa-rust',
+    'ui-proa',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({
     kind: 'check',
