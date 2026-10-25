@@ -2358,7 +2358,8 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
         AB_SESSION: 's_e2e',
         AB_TOKEN: '',
       },
-      { ...process.env, PATH: inheritedPath },
+      // The enclosing build's context directory must not override this plan session.
+      { ...process.env, PATH: inheritedPath, AB_CONTEXT_DIR: undefined },
     )
     expect(env.PATH!.split(delimiter).slice(0, 2)).toEqual([AGENT_BIN_DIR, conflictBin])
 
@@ -2385,6 +2386,13 @@ test('e. runner PATH uses the real `ab` for context through a validated terminal
     expect(context).toMatchObject({ code: 0, stderr: '' })
     expect(context.stdout).toContain(`context materialized for ${slug} — plan@1`)
     expect(await readFile(join(ws, '.ab/plan', 'spec.md'), 'utf8')).toBe('# Spec: local e2e\n')
+
+    expect(JSON.parse(await readFile(join(ws, '.ab/plan/context.json'), 'utf8'))).toMatchObject({
+      build: slug,
+      phase: 'plan',
+      round: 1,
+      contextDir: '.ab/plan',
+    })
 
     const got = await ab(['artifact', 'get', 'spec'])
     expect(got).toEqual({
