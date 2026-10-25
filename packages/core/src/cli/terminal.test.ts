@@ -7,7 +7,7 @@
  * makes the frame unpaintable, because the live region repaints by cursoring
  * up over rows that have to still be on screen.
  */
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { PassThrough } from 'node:stream'
 import {
   createTerminalInputDecoder,
@@ -115,12 +115,15 @@ function inputStream(opts: { tty?: boolean; raw?: boolean; flowing?: boolean } =
   const stream = new PassThrough() as PassThrough &
     NodeJS.ReadStream & {
       rawCalls: boolean[]
+      actualRaw: boolean
     }
   stream.isTTY = opts.tty ?? true
   stream.isRaw = opts.raw ?? false
   stream.rawCalls = []
+  stream.actualRaw = stream.isRaw
   stream.setRawMode = (raw: boolean) => {
     stream.rawCalls.push(raw)
+    if (stream.isRaw !== raw) stream.actualRaw = raw
     stream.isRaw = raw
     return stream
   }
@@ -130,6 +133,49 @@ function inputStream(opts: { tty?: boolean; raw?: boolean; flowing?: boolean } =
 }
 
 describe('processTerminalInput', () => {
+  test('repairs cached raw state repeatedly and cancels before restoring prior state', () => {
+    const callbacks: Array<() => void> = []
+    const timer = spyOn(globalThis, 'setInterval').mockImplementation(((callback: () => void) => {
+      callbacks.push(callback)
+      return { unref() {} }
+    }) as typeof setInterval)
+    const clear = spyOn(globalThis, 'clearInterval').mockImplementation(() => {})
+    try {
+      for (const raw of [false, true]) {
+        const stream = inputStream({ raw, flowing: raw })
+        stream.actualRaw = false
+        const cleanup = processTerminalInput(stream).start(() => {})
+        expect(stream.actualRaw).toBe(true)
+        const tick = callbacks.at(-1)!
+        for (let i = 0; i < 3; i++) {
+          stream.actualRaw = false
+          tick()
+          expect(stream.actualRaw).toBe(true)
+        }
+        cleanup()
+        const calls = stream.rawCalls.length
+        tick()
+        cleanup()
+        expect(stream.rawCalls.length).toBe(calls)
+        expect(stream.actualRaw).toBe(raw)
+        expect(stream.readableFlowing).toBe(raw)
+        expect(stream.listenerCount('keypress')).toBe(0)
+      }
+      const stream = inputStream()
+      processTerminalInput(stream).start(() => {})
+      stream.setRawMode = () => {
+        throw new Error('lost tty')
+      }
+      expect(() => callbacks.at(-1)!()).not.toThrow()
+      expect(stream.listenerCount('keypress')).toBe(0)
+      expect(stream.readableFlowing).toBe(false)
+      expect(clear).toHaveBeenCalledTimes(3)
+    } finally {
+      timer.mockRestore()
+      clear.mockRestore()
+    }
+  })
+
   test('normalizes navigation, editing controls, printable text, and raw-mode Ctrl-C', () => {
     const stream = inputStream()
     const inputs: TerminalInputEvent[] = []
@@ -180,12 +226,12 @@ describe('processTerminalInput', () => {
   test('enters raw mode and idempotently restores prior raw and flow state', () => {
     const stream = inputStream({ raw: false, flowing: false })
     const cleanup = processTerminalInput(stream).start(() => {})
-    expect(stream.rawCalls).toEqual([true])
+    expect(stream.rawCalls).toEqual([false, true])
     expect(stream.readableFlowing).toBe(true)
 
     cleanup()
     cleanup()
-    expect(stream.rawCalls).toEqual([true, false])
+    expect(stream.rawCalls).toEqual([false, true, false])
     expect(stream.readableFlowing).toBe(false)
     expect(stream.listenerCount('keypress')).toBe(0)
   })
@@ -194,7 +240,7 @@ describe('processTerminalInput', () => {
     const stream = inputStream({ raw: true, flowing: true })
     const cleanup = processTerminalInput(stream).start(() => {})
     cleanup()
-    expect(stream.rawCalls).toEqual([true, true])
+    expect(stream.rawCalls).toEqual([false, true, true])
     expect(stream.readableFlowing).toBe(true)
   })
 
@@ -211,9 +257,29 @@ describe('processTerminalInput', () => {
       return original(raw)
     }
     expect(() => processTerminalInput(stream).start(() => {})).toThrow('raw mode unavailable')
-    expect(stream.rawCalls).toEqual([true, false])
+    expect(stream.rawCalls).toEqual([false, false])
     expect(stream.listenerCount('keypress')).toBe(0)
     expect(stream.readableFlowing).toBe(false)
+  })
+
+  test('a listening-hook failure cancels maintenance and restores the stream', () => {
+    const stream = inputStream()
+    const clear = spyOn(globalThis, 'clearInterval')
+    try {
+      expect(() =>
+        processTerminalInput(stream).start(() => {}, {
+          onListening: () => {
+            throw new Error('listening failed')
+          },
+        }),
+      ).toThrow('listening failed')
+      expect(clear).toHaveBeenCalledTimes(1)
+      expect(stream.actualRaw).toBe(false)
+      expect(stream.readableFlowing).toBe(false)
+      expect(stream.listenerCount('keypress')).toBe(0)
+    } finally {
+      clear.mockRestore()
+    }
   })
 
   test('reports listening only after a real TTY is in raw, flowing mode', () => {
