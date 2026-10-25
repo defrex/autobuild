@@ -101,13 +101,11 @@ export interface HostedOperatorSandboxService extends OperatorSandboxService {
 export async function createHostedOperatorSandboxService(
   options: HostedOperatorSandboxOptions,
 ): Promise<HostedOperatorSandboxService> {
+  const ownsScratch = options.scratchRoot === undefined
   const scratch = options.scratchRoot ?? (await mkdtemp(join(tmpdir(), 'autobuild-sandbox-host-')))
   let disposal: Promise<void> | undefined
   const dispose = () => {
-    disposal ??=
-      options.scratchRoot === undefined
-        ? rm(scratch, { recursive: true, force: true })
-        : Promise.resolve()
+    disposal ??= ownsScratch ? rm(scratch, { recursive: true, force: true }) : Promise.resolve()
     return disposal
   }
   try {

@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { temporaryDirectories as ownTempDirectories } from '../../testing/temp-directories'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentRunner, AgentStartOpts, NativeSessionHandle } from '../types'
@@ -9,6 +10,8 @@ import { PiAgentRunner } from './pi'
 import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from './fake'
 import { describeNativeResumeContract } from './contract'
 import { nativeHandle, resumeAgent } from './native-session'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const opts: AgentStartOpts = {
   skill: 'ab-probe',

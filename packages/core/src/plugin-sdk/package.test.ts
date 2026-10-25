@@ -381,6 +381,7 @@ describe('plugin SDK package surface', () => {
     await mkdir(initialized)
     const init = Bun.spawn(['bun', join(packageRoot, 'bin', 'ab.ts'), 'init'], {
       cwd: initialized,
+      env: { ...process.env, TMPDIR: initialized, TMP: initialized, TEMP: initialized },
       stdout: 'pipe',
       stderr: 'pipe',
     })

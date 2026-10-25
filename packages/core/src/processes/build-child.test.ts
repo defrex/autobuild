@@ -1,8 +1,9 @@
+import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
-import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { afterEach, expect, test } from 'bun:test'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseConfig } from '../config/load'
@@ -16,6 +17,8 @@ import {
 } from './build-execution-state'
 import { BUILD_RUNNER_OPTIONS_ENV } from '../ports/workspace/local-build-execution'
 import { runBuildChild } from './build-child'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const config = parseConfig(`forge = "local-git"
 [roles.default]

@@ -1,5 +1,6 @@
+import { temporaryDirectories as ownTempDirectories } from '@defrex/autobuild/testing'
 import { testProjects } from './testing/projects'
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { parseConfig } from '@defrex/autobuild/testing'
 import { DISPATCHER, KERNEL, humanActor } from '@defrex/autobuild/testing'
 import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
@@ -16,6 +17,8 @@ import { buildRegistry, RegistryError, TOOLS } from '@defrex/autobuild/operator'
 import { createOperatorServer } from './operator-server'
 import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
 import type { OperatorTicketBackend } from '@defrex/autobuild/operator'
+
+const mkdtemp = ownTempDirectories(afterEach)
 
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
@@ -1189,7 +1192,7 @@ describe('sandbox registry tools (AUT-340)', () => {
     const world = await seedWorld()
     const { FakeWorkspaceProvider } = await import('@defrex/autobuild/plugin-sdk')
     const { createOperatorSandboxService } = await import('@defrex/autobuild/testing')
-    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { rm } = await import('node:fs/promises')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const workspaces = await mkdtemp(join(tmpdir(), 'ab-sandbox-registry-'))
@@ -1302,7 +1305,7 @@ describe('sandbox registry tools (AUT-340)', () => {
     const { createOperatorSandboxService: createSandbox } = await import(
       '@defrex/autobuild/testing'
     )
-    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { rm } = await import('node:fs/promises')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const workspaces = await mkdtemp(join(tmpdir(), 'ab-sandbox-noforge-'))
