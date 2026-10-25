@@ -90,8 +90,14 @@ impl Config {
                 host.is_loopback() && get("PROA_ENV").as_deref() == Some("development"),
                 "development auth requires explicit development and loopback"
             );
-            let email = get("PROA_DEV_AUTH_EMAIL").context("missing development email")?;
-            emails(&email)?;
+            let email = get("PROA_DEV_AUTH_EMAIL")
+                .context("missing development email")?
+                .trim()
+                .to_owned();
+            anyhow::ensure!(
+                emails(&email)?.len() == 1,
+                "development identity must be one email"
+            );
             let capability =
                 get("PROA_DEV_AUTH_CAPABILITY").context("missing issuance capability")?;
             anyhow::ensure!(capability.len() >= 32, "issuance capability too short");
