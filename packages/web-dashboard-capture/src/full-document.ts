@@ -180,6 +180,8 @@ export async function fullDocumentScreenshot(
       deviceScaleFactor: 1,
       mobile: false,
     })
+    // Match CLI foreground-page behavior, including native input autofocus.
+    await send('Page.bringToFront')
     // Native form controls can retain fallback glyphs from their first layout.
     // Reload with both packaged faces cached before measuring or capturing.
     for (let load = 0; load < 2; load++) {
