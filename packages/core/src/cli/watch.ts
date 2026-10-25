@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { OPERATOR_HEARTBEAT_MS, operatorIdentitySchema } from '../store/operator-presence'
 import { consentReady, consentIdentity, type ConsentReady } from './attention'
 import { formatReadinessFailure } from '../ports/forge/readiness'
-import { readBuildDigests } from '../store/reduced-reads'
+import { readDispatchUpgrade, readBuildDigests } from '../store/reduced-reads'
 import { readBuildStreamSeed, readRepositoryAttention } from '../store/reduced-reads'
 import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-facts'
 import { historicalBuildState, historicalRepositoryAttention } from './historical-build-state'
@@ -820,6 +820,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           // reporting: a failed read is infrastructure, never evidence of death.
           const record = await store.getRepo(repo)
           if (record?.lease) observedOwners.set(record.lease.holder, record)
+          let upgrade: Awaited<ReturnType<typeof readDispatchUpgrade>> | undefined
           for (const [id, owner] of observedOwners) {
             if (
               stop ||
@@ -844,6 +845,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
                 (e) => e.type === 'dispatcher.run-stopped' && e.payload.run === id,
               )
             ) {
+              observedOwners.delete(id)
+              continue
+            }
+            // Only a validated takeover proves transfer; intent or release alone
+            // must still report a predecessor whose successor never arrives.
+            upgrade ??= await readDispatchUpgrade(store, repo)
+            if (upgrade.value.runs[id]?.takeover) {
               observedOwners.delete(id)
               continue
             }
