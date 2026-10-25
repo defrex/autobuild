@@ -1,5 +1,6 @@
 import {
   mkdtempSync,
+  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -7,8 +8,7 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
 import {
   root,
   experiment,
@@ -25,6 +25,8 @@ import {
   type Scope,
   type Fixture,
   type FixtureEvent,
+  deduplicateFixtures,
+  gzipCorpus,
 } from './fixture-core'
 export function childEnvironment(): Record<string, string> {
   return Object.fromEntries(
@@ -48,8 +50,26 @@ export function normalizeEvents<T>(events: T): T {
     }),
   )
 }
+export function publishFixtures(
+  candidate: string,
+  destination: string,
+  moveCandidate = renameSync,
+) {
+  const backup = resolve(dirname(candidate), 'previous-fixtures')
+  const existed = existsSync(destination)
+  if (existed) renameSync(destination, backup)
+  try {
+    moveCandidate(candidate, destination)
+  } catch (error) {
+    if (existed) renameSync(backup, destination)
+    throw error
+  }
+  if (existed) rmSync(backup, { recursive: true })
+}
 export async function generate() {
-  const scratch = mkdtempSync(resolve(tmpdir(), 'proa-corpus-'))
+  mkdirSync(resolve(root, '.ab'), { recursive: true })
+  const scratch = mkdtempSync(resolve(root, '.ab/proa-corpus-'))
+  let completed = false
   const fixtures: Fixture[] = []
   const producers: { file: string; passed: number; skipped: number; streams: number }[] = []
   const add = (id: string, scope: Scope, events: FixtureEvent[]) => {
@@ -149,40 +169,55 @@ export async function generate() {
         ),
         producers,
       },
-      fixtures,
+      fixtures: deduplicateFixtures(fixtures),
       decodingWitnesses,
       decodeOnly,
     }
     const candidate = resolve(scratch, 'fixtures')
     mkdirSync(candidate)
-    writeFileSync(resolve(candidate, 'corpus.json'), `${JSON.stringify(corpus)}\n`)
+    writeFileSync(resolve(candidate, 'corpus.json.gz'), gzipCorpus(corpus))
+    writeFileSync(
+      resolve(candidate, 'manifest.json'),
+      `${JSON.stringify(corpus.manifest, null, 2)}\n`,
+    )
 
     writeFileSync(
       resolve(candidate, 'event-schemas.json'),
       `${JSON.stringify(eventSchemas(), null, 2)}\n`,
     )
-    const formatter = Bun.spawn(
-      [
-        'bunx',
-        'biome',
-        'format',
-        '--config-path',
-        resolve(root, 'biome.jsonc'),
-        '--write',
-        '--files-max-size=100000000',
-        candidate,
-      ],
-      { cwd: root, stdout: 'ignore', stderr: 'pipe' },
-    )
-    const formatError = await new Response(formatter.stderr).text()
-    if ((await formatter.exited) !== 0) throw new Error(`fixture formatting failed: ${formatError}`)
-    rmSync(resolve(experiment, 'fixtures'), { recursive: true, force: true })
-    renameSync(candidate, resolve(experiment, 'fixtures'))
+    for (const name of ['manifest.json', 'event-schemas.json']) {
+      const file = resolve(candidate, name)
+      const formatter = Bun.spawn(
+        [
+          'bunx',
+          'biome',
+          'format',
+          '--config-path',
+          resolve(root, 'biome.jsonc'),
+          '--stdin-file-path',
+          resolve(experiment, 'fixtures', name),
+        ],
+        { cwd: root, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' },
+      )
+      formatter.stdin.write(readFileSync(file))
+      formatter.stdin.end()
+      const [formatted, error, code] = await Promise.all([
+        new Response(formatter.stdout).text(),
+        new Response(formatter.stderr).text(),
+        formatter.exited,
+      ])
+      if (code !== 0) throw new Error(`fixture formatting failed: ${error}`)
+      writeFileSync(file, formatted)
+    }
+    publishFixtures(candidate, resolve(experiment, 'fixtures'))
+    completed = true
     console.log(
       `generated ${fixtures.length} fixtures; ${producers.reduce((n, p) => n + p.passed, 0)} tests passed, ${producers.reduce((n, p) => n + p.skipped, 0)} explicitly gated tests skipped`,
     )
   } finally {
-    rmSync(scratch, { recursive: true, force: true })
+    if (completed) rmSync(scratch, { recursive: true, force: true })
+    else
+      console.error(`fixture generation failed; diagnostic inputs/candidate retained at ${scratch}`)
   }
 }
 if (import.meta.main) await generate()

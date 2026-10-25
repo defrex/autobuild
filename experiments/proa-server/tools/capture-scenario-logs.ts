@@ -31,9 +31,13 @@ function capture(store: object) {
   }
 }
 export function installCollector() {
+  const restore: (() => void)[] = []
   // Real launcher scenarios use SQLite stores. Observe final committed rows before
   // their normal close/cleanup; no writes, migrations or behavior substitutions.
   const close = Database.prototype.close
+  restore.push(() => {
+    Database.prototype.close = close
+  })
   Database.prototype.close = function (...args) {
     try {
       const tables = new Set(
@@ -98,6 +102,9 @@ export function installCollector() {
       if (observed.has(reducer)) continue
       observed.add(reducer)
       const original = reducer.reduce
+      restore.push(() => {
+        reducer.reduce = original
+      })
       reducer.reduce = function (events: never) {
         const result = original.call(this, events)
         // Registry reducers can also accept digest fragments, which are not
@@ -148,12 +155,20 @@ export function installCollector() {
   ]) {
     const original = prototype[name]
     if (!original) throw new Error(`collector persistence seam missing: ${name}`)
+    restore.push(() => {
+      prototype[name] = original
+    })
     prototype[name] = async function (...args) {
       capture(this)
       const result = await original.apply(this, args)
       capture(this)
       return result
     }
+  }
+  return () => {
+    for (const reset of restore.reverse()) reset()
+    stores.clear()
+    streams.clear()
   }
 }
 export function collectedStreams(): CapturedStream[] {

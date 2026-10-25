@@ -12,6 +12,8 @@ import {
   sources,
   type Scope,
   type Corpus,
+  readCorpus,
+  reducerVersions,
 } from './fixture-core'
 export function checkFixtures(
   corpus: Corpus,
@@ -22,6 +24,8 @@ export function checkFixtures(
     throw new Error('fixture source closure changed; regenerate fixtures')
   if (!isDeepStrictEqual(corpus.manifest.catalog, currentCatalog))
     throw new Error('fixture event catalog changed; regenerate fixtures')
+  if (!isDeepStrictEqual(corpus.manifest.versions, reducerVersions()))
+    throw new Error('fixture reducer versions changed; regenerate fixtures')
   for (const scope of Object.keys(schemas) as Scope[]) {
     const seen = new Set<string>()
     for (const { event } of (corpus.decodingWitnesses ?? []).filter(
@@ -63,7 +67,10 @@ export function checkEventSchemas(stored: unknown) {
     throw new Error('stale event decoding schemas; regenerate fixtures')
 }
 if (import.meta.main) {
-  const corpus = JSON.parse(readFileSync(resolve(experiment, 'fixtures/corpus.json'), 'utf8'))
+  const corpus = readCorpus()
+  const manifest = JSON.parse(readFileSync(resolve(experiment, 'fixtures/manifest.json'), 'utf8'))
+  if (!isDeepStrictEqual(manifest, corpus.manifest))
+    throw new Error('corpus manifest differs from published manifest')
   checkFixtures(corpus)
   checkEventSchemas(
     JSON.parse(readFileSync(resolve(experiment, 'fixtures/event-schemas.json'), 'utf8')),

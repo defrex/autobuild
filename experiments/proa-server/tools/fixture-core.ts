@@ -1,3 +1,4 @@
+import { gzipSync, gunzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, relative } from 'node:path'
@@ -40,9 +41,14 @@ export interface Fixture {
   expectedError?: unknown
   rustUnreadable?: unknown
   boundaries?: number[]
+  aliases?: string[]
 }
 export interface Corpus {
-  manifest: { sources: Record<string, string>; catalog: Record<string, string[]> }
+  manifest: {
+    sources: Record<string, string>
+    catalog: Record<string, string[]>
+    versions?: Record<string, Record<string, number>>
+  }
   fixtures: Fixture[]
   decodingWitnesses?: { scope: string; event: FixtureEvent }[]
 }
@@ -91,7 +97,7 @@ function files(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
     entry.isDirectory()
       ? files(resolve(directory, entry.name))
-      : /\.(ts|json)$/.test(entry.name)
+      : /\.(?:[cm]?[jt]sx?|json)$/.test(entry.name)
         ? [resolve(directory, entry.name)]
         : [],
   )
@@ -107,6 +113,17 @@ export function sources() {
       'mixed-version.test.ts',
     ].map((name) => resolve(root, 'packages/hosted-store-service/src', name)),
   ]
+  paths.push(
+    ...[
+      'package.json',
+      'bun.lock',
+      'packages/core/package.json',
+      'packages/hosted-store-service/package.json',
+      'packages/postgres-store/package.json',
+      'experiments/proa-server/package.json',
+      'experiments/proa-server/bun.lock',
+    ].map((name) => resolve(root, name)),
+  )
   paths.push(
     ...['capture-scenario-logs.ts', 'fixture-core.ts', 'generate-fixtures.ts'].map((name) =>
       resolve(import.meta.dir, name),
@@ -230,4 +247,35 @@ export function oracleOutcome(scope: Scope, events: unknown[]) {
 export function unknownEvent(scope: Scope, events: { type: string; seq: number }[]) {
   const event = events.find((event) => !Object.hasOwn(schemas[scope], event.type))
   return event ? { type: event.type, seq: event.seq } : undefined
+}
+
+export function deduplicateFixtures(fixtures: Fixture[]): Fixture[] {
+  const unique = new Map<string, Fixture>()
+  for (const fixture of fixtures) {
+    const identity = createHash('sha256')
+      .update(
+        JSON.stringify([fixture.scope, fixture.events, fixture.expected, fixture.expectedError]),
+      )
+      .digest('hex')
+    const prior = unique.get(identity)
+    if (prior) prior.aliases!.push(...(fixture.aliases ?? [fixture.id]))
+    else unique.set(identity, { ...fixture, aliases: [...(fixture.aliases ?? [fixture.id])] })
+  }
+  return [...unique.values()]
+}
+export function gzipCorpus(corpus: unknown) {
+  return gzipSync(JSON.stringify(corpus), { level: 9 })
+}
+export function readCorpus(path = resolve(experiment, 'fixtures/corpus.json.gz')): Corpus {
+  const bytes = readFileSync(path)
+  return JSON.parse((path.endsWith('.gz') ? gunzipSync(bytes) : bytes).toString('utf8'))
+}
+
+export function reducerVersions() {
+  return Object.fromEntries(
+    Object.entries(reducers).map(([scope, entries]) => [
+      scope,
+      Object.fromEntries(Object.entries(entries).map(([name, reducer]) => [name, reducer.version])),
+    ]),
+  )
 }

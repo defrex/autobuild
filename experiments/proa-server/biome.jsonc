@@ -2,7 +2,6 @@
   "root": false,
   "extends": "//",
   "files": {
-    "includes": ["**", "!design/ansi", "!styles/input.css", "!public/styles.css"],
-    "maxSize": 134217728
+    "includes": ["**", "!design/ansi", "!styles/input.css", "!public/styles.css"]
   }
 }
