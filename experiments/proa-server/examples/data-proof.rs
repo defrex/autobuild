@@ -5,7 +5,12 @@ use std::io::{self, BufRead, Write};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let reader = DataReader::connect(DataConfig::from_env().map_err(anyhow::Error::msg)?.unwrap()).await?;
+    anyhow::ensure!(
+        !std::env::args().any(|arg| arg == "--fail-for-cleanup"),
+        "intentional Rust cleanup proof failure"
+    );
+    let reader =
+        DataReader::connect(DataConfig::from_env().map_err(anyhow::Error::msg)?.unwrap()).await?;
     println!("{}", json!({"ready": true}));
     io::stdout().flush()?;
     for line in io::stdin().lock().lines() {
@@ -16,7 +21,10 @@ async fn main() -> anyhow::Result<()> {
             "build" => reader.build(repo, id).await,
             "concurrent" => {
                 let (a, b) = tokio::join!(reader.build(repo, id), reader.build(repo, id));
-                match (a, b) { (Ok(a), Ok(b)) => Ok(json!([a, b])), (Err(e), _) | (_, Err(e)) => Err(e) }
+                match (a, b) {
+                    (Ok(a), Ok(b)) => Ok(json!([a, b])),
+                    (Err(e), _) | (_, Err(e)) => Err(e),
+                }
             }
             "repository" => reader.repository(repo).await,
             "session" => reader.session(repo, id).await,
@@ -25,16 +33,33 @@ async fn main() -> anyhow::Result<()> {
             "sessions" => reader.postgres().sessions(repo).await.map(|v| json!(v)),
             "project" => reader.project_builds(repo).await.map(|v| json!(v)),
             "counts" => Ok(json!(reader.query_counts().await)),
-            "clear" => { reader.clear_cache().await; Ok(Value::Null) },
+            "clear" => {
+                reader.clear_cache().await;
+                Ok(Value::Null)
+            }
             "artifact" => {
                 let scope = match command["scope"].as_str().unwrap() {
-                    "build" => Scope::Build(id), "repository" => Scope::Repository, "session" => Scope::Session(id), _ => panic!("unknown scope"),
+                    "build" => Scope::Build(id),
+                    "repository" => Scope::Repository,
+                    "session" => Scope::Session(id),
+                    _ => panic!("unknown scope"),
                 };
-                reader.artifact(repo, scope, command["kind"].as_str().unwrap(), command["revision"].as_i64()).await.map(|v| json!(v))
+                reader
+                    .artifact(
+                        repo,
+                        scope,
+                        command["kind"].as_str().unwrap(),
+                        command["revision"].as_i64(),
+                    )
+                    .await
+                    .map(|v| json!(v))
             }
             _ => panic!("unknown operation"),
         };
-        let reply = match result { Ok(value) => json!({"value": value}), Err(error) => json!({"error": error.to_string()}) };
+        let reply = match result {
+            Ok(value) => json!({"value": value}),
+            Err(error) => json!({"error": error.to_string()}),
+        };
         println!("{reply}");
         io::stdout().flush()?;
     }

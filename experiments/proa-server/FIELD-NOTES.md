@@ -192,25 +192,46 @@ server starts in a temporary cwd with a link to worktree public assets, so
 repository .env files cannot supply production/auth settings through dotenvy's
 ancestor search. Capture performs no GitHub or other external page requests.
 
-## Rust data-access foundation
+## Rust data access alongside Proa DataLoader
 
-The `data` library now contains environment parsing and a SELECT-only PostgreSQL
-reader. The reader checks migration version 17 and its checksum before accessing
-application tables, uses read-only transactions even with ordinary credentials,
-and filters build/session reads by repository. Event suffix reads use `seq >`
-with PostgreSQL bigint parameters. This is a library foundation: server startup,
-blob retrieval, reducer parity and accumulator caching are not connected yet.
-No cross-language integration or incremental-query measurement is claimed here.
+The native `data` library now initializes from the TypeScript store's environment
+contract before the HTTP listener binds. It checks migration version 17 and its
+checksum with SELECT, reads in read-only transactions, and never migrates or uses
+snapshot answers. A bounded four-connection pool allows unrelated scope reads to
+proceed independently. Build/session metadata and facts are filtered by repository.
+Blob bytes are fetched by content hash through the official AWS SDK or Vercel GET;
+no native writer is exposed.
 
-Proa's `DataLoader` / `cx.load_typed(...)` shares keyed work within one request;
-each HTML response should retain its own `DataResolver::request_scope(...)`.
-The planned scope-keyed incremental reader has a different lifetime: its event
-cursor and reducer accumulator must survive across requests, while failures must
-stay local to their build (or repository/session scope). Request sharing alone
-cannot avoid replaying whole event logs on subsequent polls. The PostgreSQL
-suffix API supplies that boundary but does not yet implement those caches.
+Proa's `DataLoader` / `cx.load_typed(...)` shares keyed work within one request.
+Each response should still get one `DataResolver::request_scope(...)`. Our
+`DataReader` lives longer: the database identity is fixed by its connection, and
+project/scope keys own serialized accumulator/cursor advances across requests.
+A restart or cache eviction replays facts. Request-local sharing alone cannot avoid
+whole-log reads on the next poll. The current shell uses neither reader in a page;
+this library is the boundary for later dashboard work.
 
-Provider inspection for the remaining blob work: the pinned TypeScript
+The real TypeScript-store/S3rver producer and native Rust process passed binary
+artifact reads in build/repository/session scopes, active-project discovery,
+foreign-project filtering, explicit/latest revisions, and distinct absent-metadata
+versus absent-object results. Query instrumentation measured N=2 initial build rows,
+M=1 appended row, and zero rows on the next poll. Concurrent callers returned equal
+states without double folds; a fresh process replay returned the same value.
+Table data, column definitions, constraints and indexes remained unchanged under
+Rust reads with a SELECT-only role. Schema version 999 refused both the reader
+bridge and actual HTTP-server startup, naming expected 17 and found 999.
+The full gate supplies its own loopback S3 service and uniquely named database/role;
+it also intentionally fails a Rust child and checks resource cleanup.
+
+Operator rulings `esc_a5644697` and `esc_f213ee9f` resolve the compatibility seam:
+classify negative logs mechanically against each scope's current catalog. Preserve
+the TypeScript answer as evidence, but require Rust decoding failure for any unknown
+event name. Assert the classification itself so no known-only log escapes strict
+field parity. An unreadable build leaves healthy neighbors usable; repository or
+session failures remain local to their own scope. This is deliberately stricter
+than the TypeScript advisory-event compatibility path, not a guessed partial state.
+
+
+Provider inspection for the native blob reader: the pinned TypeScript
 `@vercel/blob` 2.8.0 `dist/index.js` `get` and
 `dist/chunk-YYMLUMXS.js` `resolveBlobAuth` / `constructBlobUrl` send GET directly to
 `https://{storeId}.{public|private}.blob.vercel-storage.com/{pathname}` with
@@ -221,7 +242,12 @@ no OIDC exchange for GET: the OIDC token itself is the bearer. GET has no
 `x-api-version` header. A 404 returns null; other unsuccessful responses throw;
 304 has no stream. The store adapter does not request conditional reads or
 cache bypass. Prefix normalization removes empty slash-separated components.
-Rust blob implementation and wire proof remain outstanding.
+Native GET wire tests cover bearer authentication, binary bodies, missing objects
+and preserved authorization failures. S3 interoperability uses the real signed
+TypeScript and Rust SDK clients against S3rver 3.7.1; that local subset is not a
+claim about every AWS behavior. A credentialed disposable Vercel store was not
+available; the pinned SDK implementation and local wire proof are recorded in
+[BLOB-CONTRACT.md](BLOB-CONTRACT.md).
 
 Provider contracts consulted:
 [AWS GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html),

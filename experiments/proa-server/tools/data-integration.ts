@@ -11,9 +11,11 @@ import {
   messagePostedWrite,
   sampleEventWrite,
 } from '../../../packages/core/src/store/contract'
+import { encodeReducerValue } from '../../../packages/core/src/store/reducer-value-validation'
 import { reduceBuild } from '../../../packages/core/src/kernel/reducer'
 import { reduceSession } from '../../../packages/core/src/store/session-reducer'
 import { withDataServices } from './data-services'
+import { expected } from './fixture-core'
 
 const project = resolve(import.meta.dir, '..')
 async function bridge(env: Record<string, string | undefined>, cwd: string, command?: string[]) {
@@ -200,11 +202,16 @@ export async function integration(
     assert.equal((await value({ op: 'builds' })).length, 2)
     assert.equal((await value({ op: 'sessions' }))[0].id, session.id)
     const first = await value({ op: 'build', id: 'healthy' })
-    assert.deepEqual(first, { build: reduceBuild(await store.getEvents('healthy')) })
-    assert.deepEqual(await value({ op: 'session', id: session.id }), {
-      session: reduceSession(await store.getSessionEvents(session.id)),
+    assert.deepEqual(first, {
+      build: encodeReducerValue(reduceBuild(await store.getEvents('healthy'))),
     })
-    await value({ op: 'repository' })
+    assert.deepEqual(await value({ op: 'session', id: session.id }), {
+      session: encodeReducerValue(reduceSession(await store.getSessionEvents(session.id))),
+    })
+    assert.deepEqual(
+      await value({ op: 'repository' }),
+      expected('repository', await store.getRepoEvents(repo)),
+    )
     for (const [scope, id] of [
       ['build', 'healthy'],
       ['repository', ''],
@@ -247,7 +254,9 @@ export async function integration(
     await store.append('healthy', sampleEventWrite('second'))
     const concurrent = await value({ op: 'concurrent', id: 'healthy' })
     assert.deepEqual(concurrent[0], concurrent[1])
-    assert.deepEqual(concurrent[0], { build: reduceBuild(await store.getEvents('healthy')) })
+    assert.deepEqual(concurrent[0], {
+      build: encodeReducerValue(reduceBuild(await store.getEvents('healthy'))),
+    })
     await value({ op: 'build', id: 'healthy' })
     const counts = (await value({ op: 'counts' })).filter(
       (v: { scope: string }) => v.scope === 'build:healthy',
@@ -282,6 +291,38 @@ export async function integration(
     rust = undefined
     await writer`UPDATE ab_schema_migrations SET version = 999 WHERE singleton = true`
     await assert.rejects(() => bridge(env, runtime), /expected version 17, found 999/)
+    const startup = Bun.spawn(
+      [
+        'cargo',
+        'run',
+        '--locked',
+        '--quiet',
+        '--bin',
+        'proa-server',
+        '--manifest-path',
+        resolve(project, 'Cargo.toml'),
+      ],
+      {
+        cwd: runtime,
+        env: { ...env, PROA_HOST: '127.0.0.1', PORT: '65500' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    const startupTimeout = setTimeout(() => startup.kill(), 180000)
+    try {
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(startup.stdout).text(),
+        new Response(startup.stderr).text(),
+        startup.exited,
+      ])
+      assert.notEqual(code, 0)
+      assert.match(stderr, /expected version 17, found 999/)
+      assert.doesNotMatch(stdout, /Proa site listening/)
+    } finally {
+      clearTimeout(startupTimeout)
+    }
+
     console.log(
       'TS-write/Rust-read proof passed: binary artifacts, scope isolation, read-only tables, N=2 M=1 zero=0, concurrency, restart, schema refusal',
     )
@@ -328,7 +369,21 @@ if (import.meta.main)
       })
       const before = await resources()
       await assert.rejects(
-        () => integration(adminUrl, env, { rustCommand: ['bun', '-e', 'process.exit(23)'] }),
+        () =>
+          integration(adminUrl, env, {
+            rustCommand: [
+              'cargo',
+              'run',
+              '--locked',
+              '--quiet',
+              '--example',
+              'data-proof',
+              '--manifest-path',
+              resolve(project, 'Cargo.toml'),
+              '--',
+              '--fail-for-cleanup',
+            ],
+          }),
         /Rust data bridge closed/,
       )
       assert.deepEqual(await resources(), before, 'failed Rust child leaked or deleted resources')
