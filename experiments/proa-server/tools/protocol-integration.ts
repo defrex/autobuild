@@ -7,6 +7,10 @@ import { runCredentialHttpProof, runCredentialProof } from './protocol-credentia
 import { proveProtocolStore } from './protocol-store.integration.test'
 import { proveProtocolSessions } from './protocol-sessions.integration.test'
 import { proveProtocolSnapshotsPresence } from './protocol-snapshots-presence.integration.test'
+import { protocolBlobInteroperability } from './protocol-blobs.integration.test'
+import { proveProtocolTicks } from './protocol-ticks.integration.test'
+import { proveProtocolArtifactBoundaries } from './protocol-artifact-boundaries.integration.test'
+import { proveProtocolArtifacts } from './protocol-artifacts.integration.test'
 import { proveProtocolEvents } from './protocol-events.integration.test'
 import { withDataServices } from './data-services'
 
@@ -27,21 +31,25 @@ if (!process.argv.includes('--caller-holds-lock')) {
   )
   if ((await child.exited) !== 0) throw new Error('Protocol integration failed')
 } else {
-  const { server } = await buildProtocolExecutables(environment)
+  const { server, blob } = await buildProtocolExecutables(environment)
   const credential = await buildCredentialHelper(environment)
   await withDataServices(async (admin, env) => {
     await runCredentialProof(credential, admin, env)
     await runCredentialHttpProof(server, admin, env)
   })
+  const blobs = await protocolBlobInteroperability(blob)
+  const ticks = await proveProtocolTicks(server)
   const records = await proveProtocolStore(server)
   const sessions = await proveProtocolSessions(server)
   const events = await proveProtocolEvents(server)
+  const artifactBoundaries = await proveProtocolArtifactBoundaries(server)
+  const artifacts = await proveProtocolArtifacts(server)
   const snapshotsPresence = await proveProtocolSnapshotsPresence(server)
   const evidence = resolve(root, '.ab/proa-protocol-store')
   await mkdir(evidence, { recursive: true })
   await Bun.write(
     join(evidence, 'checkpoint-proof.json'),
-    `${JSON.stringify({ fullBuildStoreContract: false, records, sessions, events, snapshotsPresence }, null, 2)}\n`,
+    `${JSON.stringify({ fullBuildStoreContract: false, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, snapshotsPresence }, null, 2)}\n`,
   )
   console.log(
     `Native protocol checkpoint proof passed; complete shared suite remains required. Evidence: ${evidence}`,

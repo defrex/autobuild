@@ -1,8 +1,9 @@
 # Blob provider evidence
 
-Checked 2026-10-25. The Rust blob adapters currently implement reads only. The write
-contract below is preparation for the next artifact/deposit increment, not a
-claim that Rust uploads or live Vercel interoperability have been proved.
+Checked 2026-10-25. `data/blobs.rs::BlobReader` now implements whole-object
+`put(hash, bytes)` beside the existing read API. S3 emulator round trips and
+pinned-SDK request comparisons prove the subset below. No live Vercel
+interoperability is claimed.
 
 ## Evidence and pinned implementations
 
@@ -171,21 +172,49 @@ S3 reads likewise distinguish missing from denied access. See the primary
 [AWS GetObject reference](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
 and [Vercel get reference](https://vercel.com/docs/vercel-blob/using-blob-sdk#get).
 
-## Proof still required when writes land
+## Executable write evidence
 
-- Request-level tests must compare whole binary/empty bodies, normalized paths,
-  query encoding, bucket/key and the Vercel header/auth matrix against the pinned
-  SDK. Include token versus explicit OIDC/store identity, both access modes,
-  overwrite/random-suffix settings, response parsing, denied/missing-store cases
-  and credential-bearing redirects without logging secrets.
-- Cross-read real S3-emulator uploads in **both** directions: Rust put → TypeScript
-  get, TypeScript put → Rust get, including empty bytes and repeated identical
-  hashes. Keep per-factory DB/blob isolation and guaranteed cleanup.
-- Provider failure must leave event/artifact metadata unpublished; a SQL failure
-  after successful upload may leave only an orphan object, without consuming
-  visible revisions or event sequences. Do not substitute an in-memory provider
-  map for this transaction/provider proof.
-- Keep the existing pinned-SDK request tests. A fake Vercel HTTP responder proves
-  request/decoding mechanics only. No live Vercel credentials were used for this
-  research, no remote object was written, and live Vercel interoperability
-  remains unproved until explicitly provisioned integration evidence exists.
+`tools/protocol-blob-fixtures.ts --generate` runs the actual installed
+`@vercel/blob` 2.8.0 facade against an isolated loopback responder. The eight
+requests cover token/explicit trimmed OIDC auth, public/private access and
+empty/binary Buffers, normalized prefixes and encoded spaces/Unicode. The
+committed `fixtures/protocol-blob-provider.json` records selected exact headers,
+method, encoded target and all bytes, plus source hashes. The same script without
+`--generate` and its colocated unit test detect stale provider sources. Its only
+API-origin override is local to fixture generation; the Rust production writer
+fixes `https://vercel.com/api/blob/` and accepts no environment API override.
+
+Rust `data::blobs` tests compare actual HTTP requests to all eight SDK oracle
+rows. Additional tests inspect the configured S3 bucket/key, raw empty/binary
+body, SDK signing and session credentials; reject denied/missing-store/rate-limit
+and redirect responses; require parseable non-null successful JSON; enforce the
+950 UTF-16 pathname limit; and verify a retry retains its request ID/body while
+incrementing the attempt header. Recognized SDK error/message classifications
+bail immediately. Network/unknown/service/internal errors retry up to ten times
+with exponential backoff. Provider bodies, endpoints and credentials never enter
+diagnostics: the adapter exposes `blob storage write failed`, and the machine
+router returns a generic internal error. Reads retain their
+existing distinct missing-object/error diagnostics.
+
+`tools/protocol-blobs.integration.test.ts::protocolBlobInteroperability` invokes
+the private `examples/protocol-blob-proof.rs` against a fresh S3 emulator. Its ten
+checks cover Rust put → TypeScript get, TypeScript put → Rust get and repeated
+whole-object overwrites for empty bytes, non-UTF8 binary and UTF-8 plus NUL, and a
+distinct missing object. The bridge accepts only the isolated loopback emulator
+and fixture bucket, has no production HTTP route, and does not connect to a
+database. The harness bounds startup/response/exit and tears down its child and
+emulator on failure as well as success. The aggregate protocol gate builds and
+runs this proof; its sanitized report explicitly records `liveVercel: false`.
+
+`protocol-artifacts.integration.test.ts` and
+`protocol-artifact-boundaries.integration.test.ts` separately prove that real S3
+NoSuchBucket failure publishes no metadata, including before a stale deposit
+comparison. SQL insert and deferred-commit failures after successful upload
+consume no visible revision/event sequence, timestamp or change position. A
+recovered writer starts at revision zero. These transaction proofs complement
+the provider tests; an orphan immutable object after failed SQL is harmless.
+
+A fake Vercel HTTP responder proves request/decoding mechanics only. No live
+Vercel credentials were used and no remote Vercel object was written. Live
+Vercel interoperability remains unproved until explicitly provisioned
+integration evidence exists.

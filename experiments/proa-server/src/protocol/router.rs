@@ -340,7 +340,97 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             )),
         };
     }
+    if method == "POST" && parts.len() == 4 && parts[0] == "repos" && parts[2] == "tick" {
+        let repo = parts[1];
+        if parts[3] == "begin" {
+            let value = body(req, "leaseHolder").await?;
+            return Ok(reply(
+                200,
+                state
+                    .store
+                    .begin_repo_tick(repo, value["holder"].as_str().unwrap())
+                    .await?,
+            ));
+        }
+        if parts[3] == "finish" {
+            let value = body(req, "finishRepoTick").await?;
+            let events = value["events"].as_array().unwrap();
+            for event in events {
+                enforce_via(principal.as_ref(), event.get("actor"))?;
+            }
+            return Ok(reply(
+                200,
+                state
+                    .store
+                    .finish_repo_tick(
+                        repo,
+                        value["holder"].as_str().unwrap(),
+                        &value["completion"],
+                        events,
+                    )
+                    .await?,
+            ));
+        }
+    }
     if let Some(scope) = scope {
+        if parts.len() >= 3 && matches!(parts[2], "artifacts" | "artifact-list" | "deposits") {
+            if parts.len() == 3 && parts[2] == "artifacts" {
+                if method == "POST" {
+                    let value = body(req, "putArtifact").await?;
+                    return Ok(reply(201, state.store.put_artifact(scope, &value).await?));
+                }
+                if method == "GET" {
+                    let kind = super::wire::parameter(req.uri().query(), "kind")
+                        .filter(|k| !k.is_empty())
+                        .ok_or_else(|| {
+                            ProtocolError::validation("query parameter \"kind\" is required")
+                        })?;
+                    let rev = super::wire::int_parameter(req.uri().query(), "rev")?;
+                    return Ok(reply(
+                        200,
+                        state.store.get_artifact(scope, &kind, rev).await?,
+                    ));
+                }
+            }
+            if method == "GET" && parts.len() == 3 && parts[2] == "artifact-list" {
+                let kind = super::wire::parameter(req.uri().query(), "kind");
+                return Ok(reply(
+                    200,
+                    state.store.list_artifacts(scope, kind.as_deref()).await?,
+                ));
+            }
+            if method == "POST"
+                && parts[2] == "deposits"
+                && (parts.len() == 3
+                    || (parts.len() == 4
+                        && parts[3] == "conditional"
+                        && matches!(scope, Scope::Build(_))))
+            {
+                let value = body(req, "deposits").await?;
+                let expected = if matches!(scope, Scope::Build(_)) {
+                    value.get("expectedSeq")
+                } else {
+                    None
+                };
+                if matches!(scope, Scope::Build(_)) {
+                    if parts.len() == 4 && expected.is_none() {
+                        return Err(ProtocolError::validation(
+                            "conditional deposits require expectedSeq",
+                        ));
+                    }
+                    if parts.len() == 3 && expected.is_some() {
+                        return Err(ProtocolError::validation(
+                            "use deposits/conditional for expectedSeq",
+                        ));
+                    }
+                }
+                if !matches!(scope, Scope::Session(_)) {
+                    enforce_via(principal.as_ref(), value["event"].get("actor"))?;
+                }
+                let result = state.store.deposit(scope, &value, expected).await?;
+                return Ok(reply(if result.is_null() { 200 } else { 201 }, result));
+            }
+        }
         if parts.len() == 4
             && parts[2] == "snapshots"
             && matches!(scope, Scope::Build(_) | Scope::Repo(_))

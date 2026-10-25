@@ -4,7 +4,7 @@ import { isAbsolute, resolve } from 'node:path'
 const project = resolve(import.meta.dir, '..')
 const root = resolve(project, '../..')
 type Environment = Record<string, string | undefined>
-const builds = new Map<string, Promise<{ server: string }>>()
+const builds = new Map<string, Promise<{ server: string; blob: string }>>()
 
 async function externalTarget(environment: Environment) {
   const requested = environment.CARGO_TARGET_DIR
@@ -35,6 +35,8 @@ async function compile(environment: Environment, locked: boolean) {
         '--locked',
         '--example',
         'protocol-test-server',
+        '--example',
+        'protocol-blob-proof',
         '--message-format=json',
       ]
       const child = Bun.spawn(locked ? ['flock', `${target}/.verify.lock`, ...cargo] : cargo, {
@@ -46,6 +48,7 @@ async function compile(environment: Environment, locked: boolean) {
       const output = await new Response(child.stdout).text()
       if ((await child.exited) !== 0) throw new Error('Protocol test server compilation failed')
       let server: string | undefined
+      let blob: string | undefined
       for (const line of output.split('\n').filter(Boolean)) {
         const artifact = JSON.parse(line) as {
           reason?: string
@@ -58,9 +61,16 @@ async function compile(environment: Environment, locked: boolean) {
           artifact.executable
         )
           server = artifact.executable
+        if (
+          artifact.reason === 'compiler-artifact' &&
+          artifact.target?.name === 'protocol-blob-proof' &&
+          artifact.executable
+        )
+          blob = artifact.executable
       }
       if (!server) throw new Error('Cargo did not report the protocol test server executable')
-      return { server }
+      if (!blob) throw new Error('Cargo did not report the protocol blob proof executable')
+      return { server, blob }
     })()
     builds.set(target, pending)
     pending.catch(() => {

@@ -130,10 +130,11 @@ Rust server and connections inside that callback before database teardown.
 The protocol implementation is still staged. `src/protocol/router.rs` is a
 separate JSON branch exercised by the native test executable; it is not yet
 mounted into the normal browser server. Unsupported families do not count as
-conformance. Delegation, artifacts, assets, streams, repository ticks and reducer values
+conformance. Delegation, ticket assets, streams and reducer values
 remain outstanding; the complete shared suite and production router merge are
 still required. Build/repository/session appends, atomic initial events, public
-snapshots and operator presence now run through the native test server.
+snapshots, operator presence, artifact/deposit families and repository ticks now
+run through the native test server.
 
 Generate the independent strict append corpus with
 `bun tools/generate-protocol-fixtures.ts`; verify it with
@@ -164,16 +165,39 @@ The gate runs this command, identity freshness and append freshness automaticall
 The example binary binds an ephemeral loopback port; its private stdin/stdout
 channel synchronizes each request's clock without freezing monotonic waits.
 Open machine authority and clock control exist only in the test example, never
-as switches in the normal executable. Retention input is explicitly refused
-until artifact retention is implemented.
+as switches in the normal executable. The test harness forwards the shared
+constructor retention option; newest-revision pruning runs inside the locked
+deposit transaction, and session artifacts remain exempt.
 
 The proofs cover project credentials in both language directions (including
 actual TypeScript credential CLI issuance), immediate invalidation, authenticated
 HTTP ownership gates, all three strict event catalogs, atomic build creation,
-records, leases, node writers, snapshot caches, operator presence, cross-language
+records, leases, node writers, snapshot caches, operator presence, all three
+artifact scopes and atomic deposits, fenced repository tick telemetry, cross-language
 sequence/CAS races, SQL/commit rollback, held-read wake/timeout/cancellation, and
 restart continuity. Public snapshot state uses the TypeScript adapter's shared
 JSONB string envelope, including scalar strings and legacy object reads. Raw tokens remain only in test process memory and private
 pipes. Sanitized evidence is written to `.ab/proa-protocol-store/checkpoint-proof.json`.
 This report explicitly states `fullBuildStoreContract: false`: the unchanged
 full shared suite, historical-client fixtures and dispatch proof are still required.
+
+Artifact preparation oracles are checked with
+`bun tools/protocol-artifact-preparation-fixtures.ts` (`--generate` refreshes);
+`bun tools/protocol-tick-fixtures.ts` checks core tick boundaries;
+`bun tools/protocol-blob-fixtures.ts` captures the pinned provider SDK request
+contract (`--generate` refreshes each). The maintained gate checks all three.
+Native artifact proofs cover the exact 1 MiB decoded ceiling, canonical padded
+base64, payload-only placeholder substitution, same-kind batches, stale deposits,
+retention and SQL insert/commit rollback. Invalid deposit tests use raw HTTP so
+the unchanged remote client's local producer validator cannot mask Rust failures.
+The private `protocol-blob-proof` example cross-reads whole S3 objects with the
+TypeScript adapter. Vercel request tests are local SDK/request evidence, not a
+claim of live Vercel access. See [BLOB-CONTRACT.md](../BLOB-CONTRACT.md).
+
+A remaining request-boundary conformance gap is confirmed for raw JSON numeric
+literals. The current serde parser can preserve unsafe integers or round decimal
+lexemes differently from JavaScript, and rejects exponent overflow that
+JavaScript accepts before later schema validation/serialization. A complete
+request numeric model is still required before conformance is claimed. Probe
+regressions must send raw literal text and inspect persisted JSON as well as
+responses: parsing both responses through JavaScript can hide the divergence.

@@ -9,7 +9,11 @@ import {
   conditionalEventBodySchema,
   reducerSnapshotPutBodySchema,
   operatorPresenceBodySchema,
+  putArtifactBodySchema,
+  depositsBodySchema,
+  finishRepoTickBodySchema,
 } from '../../../packages/core/src/store/remote/protocol'
+import { repoTickCompletionSchema } from '../../../packages/core/src/store/repo-tick'
 import { eventPayloadSchemas } from '../../../packages/core/src/events/payloads'
 import { repositoryEventPayloadSchemas } from '../../../packages/core/src/events/repository'
 import { sessionEventPayloadSchemas } from '../../../packages/core/src/events/sessions'
@@ -178,6 +182,10 @@ export const requestSchemas = {
   conditionalEvent: conditionalEventBodySchema,
   snapshotPut: reducerSnapshotPutBodySchema,
   operatorPresence: operatorPresenceBodySchema,
+  putArtifact: putArtifactBodySchema,
+  deposits: depositsBodySchema,
+  finishRepoTick: finishRepoTickBodySchema,
+  tickCompletion: repoTickCompletionSchema,
 }
 export function requestWriteSchemas() {
   return Object.fromEntries(

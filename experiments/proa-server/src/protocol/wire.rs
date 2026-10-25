@@ -14,7 +14,7 @@ fn js_space(c: char) -> bool {
                 | '\u{feff}'
     )
 }
-fn parameter(query: Option<&str>, name: &str) -> Option<String> {
+pub fn parameter(query: Option<&str>, name: &str) -> Option<String> {
     url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.into_owned())

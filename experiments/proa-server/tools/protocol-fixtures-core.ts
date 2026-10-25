@@ -34,6 +34,11 @@ export type WriteCorpus = {
 export function protocolSources() {
   return {
     ...sources(),
+    'packages/core/src/store/repo-tick.ts': createHash('sha256')
+      .update(
+        readFileSync(resolve(import.meta.dir, '../../../packages/core/src/store/repo-tick.ts')),
+      )
+      .digest('hex'),
     ...Object.fromEntries(
       [
         'protocol-fixtures-core.ts',
@@ -312,53 +317,75 @@ export async function generateWriteCorpus(): Promise<WriteCorpus> {
   const requests: WriteCorpus['requests'] = []
   for (const [name, schema] of Object.entries(requestSchemas)) {
     const input =
-      name === 'snapshotPut'
-        ? { version: 1, cursor: 0, state: { ready: true } }
-        : name === 'operatorPresence'
-          ? { id: 'witness', host: 'loopback', pid: 1, startedAt: '2026-01-01T00:00:00.000Z' }
-          : name === 'newSession'
-            ? { repo: 'witness', operator: 'witness', title: 'title' }
-            : name === 'eventWrite'
+      name === 'finishRepoTick'
+        ? { holder: 'witness', completion: { outcome: 'failed', error: 'failure' }, events: [] }
+        : name === 'tickCompletion'
+          ? { outcome: 'failed', error: 'failure' }
+          : name === 'putArtifact'
+            ? { kind: 'witness', contentBase64: 'AAE=', metadata: { version: 1 } }
+            : name === 'deposits'
               ? {
-                  actor: { kind: 'kernel' },
-                  type: 'witness',
-                  payload: {},
-                  compatibility: { writerVersion: '1.0.0', classification: 'decisive' },
+                  expectedSeq: 0,
+                  artifacts: [{ kind: 'witness', contentBase64: 'AAE=', metadata: { version: 1 } }],
+                  event: { actor: { kind: 'kernel' }, type: 'witness', payload: {} },
                 }
-              : name === 'conditionalEvent'
-                ? {
-                    expectedSeq: 1,
-                    event: { actor: { kind: 'kernel' }, type: 'witness', payload: {} },
-                  }
-                : name === 'newBuild'
+              : name === 'snapshotPut'
+                ? { version: 1, cursor: 0, state: { ready: true } }
+                : name === 'operatorPresence'
                   ? {
-                      slug: 'witness',
-                      repo: 'witness',
-                      repoOrigin: 'origin',
-                      ticket: { source: 'file', id: 'witness', url: 'url', title: 'title' },
-                      branch: 'ab/witness',
-                      created: {
-                        actor: { kind: 'kernel' },
-                        type: 'witness',
-                        payload: {},
-                        compatibility: { writerVersion: '1.0.0', classification: 'decisive' },
-                      },
+                      id: 'witness',
+                      host: 'loopback',
+                      pid: 1,
+                      startedAt: '2026-01-01T00:00:00.000Z',
                     }
-                  : name === 'ensureRepo'
-                    ? { repo: 'witness' }
-                    : name === 'leaseClaim'
-                      ? { holder: 'witness', ttlMs: 1 }
-                      : { holder: 'witness' }
+                  : name === 'newSession'
+                    ? { repo: 'witness', operator: 'witness', title: 'title' }
+                    : name === 'eventWrite'
+                      ? {
+                          actor: { kind: 'kernel' },
+                          type: 'witness',
+                          payload: {},
+                          compatibility: { writerVersion: '1.0.0', classification: 'decisive' },
+                        }
+                      : name === 'conditionalEvent'
+                        ? {
+                            expectedSeq: 1,
+                            event: { actor: { kind: 'kernel' }, type: 'witness', payload: {} },
+                          }
+                        : name === 'newBuild'
+                          ? {
+                              slug: 'witness',
+                              repo: 'witness',
+                              repoOrigin: 'origin',
+                              ticket: { source: 'file', id: 'witness', url: 'url', title: 'title' },
+                              branch: 'ab/witness',
+                              created: {
+                                actor: { kind: 'kernel' },
+                                type: 'witness',
+                                payload: {},
+                                compatibility: {
+                                  writerVersion: '1.0.0',
+                                  classification: 'decisive',
+                                },
+                              },
+                            }
+                          : name === 'ensureRepo'
+                            ? { repo: 'witness' }
+                            : name === 'leaseClaim'
+                              ? { holder: 'witness', ttlMs: 1 }
+                              : { holder: 'witness' }
     for (const variant of [
       { name: 'valid', payload: input },
       { name: 'null', payload: null },
       ...payloadMutations(input),
     ]) {
-      const result = schema.safeParse(variant.payload)
+      // Request oracles describe JSON transport: array holes become null.
+      const transported = JSON.parse(JSON.stringify(variant.payload))
+      const result = schema.safeParse(transported)
       requests.push({
         name,
         id: `${name}/${variant.name}`,
-        input: variant.payload,
+        input: transported,
         oracle: result.success
           ? { accepted: result.data }
           : { rejected: { name: result.error.name, message: result.error.message } },

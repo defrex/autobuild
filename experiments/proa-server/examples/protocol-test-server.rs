@@ -30,15 +30,26 @@ async fn main() -> anyhow::Result<()> {
             && parsed.path().starts_with("/proa_protocol_"),
         "protocol test database must be an isolated loopback database"
     );
-    // Retention is explicit startup input; artifact storage will consume it when
-    // that family is integrated. Never silently pretend it has been applied.
-    if std::env::var("PROA_TEST_RETENTION").is_ok() {
-        anyhow::bail!("protocol retention support not implemented");
-    }
     let now = Arc::new(Mutex::new(Utc::now()));
     let clock = now.clone();
-    let store =
-        Arc::new(Store::connect(&url, Arc::new(move || *clock.lock().expect("test clock"))).await?);
+    let mut store =
+        Store::connect(&url, Arc::new(move || *clock.lock().expect("test clock"))).await?;
+    let config = proa_server::data::config::DataConfig::from_env()
+        .map_err(anyhow::Error::msg)?
+        .ok_or_else(|| anyhow::anyhow!("missing test storage configuration"))?;
+    store.blobs = Some(Arc::new(proa_server::data::blobs::BlobReader::new(
+        config.blobs,
+        config.prefix,
+    )?));
+    if let Ok(retention) = std::env::var("PROA_TEST_RETENTION") {
+        let retention: Value = serde_json::from_str(&retention)?;
+        store.max_revisions = retention["maxRevisions"]
+            .as_u64()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| anyhow::anyhow!("invalid test retention"))?
+            .try_into()?;
+    }
+    let store = Arc::new(store);
     let authority = if std::env::var("PROA_TEST_AUTH").as_deref() == Ok("project") {
         Authority::Project
     } else {

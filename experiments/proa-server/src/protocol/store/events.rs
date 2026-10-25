@@ -44,12 +44,13 @@ pub(crate) async fn insert_prepared(
     seq: i64,
     now: DateTime<Utc>,
 ) -> Result<Value, ProtocolError> {
-    if matches!(scope, Scope::Session(_)) {
-        return Err(ProtocolError::validation("invalid event scope"));
-    }
     let compatibility = event.get("compatibility");
     let kind = event["type"].as_str().ok_or_else(ProtocolError::internal)?;
-    tx.execute(&format!("INSERT INTO {}({},seq,ts,actor,type,payload,compatibility) VALUES($1,$2,$3,$4,$5,$6,$7)",scope.events(),scope.event_key()),&[&scope.id(),&seq,&now,&event["actor"],&kind,&event["payload"],&compatibility]).await.map_err(ProtocolError::query)?;
+    if matches!(scope, Scope::Session(_)) {
+        tx.execute("INSERT INTO session_events(session,seq,ts,actor,type,payload) VALUES($1,$2,$3,$4,$5,$6)", &[&scope.id(),&seq,&now,&event["actor"],&kind,&event["payload"]]).await.map_err(ProtocolError::query)?;
+    } else {
+        tx.execute(&format!("INSERT INTO {}({},seq,ts,actor,type,payload,compatibility) VALUES($1,$2,$3,$4,$5,$6,$7)",scope.events(),scope.event_key()),&[&scope.id(),&seq,&now,&event["actor"],&kind,&event["payload"],&compatibility]).await.map_err(ProtocolError::query)?;
+    }
     tx.execute(
         &format!(
             "UPDATE {} SET updated_at=$1 WHERE {}=$2",

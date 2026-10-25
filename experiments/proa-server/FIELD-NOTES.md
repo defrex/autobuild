@@ -413,3 +413,49 @@ null and escaped NUL tested in both directions. This was a missing Rust encoding
 convention, not a TypeScript scalar-state bug. Presence remains independent of
 journal creation, and its clock rollback/expiry probes leave event sequences and
 repository change positions untouched.
+
+
+## Artifact publication and fenced tick observations
+
+Blob upload and SQL publication are separate boundaries. Rust writes complete
+raw S3 objects through the configured official SDK and Vercel objects through
+the pinned SDK's evidenced request shape; it never base64-encodes the provider
+body. All wire artifacts decode before any upload, and uploads finish before
+the scope row lock is acquired. SQL then allocates revisions, substitutes exact
+two-key negative references only in payload, validates the event, prunes managed
+kinds once per batch, and commits metadata plus its event together. Failed
+validation or deferred commit can leave an immutable orphan blob, but cannot
+consume visible revisions, timestamps or sequence numbers. Deleting an orphan
+as compensation would risk another writer already referencing the same hash.
+
+Conditional deposits differ from ordinary conditional appends: after decoding
+and uploading they compare under the lock before event validation. A stale
+invalid event therefore returns null. Invalid-event rollback tests must send raw
+HTTP: RemoteBuildStore validates producer writes locally before making a request,
+which can otherwise make a test pass without exercising the Rust transaction.
+Mixed Rust/TypeScript writers and a fresh Rust process prove the shared SQL
+metadata and provider bytes, rather than a process-local object map.
+
+Repository ticks use the same repository row lock and live-lease fence. Begin
+and finish record observations without renewing the lease or heartbeat; quiet
+finishes leave the journal/change position untouched. Boundary events and
+telemetry become visible atomically, including under deferred commit failure.
+The wire tick schema strips compatibility while the direct core validator can
+reject incompatible metadata: HTTP oracles must compare the actual wire path.
+
+These checkpoint proofs still do not establish full BuildStore conformance.
+Ticket assets, streams, reducer values, delegation, production router mounting,
+the entire unchanged contract, historical clients and isolated dispatch/reader
+evidence remain required. Rendering the dispatch result on the Builds page
+remains deferred to node integration after file-131 under ruling esc_6370a20b.
+
+A final raw-text probe exposed another boundary still to implement: JSON numeric
+semantics. Rust's default serde parser preserved `9007199254740993` while
+JavaScript rounded it, rounded `0.9999999999999999` up to one, and refused
+`1e400` where JavaScript accepted Infinity before unknown metadata serialized it
+to null. Comparing both responses with `response.json()` hid the large-integer
+difference; SQL JSON text and raw response text exposed it. Request parsing must
+preserve JavaScript's correctly rounded numbers and nonfinite validation behavior
+before full protocol conformance can be claimed. Mapping overflow directly to
+null is insufficient because typed numeric and literal schemas must reject it
+according to their original type.
