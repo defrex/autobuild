@@ -248,6 +248,17 @@ mod tests {
     }
 }
 
+/// Interpret an experiment-generated closed schema, retaining exact Zod diagnostics.
+pub fn validate_schema(schema: &Value, input: &Value) -> Result<Value, String> {
+    let mut issues = Vec::new();
+    let (value, _) = session::parse(schema, Some(input), &mut Vec::new(), &mut issues);
+    if issues.is_empty() {
+        Ok(value.expect("closed schema output"))
+    } else {
+        Err(serde_json::to_string_pretty(&issues).unwrap())
+    }
+}
+
 /// Parse one of the closed wire request schemas, preserving Zod's stripping
 /// behavior and exact diagnostics. This is body parsing, not event validation.
 pub fn validate_request(name: &str, input: &Value) -> Result<Value, String> {

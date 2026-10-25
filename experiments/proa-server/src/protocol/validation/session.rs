@@ -90,6 +90,20 @@ pub(super) fn parse(
                 issues.push(unrecognized_keys(&extra, path));
                 abort = true;
             }
+            if let Some(catchall) = schema.get("catchall") {
+                for key in extra {
+                    if key == "__proto__" {
+                        continue;
+                    }
+                    path.push(Value::String(key.clone()));
+                    let (value, child_abort) = parse(catchall, object.get(&key), path, issues);
+                    abort |= child_abort;
+                    if let Some(value) = value {
+                        output.insert(key, value);
+                    }
+                    path.pop();
+                }
+            }
             Value::Object(output)
         }
         "record" => {

@@ -222,6 +222,25 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         .and_then(|header| header.to_str().ok())
         .map(str::to_owned);
     let principal = authorize(&state, authorization.as_deref(), &segments).await?;
+    if parts.first() == Some(&"streams") && parts.len() >= 2 {
+        let record = state.store.get_stream(parts[1]).await?;
+        if record.is_null() {
+            return Err(unavailable());
+        }
+        let stream_scope = super::store::streams::record_scope(&record)?;
+        if let Some(principal) = principal.as_ref() {
+            let repo = match stream_scope {
+                Scope::Repo(repo) => Some(repo.to_owned()),
+                other => state.store.get_record(other).await?["repo"]
+                    .as_str()
+                    .map(str::to_owned),
+            };
+            if repo.as_deref() != Some(principal.repo.as_str()) {
+                return Err(unavailable());
+            }
+        }
+        return stream_route(&state, req, stream_scope, &parts[1..]).await;
+    }
     let scope = match parts.as_slice() {
         ["builds", id, ..] => Some(Scope::Build(id)),
         ["repos", id, ..] => Some(Scope::Repo(id)),
@@ -370,6 +389,117 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
                     )
                     .await?,
             ));
+        }
+    }
+    if parts.len() >= 5 && parts[0] == "repos" && parts[2] == "tickets" && parts[4] == "assets" {
+        return asset_route(&state, req, parts[1], parts[3], &parts[5..]).await;
+    }
+    if method == "GET"
+        && parts.len() == 3
+        && parts[0] == "repos"
+        && parts[2] == "ticket-asset-limits"
+    {
+        return Ok(reply(200, asset_limits(&state)));
+    }
+    if method == "GET"
+        && parts.len() >= 3
+        && parts[0] == "builds"
+        && parts[2] == "ticket-assets"
+        && (parts.len() == 3 || (parts.len() == 4 && parts[3] == "file"))
+    {
+        let (kind, name) = asset_identity(req.uri().query())?;
+        let path = if parts.len() == 4 {
+            Some(
+                super::wire::parameter(req.uri().query(), "path")
+                    .filter(|p| !p.is_empty())
+                    .ok_or_else(|| {
+                        ProtocolError::validation("query parameter \"path\" is required")
+                    })?,
+            )
+        } else {
+            None
+        };
+        let rev = super::wire::int_parameter(req.uri().query(), "rev")?;
+        let asset = state
+            .store
+            .get_pinned_ticket_asset(parts[1], &kind, &name, rev)
+            .await?;
+        return asset_read_reply(&state, asset, &kind, &name, path.as_deref());
+    }
+    if let Some(scope @ (Scope::Build(_) | Scope::Repo(_))) = scope {
+        if parts.len() == 3 && parts[2] == "reducer-values" {
+            if method != "POST" {
+                return Err(ProtocolError::new(
+                    404,
+                    "not-found",
+                    format!("no route: {method} reducer-values"),
+                ));
+            }
+            let bytes = to_bytes(req.into_body(), 4096).await.map_err(|error| {
+                use std::error::Error;
+                if error
+                    .source()
+                    .is_some_and(|e| e.is::<http_body_util::LengthLimitError>())
+                {
+                    ProtocolError::new(413, "validation", "reducer request exceeds 4 KiB")
+                } else {
+                    ProtocolError::validation("request body is not valid JSON")
+                }
+            })?;
+            let input = super::reducer_values::parse_reducer_request(&bytes)?;
+            let mut result = state.store.get_reducer_value(scope, &input).await?;
+            let catalog = result.as_object_mut().unwrap().remove("catalogIdentity");
+            let mut response = reply(200, result);
+            if let Some(catalog) = catalog.and_then(|v| v.as_str().map(str::to_owned)) {
+                response.headers_mut().insert(
+                    "x-autobuild-catalog-identity",
+                    catalog.parse().map_err(|_| ProtocolError::internal())?,
+                );
+            }
+            return Ok(response);
+        }
+    }
+    if parts.len() == 3 && parts[0] == "repos" && parts[2] == "build-digests" {
+        if method != "GET" {
+            return Err(ProtocolError::new(
+                404,
+                "not-found",
+                format!("no route: {method} /repos/:repo/build-digests"),
+            ));
+        }
+        let supports_audit = identity::client_supports_integration_audit_pending(
+            req.headers()
+                .get("x-autobuild-version")
+                .and_then(|v| v.to_str().ok()),
+        );
+        let mut digests = state.store.repo_build_digests(parts[1]).await?;
+        if !supports_audit {
+            for digest in digests.as_array_mut().unwrap() {
+                digest
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("integrationAuditPending");
+            }
+        }
+        let mut response = reply(200, digests);
+        response.headers_mut().insert(
+            "x-autobuild-catalog-identity",
+            identity::ServiceIdentity::current()
+                .catalog_identity
+                .parse()
+                .map_err(|_| ProtocolError::internal())?,
+        );
+        return Ok(response);
+    }
+    if let Some(scope) = scope {
+        if parts.get(2) == Some(&"streams") {
+            if matches!(scope, Scope::Repo(_))
+                && !(method == "POST" && parts.len() == 3)
+                && state.store.get_record(scope).await?.is_null()
+            {
+                return Err(ProtocolError::missing("repo", scope.id()));
+            }
+            return stream_route(&state, req, scope, &parts[3..]).await;
         }
     }
     if let Some(scope) = scope {
@@ -633,4 +763,283 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
         "not-found",
         format!("no route: {method} {missing_path}"),
     ))
+}
+
+async fn stream_route(
+    state: &MachineState,
+    req: Request,
+    scope: Scope<'_>,
+    rest: &[&str],
+) -> Result<Response, ProtocolError> {
+    let method = req.method().as_str().to_owned();
+    let no_route = || {
+        ProtocolError::new(
+            404,
+            "not-found",
+            format!(
+                "no route: {method} streams{}",
+                if rest.is_empty() {
+                    String::new()
+                } else {
+                    format!("/{}", rest.join("/"))
+                }
+            ),
+        )
+    };
+    if rest.is_empty() {
+        return match method.as_str() {
+            "POST" => {
+                let input = body(req, "createStream").await?;
+                Ok(reply(
+                    201,
+                    state
+                        .store
+                        .create_stream(scope, input["label"].as_str().unwrap())
+                        .await?,
+                ))
+            }
+            "GET" => Ok(reply(200, state.store.list_streams(scope).await?)),
+            _ => Err(no_route()),
+        };
+    }
+    if rest.len() > 2 {
+        return Err(no_route());
+    }
+    let id = rest[0];
+    let record = state.store.get_stream(id).await?;
+    if record.is_null() {
+        return Err(unavailable());
+    }
+    let owning = super::store::streams::record_scope(&record)?;
+    if owning.name() != scope.name() || owning.id() != scope.id() {
+        return Err(unavailable());
+    }
+    if rest.len() == 1 {
+        return if method == "GET" {
+            Ok(reply(200, record))
+        } else {
+            Err(no_route())
+        };
+    }
+    match (method.as_str(), rest[1]) {
+        ("POST", "chunks") => {
+            let input = body(req, "appendStream").await?;
+            Ok(reply(
+                201,
+                state.store.append_stream_parts(id, &input["parts"]).await?,
+            ))
+        }
+        ("GET", "chunks") => {
+            let since = super::wire::int_parameter(req.uri().query(), "since")?.unwrap_or(0);
+            let wait = super::wire::wait_parameter(req.uri().query())?;
+            Ok(reply(200, state.store.read_stream(id, since, wait).await?))
+        }
+        ("POST", "close") => {
+            let input = body(req, "closeStream").await?;
+            Ok(reply(
+                200,
+                state
+                    .store
+                    .close_stream(id, input["outcome"].as_str().unwrap())
+                    .await?,
+            ))
+        }
+        _ => Err(no_route()),
+    }
+}
+
+fn asset_limits(state: &MachineState) -> Value {
+    use super::store::assets::{MAX_BYTES, MAX_ENTRIES};
+    let bytes = state
+        .store
+        .asset_max_request_bytes
+        .map(|max| {
+            max.saturating_sub(1024 + MAX_ENTRIES * (256 + 64))
+                .saturating_mul(3)
+                / 4
+        })
+        .unwrap_or(MAX_BYTES)
+        .min(MAX_BYTES);
+    let mut value = json!({"maxBytes":bytes,"maxEntries":MAX_ENTRIES});
+    if let Some(max) = state.store.asset_max_request_bytes {
+        value["maxRequestBytes"] = max.into();
+    }
+    value
+}
+fn asset_identity(query: Option<&str>) -> Result<(String, String), ProtocolError> {
+    let kind = super::wire::parameter(query, "kind").filter(|s| !s.is_empty());
+    let name = super::wire::parameter(query, "name").filter(|s| !s.is_empty());
+    match (kind, name) {
+        (Some(kind), Some(name)) => Ok((kind, name)),
+        _ => Err(ProtocolError::validation(
+            "query parameters \"kind\" and \"name\" are required",
+        )),
+    }
+}
+fn check_asset_response(
+    state: &MachineState,
+    value: &Value,
+    describe: &str,
+) -> Result<(), ProtocolError> {
+    if let Some(max) = state.store.asset_max_request_bytes {
+        let bytes = serde_json::to_vec(&super::js_json::serializable(value.clone()))
+            .map_err(|_| ProtocolError::internal())?
+            .len();
+        if bytes > max {
+            return Err(ProtocolError::new(413,"validation",format!("ticket asset {describe} is {bytes} bytes encoded, over this deployment's {max}-byte response ceiling; it can only be fetched from a store with a higher ceiling")));
+        }
+    }
+    Ok(())
+}
+fn asset_json(
+    state: &MachineState,
+    status: u16,
+    value: Value,
+    describe: &str,
+) -> Result<Response, ProtocolError> {
+    check_asset_response(state, &value, describe)?;
+    Ok(reply(status, value))
+}
+fn asset_read_reply(
+    state: &MachineState,
+    asset: Value,
+    kind: &str,
+    name: &str,
+    path: Option<&str>,
+) -> Result<Response, ProtocolError> {
+    if asset.is_null() {
+        return Ok(reply(200, Value::Null));
+    }
+    if let Some(path) = path {
+        let entry = asset["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|e| e["path"] == path && e["type"] == "file")
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    404,
+                    "not-found",
+                    format!("ticket asset {kind}/{name} has no file \"{path}\""),
+                )
+            })?;
+        let encoded = entry["contentBase64"]
+            .as_str()
+            .ok_or_else(ProtocolError::internal)?;
+        use base64::Engine;
+        let size = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| ProtocolError::internal())?
+            .len();
+        return asset_json(
+            state,
+            200,
+            json!({"contentBase64":encoded}),
+            &format!("file \"{path}\" of {kind}/{name} ({size} bytes)"),
+        );
+    }
+    asset_json(
+        state,
+        200,
+        asset["meta"].clone(),
+        &format!("{kind}/{name} manifest"),
+    )
+}
+async fn asset_route(
+    state: &MachineState,
+    req: Request,
+    repo: &str,
+    ticket: &str,
+    rest: &[&str],
+) -> Result<Response, ProtocolError> {
+    let method = req.method().as_str().to_owned();
+    match (method.as_str(), rest) {
+        ("POST", []) => {
+            let bytes = to_bytes(req.into_body(), usize::MAX)
+                .await
+                .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
+            let limits = asset_limits(state);
+            if let Some(max) = state.store.asset_max_request_bytes {
+                if bytes.len() > max {
+                    return Err(ProtocolError::new(413,"validation",format!("ticket asset exceeds this store's {}-byte limit (deployment request ceiling {max} bytes): request is {} bytes",limits["maxBytes"],bytes.len())));
+                }
+            }
+            let raw = super::js_json::parse_js_json(&bytes)
+                .map_err(|_| ProtocolError::validation("request body is not valid JSON"))?;
+            let input = super::validation::validate_request("putTicketAsset", &raw)
+                .map_err(|m| ProtocolError::validation(format!("invalid request body: {m}")))?;
+            let (manifest, _, size) = super::store::assets::prepare_asset_with_limits(
+                &input,
+                limits["maxBytes"].as_u64().unwrap() as usize,
+                limits["maxEntries"].as_u64().unwrap() as usize,
+            )?;
+            let kind = input["kind"].as_str().unwrap();
+            let name = input["name"].as_str().unwrap();
+            let worst = json!({"repo":repo,"ticketId":ticket,"kind":kind,"name":name,"revision":999_999_999,"layout":input["layout"],"size":size,"entries":manifest,"createdAt":"2026-01-01T00:00:00.000Z"});
+            check_asset_response(state, &worst, &format!("{kind}/{name} manifest"))?;
+            let meta = state.store.put_ticket_asset(repo, ticket, &input).await?;
+            asset_json(state, 201, meta, &format!("{kind}/{name} manifest"))
+        }
+        ("GET", []) | ("GET", ["file"]) => {
+            let (kind, name) = asset_identity(req.uri().query())?;
+            let path = if rest.is_empty() {
+                None
+            } else {
+                Some(
+                    super::wire::parameter(req.uri().query(), "path")
+                        .filter(|p| !p.is_empty())
+                        .ok_or_else(|| {
+                            ProtocolError::validation("query parameter \"path\" is required")
+                        })?,
+                )
+            };
+            let rev = super::wire::int_parameter(req.uri().query(), "rev")?;
+            asset_read_reply(
+                state,
+                state
+                    .store
+                    .get_ticket_asset(repo, ticket, &kind, &name, rev)
+                    .await?,
+                &kind,
+                &name,
+                path.as_deref(),
+            )
+        }
+        ("GET", ["list"]) => {
+            let revisions =
+                super::wire::parameter(req.uri().query(), "revisions").as_deref() == Some("1");
+            let values = state
+                .store
+                .list_ticket_assets(repo, ticket, revisions)
+                .await?;
+            asset_json(state, 200, values, &format!("list for ticket \"{ticket}\""))
+        }
+        ("POST", ["remove"]) => {
+            let input = body(req, "removeTicketAsset").await?;
+            let kind = input["kind"].as_str().unwrap();
+            let name = input["name"].as_str().unwrap();
+            let live = state
+                .store
+                .get_ticket_asset(repo, ticket, kind, name, None)
+                .await?;
+            if !live.is_null() {
+                check_asset_response(state, &live["meta"], &format!("{kind}/{name} manifest"))?;
+            }
+            Ok(reply(
+                200,
+                state
+                    .store
+                    .remove_ticket_asset(repo, ticket, kind, name)
+                    .await?,
+            ))
+        }
+        _ => Err(ProtocolError::new(
+            404,
+            "not-found",
+            format!(
+                "no route: {method} /repos/:repo/tickets/:id/assets/{}",
+                rest.join("/")
+            ),
+        )),
+    }
 }

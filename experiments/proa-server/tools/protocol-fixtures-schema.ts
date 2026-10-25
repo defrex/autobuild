@@ -12,6 +12,11 @@ import {
   putArtifactBodySchema,
   depositsBodySchema,
   finishRepoTickBodySchema,
+  createStreamBodySchema,
+  appendStreamBodySchema,
+  closeStreamBodySchema,
+  putTicketAssetBodySchema,
+  removeTicketAssetBodySchema,
 } from '../../../packages/core/src/store/remote/protocol'
 import { repoTickCompletionSchema } from '../../../packages/core/src/store/repo-tick'
 import { eventPayloadSchemas } from '../../../packages/core/src/events/payloads'
@@ -23,7 +28,7 @@ import { sessionEventPayloadSchemas } from '../../../packages/core/src/events/se
  * cannot silently weaken a Rust write validator. Custom checks are named and
  * implemented in Rust; the source closure pins their actual TypeScript code.
  */
-function node(schema: z.ZodType, path: string): unknown {
+export function schemaNode(schema: z.ZodType, path: string): unknown {
   const def = schema._zod.def as unknown as Record<string, unknown>
   const type = def.type as string
   const out: Record<string, unknown> = { type }
@@ -111,7 +116,7 @@ function node(schema: z.ZodType, path: string): unknown {
         ]),
       )
       out.strict = (def.catchall as z.ZodType)?._zod.def.type === 'never'
-      if (def.catchall && !out.strict) throw new Error(`Unsupported object catchall: ${path}`)
+      if (def.catchall && !out.strict) out.catchall = node(def.catchall as z.ZodType, `${path}.*`)
       break
     }
     case 'nullable':
@@ -186,6 +191,11 @@ export const requestSchemas = {
   deposits: depositsBodySchema,
   finishRepoTick: finishRepoTickBodySchema,
   tickCompletion: repoTickCompletionSchema,
+  createStream: createStreamBodySchema,
+  appendStream: appendStreamBodySchema,
+  closeStream: closeStreamBodySchema,
+  putTicketAsset: putTicketAssetBodySchema,
+  removeTicketAsset: removeTicketAssetBodySchema,
 }
 export function requestWriteSchemas() {
   return Object.fromEntries(
@@ -390,3 +400,5 @@ export function producerPayloadVariants(scope: string, type: string, payload: un
   }
   return out
 }
+
+const node = schemaNode

@@ -49,6 +49,10 @@ async fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("invalid test retention"))?
             .try_into()?;
     }
+    store.asset_max_request_bytes = std::env::var("PROA_TEST_ASSET_MAX_BYTES")
+        .ok()
+        .map(|v| v.parse())
+        .transpose()?;
     let store = Arc::new(store);
     let authority = if std::env::var("PROA_TEST_AUTH").as_deref() == Ok("project") {
         Authority::Project

@@ -39,8 +39,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ryu-js = "1.0.3"
 
-[dev-dependencies]
 flate2 = "1"
+
+[dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 
 [profile.release]

@@ -143,12 +143,27 @@ pub fn serializable(value: Value) -> Value {
             }
         }
         Value::Array(values) => Value::Array(values.into_iter().map(serializable).collect()),
-        Value::Object(values) => Value::Object(
-            values
-                .into_iter()
-                .map(|(key, value)| (key, serializable(value)))
-                .collect(),
-        ),
+        Value::Object(values) => {
+            let mut indices = Vec::new();
+            let mut others = Vec::new();
+            for (key, value) in values {
+                let value = serializable(value);
+                match key.parse::<u32>() {
+                    Ok(index) if index != u32::MAX && index.to_string() == key => {
+                        indices.push((index, key, value))
+                    }
+                    _ => others.push((key, value)),
+                }
+            }
+            indices.sort_by_key(|(index, _, _)| *index);
+            Value::Object(
+                indices
+                    .into_iter()
+                    .map(|(_, key, value)| (key, value))
+                    .chain(others)
+                    .collect(),
+            )
+        }
         other => other,
     }
 }

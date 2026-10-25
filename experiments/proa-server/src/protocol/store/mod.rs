@@ -10,6 +10,7 @@ pub struct Store {
     pub clock: Clock,
     pub blobs: Option<Arc<crate::data::blobs::BlobReader>>,
     pub max_revisions: usize,
+    pub asset_max_request_bytes: Option<usize>,
 }
 impl Store {
     pub async fn connect(url: &str, clock: Clock) -> Result<Self, super::error::ProtocolError> {
@@ -18,6 +19,7 @@ impl Store {
             clock,
             blobs: None,
             max_revisions: 200,
+            asset_max_request_bytes: None,
         })
     }
     pub fn now(&self) -> DateTime<Utc> {
@@ -38,3 +40,6 @@ pub mod events;
 
 pub mod artifacts;
 pub mod ticks;
+
+pub mod assets;
+pub mod streams;

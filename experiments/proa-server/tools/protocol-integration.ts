@@ -4,6 +4,9 @@ import { cachePath } from './verify'
 import { buildProtocolExecutables } from './protocol-server-harness'
 import { buildCredentialHelper } from './protocol-credentials'
 import { runCredentialHttpProof, runCredentialProof } from './protocol-credentials.integration.test'
+import { proveProtocolReducers } from './protocol-reducers.integration.test'
+import { proveProtocolAssets } from './protocol-assets.integration.test'
+import { proveProtocolStreams } from './protocol-streams.integration.test'
 import { proveProtocolStore } from './protocol-store.integration.test'
 import { proveProtocolSessions } from './protocol-sessions.integration.test'
 import { proveProtocolSnapshotsPresence } from './protocol-snapshots-presence.integration.test'
@@ -41,6 +44,9 @@ if (!process.argv.includes('--caller-holds-lock')) {
   const json = await proveProtocolJson(server)
   const blobs = await protocolBlobInteroperability(blob)
   const ticks = await proveProtocolTicks(server)
+  const reducers = await proveProtocolReducers(server)
+  const assets = await proveProtocolAssets(server)
+  const streams = await proveProtocolStreams(server)
   const records = await proveProtocolStore(server)
   const sessions = await proveProtocolSessions(server)
   const events = await proveProtocolEvents(server)
@@ -51,9 +57,9 @@ if (!process.argv.includes('--caller-holds-lock')) {
   await mkdir(evidence, { recursive: true })
   await Bun.write(
     join(evidence, 'checkpoint-proof.json'),
-    `${JSON.stringify({ fullBuildStoreContract: false, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
+    `${JSON.stringify({ includesFullBuildStoreContract: false, fullContractReport: '.ab/proa-protocol-contract/report.json', assets, streams, reducers, records, sessions, events, artifacts, artifactBoundaries, ticks, blobs, json, snapshotsPresence }, null, 2)}\n`,
   )
   console.log(
-    `Native protocol checkpoint proof passed; complete shared suite remains required. Evidence: ${evidence}`,
+    `Native protocol family proofs passed; unchanged suite evidence is recorded separately by protocol-contract.ts. Evidence: ${evidence}`,
   )
 }

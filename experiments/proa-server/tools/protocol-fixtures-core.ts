@@ -316,8 +316,24 @@ export async function generateWriteCorpus(): Promise<WriteCorpus> {
   }
   const requests: WriteCorpus['requests'] = []
   for (const [name, schema] of Object.entries(requestSchemas)) {
+    const special: Record<string, unknown> = {
+      createStream: { label: 'witness' },
+      appendStream: { parts: [{ type: 'data-witness', data: { key: 'value' }, other: true }] },
+      closeStream: { outcome: 'completed' },
+      putTicketAsset: {
+        kind: 'design',
+        name: 'witness',
+        layout: 'tree',
+        entries: [
+          { type: 'dir', path: 'dir' },
+          { type: 'file', path: 'dir/file.txt', contentBase64: 'AAE=' },
+        ],
+      },
+      removeTicketAsset: { kind: 'design', name: 'witness' },
+    }
     const input =
-      name === 'finishRepoTick'
+      special[name] ??
+      (name === 'finishRepoTick'
         ? { holder: 'witness', completion: { outcome: 'failed', error: 'failure' }, events: [] }
         : name === 'tickCompletion'
           ? { outcome: 'failed', error: 'failure' }
@@ -373,7 +389,7 @@ export async function generateWriteCorpus(): Promise<WriteCorpus> {
                             ? { repo: 'witness' }
                             : name === 'leaseClaim'
                               ? { holder: 'witness', ttlMs: 1 }
-                              : { holder: 'witness' }
+                              : { holder: 'witness' })
     for (const variant of [
       { name: 'valid', payload: input },
       { name: 'null', payload: null },

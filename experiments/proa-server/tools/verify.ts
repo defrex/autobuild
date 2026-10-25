@@ -116,6 +116,10 @@ export async function build(capture = false): Promise<string> {
         ['bun', 'tools/protocol-blob-fixtures.ts'],
         ['bun', 'tools/protocol-json-number-fixtures.ts'],
         ['bun', 'tools/protocol-numeric-fixtures.ts'],
+        ['bun', 'tools/protocol-asset-fixtures.ts'],
+        ['bun', 'tools/protocol-stream-document-fixtures.ts'],
+        ['bun', 'tools/protocol-reducer-fixtures.ts'],
+        ['bun', 'tools/protocol-restack-fixtures.ts'],
         ['proa', 'fmt', '--check', '--verify', 'src'],
         ['cargo', 'fmt', '--check'],
         ['proa', 'lint', 'src', '--deny', 'warnings'],
@@ -123,6 +127,7 @@ export async function build(capture = false): Promise<string> {
         ['cargo', 'test', '--locked'],
         ['proa', 'test', '--locked'],
         ['bun', 'tools/data-integration.ts'],
+        ['bun', 'tools/protocol-contract.ts', '--caller-holds-lock'],
         ['bun', 'tools/protocol-integration.ts', '--caller-holds-lock'],
       ]
   commands.push([

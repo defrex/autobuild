@@ -139,8 +139,10 @@ async fn current_record<C: GenericClient + Sync>(
     if matches!(scope, Scope::Build(_)) && value["ticket"]["source"] == "hosted" {
         if let Some(id) = value["ticket"]["id"].as_str() {
             let repo = value["repo"].as_str().unwrap();
-            if let Some(ticket) = client.query_opt("SELECT readable_id FROM ab_tickets WHERE repo=$1 AND (id=$2 OR lower(readable_id)=lower($2)) LIMIT 1", &[&repo, &id]).await? {
-                if let Some(id) = ticket.get::<_, Option<String>>("readable_id") { value["ticket"]["id"] = id.into(); }
+            if let Some((_, Some(id))) = super::assets::hosted_ticket(client, repo, id).await? {
+                if !id.is_empty() {
+                    value["ticket"]["id"] = id.into();
+                }
             }
         }
     }
@@ -217,7 +219,11 @@ impl Store {
     }
     pub async fn list_builds(&self, repo: Option<&str>) -> Result<Value, ProtocolError> {
         let client = self.database.client().await?;
-        let rows = client.query("SELECT b.*, t.readable_id AS projected_ticket_id FROM builds b LEFT JOIN LATERAL (SELECT readable_id FROM ab_tickets WHERE b.ticket->>'source'='hosted' AND repo=b.repo AND (id=b.ticket->>'id' OR lower(readable_id)=lower(b.ticket->>'id')) LIMIT 1) t ON true WHERE ($1::text IS NULL OR b.repo=$1) ORDER BY b.created_at,b.slug", &[&repo]).await?;
+        let rows = if super::assets::has_readable_ticket_schema(&**client).await? {
+            client.query("SELECT b.*, t.readable_id AS projected_ticket_id FROM builds b LEFT JOIN LATERAL (SELECT readable_id FROM ab_tickets WHERE b.ticket->>'source'='hosted' AND repo=b.repo AND (id=b.ticket->>'id' OR lower(readable_id)=lower(b.ticket->>'id')) LIMIT 1) t ON true WHERE ($1::text IS NULL OR b.repo=$1) ORDER BY b.created_at,b.slug", &[&repo]).await?
+        } else {
+            client.query("SELECT b.*,NULL::text AS projected_ticket_id FROM builds b WHERE ($1::text IS NULL OR b.repo=$1) ORDER BY b.created_at,b.slug", &[&repo]).await?
+        };
         let mut values = Vec::new();
         for row in rows {
             let mut value = record(&row, Scope::Build(""));

@@ -130,11 +130,13 @@ Rust server and connections inside that callback before database teardown.
 The protocol implementation is still staged. `src/protocol/router.rs` is a
 separate JSON branch exercised by the native test executable; it is not yet
 mounted into the normal browser server. Unsupported families do not count as
-conformance. Delegation, ticket assets, streams and reducer values
-remain outstanding; the complete shared suite and production router merge are
-still required. Build/repository/session appends, atomic initial events, public
-snapshots, operator presence, artifact/deposit families and repository ticks now
-run through the native test server.
+conformance. Delegation, the production router merge, historical-client and
+isolated-dispatch proof remain outstanding. Build/repository/session appends,
+atomic initial events, public snapshots, operator presence, artifact/deposit
+families, repository ticks, ticket assets/pins and stream lifecycles now run
+through the native test server. All 42 exposed named values are checked against
+the executable reducer registry, and the entire unchanged shared suite is the
+completion bar.
 
 Generate the independent strict append corpus with
 `bun tools/generate-protocol-fixtures.ts`; verify it with
@@ -178,8 +180,10 @@ sequence/CAS races, SQL/commit rollback, held-read wake/timeout/cancellation, an
 restart continuity. Public snapshot state uses the TypeScript adapter's shared
 JSONB string envelope, including scalar strings and legacy object reads. Raw tokens remain only in test process memory and private
 pipes. Sanitized evidence is written to `.ab/proa-protocol-store/checkpoint-proof.json`.
-This report explicitly states `fullBuildStoreContract: false`: the unchanged
-full shared suite, historical-client fixtures and dispatch proof are still required.
+This family report states `includesFullBuildStoreContract: false` and points to
+the separate `.ab/proa-protocol-contract/report.json`, which records the complete
+unchanged suite and factory counts. Historical-client and dispatch proofs remain
+separate requirements.
 
 Artifact preparation oracles are checked with
 `bun tools/protocol-artifact-preparation-fixtures.ts` (`--generate` refreshes);
@@ -204,3 +208,40 @@ expanded database numbers. `bun tools/protocol-json-number-fixtures.ts` and
 number oracles (`--generate` refreshes each). The aggregate includes 204 raw HTTP
 comparisons with exact response-number tokens and SQL JSON text; comparing only
 `response.json()` would hide unsafe-integer differences.
+
+Ticket assets use the core path/label/layout limits and PostgreSQL's identical
+advisory lock for each repository/ticket/kind/name. Writes can precede a journal;
+revision tombstones preserve historical bytes and build pins. Snapshot pins
+verify gzip manifest identity, paths, digests and file sizes, including chunked
+content and concatenated gzip members. The optional hosted-ticket extension is
+discovered without assuming its tables exist. Deployment request/response caps
+are test-constructor input (`PROA_TEST_ASSET_MAX_BYTES` only in the private
+example), with advertised effective limits and mutation-free response preflight.
+`bun tools/protocol-asset-fixtures.ts` checks the core structural/snapshot oracle.
+
+Streams persist parts as the TypeScript JSONB string envelope, validate the
+serialized UTF-8 batch ceiling and defer protocol semantics until close. Scope
+rows serialize creation/pruning; stream rows serialize chunks and close. Close
+uploads before its transaction, then verifies the locked chunk prefix and
+reassembles if an acknowledged append raced preparation. Metadata and closed
+state publish atomically. Held reads use monotonic deadlines, release their pool
+slot between one-second database polls, and terminate when the HTTP future is
+cancelled. `bun tools/protocol-stream-document-fixtures.ts` checks the pinned SDK
+classifier, assembler and exact artifact byte oracles, including lossless UTF-16
+partial tool JSON. The inspection Value projection cannot encode lone surrogate
+units, so typed raw fragments retain the authoritative encoded artifact document.
+
+`bun tools/protocol-reducer-fixtures.ts` checks catalog/scope/arguments and native
+value replay. Named values use one read-only repeatable-read prefix and replay
+from authoritative events; poisoned public/private checkpoints cannot change an
+answer. The digest endpoint also works for a repository with builds but no
+journal and advertises catalog identity.
+
+`bun tools/protocol-contract.ts` compiles the native example once and runs the
+**unchanged** core `describeBuildStoreContract` through RemoteBuildStore. Each
+factory receives its clock/retention constructor options and independent
+PostgreSQL database/blob prefix. The explicitly invoked test process sets
+`PROA_RUN_FULL_CONTRACT=1`; ordinary unit imports perform no database work.
+The runner fails on any failed/skipped test, missing summary or leaked factory,
+and writes logs/counts to `.ab/proa-protocol-contract/`. No methods are replaced
+by direct SQL/backing-store calls and no test family is filtered.

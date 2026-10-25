@@ -471,3 +471,42 @@ request and database read paths. The production read-only reader uses that same
 wrapper without changing its transactions. Regression proof covers 83 parser
 oracles, 218 raw Zod cases and 204 native HTTP comparisons including stored JSON,
 private-marker objects, decimal rounding, overflow and underflow.
+
+## Ticket pins, stream close and native values
+
+Ticket assets use the existing shared table and advisory lock key, so native and
+TypeScript writers share revisions even before a repository journal exists.
+Tombstones retain older manifests and blobs; build pins resolve their recorded
+revision after replacement or removal. Snapshot pins add a separate integrity
+boundary: gzip manifests (including concatenated members), chunk digests, file
+sizes and ticket identity must validate before a read exposes bytes. Hosted
+readable IDs are an optional projection over canonical storage keys; absence of
+the independently migrated ticket extension must not break build record reads.
+Deployment request/response ceilings need a manifest response preflight before
+publication, otherwise a refused response can hide a committed asset revision.
+
+Streams keep the TypeScript JSONB string envelope for chunk parts, including
+property order inside custom data. A row lock owns each chunk sequence. Close
+reads and uploads without holding a transaction, then locks and rechecks the
+chunk prefix before publishing its artifact and lifecycle together. A real
+TypeScript append held inside a database trigger proved the race: close prepared
+older bytes, waited behind the append, then reassembled after that append was
+acknowledged. Failed uploads and deferred commit failures leave neither a closed
+record nor consumed revisions/sequences. Creation prunes only older closed chunk
+logs, retaining the newest closed stream and every open stream.
+
+The AI SDK is also a state machine, not just a list of allowed part names.
+Malformed defined parts are dropped; runtime processing errors stop the current
+message segment while later start segments can still progress. Partial tool JSON
+can legally materialize lone UTF-16 units from ASCII escape text. A Rust String
+cannot represent those values. Typed raw fragments therefore carry the exact
+encoded document alongside its inspection projection; no magic placeholder key
+can collide with user data. Blob bytes preserve the SDK's escaped strings and
+keys without lossy replacement.
+
+Named values replay one authoritative event prefix in a read-only repeatable-read
+transaction. They do not trust client-written public snapshots or private caches.
+The unchanged shared suite is invoked through the real remote client, with a new
+migrated database and blob prefix per factory, injected clock/retention, bounded
+child cleanup and asserted test/factory counts. A green route smoke test cannot
+replace this evidence.

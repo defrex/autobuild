@@ -174,7 +174,8 @@ fail that request; subsequent polls retry with a replacement connection.
 The remote BuildStore implementation is in staged development under
 `src/protocol/`. Its native checkpoint server currently proves identity,
 project credentials, all event catalogs, records, leases, snapshots, operator
-presence, artifact deposits and fenced repository ticks independently of the
+presence, artifact deposits, ticket assets/pins, stream lifecycles, reducer
+values and fenced repository ticks independently of the
 browser router. It is not yet a complete hosted-store replacement. See
 [the native protocol tools](tools/README.md#native-machine-protocol-checkpoints)
 for fixture generation, isolated proofs, evidence and remaining coverage.

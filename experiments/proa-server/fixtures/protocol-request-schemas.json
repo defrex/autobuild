@@ -1167,5 +1167,73 @@
         "strict": false
       }
     ]
+  },
+  "createStream": {
+    "type": "object",
+    "shape": { "label": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] } },
+    "strict": false
+  },
+  "appendStream": {
+    "type": "object",
+    "shape": {
+      "parts": {
+        "type": "array",
+        "checks": [{ "check": "min_length", "minimum": 1 }],
+        "element": {
+          "type": "object",
+          "shape": {
+            "type": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+          },
+          "strict": false,
+          "catchall": { "type": "unknown" }
+        }
+      }
+    },
+    "strict": false
+  },
+  "closeStream": {
+    "type": "object",
+    "shape": { "outcome": { "type": "enum", "values": ["completed", "aborted"] } },
+    "strict": false
+  },
+  "putTicketAsset": {
+    "type": "object",
+    "shape": {
+      "kind": { "type": "string" },
+      "name": { "type": "string" },
+      "layout": { "type": "enum", "values": ["file", "tree"] },
+      "entries": {
+        "type": "array",
+        "element": {
+          "type": "union",
+          "discriminator": "type",
+          "options": [
+            {
+              "type": "object",
+              "shape": {
+                "type": { "type": "literal", "values": ["file"] },
+                "path": { "type": "string" },
+                "contentBase64": { "type": "string" }
+              },
+              "strict": false
+            },
+            {
+              "type": "object",
+              "shape": {
+                "type": { "type": "literal", "values": ["dir"] },
+                "path": { "type": "string" }
+              },
+              "strict": false
+            }
+          ]
+        }
+      }
+    },
+    "strict": false
+  },
+  "removeTicketAsset": {
+    "type": "object",
+    "shape": { "kind": { "type": "string" }, "name": { "type": "string" } },
+    "strict": false
   }
 }
