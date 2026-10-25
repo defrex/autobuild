@@ -1,3 +1,4 @@
+import { seedConsentCapture } from './mcp-capture-seed'
 import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -8,6 +9,7 @@ import { build, project, root } from './verify'
 import { runExtendedBrowserProof } from './browser-extended-proof'
 import {
   checkRoutes,
+  checkOAuthRoutes,
   checkCaptureCapabilities,
   checkFrameMatrix,
   frames,
@@ -36,6 +38,10 @@ async function captureSeeded(
   checkRoutes(
     await Bun.file(join(project, 'src/routes.rs')).text(),
     await Bun.file(join(project, 'src/protocol/router.rs')).text(),
+  )
+  checkOAuthRoutes(
+    await Bun.file(join(project, 'src/oauth/http.rs')).text(),
+    await Bun.file(join(project, 'src/routes.rs')).text(),
   )
   const sources = await Array.fromAsync(
     new Bun.Glob('src/{pages,endpoints}/**/*.rs').scan({ cwd: project }),
@@ -179,6 +185,7 @@ async function captureSeeded(
     if (!ready) throw Error('Server readiness timeout')
     for (const path of ['/health', '/readyz', '/sign-in', '/static/styles.css'])
       if (!(await fetch(origin + path)).ok) throw Error(`Response smoke failed: ${path}`)
+    seed.consent = await seedConsentCapture(origin, capability, seedEnv.PROA_POSTGRES_WRITE_URL!)
     const captured = await captureFrames(origin, output, {
       capability,
       refusalOrigin,
@@ -462,11 +469,13 @@ export async function captureFrames(
         frame.state === 'detail' || frame.state.startsWith('control-')
           ? `/dashboard/builds/${detail?.slug ?? 'detail-case'}`
           : frame.route
-      const query = frame.state.startsWith('connect-')
-        ? `?${new URLSearchParams({ code: auth?.seed?.connect?.[frame.state.slice(8)] ?? '' })}`
-        : projectId && !['sign-in', 'refused'].includes(frame.state)
-          ? `?${new URLSearchParams({ project: frame.state.startsWith('control-') ? detail!.project : projectId })}`
-          : ''
+      const query = frame.state.startsWith('consent-')
+        ? `?${new URLSearchParams({ consent_code: auth?.seed?.consent?.[frame.state.slice(8)] ?? '' })}`
+        : frame.state.startsWith('connect-')
+          ? `?${new URLSearchParams({ code: auth?.seed?.connect?.[frame.state.slice(8)] ?? '' })}`
+          : projectId && !['sign-in', 'refused'].includes(frame.state)
+            ? `?${new URLSearchParams({ project: frame.state.startsWith('control-') ? detail!.project : projectId })}`
+            : ''
       await send('Page.navigate', {
         url: frameOrigin + route + query,
       })
@@ -611,12 +620,14 @@ export async function captureFrames(
       await Bun.write(png, bytes)
       inventory.push({
         ...frame,
-        route: route + query,
+        route: frame.state.startsWith('consent-')
+          ? `${route}?consent_code=[REDACTED]`
+          : route + query,
         scenario,
         project: projectId,
         build:
           frame.state === 'detail' || frame.state.startsWith('control-') ? detail?.slug : undefined,
-        seed: auth?.seed,
+        seed: captureSeedForEvidence(auth?.seed),
         png,
         probe: result,
         fonts: [...fonts],
@@ -700,6 +711,73 @@ export async function captureFrames(
           sameSite: 'Lax',
         })
       }
+      const consentProof = []
+      for (const decision of ['accept', 'deny']) {
+        const consentCode = auth.seed?.consent?.[`browser-${decision}`]
+        if (!consentCode) throw Error('Missing native consent proof seed')
+        await send('Page.navigate', {
+          url: `${origin}/oauth/consent?${new URLSearchParams({ consent_code: consentCode })}`,
+        })
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (await evaluate(`Boolean(document.querySelector('[data-consent-form]'))`)) break
+          await Bun.sleep(30)
+        }
+        await evaluate(`document.querySelector('button[value="${decision}"]').click()`)
+        let callback: URL | undefined
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const current = new URL(String(await evaluate('location.href')))
+          if (
+            current.pathname === '/sign-in' &&
+            (current.searchParams.has('code') || current.searchParams.has('error'))
+          ) {
+            callback = current
+            break
+          }
+          await Bun.sleep(30)
+        }
+        if (callback?.searchParams.get('state') !== 'proa-consent-browser')
+          throw Error('Native consent form did not reach the bound callback')
+        if (decision === 'accept') {
+          const response = await fetch(`${origin}/api/auth/mcp/token`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              grant_type: 'authorization_code',
+              client_id: auth.seed!.consent![`client-browser-${decision}`]!,
+              redirect_uri: `${origin}/sign-in`,
+              code: callback.searchParams.get('code')!,
+              code_verifier: 'v'.repeat(43),
+              resource: `${origin}/mcp`,
+            }),
+          })
+          if (response.status !== 200)
+            throw Error('Native consent authorization code was not redeemable')
+          const tokens = await response.json()
+          if (
+            (
+              await fetch(`${origin}/mcp`, {
+                method: 'DELETE',
+                headers: { authorization: `Bearer ${tokens.access_token}` },
+              })
+            ).status !== 200
+          )
+            throw Error('Native form did not authorize MCP')
+        } else if (
+          callback.searchParams.has('code') ||
+          callback.searchParams.get('error') !== 'access_denied'
+        )
+          throw Error('Native denial issued a code')
+        consentProof.push({
+          decision,
+          callbackBound: true,
+          codeIssued: decision === 'accept',
+          mcpAuthorized: decision === 'accept',
+        })
+      }
+      await Bun.write(
+        join(output, 'browser-consent-proof.json'),
+        JSON.stringify(consentProof, null, 2),
+      )
       const machineReply = await fetch(`${origin}/builds/${detail.slug}`, {
         headers: { accept: 'text/html' },
         redirect: 'manual',
@@ -1094,7 +1172,7 @@ export async function captureFrames(
     await Bun.write(join(output, 'inventory.json'), JSON.stringify(inventory, null, 2))
     await Bun.write(
       join(output, 'verify-report.md'),
-      `# Proa visual verification\n\nDeterministic probes passed for ${inventory.length} frames. Database: isolated loopback Postgres/S3, seeded before server startup through both scenario producers. ${auth?.seed ? JSON.stringify(auth.seed) : 'Fixture capture'}\n\nAuth: server-issued loopback development sessions; real refused issuance, public sign-in, protected Builds and account menu.\n\nAgent must open every PNG and append observations on palette, two faces, overflow, route content, shell/menu composition and reference fidelity.\n\nVisual verdict: PENDING\n`,
+      `# Proa visual verification\n\nDeterministic probes passed for ${inventory.length} frames. Database: isolated loopback Postgres/S3, seeded before server startup through both scenario producers. ${auth?.seed ? JSON.stringify(captureSeedForEvidence(auth.seed)) : 'Fixture capture'}\n\nAuth: server-issued loopback development sessions; real refused issuance, public sign-in, protected Builds and account menu.\n\nAgent must open every PNG and append observations on palette, two faces, overflow, route content, shell/menu composition and reference fidelity.\n\nVisual verdict: PENDING\n`,
     )
     return output
   } finally {
@@ -1104,6 +1182,16 @@ export async function captureFrames(
     process.removeListener('SIGINT', cleanup)
     await rm(profile, { recursive: true, force: true })
   }
+}
+export function captureSeedForEvidence(seed?: SeedEvidence) {
+  return (
+    seed && {
+      ...seed,
+      consent:
+        seed.consent &&
+        Object.fromEntries(Object.keys(seed.consent).map((key) => [key, '[REDACTED]'])),
+    }
+  )
 }
 export function decodePng(data?: string) {
   const bytes = Buffer.from(data || '', 'base64')

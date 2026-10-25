@@ -943,3 +943,53 @@ so its existing reconnect/preflight boundary survives across requests. This does
 not cache credentials, policy or grants: those still read current database state.
 The writer lifetime regression test checks shared ownership across successive
 requests; the normal HTTP and CLI proofs exercise the retained connection.
+
+## 2026-10-25 — MCP and native OAuth
+
+The Rust connector now has its own discovery, dynamic registration, PKCE,
+operator consent, token/refresh and public JWKS boundaries. The OAuth migration
+owns a separate schema and never advances the product migration identity.
+A single locked state row makes code consumption and refresh rotation atomic
+across processes. This reduces implementation surface at the cost of serialized
+OAuth writes; it needs workload measurement before any production adoption.
+Signing keys are encrypted with the stable session secret, while opaque grants
+are indexed by digests. MCP rechecks resource, expiry, active grant and the email
+allowlist on every request, then invokes the existing native operator HTTP router
+with a short-lived attributed token. No Bun process serves production requests.
+
+The executable oracle exposed an SDK asymmetry: union tool descriptions can carry
+an empty object input schema even though execution validates the original union.
+The corpus captures both. It also pins null-ID parse failures and tool-content
+schema errors rather than guessing from JSON-RPC alone. Time correspondence in
+native note/control replay is tied to unchanged TypeScript store readback; actor,
+sequence, schemas and refusal text remain comparison data.
+
+A real Claude Code 2.1.310 session, with only Proa MCP tools, used the installed
+operator skill to discover repositories, list builds, read a blocked build,
+answer its escalation, create a ticket and read back its writes. The driver
+independently parsed/reduced Rust-written events and checked the consenting
+operator's exact MCP attribution. A successful final session took under a minute
+on this host. Earlier proof runs exposed missing test-seed effective config and
+an outdated ticket readback column; those are harness corrections, not client
+success evidence. Only the passing sanitized report/transcript was deposited.
+
+## Proa node synthesis
+
+The earlier entries record the node's measurements: a 24GB cold linked target
+cache, roughly 20–26 seconds per warm linked stage in one run, and local browser
+poll/live-update probes of 76/29ms in a focused run. These are local observations,
+not deployment latency or throughput promises. Native Rust, TypeScript fixture
+replay, database protocol tests and browser/pixel captures test distinct seams;
+one cannot substitute for another. This increment adds real SDK and model-client
+evidence to the existing store, ticket, connection and control evidence.
+
+Proa's synchronous rendering fits the ANSI shell and ordinary forms without
+client islands. Axum makes the browser, machine protocol and OAuth boundaries
+explicit. The cost is compatibility maintenance: JavaScript number/string
+semantics, schema errors, reducer versions and framework linked builds all need
+executable oracles. OAuth introduces another persistent schema and credential
+lifecycle to maintain. The experiment remains a candidate, not a shipped server;
+its serialized OAuth store, in-memory browser-session lifetime, cold linked-build
+cost and operational key rotation need consideration before adoption. My judgment
+is that rendering and native protocol reuse fit; the accumulated parity machinery
+and operational burden are material costs, not evidence that migration is free.

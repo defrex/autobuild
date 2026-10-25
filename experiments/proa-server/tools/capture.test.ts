@@ -28,7 +28,7 @@ test('route inventory rejects new and unsupported route declarations', async () 
     'Route::page("/new",other)',
   ])
     expect(() => checkRoutes(`${source}\n${declaration}`, machine)).toThrow('Unclassified')
-  expect(new Set(frames.map((f) => f.id)).size).toBe(68)
+  expect(new Set(frames.map((f) => f.id)).size).toBe(96)
   for (const width of [1440, 390])
     for (const theme of ['light', 'dark'])
       for (const state of ['open', 'closed'])
@@ -232,4 +232,27 @@ test('only exact documented connection error frames accept HTTP errors', () => {
       codes,
     ),
   ).toBe(false)
+})
+
+test('consent evidence never exports resumable grant handles', async () => {
+  const { captureSeedForEvidence } = await import('./capture')
+  const seed = {
+    consent: { named: 'opaque-grant', used: 'consumed-grant' },
+  } as unknown as import('./capture-seed').SeedEvidence
+  const publicSeed = captureSeedForEvidence(seed)
+  expect(publicSeed?.consent).toEqual({ named: '[REDACTED]', used: '[REDACTED]' })
+  expect(seed.consent?.named).toBe('opaque-grant')
+})
+
+test('every public OAuth and MCP endpoint is classified separately from consent HTML', async () => {
+  const { checkOAuthRoutes } = await import('./capture-cases')
+  const source = await Bun.file(join(project, 'src/oauth/http.rs')).text()
+  const router = await Bun.file(join(project, 'src/routes.rs')).text()
+  expect(() => checkOAuthRoutes(source, router)).not.toThrow()
+  expect(() =>
+    checkOAuthRoutes(source.replace('"/api/auth/jwks"', '"/api/auth/new"'), router),
+  ).toThrow('Unclassified')
+  expect(() =>
+    checkOAuthRoutes(source, router.replace('request.uri().path() == "/mcp"', 'false')),
+  ).toThrow('Unclassified')
 })
