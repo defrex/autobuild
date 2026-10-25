@@ -103,7 +103,8 @@ try {
         AB_SESSION: 's_e2e',
         AB_TOKEN: '',
       },
-      process.env,
+      // The enclosing build's context directory must not override this plan session.
+      { ...process.env, AB_CONTEXT_DIR: undefined },
     )
     expect(env.PATH!.split(delimiter)[0]).toBe(AGENT_BIN_DIR)
 
@@ -142,6 +143,7 @@ try {
       build: slug,
       phase: 'plan',
       round: 1,
+      contextDir: '.ab/plan',
     })
 
     const got = await ab(['artifact', 'get', 'spec'])
