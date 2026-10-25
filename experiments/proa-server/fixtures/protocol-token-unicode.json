@@ -1,0 +1,2242 @@
+{
+  "verify": [
+    {
+      "name": "build-runner/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.m8I5arnxDyCsdfhGV7Favm2UL_wDaUUZx2FESDH89D0",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 56, 48,
+        48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58,
+        34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiXHVkODAwIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.hJEjF5KdTYnkAtprNxs0EyzNHXMatSaTplIFVxXo3Jc",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 97, 110, 99,
+        104, 111, 114, 34, 58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34,
+        58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiXHVkODAwIn19.KicJV0ZZyl2afOeTDQr6SPCratnZz91_qXUL_T1AK_k",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117,
+        100, 56, 48, 48, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.DQFzDwtfAs5AbT8JcvsPwTZ_VVr_53byxGXO2RbYBZM",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 56, 48,
+        48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34,
+        104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJcdWQ4MDAiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.2CCVCZ3vf-m4QOPydQg_Rx3uTxLSiZQwSIuoXfacWlo",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115,
+        115, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58,
+        34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/session/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Ilx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.6lGgO-M9PreoRHgPh_8J0bs5ROX_SeHQw-FFxI2WoUA",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44,
+        34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100,
+        101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Ilx1ZDgwMCJ9fQ.7MyFUp38wwTLd0iplb70HxTAdYeAE0SM-26rQzWk_-s",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117,
+        100, 56, 48, 48, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.KbNLRRuYzpz6VpblOevloG8PW_rDR9vPMLIF8a1BtHo",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 56, 48,
+        48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114,
+        117, 110, 110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110,
+        99, 104, 111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58,
+        34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111,
+        108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJcdWQ4MDAiLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.050QH02EUO5zrsJbKyKNDTXGoY13w_bt_n5eelcnXfs",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 97,
+        110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34,
+        58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72,
+        111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/execution/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiXHVkODAwIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.6G0tIAYd-WZGibIxoB7u0nK5KCbVtfb0sDz3fYPv1kw",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92,
+        117, 100, 56, 48, 48, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34,
+        58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJcdWQ4MDAifX0.pOIB2gLcCt2XLpVPmPmSwSdJ29JHJpuMHrRozUwlwmY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.E4p9JjFpY86dRJsckYaj012jxC_pFAEljdFofrosEJg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 56, 48,
+        48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112,
+        104, 97, 115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115,
+        115, 105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Ilx1ZDgwMCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.-5c-iyN6E42_RRkJ9Jn507nxZj6LLMfS8EgUZoqrUgQ",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 97, 110,
+        99, 104, 111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115,
+        101, 115, 115, 105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34,
+        58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72,
+        111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/session/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiXHVkODAwIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.bg8DtDEzYGh2SW1R3DGhJ_4K-opGW6JjBedAp615upA",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 56,
+        48, 48, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101,
+        99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101,
+        114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/execution/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Ilx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.qBPLMh6D1gq0jiuPMbxX2dHPEzB4WVF9ZZoZBNwF4Qw",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92, 117,
+        100, 56, 48, 48, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58,
+        34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiXHVkODAwIn19.hgX7ZcfwuSvNT0_-pchc7Tm9IumLQgYGtXm_VK5J7pk",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120,
+        101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100,
+        101, 114, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 125, 125
+      ]
+    },
+    {
+      "name": "admin/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHRcdWQ4MDDCoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.LMs61CD30GGXud7hOPnOYcKzRZ6eiWJJxVpWrqItaUY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 111, 119, 110, 101, 114, 65,
+        100, 109, 105, 110, 34, 58, 123, 34, 117, 115, 101, 114, 34, 58, 34, 92, 117, 100, 56, 48,
+        48, 34, 125, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48,
+        48, 125
+      ]
+    },
+    {
+      "name": "internal/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIgXHVkODAwICIsInJlcG8iOiJcdWQ4MDAifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Ilx1ZDgwMCJ9fQ.sgltgMjaih_l3y9wGqwE4gv2l8BlOrpL-e3uKOEsicU",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100,
+        56, 48, 48, 34, 125, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48,
+        48, 48, 48, 44, 34, 118, 105, 97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 115, 101,
+        115, 115, 105, 111, 110, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34,
+        125, 125
+      ]
+    },
+    {
+      "name": "internal-mcp/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiJcdWQ4MDAiLCJyZXBvIjoiXHVkODAwIn0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiJcdWQ4MDAifX0.Dk1_g6b280m3YP5eW3ob0TWRS2KBgRt7W_Js7iMggl0",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100,
+        56, 48, 48, 34, 125, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48,
+        48, 48, 48, 44, 34, 118, 105, 97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 109, 99,
+        112, 34, 44, 34, 99, 108, 105, 101, 110, 116, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 125,
+        125
+      ]
+    },
+    {
+      "name": "retired/high",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJidWlsZCI6Ilx1ZDgwMCIsInNlc3Npb24iOiJcdWQ4MDAiLCJleHAiOjE4OTM0NTYxMDAwMDB9.romp8I44KAuQ-S4vyVnTV3lLcRZeHHL3vf9Uvw4fgUs",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 98, 117, 105, 108, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 115, 101,
+        115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 101, 120, 112,
+        34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 125
+      ]
+    },
+    {
+      "name": "build-runner/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.opSkI96VpIN_s0G_cNUuvEGlRVh7-Hkib6-fX6-UQjA",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58,
+        34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiXHVkZmZmIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.0dmN7g2wKJWHLIMymtci7TJA960XynxAnyb6CooqduU",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 97, 110, 99,
+        104, 111, 114, 34, 58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34,
+        58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiXHVkZmZmIn19.b_DNZcbAJqQtRY5OImJZX5U-S3Z9uPTdQN3TVE_WLhg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.TT7ceOPHwKQ9mtor5XvsMwHwqUkDFKvJJhJvGNuWRlg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34,
+        104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJcdWRmZmYiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.Mm_WgSQzxfKSCvPYMKKfa5XHGkZiZRtmboU8qNKSEKY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115,
+        115, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58,
+        34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/session/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Ilx1ZGZmZiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.4KtjQh7m316ZL1LOQwkThkBcCbzZr6uJ8_iHG_Tqeu0",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34,
+        44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100,
+        101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Ilx1ZGZmZiJ9fQ.oKVhS3wGa4UAS7i4X9oZGWDLBZtHiDvUIm3tOcpGTA4",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.19ZiHXIMG-ph8ULnrbcQmDLRj5mEf5cJVTIkUeHpE5o",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114,
+        117, 110, 110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110,
+        99, 104, 111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58,
+        34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111,
+        108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJcdWRmZmYiLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.SBRHQIAWe_7PzDTEnKO9cOfwYANdoexA2QBE_p3wEDY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34,
+        97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110,
+        34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101,
+        72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/execution/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiXHVkZmZmIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.Ck-FK4SsLSrXlEfm-hcyHm-dfC5H3DX6W8Q8D-2lNsg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92,
+        117, 100, 102, 102, 102, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114,
+        34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJcdWRmZmYifX0.CSohOht7PhEuTpmqHzpGf7aA13Jc5QkD4fCy-swG5Zg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.76Iv5dtSjJ2zxvuiRKUPnZItIOOcGaz7OFBJ1SwZTbY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112,
+        104, 97, 115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115,
+        115, 105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Ilx1ZGZmZiIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.omDrEvGjsyEyKPJiYzGaItDcmhvwicHSoyXe-O_DaYU",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 97,
+        110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34,
+        115, 101, 115, 115, 105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110,
+        34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101,
+        72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/session/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiXHVkZmZmIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.F4uEYP1lSCIPUEOaRQCf5pMSjxZNm6NImTcLWxBluP8",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 102,
+        102, 102, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101,
+        99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101,
+        114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/execution/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Ilx1ZGZmZiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.Y-4xCt1j9R_6RqmTnYIe45mc-Nms0_r2dOAXgAd_LXc",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58,
+        34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiXHVkZmZmIn19.VFYR22rpQ4ln6X-2M0TRHs8RELKU8M4lyMSnTfc376o",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120,
+        101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100,
+        101, 114, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 125, 125
+      ]
+    },
+    {
+      "name": "admin/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHRcdWRmZmbCoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.Ji6_oOM5xV3VMpAa4fcj3nJdX0SAD6NaTvR4HeNJyyI",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 111, 119, 110, 101, 114, 65,
+        100, 109, 105, 110, 34, 58, 123, 34, 117, 115, 101, 114, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 125, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48,
+        48, 125
+      ]
+    },
+    {
+      "name": "internal/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIgXHVkZmZmICIsInJlcG8iOiJcdWRmZmYifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Ilx1ZGZmZiJ9fQ.zFzFu1UQddiRvY-2XiBWQ-0kuabUTsaceqk5snfvYJ4",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 34, 125, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49,
+        48, 48, 48, 48, 48, 44, 34, 118, 105, 97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34,
+        115, 101, 115, 115, 105, 111, 110, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 125, 125
+      ]
+    },
+    {
+      "name": "internal-mcp/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiJcdWRmZmYiLCJyZXBvIjoiXHVkZmZmIn0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiJcdWRmZmYifX0.SOvO4t5wjGAEgtIxYKdF5MymO8K64KxJ7RLsqHYMBsg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 34, 125, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49,
+        48, 48, 48, 48, 48, 44, 34, 118, 105, 97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34,
+        109, 99, 112, 34, 44, 34, 99, 108, 105, 101, 110, 116, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 125, 125
+      ]
+    },
+    {
+      "name": "retired/low",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJidWlsZCI6Ilx1ZGZmZiIsInNlc3Npb24iOiJcdWRmZmYiLCJleHAiOjE4OTM0NTYxMDAwMDB9.GrUhS-oAv9cBlHs4C6ZF0RtAOzRQnEgFWqARhleiia0",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 98, 117, 105, 108, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 115,
+        101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 101, 120,
+        112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 125
+      ]
+    },
+    {
+      "name": "build-runner/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.9Da_vLEmv2z1WzIGWviboxNC38lI31r1MhKA7FDJM2I",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105,
+        108, 100, 45, 114, 117, 110, 110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34,
+        44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111,
+        108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiXHVkZmZmXHVkODAwIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.sBs42ssbUaKxKEeqfhfbJiOtukuIGGVZTYVL4L5Hy8M",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48,
+        48, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 108, 101, 97, 115, 101, 72,
+        111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiXHVkZmZmXHVkODAwIn19.Ebrpf-moWI23c5mCvC6M4fir7o76TU6UWaepgwKnPuQ",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.Xhzi_bqEqRVumx15Dd0mHHa3Q7gSoua9cQnvEO3_L7Q",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105,
+        108, 100, 45, 112, 104, 97, 115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44,
+        34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34,
+        58, 34, 115, 101, 115, 115, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJcdWRmZmZcdWQ4MDAiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.ULj9WyuG1umbCZgkOrnmBeGkegA5_ndcJWWZcKsdbHo",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34,
+        44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110,
+        34, 58, 34, 115, 101, 115, 115, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111,
+        108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/session/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Ilx1ZGZmZlx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.efyhJsWhfakfQbPLcSQS4GB6aysz989kdREnt38WKtg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92,
+        117, 100, 56, 48, 48, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34,
+        58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Ilx1ZGZmZlx1ZDgwMCJ9fQ.F79lr8rHh4Q27H5OMp6UUHeg33oFNRKw31xxa4M2dWU",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.6th8tcTxuTBrpDY-RvwcyT2ISBKxaLzIiK9XmG_JKpg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114,
+        118, 101, 115, 116, 45, 114, 117, 110, 110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105,
+        100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117,
+        116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108,
+        101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114,
+        34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJcdWRmZmZcdWQ4MDAiLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.aP1vgJaRldalj_jt2nCfZju8wiPZSfK9V6QzhxVO4lo",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100,
+        56, 48, 48, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99,
+        117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34,
+        108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101,
+        114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/execution/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiXHVkZmZmXHVkODAwIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.qARZD50jdy6h-owsoGGWoxj284kt2RHQ3mTwiCRd0GI",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92,
+        117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 108, 101, 97, 115, 101, 72,
+        111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJcdWRmZmZcdWQ4MDAifX0.mMUDRKsyMKo2ekVGwItkKnL7UfE2eTa4K4dj-A3T5xY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125,
+        125
+      ]
+    },
+    {
+      "name": "harvest-phase/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.a7oY36zK1VPGo6cDqvsE44vfOJ8K70PCtmpSnTNXZSg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114,
+        118, 101, 115, 116, 45, 112, 104, 97, 115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100,
+        34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116,
+        105, 111, 110, 34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101,
+        97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34,
+        125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Ilx1ZGZmZlx1ZDgwMCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.SkASqV-7vebcQMtcScfFq1c_0n6P8VnQ4it2lcPCl-E",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56,
+        48, 48, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105,
+        111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117,
+        116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108,
+        101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114,
+        34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/session/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiXHVkZmZmXHVkODAwIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.qZN7qZufr03PgWTTlVWx4F4EdLZMq9ndBITV7S-fUNs",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 102,
+        102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110,
+        34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101,
+        72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/execution/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Ilx1ZGZmZlx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.7V9Y-U1Jc5PFn9kcyTib-sWkH-IOIM6Ltz-Ucf1ZXXs",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92, 117,
+        100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111,
+        108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiXHVkZmZmXHVkODAwIn19.M5XZEt8OyYjRpYQTb-1fE47yTljmMQNRAYQMI9X0O2o",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120,
+        101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100,
+        101, 114, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125, 125
+      ]
+    },
+    {
+      "name": "admin/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHRcdWRmZmZcdWQ4MDDCoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.LkZlh84vtIxMid1182-56zv_FGYA-voisTtdtCJRrhA",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 111, 119, 110, 101, 114, 65,
+        100, 109, 105, 110, 34, 58, 123, 34, 117, 115, 101, 114, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 92, 117, 100, 56, 48, 48, 34, 125, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52,
+        53, 54, 49, 48, 48, 48, 48, 48, 125
+      ]
+    },
+    {
+      "name": "internal/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIgXHVkZmZmXHVkODAwICIsInJlcG8iOiJcdWRmZmZcdWQ4MDAifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Ilx1ZGZmZlx1ZDgwMCJ9fQ.9xuQhSZpjZGAH_bK3e9A7UhRr80DRJaEXhLvz7VCRCU",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 114, 101, 112,
+        111, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125, 44, 34,
+        101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 44, 34, 118, 105,
+        97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110, 34,
+        44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34,
+        125, 125
+      ]
+    },
+    {
+      "name": "internal-mcp/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiJcdWRmZmZcdWQ4MDAiLCJyZXBvIjoiXHVkZmZmXHVkODAwIn0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiJcdWRmZmZcdWQ4MDAifX0.Cnm0fNJc6ntGTKKS5xfhCq8pn9gl7lRbjeU-2Y0f2iA",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 114, 101, 112,
+        111, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125, 44, 34,
+        101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 44, 34, 118, 105,
+        97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 109, 99, 112, 34, 44, 34, 99, 108, 105,
+        101, 110, 116, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125,
+        125
+      ]
+    },
+    {
+      "name": "retired/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJidWlsZCI6Ilx1ZGZmZlx1ZDgwMCIsInNlc3Npb24iOiJcdWRmZmZcdWQ4MDAiLCJleHAiOjE4OTM0NTYxMDAwMDB9.dhk9gFd2ZX6Y_T1dmTCO3uSPO_oWa20nmkPgFp4vV5w",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 98, 117, 105, 108, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56,
+        48, 48, 34, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53,
+        54, 49, 48, 48, 48, 48, 48, 125
+      ]
+    },
+    {
+      "name": "build-runner/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.Njv-3JWYMGnlLK_6x_CqIWZ7J9Gf6opJB23MHldc2aE",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 44, 34, 107,
+        105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101, 114, 34, 44,
+        34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44,
+        34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100,
+        101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoi77-9IiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.XsOZ26W0i4y4qhvf26TUBu8g4L2ZbKr8LEiSKFC_28A",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 65533, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111,
+        108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoi77-9In19.Lpat60Y45J8n2z-soOyddrkRfdXiR7SNkyt9xWWdRYg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 65533, 34,
+        125, 125
+      ]
+    },
+    {
+      "name": "build-phase/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.pbQXx9h9IVvkXPXmg7YjAd4KYD7egYwWEAfwakruLhI",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 44, 34, 107,
+        105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101, 34, 44, 34,
+        105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49, 44, 34,
+        115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110, 34, 44,
+        34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100,
+        101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiLvv70iLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0._CDQqiprr_aBkMykrKObQQTWq2YgyDLiiw8uIyfRlxQ",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 65533, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49,
+        44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110,
+        34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108,
+        100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/session/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Iu-_vSIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.CDxBo8qsXplKMYZ5JpcbhtT_o9nGxvLYzMlgpbGWFFE",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 65533, 34, 44, 34, 108, 101, 97,
+        115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125,
+        125
+      ]
+    },
+    {
+      "name": "build-phase/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Iu-_vSJ9fQ.Y48iNvl9L1hY2JokvCcWzz8dJrVi4mZlKVwO_pF8qb0",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 65533, 34,
+        125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.40yY1AYejzCYB97OGICYzi6hs1wmFEUS1QYkMRKiDDY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 44, 34, 107,
+        105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99,
+        117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114,
+        34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiLvv70iLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.kfnpDUNcIWD87xGEhtOSdLR_5q_JfKT4EcPogHJchcg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 65533, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120,
+        101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100,
+        101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/execution/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoi77-9IiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.L7SOzoauy3iLk-QbxlJHpAWfbbWXfvaGWPUR9zI1V-I",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 65533,
+        34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108,
+        100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiLvv70ifX0.JVqg6xGMScTx44wyLwTIdmnOwbXUe7N1heOrgfGdUrY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 65533, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.m92zzDDWtBAIHuPN7wDZjqtul7YYbOMYV2DOY5iS7SQ",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 44, 34, 107,
+        105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97, 115, 101, 34,
+        44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49,
+        44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110,
+        34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99, 117,
+        116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58,
+        34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Iu-_vSIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.vBcVGzLZzg5HE-53em5i3H9_6JYVnf4sQl4f05NYsbY",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 65533, 34, 44, 34, 97, 110, 99, 104, 111, 114,
+        34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105,
+        111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101,
+        99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101,
+        114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/session/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoi77-9IiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.3xaoocNnx3p9dhwkcjvqclq3-exsaR3aqI_vmCXQkJE",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 65533, 34, 44, 34,
+        101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99, 117, 116, 105,
+        111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104,
+        111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/execution/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Iu-_vSIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.WsjF0Ey5HXIsewaKdkXKxG0oKcda_Ouz5C6u68TQeD4",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 65533,
+        34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108,
+        100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoi77-9In19.NtrLRxTCXRheEYyNFMQ0oYYJbrMTGW-8p5CZPa0IH4c",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120,
+        101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100,
+        101, 114, 34, 58, 34, 65533, 34, 125, 125
+      ]
+    },
+    {
+      "name": "admin/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHTvv73CoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.hAuqnaZEkPy9FCzK6oJfIKJLj6yV6HhC2Pfyqg7XXts",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 111, 119, 110, 101, 114, 65,
+        100, 109, 105, 110, 34, 58, 123, 34, 117, 115, 101, 114, 34, 58, 34, 65533, 34, 125, 44, 34,
+        101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 125
+      ]
+    },
+    {
+      "name": "internal/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIg77-9ICIsInJlcG8iOiLvv70ifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Iu-_vSJ9fQ.pCpsGWUxTUC4-_tfkPS0cAQAg8QN1krXBvpKnGKC9zI",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 65533, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 125, 44, 34, 101, 120,
+        112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 44, 34, 118, 105, 97, 34,
+        58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110, 34, 44, 34,
+        105, 100, 34, 58, 34, 65533, 34, 125, 125
+      ]
+    },
+    {
+      "name": "internal-mcp/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiLvv70iLCJyZXBvIjoi77-9In0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiLvv70ifX0.IHU466AdA1kas7W0q2o7moSmbE2CZvRoXZjEX2mbwsI",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 65533, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 125, 44, 34, 101, 120,
+        112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 44, 34, 118, 105, 97, 34,
+        58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 109, 99, 112, 34, 44, 34, 99, 108, 105, 101,
+        110, 116, 34, 58, 34, 65533, 34, 125, 125
+      ]
+    },
+    {
+      "name": "retired/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJidWlsZCI6Iu-_vSIsInNlc3Npb24iOiLvv70iLCJleHAiOjE4OTM0NTYxMDAwMDB9.pam4nkWdALq7W7jRkFERQ3Qg0OBvVR9zrTgRjBY5_vU",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 98, 117, 105, 108, 100, 34, 58, 34, 65533, 34, 44, 34, 115, 101, 115, 115, 105,
+        111, 110, 34, 58, 34, 65533, 34, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54,
+        49, 48, 48, 48, 48, 48, 125
+      ]
+    },
+    {
+      "name": "build-runner/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.tCc4eKbPnEV95fPHafAOo1uYxBKMlaaAUTLFlI08fh4",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 44,
+        34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111,
+        108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoi8J-SqSIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.7pArMzbJ2A0JXorZsMjrjOp7CFZxvbtZO6hR7DH5-GA",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 55357, 56489, 34, 44, 34, 97, 110, 99, 104, 111, 114,
+        34, 58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104,
+        111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-runner/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoi8J-SqSJ9fQ.4nZB-r4xOq_bVdWw3XrG4AJqbR1DNP8MzBPKhITwffc",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 114, 117, 110, 110, 101,
+        114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 55357,
+        56489, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.KVwoZpbsH5JU0KesKEz7iZpZlV_K-9rJrqAkbcJyUP4",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 44,
+        34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101, 34,
+        44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58, 49,
+        44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110,
+        34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108,
+        100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiLwn5KpIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.7ga3nR9rfzjaB2Jw05aZp4fyjiNHMa86JRZMuaZTuR4",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 55357, 56489, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111,
+        108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/session/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6IvCfkqkiLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.NG3ryqX-Q26Xoog9DTfguzqYV6s_D3IOJnyNWQC0dak",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 55357, 56489, 34, 44, 34, 108,
+        101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114,
+        34, 125, 125
+      ]
+    },
+    {
+      "name": "build-phase/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6IvCfkqkifX0.p-IPq1QYtfnL3xpgv2QfHLt6uknA2BA9try9BAApWEU",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 98, 117, 105, 108, 100, 45, 112, 104, 97, 115, 101,
+        34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34, 58,
+        49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 55357,
+        56489, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.KTBq69hppezGnvaYQkFKCx5Mge9LIJT0NoL7B0zsdDs",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 44,
+        34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiLwn5KpIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.idV0zV-9CiQv4QHHTyEAiDdNhltWJ5xbUoLpjQueVYc",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 55357, 56489, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/execution/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoi8J-SqSIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.1dO6L4vl-yxqLaJKzbbs5r_oMLsSej0Vp65jm18Oyro",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 55357,
+        56489, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104,
+        111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-runner/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiLwn5KpIn19.f27DPH70fvrKx9CfJiDEkS5tgheYFV_-aAWOFKCRNGc",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117, 110,
+        110, 101, 114, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104,
+        111, 114, 34, 58, 49, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101,
+        120, 101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108,
+        100, 101, 114, 34, 58, 34, 55357, 56489, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.eadC0qK7F-1P6CTtOAmMe6NqeMefA7mRK1dfrkeAhXE",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 44,
+        34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97, 115,
+        101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111, 114, 34,
+        58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99,
+        117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114,
+        34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6IvCfkqkiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.DVna8ro5NxreWSFeWP5nDL0fkkKUQoltEotKu2EqGrI",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 55357, 56489, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120,
+        101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100,
+        101, 114, 34, 58, 34, 104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/session/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoi8J-SqSIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.a2aMk9wukq-AOHFFcgp-qAhEMRBvBt2Q1-yDhBJF1xE",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 55357, 56489, 34,
+        44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120, 101, 99, 117, 116,
+        105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34,
+        104, 111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/execution/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6IvCfkqkiLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.CwCnDI9mFoAZKHDKuDr4Vd6A8RYQ4CyR3Z5DlMY7OQ0",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 55357,
+        56489, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 104,
+        111, 108, 100, 101, 114, 34, 125, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoi8J-SqSJ9fQ.3Ax1bU_2BZ1EPICmH3uq1SlzjSrxUyOT-ASlPxDlH_M",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 50, 44, 34, 100, 101, 108, 101, 103, 97,
+        116, 105, 111, 110, 34, 58, 123, 34, 114, 101, 112, 111, 34, 58, 34, 114, 101, 112, 111, 34,
+        44, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 105, 100, 34, 58, 34, 105, 100, 34, 44, 34, 97, 110, 99, 104, 111,
+        114, 34, 58, 49, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 101, 120,
+        101, 99, 117, 116, 105, 111, 110, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100,
+        101, 114, 34, 58, 34, 55357, 56489, 34, 125, 125
+      ]
+    },
+    {
+      "name": "admin/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHTwn5KpwqAifSwiZXhwIjoxODkzNDU2MTAwMDAwfQ.rwIFswRrkT05i4Rp2BeIneKhFGdL3SdHIUdFbphiU_g",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 111, 119, 110, 101, 114, 65,
+        100, 109, 105, 110, 34, 58, 123, 34, 117, 115, 101, 114, 34, 58, 34, 55357, 56489, 34, 125,
+        44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 125
+      ]
+    },
+    {
+      "name": "internal/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIg8J-SqSAiLCJyZXBvIjoi8J-SqSJ9LCJleHAiOjE4OTM0NTYxMDAwMDAsInZpYSI6eyJraW5kIjoic2Vzc2lvbiIsImlkIjoi8J-SqSJ9fQ.yVpv94T5H6aCsF9Ndrfkj41-hSm9lw069x7Gx0R1Vks",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 55357, 56489, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 125, 44,
+        34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 44, 34, 118,
+        105, 97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 115, 101, 115, 115, 105, 111, 110,
+        34, 44, 34, 105, 100, 34, 58, 34, 55357, 56489, 34, 125, 125
+      ]
+    },
+    {
+      "name": "internal-mcp/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiLwn5KpIiwicmVwbyI6IvCfkqkifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6Im1jcCIsImNsaWVudCI6IvCfkqkifX0.UZRebiuwMgzqH3bzPoPz5M6umy9ZzTeFudAUi3ISmYg",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 118, 101, 114, 115, 105, 111, 110, 34, 58, 49, 44, 34, 105, 110, 116, 101, 114,
+        110, 97, 108, 79, 112, 101, 114, 97, 116, 111, 114, 34, 58, 123, 34, 117, 115, 101, 114, 34,
+        58, 34, 55357, 56489, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 125, 44,
+        34, 101, 120, 112, 34, 58, 49, 56, 57, 51, 52, 53, 54, 49, 48, 48, 48, 48, 48, 44, 34, 118,
+        105, 97, 34, 58, 123, 34, 107, 105, 110, 100, 34, 58, 34, 109, 99, 112, 34, 44, 34, 99, 108,
+        105, 101, 110, 116, 34, 58, 34, 55357, 56489, 34, 125, 125
+      ]
+    },
+    {
+      "name": "retired/pair",
+      "secret": "fake-unicode-token-oracle",
+      "token": "eyJidWlsZCI6IvCfkqkiLCJzZXNzaW9uIjoi8J-SqSIsImV4cCI6MTg5MzQ1NjEwMDAwMH0.R6Dsrm8lSF3LLHYo_YF8oy1Ps1gfC8duC3kGW-WzfsQ",
+      "now": 1893456000000,
+      "expectedUnits": [
+        123, 34, 98, 117, 105, 108, 100, 34, 58, 34, 55357, 56489, 34, 44, 34, 115, 101, 115, 115,
+        105, 111, 110, 34, 58, 34, 55357, 56489, 34, 44, 34, 101, 120, 112, 34, 58, 49, 56, 57, 51,
+        52, 53, 54, 49, 48, 48, 48, 48, 48, 125
+      ]
+    }
+  ],
+  "mint": [
+    {
+      "name": "build-runner/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\ud800\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.m8I5arnxDyCsdfhGV7Favm2UL_wDaUUZx2FESDH89D0"
+    },
+    {
+      "name": "build-runner/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"\\ud800\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiXHVkODAwIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.hJEjF5KdTYnkAtprNxs0EyzNHXMatSaTplIFVxXo3Jc"
+    },
+    {
+      "name": "build-runner/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiXHVkODAwIn19.KicJV0ZZyl2afOeTDQr6SPCratnZz91_qXUL_T1AK_k"
+    },
+    {
+      "name": "build-phase/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\ud800\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.DQFzDwtfAs5AbT8JcvsPwTZ_VVr_53byxGXO2RbYBZM"
+    },
+    {
+      "name": "build-phase/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"\\ud800\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJcdWQ4MDAiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.2CCVCZ3vf-m4QOPydQg_Rx3uTxLSiZQwSIuoXfacWlo"
+    },
+    {
+      "name": "build-phase/session/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"\\ud800\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Ilx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.6lGgO-M9PreoRHgPh_8J0bs5ROX_SeHQw-FFxI2WoUA"
+    },
+    {
+      "name": "build-phase/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Ilx1ZDgwMCJ9fQ.7MyFUp38wwTLd0iplb70HxTAdYeAE0SM-26rQzWk_-s"
+    },
+    {
+      "name": "harvest-runner/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\ud800\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.KbNLRRuYzpz6VpblOevloG8PW_rDR9vPMLIF8a1BtHo"
+    },
+    {
+      "name": "harvest-runner/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"\\ud800\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJcdWQ4MDAiLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.050QH02EUO5zrsJbKyKNDTXGoY13w_bt_n5eelcnXfs"
+    },
+    {
+      "name": "harvest-runner/execution/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"\\ud800\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiXHVkODAwIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.6G0tIAYd-WZGibIxoB7u0nK5KCbVtfb0sDz3fYPv1kw"
+    },
+    {
+      "name": "harvest-runner/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJcdWQ4MDAifX0.pOIB2gLcCt2XLpVPmPmSwSdJ29JHJpuMHrRozUwlwmY"
+    },
+    {
+      "name": "harvest-phase/repo/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\ud800\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.E4p9JjFpY86dRJsckYaj012jxC_pFAEljdFofrosEJg"
+    },
+    {
+      "name": "harvest-phase/id/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"\\ud800\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Ilx1ZDgwMCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.-5c-iyN6E42_RRkJ9Jn507nxZj6LLMfS8EgUZoqrUgQ"
+    },
+    {
+      "name": "harvest-phase/session/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"\\ud800\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiXHVkODAwIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.bg8DtDEzYGh2SW1R3DGhJ_4K-opGW6JjBedAp615upA"
+    },
+    {
+      "name": "harvest-phase/execution/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"\\ud800\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Ilx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.qBPLMh6D1gq0jiuPMbxX2dHPEzB4WVF9ZZoZBNwF4Qw"
+    },
+    {
+      "name": "harvest-phase/leaseHolder/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiXHVkODAwIn19.hgX7ZcfwuSvNT0_-pchc7Tm9IumLQgYGtXm_VK5J7pk"
+    },
+    {
+      "name": "admin/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"ownerAdmin\":{\"user\":\" \\t\\ud800 \"},\"exp\":1893456100000}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHRcdWQ4MDDCoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.LMs61CD30GGXud7hOPnOYcKzRZ6eiWJJxVpWrqItaUY"
+    },
+    {
+      "name": "internal/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\" \\ud800 \",\"repo\":\"\\ud800\"},\"exp\":1893456100000,\"via\":{\"kind\":\"session\",\"id\":\"\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIgXHVkODAwICIsInJlcG8iOiJcdWQ4MDAifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Ilx1ZDgwMCJ9fQ.sgltgMjaih_l3y9wGqwE4gv2l8BlOrpL-e3uKOEsicU"
+    },
+    {
+      "name": "internal-mcp/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\"\\ud800\",\"repo\":\"\\ud800\"},\"exp\":1893456100000,\"via\":{\"kind\":\"mcp\",\"client\":\"\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiJcdWQ4MDAiLCJyZXBvIjoiXHVkODAwIn0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiJcdWQ4MDAifX0.Dk1_g6b280m3YP5eW3ob0TWRS2KBgRt7W_Js7iMggl0"
+    },
+    {
+      "name": "retired/high",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"build\":\"\\ud800\",\"session\":\"\\ud800\",\"exp\":1893456100000}",
+      "token": "eyJidWlsZCI6Ilx1ZDgwMCIsInNlc3Npb24iOiJcdWQ4MDAiLCJleHAiOjE4OTM0NTYxMDAwMDB9.romp8I44KAuQ-S4vyVnTV3lLcRZeHHL3vf9Uvw4fgUs"
+    },
+    {
+      "name": "build-runner/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.opSkI96VpIN_s0G_cNUuvEGlRVh7-Hkib6-fX6-UQjA"
+    },
+    {
+      "name": "build-runner/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"\\udfff\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiXHVkZmZmIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.0dmN7g2wKJWHLIMymtci7TJA960XynxAnyb6CooqduU"
+    },
+    {
+      "name": "build-runner/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"\\udfff\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiXHVkZmZmIn19.b_DNZcbAJqQtRY5OImJZX5U-S3Z9uPTdQN3TVE_WLhg"
+    },
+    {
+      "name": "build-phase/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.TT7ceOPHwKQ9mtor5XvsMwHwqUkDFKvJJhJvGNuWRlg"
+    },
+    {
+      "name": "build-phase/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"\\udfff\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJcdWRmZmYiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.Mm_WgSQzxfKSCvPYMKKfa5XHGkZiZRtmboU8qNKSEKY"
+    },
+    {
+      "name": "build-phase/session/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"\\udfff\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Ilx1ZGZmZiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.4KtjQh7m316ZL1LOQwkThkBcCbzZr6uJ8_iHG_Tqeu0"
+    },
+    {
+      "name": "build-phase/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"\\udfff\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Ilx1ZGZmZiJ9fQ.oKVhS3wGa4UAS7i4X9oZGWDLBZtHiDvUIm3tOcpGTA4"
+    },
+    {
+      "name": "harvest-runner/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.19ZiHXIMG-ph8ULnrbcQmDLRj5mEf5cJVTIkUeHpE5o"
+    },
+    {
+      "name": "harvest-runner/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"\\udfff\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJcdWRmZmYiLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.SBRHQIAWe_7PzDTEnKO9cOfwYANdoexA2QBE_p3wEDY"
+    },
+    {
+      "name": "harvest-runner/execution/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"\\udfff\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiXHVkZmZmIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.Ck-FK4SsLSrXlEfm-hcyHm-dfC5H3DX6W8Q8D-2lNsg"
+    },
+    {
+      "name": "harvest-runner/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"\\udfff\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJcdWRmZmYifX0.CSohOht7PhEuTpmqHzpGf7aA13Jc5QkD4fCy-swG5Zg"
+    },
+    {
+      "name": "harvest-phase/repo/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmYiLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.76Iv5dtSjJ2zxvuiRKUPnZItIOOcGaz7OFBJ1SwZTbY"
+    },
+    {
+      "name": "harvest-phase/id/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"\\udfff\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Ilx1ZGZmZiIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.omDrEvGjsyEyKPJiYzGaItDcmhvwicHSoyXe-O_DaYU"
+    },
+    {
+      "name": "harvest-phase/session/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"\\udfff\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiXHVkZmZmIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.F4uEYP1lSCIPUEOaRQCf5pMSjxZNm6NImTcLWxBluP8"
+    },
+    {
+      "name": "harvest-phase/execution/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"\\udfff\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Ilx1ZGZmZiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.Y-4xCt1j9R_6RqmTnYIe45mc-Nms0_r2dOAXgAd_LXc"
+    },
+    {
+      "name": "harvest-phase/leaseHolder/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"\\udfff\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiXHVkZmZmIn19.VFYR22rpQ4ln6X-2M0TRHs8RELKU8M4lyMSnTfc376o"
+    },
+    {
+      "name": "admin/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"ownerAdmin\":{\"user\":\" \\t\\udfff \"},\"exp\":1893456100000}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHRcdWRmZmbCoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.Ji6_oOM5xV3VMpAa4fcj3nJdX0SAD6NaTvR4HeNJyyI"
+    },
+    {
+      "name": "internal/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\" \\udfff \",\"repo\":\"\\udfff\"},\"exp\":1893456100000,\"via\":{\"kind\":\"session\",\"id\":\"\\udfff\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIgXHVkZmZmICIsInJlcG8iOiJcdWRmZmYifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Ilx1ZGZmZiJ9fQ.zFzFu1UQddiRvY-2XiBWQ-0kuabUTsaceqk5snfvYJ4"
+    },
+    {
+      "name": "internal-mcp/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\"\\udfff\",\"repo\":\"\\udfff\"},\"exp\":1893456100000,\"via\":{\"kind\":\"mcp\",\"client\":\"\\udfff\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiJcdWRmZmYiLCJyZXBvIjoiXHVkZmZmIn0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiJcdWRmZmYifX0.SOvO4t5wjGAEgtIxYKdF5MymO8K64KxJ7RLsqHYMBsg"
+    },
+    {
+      "name": "retired/low",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"build\":\"\\udfff\",\"session\":\"\\udfff\",\"exp\":1893456100000}",
+      "token": "eyJidWlsZCI6Ilx1ZGZmZiIsInNlc3Npb24iOiJcdWRmZmYiLCJleHAiOjE4OTM0NTYxMDAwMDB9.GrUhS-oAv9cBlHs4C6ZF0RtAOzRQnEgFWqARhleiia0"
+    },
+    {
+      "name": "build-runner/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\\ud800\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.9Da_vLEmv2z1WzIGWviboxNC38lI31r1MhKA7FDJM2I"
+    },
+    {
+      "name": "build-runner/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"\\udfff\\ud800\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiXHVkZmZmXHVkODAwIiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.sBs42ssbUaKxKEeqfhfbJiOtukuIGGVZTYVL4L5Hy8M"
+    },
+    {
+      "name": "build-runner/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"\\udfff\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiXHVkZmZmXHVkODAwIn19.Ebrpf-moWI23c5mCvC6M4fir7o76TU6UWaepgwKnPuQ"
+    },
+    {
+      "name": "build-phase/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\\ud800\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.Xhzi_bqEqRVumx15Dd0mHHa3Q7gSoua9cQnvEO3_L7Q"
+    },
+    {
+      "name": "build-phase/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"\\udfff\\ud800\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJcdWRmZmZcdWQ4MDAiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.ULj9WyuG1umbCZgkOrnmBeGkegA5_ndcJWWZcKsdbHo"
+    },
+    {
+      "name": "build-phase/session/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"\\udfff\\ud800\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Ilx1ZGZmZlx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.efyhJsWhfakfQbPLcSQS4GB6aysz989kdREnt38WKtg"
+    },
+    {
+      "name": "build-phase/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"\\udfff\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Ilx1ZGZmZlx1ZDgwMCJ9fQ.F79lr8rHh4Q27H5OMp6UUHeg33oFNRKw31xxa4M2dWU"
+    },
+    {
+      "name": "harvest-runner/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\\ud800\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.6th8tcTxuTBrpDY-RvwcyT2ISBKxaLzIiK9XmG_JKpg"
+    },
+    {
+      "name": "harvest-runner/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"\\udfff\\ud800\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJcdWRmZmZcdWQ4MDAiLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.aP1vgJaRldalj_jt2nCfZju8wiPZSfK9V6QzhxVO4lo"
+    },
+    {
+      "name": "harvest-runner/execution/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"\\udfff\\ud800\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiXHVkZmZmXHVkODAwIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.qARZD50jdy6h-owsoGGWoxj284kt2RHQ3mTwiCRd0GI"
+    },
+    {
+      "name": "harvest-runner/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"\\udfff\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJcdWRmZmZcdWQ4MDAifX0.mMUDRKsyMKo2ekVGwItkKnL7UfE2eTa4K4dj-A3T5xY"
+    },
+    {
+      "name": "harvest-phase/repo/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"\\udfff\\ud800\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJcdWRmZmZcdWQ4MDAiLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.a7oY36zK1VPGo6cDqvsE44vfOJ8K70PCtmpSnTNXZSg"
+    },
+    {
+      "name": "harvest-phase/id/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"\\udfff\\ud800\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Ilx1ZGZmZlx1ZDgwMCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.SkASqV-7vebcQMtcScfFq1c_0n6P8VnQ4it2lcPCl-E"
+    },
+    {
+      "name": "harvest-phase/session/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"\\udfff\\ud800\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoiXHVkZmZmXHVkODAwIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.qZN7qZufr03PgWTTlVWx4F4EdLZMq9ndBITV7S-fUNs"
+    },
+    {
+      "name": "harvest-phase/execution/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"\\udfff\\ud800\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Ilx1ZGZmZlx1ZDgwMCIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.7V9Y-U1Jc5PFn9kcyTib-sWkH-IOIM6Ltz-Ucf1ZXXs"
+    },
+    {
+      "name": "harvest-phase/leaseHolder/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"\\udfff\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiXHVkZmZmXHVkODAwIn19.M5XZEt8OyYjRpYQTb-1fE47yTljmMQNRAYQMI9X0O2o"
+    },
+    {
+      "name": "admin/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"ownerAdmin\":{\"user\":\" \\t\\udfff\\ud800 \"},\"exp\":1893456100000}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHRcdWRmZmZcdWQ4MDDCoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.LkZlh84vtIxMid1182-56zv_FGYA-voisTtdtCJRrhA"
+    },
+    {
+      "name": "internal/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\" \\udfff\\ud800 \",\"repo\":\"\\udfff\\ud800\"},\"exp\":1893456100000,\"via\":{\"kind\":\"session\",\"id\":\"\\udfff\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIgXHVkZmZmXHVkODAwICIsInJlcG8iOiJcdWRmZmZcdWQ4MDAifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Ilx1ZGZmZlx1ZDgwMCJ9fQ.9xuQhSZpjZGAH_bK3e9A7UhRr80DRJaEXhLvz7VCRCU"
+    },
+    {
+      "name": "internal-mcp/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\"\\udfff\\ud800\",\"repo\":\"\\udfff\\ud800\"},\"exp\":1893456100000,\"via\":{\"kind\":\"mcp\",\"client\":\"\\udfff\\ud800\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiJcdWRmZmZcdWQ4MDAiLCJyZXBvIjoiXHVkZmZmXHVkODAwIn0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiJcdWRmZmZcdWQ4MDAifX0.Cnm0fNJc6ntGTKKS5xfhCq8pn9gl7lRbjeU-2Y0f2iA"
+    },
+    {
+      "name": "retired/reversed",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"build\":\"\\udfff\\ud800\",\"session\":\"\\udfff\\ud800\",\"exp\":1893456100000}",
+      "token": "eyJidWlsZCI6Ilx1ZGZmZlx1ZDgwMCIsInNlc3Npb24iOiJcdWRmZmZcdWQ4MDAiLCJleHAiOjE4OTM0NTYxMDAwMDB9.dhk9gFd2ZX6Y_T1dmTCO3uSPO_oWa20nmkPgFp4vV5w"
+    },
+    {
+      "name": "build-runner/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"�\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiYnVpbGQtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.Njv-3JWYMGnlLK_6x_CqIWZ7J9Gf6opJB23MHldc2aE"
+    },
+    {
+      "name": "build-runner/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"�\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoi77-9IiwiYW5jaG9yIjoxLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.XsOZ26W0i4y4qhvf26TUBu8g4L2ZbKr8LEiSKFC_28A"
+    },
+    {
+      "name": "build-runner/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"�\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoi77-9In19.Lpat60Y45J8n2z-soOyddrkRfdXiR7SNkyt9xWWdRYg"
+    },
+    {
+      "name": "build-phase/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"�\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiYnVpbGQtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.pbQXx9h9IVvkXPXmg7YjAd4KYD7egYwWEAfwakruLhI"
+    },
+    {
+      "name": "build-phase/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"�\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiLvv70iLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0._CDQqiprr_aBkMykrKObQQTWq2YgyDLiiw8uIyfRlxQ"
+    },
+    {
+      "name": "build-phase/session/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"�\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6Iu-_vSIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.CDxBo8qsXplKMYZ5JpcbhtT_o9nGxvLYzMlgpbGWFFE"
+    },
+    {
+      "name": "build-phase/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"�\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6Iu-_vSJ9fQ.Y48iNvl9L1hY2JokvCcWzz8dJrVi4mZlKVwO_pF8qb0"
+    },
+    {
+      "name": "harvest-runner/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"�\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiaGFydmVzdC1ydW5uZXIiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.40yY1AYejzCYB97OGICYzi6hs1wmFEUS1QYkMRKiDDY"
+    },
+    {
+      "name": "harvest-runner/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"�\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiLvv70iLCJhbmNob3IiOjEsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.kfnpDUNcIWD87xGEhtOSdLR_5q_JfKT4EcPogHJchcg"
+    },
+    {
+      "name": "harvest-runner/execution/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"�\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoi77-9IiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.L7SOzoauy3iLk-QbxlJHpAWfbbWXfvaGWPUR9zI1V-I"
+    },
+    {
+      "name": "harvest-runner/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"�\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiLvv70ifX0.JVqg6xGMScTx44wyLwTIdmnOwbXUe7N1heOrgfGdUrY"
+    },
+    {
+      "name": "harvest-phase/repo/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"�\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLvv70iLCJraW5kIjoiaGFydmVzdC1waGFzZSIsImlkIjoiaWQiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.m92zzDDWtBAIHuPN7wDZjqtul7YYbOMYV2DOY5iS7SQ"
+    },
+    {
+      "name": "harvest-phase/id/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"�\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6Iu-_vSIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.vBcVGzLZzg5HE-53em5i3H9_6JYVnf4sQl4f05NYsbY"
+    },
+    {
+      "name": "harvest-phase/session/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"�\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoi77-9IiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.3xaoocNnx3p9dhwkcjvqclq3-exsaR3aqI_vmCXQkJE"
+    },
+    {
+      "name": "harvest-phase/execution/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"�\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6Iu-_vSIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.WsjF0Ey5HXIsewaKdkXKxG0oKcda_Ouz5C6u68TQeD4"
+    },
+    {
+      "name": "harvest-phase/leaseHolder/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"�\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoi77-9In19.NtrLRxTCXRheEYyNFMQ0oYYJbrMTGW-8p5CZPa0IH4c"
+    },
+    {
+      "name": "admin/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"ownerAdmin\":{\"user\":\" \\t� \"},\"exp\":1893456100000}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHTvv73CoCJ9LCJleHAiOjE4OTM0NTYxMDAwMDB9.hAuqnaZEkPy9FCzK6oJfIKJLj6yV6HhC2Pfyqg7XXts"
+    },
+    {
+      "name": "internal/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\" � \",\"repo\":\"�\"},\"exp\":1893456100000,\"via\":{\"kind\":\"session\",\"id\":\"�\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIg77-9ICIsInJlcG8iOiLvv70ifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6InNlc3Npb24iLCJpZCI6Iu-_vSJ9fQ.pCpsGWUxTUC4-_tfkPS0cAQAg8QN1krXBvpKnGKC9zI"
+    },
+    {
+      "name": "internal-mcp/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\"�\",\"repo\":\"�\"},\"exp\":1893456100000,\"via\":{\"kind\":\"mcp\",\"client\":\"�\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiLvv70iLCJyZXBvIjoi77-9In0sImV4cCI6MTg5MzQ1NjEwMDAwMCwidmlhIjp7ImtpbmQiOiJtY3AiLCJjbGllbnQiOiLvv70ifX0.IHU466AdA1kas7W0q2o7moSmbE2CZvRoXZjEX2mbwsI"
+    },
+    {
+      "name": "retired/replacement",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"build\":\"�\",\"session\":\"�\",\"exp\":1893456100000}",
+      "token": "eyJidWlsZCI6Iu-_vSIsInNlc3Npb24iOiLvv70iLCJleHAiOjE4OTM0NTYxMDAwMDB9.pam4nkWdALq7W7jRkFERQ3Qg0OBvVR9zrTgRjBY5_vU"
+    },
+    {
+      "name": "build-runner/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"💩\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.tCc4eKbPnEV95fPHafAOo1uYxBKMlaaAUTLFlI08fh4"
+    },
+    {
+      "name": "build-runner/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"💩\",\"anchor\":1,\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoi8J-SqSIsImFuY2hvciI6MSwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.7pArMzbJ2A0JXorZsMjrjOp7CFZxvbtZO6hR7DH5-GA"
+    },
+    {
+      "name": "build-runner/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-runner\",\"id\":\"id\",\"anchor\":1,\"leaseHolder\":\"💩\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXJ1bm5lciIsImlkIjoiaWQiLCJhbmNob3IiOjEsImxlYXNlSG9sZGVyIjoi8J-SqSJ9fQ.4nZB-r4xOq_bVdWw3XrG4AJqbR1DNP8MzBPKhITwffc"
+    },
+    {
+      "name": "build-phase/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"💩\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.KVwoZpbsH5JU0KesKEz7iZpZlV_K-9rJrqAkbcJyUP4"
+    },
+    {
+      "name": "build-phase/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"💩\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiLwn5KpIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.7ga3nR9rfzjaB2Jw05aZp4fyjiNHMa86JRZMuaZTuR4"
+    },
+    {
+      "name": "build-phase/session/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"💩\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6IvCfkqkiLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.NG3ryqX-Q26Xoog9DTfguzqYV6s_D3IOJnyNWQC0dak"
+    },
+    {
+      "name": "build-phase/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"build-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"leaseHolder\":\"💩\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImJ1aWxkLXBoYXNlIiwiaWQiOiJpZCIsImFuY2hvciI6MSwic2Vzc2lvbiI6InNlc3Npb24iLCJsZWFzZUhvbGRlciI6IvCfkqkifX0.p-IPq1QYtfnL3xpgv2QfHLt6uknA2BA9try9BAApWEU"
+    },
+    {
+      "name": "harvest-runner/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"💩\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.KTBq69hppezGnvaYQkFKCx5Mge9LIJT0NoL7B0zsdDs"
+    },
+    {
+      "name": "harvest-runner/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"💩\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiLwn5KpIiwiYW5jaG9yIjoxLCJleGVjdXRpb24iOiJleGVjdXRpb24iLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.idV0zV-9CiQv4QHHTyEAiDdNhltWJ5xbUoLpjQueVYc"
+    },
+    {
+      "name": "harvest-runner/execution/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"💩\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoi8J-SqSIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.1dO6L4vl-yxqLaJKzbbs5r_oMLsSej0Vp65jm18Oyro"
+    },
+    {
+      "name": "harvest-runner/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-runner\",\"id\":\"id\",\"anchor\":1,\"execution\":\"execution\",\"leaseHolder\":\"💩\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcnVubmVyIiwiaWQiOiJpZCIsImFuY2hvciI6MSwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiLwn5KpIn19.f27DPH70fvrKx9CfJiDEkS5tgheYFV_-aAWOFKCRNGc"
+    },
+    {
+      "name": "harvest-phase/repo/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"💩\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiLwn5KpIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.eadC0qK7F-1P6CTtOAmMe6NqeMefA7mRK1dfrkeAhXE"
+    },
+    {
+      "name": "harvest-phase/id/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"💩\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6IvCfkqkiLCJhbmNob3IiOjEsInNlc3Npb24iOiJzZXNzaW9uIiwiZXhlY3V0aW9uIjoiZXhlY3V0aW9uIiwibGVhc2VIb2xkZXIiOiJob2xkZXIifX0.DVna8ro5NxreWSFeWP5nDL0fkkKUQoltEotKu2EqGrI"
+    },
+    {
+      "name": "harvest-phase/session/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"💩\",\"execution\":\"execution\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoi8J-SqSIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoiaG9sZGVyIn19.a2aMk9wukq-AOHFFcgp-qAhEMRBvBt2Q1-yDhBJF1xE"
+    },
+    {
+      "name": "harvest-phase/execution/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"💩\",\"leaseHolder\":\"holder\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6IvCfkqkiLCJsZWFzZUhvbGRlciI6ImhvbGRlciJ9fQ.CwCnDI9mFoAZKHDKuDr4Vd6A8RYQ4CyR3Z5DlMY7OQ0"
+    },
+    {
+      "name": "harvest-phase/leaseHolder/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":2,\"delegation\":{\"repo\":\"repo\",\"kind\":\"harvest-phase\",\"id\":\"id\",\"anchor\":1,\"session\":\"session\",\"execution\":\"execution\",\"leaseHolder\":\"💩\"}}",
+      "token": "eyJ2ZXJzaW9uIjoyLCJkZWxlZ2F0aW9uIjp7InJlcG8iOiJyZXBvIiwia2luZCI6ImhhcnZlc3QtcGhhc2UiLCJpZCI6ImlkIiwiYW5jaG9yIjoxLCJzZXNzaW9uIjoic2Vzc2lvbiIsImV4ZWN1dGlvbiI6ImV4ZWN1dGlvbiIsImxlYXNlSG9sZGVyIjoi8J-SqSJ9fQ.3Ax1bU_2BZ1EPICmH3uq1SlzjSrxUyOT-ASlPxDlH_M"
+    },
+    {
+      "name": "admin/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"ownerAdmin\":{\"user\":\" \\t💩 \"},\"exp\":1893456100000}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJvd25lckFkbWluIjp7InVzZXIiOiIgXHTwn5KpwqAifSwiZXhwIjoxODkzNDU2MTAwMDAwfQ.rwIFswRrkT05i4Rp2BeIneKhFGdL3SdHIUdFbphiU_g"
+    },
+    {
+      "name": "internal/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\" 💩 \",\"repo\":\"💩\"},\"exp\":1893456100000,\"via\":{\"kind\":\"session\",\"id\":\"💩\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiIg8J-SqSAiLCJyZXBvIjoi8J-SqSJ9LCJleHAiOjE4OTM0NTYxMDAwMDAsInZpYSI6eyJraW5kIjoic2Vzc2lvbiIsImlkIjoi8J-SqSJ9fQ.yVpv94T5H6aCsF9Ndrfkj41-hSm9lw069x7Gx0R1Vks"
+    },
+    {
+      "name": "internal-mcp/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"version\":1,\"internalOperator\":{\"user\":\"💩\",\"repo\":\"💩\"},\"exp\":1893456100000,\"via\":{\"kind\":\"mcp\",\"client\":\"💩\"}}",
+      "token": "eyJ2ZXJzaW9uIjoxLCJpbnRlcm5hbE9wZXJhdG9yIjp7InVzZXIiOiLwn5KpIiwicmVwbyI6IvCfkqkifSwiZXhwIjoxODkzNDU2MTAwMDAwLCJ2aWEiOnsia2luZCI6Im1jcCIsImNsaWVudCI6IvCfkqkifX0.UZRebiuwMgzqH3bzPoPz5M6umy9ZzTeFudAUi3ISmYg"
+    },
+    {
+      "name": "retired/pair",
+      "secret": "fake-unicode-token-oracle",
+      "input": "{\"build\":\"💩\",\"session\":\"💩\",\"exp\":1893456100000}",
+      "token": "eyJidWlsZCI6IvCfkqkiLCJzZXNzaW9uIjoi8J-SqSIsImV4cCI6MTg5MzQ1NjEwMDAwMH0.R6Dsrm8lSF3LLHYo_YF8oy1Ps1gfC8duC3kGW-WzfsQ"
+    }
+  ],
+  "targets": [
+    {
+      "name": "build-runner/high",
+      "input": "{\"kind\":\"build-runner\",\"repo\":\"\\ud800\",\"id\":\"\\ud800\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "build-phase/high",
+      "input": "{\"kind\":\"build-phase\",\"repo\":\"\\ud800\",\"id\":\"\\ud800\",\"session\":\"\\ud800\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "harvest-runner/high",
+      "input": "{\"kind\":\"harvest-runner\",\"repo\":\"\\ud800\",\"id\":\"\\ud800\",\"execution\":\"\\ud800\",\"leaseHolder\":\"\\ud800\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117,
+        110, 110, 101, 114, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92,
+        117, 100, 56, 48, 48, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 56, 48, 48,
+        34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 108, 101, 97, 115,
+        101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/high",
+      "input": "{\"kind\":\"harvest-phase\",\"repo\":\"\\ud800\",\"id\":\"\\ud800\",\"session\":\"\\ud800\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34,
+        105, 100, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 44, 34, 115, 101, 115, 115, 105, 111,
+        110, 34, 58, 34, 92, 117, 100, 56, 48, 48, 34, 125
+      ]
+    },
+    {
+      "name": "build-runner/low",
+      "input": "{\"kind\":\"build-runner\",\"repo\":\"\\udfff\",\"id\":\"\\udfff\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "build-phase/low",
+      "input": "{\"kind\":\"build-phase\",\"repo\":\"\\udfff\",\"id\":\"\\udfff\",\"session\":\"\\udfff\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "harvest-runner/low",
+      "input": "{\"kind\":\"harvest-runner\",\"repo\":\"\\udfff\",\"id\":\"\\udfff\",\"execution\":\"\\udfff\",\"leaseHolder\":\"\\udfff\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117,
+        110, 110, 101, 114, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92,
+        117, 100, 102, 102, 102, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102,
+        102, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 108, 101,
+        97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/low",
+      "input": "{\"kind\":\"harvest-phase\",\"repo\":\"\\udfff\",\"id\":\"\\udfff\",\"session\":\"\\udfff\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44,
+        34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 44, 34, 115, 101, 115, 115, 105,
+        111, 110, 34, 58, 34, 92, 117, 100, 102, 102, 102, 34, 125
+      ]
+    },
+    {
+      "name": "build-runner/reversed",
+      "input": "{\"kind\":\"build-runner\",\"repo\":\"\\udfff\\ud800\",\"id\":\"\\udfff\\ud800\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "build-phase/reversed",
+      "input": "{\"kind\":\"build-phase\",\"repo\":\"\\udfff\\ud800\",\"id\":\"\\udfff\\ud800\",\"session\":\"\\udfff\\ud800\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "harvest-runner/reversed",
+      "input": "{\"kind\":\"harvest-runner\",\"repo\":\"\\udfff\\ud800\",\"id\":\"\\udfff\\ud800\",\"execution\":\"\\udfff\\ud800\",\"leaseHolder\":\"\\udfff\\ud800\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117,
+        110, 110, 101, 114, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34, 92,
+        117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 114, 101, 112, 111, 34, 58,
+        34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 105, 100, 34, 58, 34,
+        92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 44, 34, 108, 101, 97, 115, 101,
+        72, 111, 108, 100, 101, 114, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117, 100, 56, 48,
+        48, 34, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/reversed",
+      "input": "{\"kind\":\"harvest-phase\",\"repo\":\"\\udfff\\ud800\",\"id\":\"\\udfff\\ud800\",\"session\":\"\\udfff\\ud800\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117,
+        100, 56, 48, 48, 34, 44, 34, 105, 100, 34, 58, 34, 92, 117, 100, 102, 102, 102, 92, 117,
+        100, 56, 48, 48, 34, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 92, 117, 100,
+        102, 102, 102, 92, 117, 100, 56, 48, 48, 34, 125
+      ]
+    },
+    {
+      "name": "build-runner/replacement",
+      "input": "{\"kind\":\"build-runner\",\"repo\":\"�\",\"id\":\"�\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "build-phase/replacement",
+      "input": "{\"kind\":\"build-phase\",\"repo\":\"�\",\"id\":\"�\",\"session\":\"�\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "harvest-runner/replacement",
+      "input": "{\"kind\":\"harvest-runner\",\"repo\":\"�\",\"id\":\"�\",\"execution\":\"�\",\"leaseHolder\":\"�\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117,
+        110, 110, 101, 114, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34,
+        65533, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 44, 34, 105, 100, 34, 58, 34,
+        65533, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101, 114, 34, 58, 34, 65533,
+        34, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/replacement",
+      "input": "{\"kind\":\"harvest-phase\",\"repo\":\"�\",\"id\":\"�\",\"session\":\"�\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 65533, 34, 44, 34, 105, 100, 34, 58,
+        34, 65533, 34, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 65533, 34, 125
+      ]
+    },
+    {
+      "name": "build-runner/pair",
+      "input": "{\"kind\":\"build-runner\",\"repo\":\"💩\",\"id\":\"💩\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "build-phase/pair",
+      "input": "{\"kind\":\"build-phase\",\"repo\":\"💩\",\"id\":\"💩\",\"session\":\"💩\"}",
+      "expectedUnits": [110, 117, 108, 108]
+    },
+    {
+      "name": "harvest-runner/pair",
+      "input": "{\"kind\":\"harvest-runner\",\"repo\":\"💩\",\"id\":\"💩\",\"execution\":\"💩\",\"leaseHolder\":\"💩\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 114, 117,
+        110, 110, 101, 114, 34, 44, 34, 101, 120, 101, 99, 117, 116, 105, 111, 110, 34, 58, 34,
+        55357, 56489, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 44, 34, 105,
+        100, 34, 58, 34, 55357, 56489, 34, 44, 34, 108, 101, 97, 115, 101, 72, 111, 108, 100, 101,
+        114, 34, 58, 34, 55357, 56489, 34, 125
+      ]
+    },
+    {
+      "name": "harvest-phase/pair",
+      "input": "{\"kind\":\"harvest-phase\",\"repo\":\"💩\",\"id\":\"💩\",\"session\":\"💩\"}",
+      "expectedUnits": [
+        123, 34, 107, 105, 110, 100, 34, 58, 34, 104, 97, 114, 118, 101, 115, 116, 45, 112, 104, 97,
+        115, 101, 34, 44, 34, 114, 101, 112, 111, 34, 58, 34, 55357, 56489, 34, 44, 34, 105, 100,
+        34, 58, 34, 55357, 56489, 34, 44, 34, 115, 101, 115, 115, 105, 111, 110, 34, 58, 34, 55357,
+        56489, 34, 125
+      ]
+    }
+  ]
+}

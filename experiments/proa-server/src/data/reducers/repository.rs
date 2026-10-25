@@ -49,12 +49,20 @@ fn durable(t: &str) -> bool {
 }
 impl RepositoryAcc {
     pub fn fold(&mut self, e: &Value, raw: &Value) -> Result<(), DataError> {
+        self.fold_inner(e, raw, true)
+    }
+    pub fn fold_without_harvest(&mut self, e: &Value, raw: &Value) -> Result<(), DataError> {
+        self.fold_inner(e, raw, false)
+    }
+    fn fold_inner(&mut self, e: &Value, raw: &Value, with_harvest: bool) -> Result<(), DataError> {
         let p = &e["payload"];
         let t = e["type"].as_str().unwrap_or("");
         // The TS read-facts reducer gives its constituent folds the stored
         // facts, then projects known payloads only for its own selector loop.
         // Bounded journal views also retain source envelopes verbatim.
-        self.harvest.fold(raw)?;
+        if with_harvest {
+            self.harvest.fold(raw)?;
+        }
         super::repository_upgrades::fold(&mut self.facts["upgrades"], raw);
         super::repository_attention::fold(&mut self.facts["attention"], raw);
         if t == "dispatcher.run-started" {
@@ -481,6 +489,17 @@ impl RepositoryAcc {
                 break;
             }
         }
+    }
+    /// Parameterized status replay does not retain the bounded recent-run window.
+    pub fn status_for_events(run: &str, events: &[Value]) -> Value {
+        let mut acc = Self::default();
+        acc.facts["run"] = json!(run);
+        acc.facts["status"] =
+            json!({"run":run,"health":"starting","roleWarnings":[],"diagnostics":[],"lastSeq":0});
+        for event in events {
+            acc.status(event);
+        }
+        acc.facts["status"].clone()
     }
     fn status(&mut self, e: &Value) {
         if self.facts.get("run").is_none() {

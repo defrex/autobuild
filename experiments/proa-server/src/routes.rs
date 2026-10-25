@@ -11,8 +11,16 @@ use proa_framework_axum::{
 };
 
 use crate::{app::AppState, endpoints, pages, static_assets};
+use axum::extract::Request;
+use proa_server::protocol;
+use tower::{service_fn, ServiceExt};
 
 pub fn router(state: AppState) -> Router {
+    let machine = state
+        .machine
+        .clone()
+        .map(protocol::router::router)
+        .unwrap_or_else(protocol::router::unavailable_router);
     let (router, metadata) = router_from_spec(vec![
         // proa:route-specs:start
         Route::endpoint("/", get(pages::home::handler)),
@@ -38,7 +46,7 @@ pub fn router(state: AppState) -> Router {
     };
     let cross_origin = CrossOriginProtectionLayer::new()
         .with_trusted_origin(state.auth.config.origin.origin().ascii_serialization());
-    router
+    let browser = router
         .route("/health", get(endpoints::health::live))
         .route("/readyz", get(endpoints::health::ready))
         // proa:explicit-routes:start
@@ -57,5 +65,13 @@ pub fn router(state: AppState) -> Router {
         .layer(RouteContextLayer::new(manifest, metadata))
         .layer(cross_origin)
         .layer(middleware::from_fn(endpoints::auth::privacy))
-        .layer(SecurityHeadersLayer::new(security))
+        .layer(SecurityHeadersLayer::new(security));
+    Router::new().fallback_service(service_fn(move |request: Request| {
+        let selected = if protocol::router::is_machine_path(request.uri().path()) {
+            machine.clone()
+        } else {
+            browser.clone()
+        };
+        async move { selected.oneshot(request).await }
+    }))
 }

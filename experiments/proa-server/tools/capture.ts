@@ -3,7 +3,14 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { build, project, root } from './verify'
-import { checkRoutes, checkFrameMatrix, frames, palette, probe } from './capture-cases'
+import {
+  checkRoutes,
+  checkCaptureCapabilities,
+  checkFrameMatrix,
+  frames,
+  palette,
+  probe,
+} from './capture-cases'
 
 interface Reply {
   result: { value: ReturnType<typeof probe> & boolean }
@@ -15,16 +22,21 @@ interface Reply {
 }
 
 export async function capture() {
-  checkRoutes(await Bun.file(join(project, 'src/routes.rs')).text())
+  checkRoutes(
+    await Bun.file(join(project, 'src/routes.rs')).text(),
+    await Bun.file(join(project, 'src/protocol/router.rs')).text(),
+  )
   const config = await Bun.file(join(project, 'proa.config.json')).json()
   const sources = await Array.fromAsync(
     new Bun.Glob('src/{pages,endpoints}/**/*.rs').scan({ cwd: project }),
   )
-  const source = (await Promise.all(sources.map((p) => Bun.file(join(project, p)).text()))).join(
-    '\n',
+  const sourceFiles = Object.fromEntries(
+    await Promise.all(
+      sources.map(async (path) => [path, await Bun.file(join(project, path)).text()] as const),
+    ),
   )
-  if (config.database.driver !== 'none' || /sqlx|postgres|DATABASE_URL|state\.data/i.test(source))
-    throw Error('Unsupported database capability; add a seed adapter; see tools/README.md')
+  const source = Object.values(sourceFiles).join('\n')
+  checkCaptureCapabilities(config.database.driver, sourceFiles)
   if (
     !source.includes('x-proa-dev-capability') ||
     !source.includes('ConnectInfo') ||

@@ -22,4 +22,6 @@ pub enum DataError {
     MissingBlob,
     #[error("blob storage read failed")]
     Blob,
+    #[error("blob storage write failed")]
+    BlobWrite,
 }
