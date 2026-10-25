@@ -232,7 +232,7 @@ pub async fn gateway(
         "/health" | "/readyz" | "/sign-in" | "/auth/github" | "/auth/github/callback"
     ) || path.starts_with("/static/")
         || path == "/auth/dev-session" && state.auth.config.dev.is_some();
-    let response = if public {
+    if public {
         next.run(request).await
     } else {
         let id = state.auth.read_cookie(request.headers(), "proa-session");
@@ -259,18 +259,20 @@ pub async fn gateway(
             let target = format!("{}?{}", url.path(), url.query().unwrap());
             Redirect::temporary(&target).into_response()
         }
-    };
-    response
+    }
 }
 
 pub async fn privacy(request: Request, next: Next) -> Response {
+    // no-referrer can make a browser's same-origin form POST send Origin: null.
+    // OAuth pages have no unsafe forms; authenticated forms retain their Origin proof.
+    let oauth = request.uri().path().starts_with("/auth/") || request.uri().path() == "/sign-in";
     let mut response = next.run(request).await;
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response.headers_mut().insert(
         header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
+        HeaderValue::from_static(if oauth { "no-referrer" } else { "same-origin" }),
     );
     response
 }
@@ -404,7 +406,9 @@ mod tests {
         assert_eq!(response.headers()[header::LOCATION], "/index.md?x=y");
         let session = cookie(&response, "proa-session");
         assert!(!session.contains("Operator"));
-        assert_eq!(call(&state, "/", &session).await.status(), StatusCode::OK);
+        let protected = call(&state, "/", &session).await;
+        assert_eq!(protected.status(), StatusCode::OK);
+        assert_eq!(protected.headers()[header::REFERRER_POLICY], "same-origin");
         assert_eq!(
             call(&state, &callback, &binding).await.status(),
             StatusCode::FORBIDDEN

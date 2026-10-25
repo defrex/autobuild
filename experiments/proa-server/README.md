@@ -1,13 +1,13 @@
 # Proa server experiment
 
 Nonshipping Rust/Proa experiment, version 0.1.0. Only the Builds placeholder is
-implemented; there is no database, account, authentication or dispatcher connection.
+implemented, with Rust-owned GitHub operator sign-in. There is no database or dispatcher connection.
 
 The visual authority is [design/ansi](design/ansi/README.md), pinned ticket asset
 **design / ansi / revision 1000000000**, including its reference HTML, 24 screenshots
 and product briefs. It overrides the repository-root DESIGN.md for this experiment.
 The reference's synthetic records and external font links are reference material;
-the application serves its own fonts and uses neutral experiment identity.
+the application serves its own fonts and displays the admitted operator email.
 
 Prerequisites:
 
@@ -51,7 +51,7 @@ Run repository checks from the repository root as required by AGENTS.md. The loc
 Biome config inherits root rules while excluding the immutable reference and the
 Tailwind directive entrypoint. Authored CSS, JavaScript and JSON remain checked.
 
-Theme follows the OS until Light or Dark is chosen in Experiment menu. Explicit
+Theme follows the OS until Light or Dark is chosen in the account menu. Explicit
 choices persist in localStorage; System removes the override. With storage disabled,
 the current page still honors explicit choices. The disclosure uses ordinary Tab
 navigation, closes on Escape/outside activation/focus departure, and returns focus
@@ -68,3 +68,58 @@ Automated Rust and visual gates are described in [tools/README.md](tools/README.
 They capture the actual server and share ordinary Cargo artifacts across worktrees.
 Proa linked dependencies still rebuild for a new worktree; see the field notes.
 See [FIELD-NOTES.md](FIELD-NOTES.md) for measured tooling behavior.
+
+## Operator sign-in
+
+Without auth settings the default loopback server starts closed: protected pages,
+including Markdown and unknown paths, redirect to sign-in. Public resources are
+health/readiness, fixed static assets, sign-in and the GitHub flow.
+
+Set these together for GitHub sign-in:
+
+- `PROA_AUTH_URL`: canonical origin (e.g. `https://operator.example.com`).
+- `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`: GitHub OAuth App credentials.
+  Register `<PROA_AUTH_URL>/auth/github/callback` as the callback.
+- `PROA_SESSION_SECRET`: at least 32 high-entropy characters.
+- `AB_WEB_ALLOWED_EMAILS`: comma-separated emails, trimmed and case-insensitive.
+
+Non-loopback binding requires complete GitHub configuration and an HTTPS origin.
+Terminate TLS at a trusted reverse proxy; this executable's listener speaks HTTP.
+Forwarded and Host headers do not select the canonical origin or cookie policy.
+On loopback the origin must match the listener's IP and port. Invalid origins,
+allowlists, short secrets and partial GitHub settings fail startup.
+
+Admission uses GitHub's verified email records, preferring an allowed primary email.
+The session keeps only the chosen email and random CSRF token. The allowlist is
+read again on every protected request; removal refuses and revokes that session
+on its next request. Environment updates from a supervisor require process replacement,
+which also invalidates all sessions. Tests inject a mutable source to prove next-request
+removal. Sessions expire after eight hours and live only in this process (4096 maximum);
+restart logs everyone out, and replicas cannot share sessions. OAuth transactions expire
+after ten minutes (4096 maximum). Cookies contain signed opaque random IDs, are host-only,
+HTTP-only, SameSite=Lax, Path=/, and Secure off loopback or with HTTPS loopback.
+POST sign-out requires the session's CSRF token and canonical Origin (same-origin
+Referer fallback); it deletes the server record so copied cookies stop working.
+
+OAuth uses state, a separate browser-binding cookie, single-use transactions and
+S256 PKCE. Provider tokens are discarded after the bounded email lookup. Only safe
+origin-relative return paths are honored; malformed encodings, encoded separators,
+backslashes and auth-route returns fall back to /. Auth and personalized responses
+use no-store. OAuth pages use no-referrer; signed-in pages use same-origin so browser form POSTs retain their Origin proof. The router explicitly applies Proa's security and
+cross-origin layers: CSP restricts scripts/styles/fonts to self, denies objects and
+framing, and restricts forms/base to self; nosniff and frame denial cover all routes.
+HSTS is enabled only for a configured HTTPS origin.
+
+For local development or deterministic capture, additionally set
+`PROA_ENV=development PROA_DEV_AUTH=true`, `PROA_DEV_AUTH_EMAIL` (one email),
+and `PROA_DEV_AUTH_CAPABILITY` (a freshly generated random value of at least 32 characters).
+A session secret and allowlist remain required; GitHub credentials are optional.
+POST `/auth/dev-session` with `X-Proa-Dev-Capability` issues the configured identity
+only after checking the actual loopback socket peer. There is no identity parameter.
+A denied identity renders the real refusal page. Missing peer/capability or a
+cross-origin browser request is denied. Issuance is absent unless explicitly enabled;
+non-loopback/deployment-mode dev auth fails startup. Never expose the capability
+in browser HTML. Development issuance uses an Axum ConnectInfo serve adapter with
+SIGINT/SIGTERM handling and a 30-second drain, because Proa's serve helper does not
+supply socket peer metadata. This path uses the exported binary and does not provide
+Proa's development reload injection.

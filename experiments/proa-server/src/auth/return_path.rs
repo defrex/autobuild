@@ -24,7 +24,7 @@ pub fn validate(value: &str, origin: &Url) -> String {
             else {
                 return invalid();
             };
-            if n <= 32 || [b'/', b'\\', b'%', 127].contains(&n) {
+            if n < 32 || [b'/', b'\\', b'%', 127].contains(&n) {
                 return invalid();
             }
             i += 2;
@@ -63,8 +63,8 @@ mod tests {
             assert_eq!(validate(v, &origin), "/");
         }
         assert_eq!(
-            validate("/builds?state=open", &origin),
-            "/builds?state=open"
+            validate("/builds?state=open%20now", &origin),
+            "/builds?state=open%20now"
         );
     }
 }
