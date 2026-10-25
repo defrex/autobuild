@@ -25,7 +25,7 @@ The dispatcher claims ready tickets up to your configured capacity and runs each
 1. **Spec.** The ticket's spec becomes the build's contract.
 2. **Plan and plan review.** An agent proposes a plan; an independent reviewer checks it against the spec and can request revisions.
 3. **Implement and code review.** An agent commits the change; a fresh reviewer's findings send it back for another round.
-4. **Verify.** Your configured checks, commands or agent verifiers, run in order; a failure returns the build to implementation. This effectively replaces CI.
+4. **Verify.** Your configured checks, commands or agent verifiers, run in ordered stages whose members may run concurrently. A failed stage settles, then returns every failed report to implementation. See [Verification](verification.md). This effectively replaces CI.
 5. **Finalize.** An agent writes the pull request description and Autobuild opens the PR.
 
 Landing depends on the configured policy and merge gates. Conflicts are reconciled, then verified again. Related work can be collected into an integration tree before landing.
