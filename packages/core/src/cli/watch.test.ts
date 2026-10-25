@@ -8,6 +8,7 @@ import { autoMergeDeferralObservation } from '../kernel/auto-merge'
  */
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
+import { validateRepositoryEventWrite } from '../events/repository'
 import { EVENT_TYPES } from '../events/payloads'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -1973,6 +1974,142 @@ for (const json of [true, false]) {
     } else expect(h.out[0]).toContain('dispatcher.lost lost-run')
     expect(await store.getRepoEvents(REPO)).toEqual(before)
   })
+}
+
+// Use the negotiated journal, including an unfinished drain: completion and
+// predecessor process exit are deliberately absent.
+for (const mode of [
+  'takeover',
+  'requested',
+  'released',
+  'wrong-successor',
+  'wrong-correlation',
+  'legacy',
+] as const) {
+  for (const remote of [false, true]) {
+    for (const named of [false, true]) {
+      test(`handoff loss classification ${mode} remote=${remote} named=${named}`, async () => {
+        const clock = manualClock()
+        const store = new MemoryBuildStore({ clock })
+        await store.ensureRepo(REPO)
+        if (named) await seedRunningBuild(store, 'live')
+        await store.claimRepoLease(REPO, 'old', 1000)
+        const runtime = {
+          version: '1.0.0',
+          commit: 'unknown',
+          source: { kind: 'package', location: '/old' },
+        }
+        const handoff = {
+          correlation: 'upgrade',
+          run: 'old',
+          lineage: 'launcher',
+          from: runtime,
+          to: { ...runtime, version: '2.0.0' },
+          root: '/cache/new',
+          cacheId: 'new',
+          target: { mode: 'installed', key: 'new', source: '/install' },
+        }
+        const append = async (type: string, payload: unknown) => {
+          await store.appendRepo(
+            REPO,
+            validateRepositoryEventWrite({ actor: DISPATCHER, type, payload }),
+          )
+        }
+        let upgradeReads = 0
+        const getReducerValue = store.getReducerValue.bind(store)
+        store.getReducerValue = async (scope, request) => {
+          if (request.reducer === 'dispatchUpgrade' && ++upgradeReads === 1) {
+            throw new Error('upgrade projection temporarily unavailable')
+          }
+          return getReducerValue(scope, request)
+        }
+        let switched = false
+        const h = harness(store, {
+          now: clock,
+          delay: async () => {
+            clock.advance(1000)
+            if (switched) return
+            switched = true
+            if (mode === 'legacy') {
+              await append('dispatcher.handoff-started', handoff)
+              await append('dispatcher.handoff-completed', { ...handoff, successor: 'new' })
+            } else {
+              await append('dispatcher.target-prepared', handoff)
+              await append('dispatcher.yield-requested', {
+                ...handoff,
+                successor: 'new',
+                mode: 'drain',
+                evidence: 'same schema',
+              })
+              if (mode !== 'requested') {
+                await append('dispatcher.handoff-started', {
+                  ...handoff,
+                  successor: 'new',
+                  mode: 'drain',
+                  startedAt: clock().toISOString(),
+                  deadline: new Date(clock().getTime() + 900000).toISOString(),
+                  builds: [{ slug: 'live', instance: 'execution' }],
+                })
+                await append('dispatcher.terminal-released', handoff)
+                if (mode !== 'released')
+                  await append('dispatcher.takeover', {
+                    ...handoff,
+                    successor: mode === 'wrong-successor' ? 'stranger' : 'new',
+                    correlation: mode === 'wrong-correlation' ? 'foreign' : handoff.correlation,
+                  })
+              }
+            }
+            await store.claimRepoLease(REPO, 'new', mode === 'takeover' && !named ? 100000 : 1000)
+          },
+        })
+        await abWatch({
+          ...h.base,
+          storeRef: remote ? 'https://store.example.test' : undefined,
+          repository: named,
+          slugs: named ? ['live'] : [],
+          events: ['dispatcher.lost'],
+          timeout: '4',
+        })
+        expect(h.err.join(' ')).toContain('upgrade projection temporarily unavailable')
+        expect(upgradeReads).toBeGreaterThan(1)
+        const records = h.out.map((line) => JSON.parse(line))
+        expect(records.filter((r) => r.observation).map((r) => r.observation.run)).toEqual(
+          mode === 'takeover' ? (named ? ['new'] : []) : ['old', 'new'],
+        )
+        await append('dispatcher.ticket-source-degraded', {
+          source: 'fake',
+          cause: 'rate-limited',
+          operation: 'ready-scan',
+          message: 'limited',
+          resetAt: clock().toISOString(),
+        })
+        const before = await store.getRepoEvents(REPO)
+        const resumed = harness(store, {
+          now: clock,
+          delay: async () => {
+            clock.advance(1000)
+          },
+        })
+        await abWatch({
+          ...resumed.base,
+          storeRef: remote ? 'https://store.example.test' : undefined,
+          repository: named,
+          slugs: named ? ['live'] : [],
+          events: ['*'],
+          since: records.filter((r) => r.observation).at(-1)?.cursor ?? records.at(-1).cursor,
+          timeout: '1',
+        })
+        expect(resumed.out.map((line) => JSON.parse(line)).filter((r) => r.observation)).toEqual([])
+        expect(
+          resumed.out
+            .map((line) => JSON.parse(line))
+            .filter((r) => r.event)
+            .map((r) => r.event.type),
+        ).toEqual(['dispatcher.ticket-source-degraded'])
+        expect(await store.getRepoEvents(REPO)).toEqual(before)
+      }, 15000)
+    }
+  }
 }
 
 test('clean stop suppresses loss, and no lease is not death', async () => {
