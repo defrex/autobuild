@@ -1,5 +1,7 @@
-import { expect, test } from 'bun:test'
-import { access } from 'node:fs/promises'
+import { expect, spyOn, test } from 'bun:test'
+import { access, mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import {
   administrativeUrl,
   defaultAdminUrl,
@@ -108,3 +110,33 @@ test('service stop is idempotent and waits for shared cleanup', async () => {
   await expect(access(service.directory)).rejects.toThrow()
   await expect(fetch(service.endpoint)).rejects.toThrow()
 }, 30000)
+
+test('unresponsive service is reaped and only its owned directory is removed', async () => {
+  const unrelated = await mkdtemp(join(tmpdir(), 'proa-service-test-'))
+  const marker = join(unrelated, 'owned-directory')
+  const cleanupError = spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await expect(
+      startS3({
+        command: [
+          'bun',
+          '-e',
+          `
+      process.on('SIGTERM', () => {});
+      await Bun.write(${JSON.stringify(marker)}, process.env.PROA_S3_DIRECTORY);
+      setInterval(() => {}, 1000);
+    `,
+        ],
+        startupTimeoutMs: 200,
+        teardownTimeoutMs: 50,
+      }),
+    ).rejects.toThrow('startup timed out')
+    const owned = await Bun.file(marker).text()
+    await expect(access(owned)).rejects.toThrow()
+    await access(unrelated)
+    expect(cleanupError).toHaveBeenCalled()
+  } finally {
+    cleanupError.mockRestore()
+    await rm(unrelated, { recursive: true, force: true })
+  }
+}, 5000)
