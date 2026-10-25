@@ -1,5 +1,8 @@
 export const routes = {
   '/': 'html',
+  '/builds/:slug': 'detail-html',
+  '/refresh': 'endpoint',
+  '/frame': 'endpoint',
   '/index.md': 'representation',
   '/health': 'endpoint',
   '/readyz': 'endpoint',
@@ -12,9 +15,16 @@ export const routes = {
 } as const
 export const frames = [1440, 390].flatMap((width) =>
   ['light', 'dark'].flatMap((theme) =>
-    ['closed', 'open', 'sign-in', 'refused'].map((state) => ({
+    ['closed', 'open', 'mixed', 'detail', 'sign-in', 'refused'].map((state) => ({
       id: `builds-${width}-${theme}-${state}`,
-      route: state === 'sign-in' ? '/sign-in' : state === 'refused' ? '/auth/dev-session' : '/',
+      route:
+        state === 'sign-in'
+          ? '/sign-in'
+          : state === 'refused'
+            ? '/auth/dev-session'
+            : state === 'detail'
+              ? '/builds/:slug'
+              : '/',
       width,
       theme,
       state,
@@ -38,14 +48,22 @@ export function checkRoutes(source: string) {
 export function checkFrameMatrix(cases: typeof frames) {
   if (new Set(cases.map((f) => f.id)).size !== cases.length) throw Error('Duplicate frame id')
   for (const [route, kind] of Object.entries(routes)) {
-    if (kind !== 'html' && kind !== 'public-html' && kind !== 'development-issuer') continue
+    if (
+      kind !== 'detail-html' &&
+      kind !== 'html' &&
+      kind !== 'public-html' &&
+      kind !== 'development-issuer'
+    )
+      continue
     for (const width of [1440, 390])
       for (const theme of ['light', 'dark'])
-        for (const state of kind === 'html'
-          ? ['closed', 'open']
-          : kind === 'public-html'
-            ? ['sign-in']
-            : ['refused']) {
+        for (const state of kind === 'detail-html'
+          ? ['detail']
+          : kind === 'html'
+            ? ['closed', 'open']
+            : kind === 'public-html'
+              ? ['sign-in']
+              : ['refused']) {
           if (
             cases.filter(
               (f) =>
@@ -83,16 +101,16 @@ export function probe(colors: string[], state: string, theme: string) {
       ? ['Sign in', 'Continue with GitHub']
       : [
           'Builds',
-          'proa/server',
           'operator@example.com',
-          'No build data connected yet.',
-          'This experiment establishes the server and app shell. Builds will appear here when the event log is connected.',
           ...(state === 'open' ? ['Sign out', 'System', 'Light', 'Dark'] : []),
         ]),
     ...(state === 'refused' ? ["You're not in an organization yet.", 'refused@example.com'] : []),
   ])
     if (!text.includes(content)) failures.push(`Missing content: ${content}`)
-  if (document.querySelector('h1')?.textContent !== (publicPage ? 'Sign in' : 'Builds'))
+  if (
+    document.querySelector('h1')?.textContent !==
+    (publicPage ? 'Sign in' : state === 'detail' ? 'detail-case' : 'Builds')
+  )
     failures.push(publicPage ? 'Missing Sign in heading' : 'Missing Builds heading')
   if (publicPage && document.querySelector('#account-trigger')) failures.push('Public account menu')
   if (state === 'refused' && !document.querySelector('[role="alert"]'))
@@ -178,4 +196,15 @@ export function probe(colors: string[], state: string, theme: string) {
     textElements: textNodes.length,
     height: Math.max(900, document.documentElement.scrollHeight),
   }
+}
+
+// User-authored multilingual/emoji content needs platform glyphs outside the two
+// interface faces. This never permits a fallback for interface labels or spacing.
+export function dataFontFallback(family: string, text: string, storeText: boolean): boolean {
+  if (!storeText) return false
+  if (family === 'Noto Sans CJK JP')
+    return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)
+  if (family === 'Noto Color Emoji')
+    return /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(text)
+  return false
 }
