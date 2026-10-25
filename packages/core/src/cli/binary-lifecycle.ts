@@ -13,7 +13,7 @@ export interface SessionlessSigintBoundary {
   removeListener(event: 'SIGINT', listener: () => void): unknown
 }
 
-/** Dispatch keeps its listener through the complete child drain; ordinary
+/** Dispatch and watch keep their listeners through shutdown cleanup; ordinary
  * sessionless commands preserve the historical one-shot cancellation. */
 export function installSessionlessSigintHandler(
   command: string | undefined,
@@ -21,7 +21,7 @@ export function installSessionlessSigintHandler(
   boundary: SessionlessSigintBoundary = process,
 ): () => void {
   if (!usesGenericSessionlessSigintHandler(command)) return () => {}
-  if (command === 'dispatch') boundary.on('SIGINT', onSigint)
+  if (command === 'dispatch' || command === 'watch') boundary.on('SIGINT', onSigint)
   else boundary.once('SIGINT', onSigint)
   return () => boundary.removeListener('SIGINT', onSigint)
 }
@@ -42,5 +42,68 @@ export async function withDispatchTerminalRestore<T>(
     return await run()
   } finally {
     hook?.close()
+  }
+}
+
+/** Watch alone catches termination long enough to withdraw advisory presence.
+ * SIGTERM/HUP are re-raised after cleanup to retain the shell's signal outcome. */
+export function installWatchTermination(controller: AbortController): {
+  close: () => void
+  write: (line: string) => void
+  flush: () => Promise<void>
+  complete: (code: number) => Promise<number>
+} {
+  const pending = new Set<Promise<void>>()
+  let broken = false
+  let signal: 'SIGTERM' | 'SIGHUP' | undefined
+  const stop = (value: 'SIGTERM' | 'SIGHUP'): void => {
+    signal ??= value
+    controller.abort(value)
+  }
+  const term = (): void => stop('SIGTERM')
+  const hup = (): void => stop('SIGHUP')
+  const pipe = (error: NodeJS.ErrnoException): void => {
+    if (error.code !== 'EPIPE') throw error
+    broken = true
+    controller.abort('EPIPE')
+  }
+  process.on('SIGTERM', term)
+  process.on('SIGHUP', hup)
+  process.stdout.on('error', pipe)
+  const close = (): void => {
+    process.removeListener('SIGTERM', term)
+    process.removeListener('SIGHUP', hup)
+    process.stdout.removeListener('error', pipe)
+  }
+  return {
+    close,
+    write(line) {
+      if (broken || signal !== undefined) return
+      const written = new Promise<void>((resolve) => {
+        try {
+          process.stdout.write(`${line}\n`, (error) => {
+            if (error) pipe(error)
+            resolve()
+          })
+        } catch (error) {
+          pipe(error as NodeJS.ErrnoException)
+          resolve()
+        }
+      })
+      pending.add(written)
+      void written.then(() => pending.delete(written))
+    },
+    async flush() {
+      await Promise.all(pending)
+    },
+    async complete(code) {
+      close()
+      if (signal) {
+        process.kill(process.pid, signal)
+        // Wait for default signal delivery before the entry point can exit.
+        await new Promise<never>(() => {})
+      }
+      return broken ? 1 : code
+    },
   }
 }

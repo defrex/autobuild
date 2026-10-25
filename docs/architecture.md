@@ -1623,9 +1623,13 @@ A standing CLI operator operates the builds the repository's dispatcher dispatch
 `ab watch --operator` upserts mutable `(repo, id)` liveness rows in each BuildStore
 adapter; a cursor carries the registration ID and original start time. Heartbeats
 run independently of watch discovery and held reads. A final best-effort renewal
-anchors orderly-exit grace; rows expire after 300,000ms. Neither registration nor
-renewal appends events, creates a repository journal or claims a lease. Reads on
-an unknown repository return an empty collection. Status loads presence separately
+anchors orderly-exit grace; rows expire after 300,000ms. Neither registration,
+renewal nor removal appends events, creates a repository journal or claims a lease.
+SIGINT, SIGTERM, SIGHUP and stdout EPIPE cancel pending presence writes and attempt
+one idempotent repository/ID removal within a shared two-second shutdown budget.
+Failures retain TTL fallback (silently for an unsupported remote route); SIGKILL
+remains TTL-only. Timeout/count completion retains presence for routine re-arming.
+Reads on an unknown repository return an empty collection. Status loads presence separately
 from fact reduction. Build/session/phase authority cannot register; remote routes
 require repository operator authority. Concurrent advisory registrations coexist.
 Unflagged watch and `ab wait` remain read-only; MCP and dashboards do not register.

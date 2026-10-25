@@ -78,6 +78,8 @@ export function compatibilityAdvice(
  * Historical lines require explicit entries; the service's own line uses its
  * current protocol identity. Unknown historical protocols fail closed. */
 export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = {
+  // v1.0.x shipped protocol 4; protocol 5+ requires the next minor line.
+  '1.0': '4',
   '0.9': '3',
   '0.10': '3',
   '0.11': '3',

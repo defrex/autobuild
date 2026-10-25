@@ -100,6 +100,8 @@ import {
 
 export interface StoreServerOptions {
   store: BuildStore
+  /** Test seam for release-line compatibility before the release-owned version bump. */
+  identity?: { autobuildVersion: string; protocolVersion: string }
   /** When set, all /builds routes require a scoped Bearer token (D8). */
   secret?: string
   auth?: MachineAuth
@@ -212,6 +214,10 @@ function streamScopesEqual(a: StreamScope, b: StreamScope): boolean {
 
 export function createStoreServer(opts: StoreServerOptions): StoreServer {
   const { store } = opts
+  const identity = opts.identity ?? {
+    autobuildVersion: AUTOBUILD_VERSION,
+    protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+  }
   const clock = opts.clock ?? systemClock
   const maxEventWaitSeconds = opts.maxEventWaitSeconds ?? MAX_STREAM_WAIT_SECONDS
 
@@ -225,7 +231,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   function validateIdentity(req: Request): void {
     const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
     const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
-    const mismatch = clientIdentityError(clientAutobuild, clientProtocol)
+    const mismatch = clientIdentityError(
+      clientAutobuild,
+      clientProtocol,
+      identity.autobuildVersion,
+      identity.protocolVersion,
+    )
     if (mismatch !== undefined) {
       throw new RequestError(409, 'conflict', mismatch)
     }
@@ -1322,9 +1333,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments.length === 1 && segments[0] === 'health' && req.method === 'GET') {
       return json(200, {
         ok: true,
-        autobuildVersion: AUTOBUILD_VERSION,
-        protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
-        supportedClientRange: supportedClientRange(),
+        autobuildVersion: identity.autobuildVersion,
+        protocolVersion: identity.protocolVersion,
+        supportedClientRange: supportedClientRange(identity.autobuildVersion),
       })
     }
     if (['credentials', 'repos', 'builds', 'streams', 'sessions'].includes(segments[0] ?? '')) {
@@ -1350,13 +1361,20 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments[0] === 'repos') {
       if (segments.length === 1) return repoAdminRoute(req)
       const repo = segments[1]!
-      const scope = await authorize(req, 'repo', repo)
-      if (segments.length === 3 && segments[2] === 'operator-presence') {
-        if (scope?.kind === 'delegated')
+      if (
+        (segments.length === 3 || (segments.length === 4 && req.method === 'DELETE')) &&
+        segments[2] === 'operator-presence'
+      ) {
+        if ((await principal(req))?.kind === 'delegated')
           throw new MachineAuthError(
             403,
             'operator presence requires repository operator authority',
           )
+        await authorize(req, 'repo', repo)
+        if (req.method === 'DELETE' && segments.length === 4) {
+          await store.removeOperatorPresence(repo, segments[3]!)
+          return json(200, { ok: true })
+        }
         if (req.method === 'GET') return json(200, await store.listOperatorPresence(repo))
         if (req.method === 'POST')
           return json(
@@ -1364,10 +1382,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
             await store.upsertOperatorPresence(
               repo,
               await readBody(req, operatorPresenceBodySchema),
+              req.signal,
             ),
           )
         return fail(404, 'not-found', 'unknown operator presence route')
       }
+      const scope = await authorize(req, 'repo', repo)
       if (segments.length === 3 && segments[2] === 'sessions') {
         return sessionCollectionRoute(req, repo)
       }

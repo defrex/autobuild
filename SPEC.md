@@ -1672,7 +1672,13 @@ watch initialization, renew independently every 30 seconds and attempt one final
 renewal at orderly exit. Presence expires 300,000ms after the last successful
 heartbeat and never appends a build/repository event or claims a lease. Multiple
 registrations coexist. The opaque watch cursor preserves registration ID and start
-across re-arms, including expired revival; no exit unregisters. `ab wait` does not
+across re-arms, including revival after withdrawal or expiry. SIGINT, SIGTERM,
+SIGHUP and stdout EPIPE attempt one store withdrawal, with a shared approximately
+2-second shutdown budget that cancels and drains pending heartbeats before removal.
+Withdrawal failure is reported on stderr and falls back to TTL expiry; a remote
+service without the route falls back silently. Timeout/count completion retains
+presence and its final renewal for re-arming. SIGKILL cannot be caught and still
+relies on TTL expiry. `ab wait` does not
 renew or preserve this identity. MCP presence and dashboard display are deferred.
 
 Filing agents check CLI repository status before ready filing. With a live

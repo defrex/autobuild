@@ -173,6 +173,8 @@ export interface SessionlessCliDeps {
   /** For init/upgrade this is just the cwd — the default target repo. */
   workspacePath: string
   stdout: (line: string) => void
+  /** Drain watch output while termination cleanup still owns the store. */
+  flushStdout?: () => Promise<void>
   stderr: (line: string) => void
   /** Raw process environment for sessionless store selection, operator
    * provenance/self-control checks, and adapter secrets; distinct from `env`,
@@ -960,6 +962,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         env: deps.processEnv ?? {},
         exec: deps.exec,
         stdout,
+        ...(deps.flushStdout ? { flushStdout: deps.flushStdout } : {}),
         stderr,
         slugs: parsed.positionals,
         repository: parsed.flags.has('repository'),

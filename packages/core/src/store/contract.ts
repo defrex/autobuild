@@ -331,6 +331,42 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    test('operator withdrawal is idempotent, isolated and permits re-registration without journal writes', async () => {
+      const clock = manualClock()
+      await withStore(factory, { clock }, async (store) => {
+        const identity = { id: 'one', host: 'host', pid: 1, startedAt: clock().toISOString() }
+        await store.upsertOperatorPresence('withdraw', identity)
+        await store.upsertOperatorPresence('withdraw', { ...identity, id: 'two' })
+        await store.upsertOperatorPresence('other', identity)
+        await store.ensureRepo('withdraw')
+        await store.claimRepoLease('withdraw', 'dispatcher', 900_000)
+        const before = await store.getRepo('withdraw')
+        const events = await store.getRepoEvents('withdraw')
+        await store.removeOperatorPresence('withdraw', 'one')
+        await store.removeOperatorPresence('withdraw', 'one')
+        await store.removeOperatorPresence('unknown', 'one')
+        expect(await store.getRepo('unknown')).toBeNull()
+        expect((await store.listOperatorPresence('withdraw')).map((row) => row.id)).toEqual(['two'])
+        expect(await store.listOperatorPresence('other')).toHaveLength(1)
+        await store.upsertOperatorPresence('withdraw', identity)
+        expect((await store.listOperatorPresence('withdraw')).map((row) => row.id)).toEqual([
+          'one',
+          'two',
+        ])
+        clock.advance(300_000)
+        await store.removeOperatorPresence('withdraw', 'one')
+        await store.removeOperatorPresence('withdraw', 'two')
+        expect(await store.listOperatorPresence('withdraw')).toEqual([])
+        const restartedAt = clock().toISOString()
+        expect(
+          (await store.upsertOperatorPresence('withdraw', { ...identity, startedAt: restartedAt }))
+            .startedAt,
+        ).toBe(restartedAt)
+        expect(await store.getRepo('withdraw')).toEqual(before)
+        expect(await store.getRepoEvents('withdraw')).toEqual(events)
+      })
+    })
+
     test('operator presence validates identity before mutation', async () => {
       await withStore(factory, undefined, async (store) => {
         const identity = { id: 'ok', host: 'host', pid: 1, startedAt: CONTRACT_T0 }
