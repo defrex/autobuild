@@ -445,7 +445,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
           assert.equal(publish.status, 200)
           const seeded = await sql`SELECT name FROM ab_ticket_states WHERE repo=${legacyRepo}`
           assert.ok(
-            seeded.some((r) => r.name === 'Old ready'),
+            seeded.some((r: { name: string }) => r.name === 'Old ready'),
             'legacy names retained on publication',
           )
           assertions += 2
