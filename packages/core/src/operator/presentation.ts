@@ -1,5 +1,10 @@
 export { capacityExplanation } from '../kernel/dispatch-capacity'
-export { landingPolicyDisplay } from '../cli/dashboard/landing-display'
+export {
+  landingPolicyDisplay,
+  mergeVocabulary,
+  mergeSummary,
+  mergedChildren,
+} from '../cli/dashboard/landing-display'
 export {
   pauseResumeHelp,
   buildActionAvailability,

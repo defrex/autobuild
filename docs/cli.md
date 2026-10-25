@@ -22,7 +22,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `help` — Show the overview or one command's help.
 - `ticket` — Create, groom, inspect, and move tickets.
 - `repository` — Inspect durable dispatcher settings.
-- `landings` — List landings awaiting consent.
+- `merges` — List merges awaiting consent.
 - `builds` — List builds and status.
 - `build` — Inspect one build's state and events.
 - `watch` — Follow events with a resumable cursor. Opt-in `--operator` registers advisory liveness for a repository-wide standing watch; unflagged watches write nothing.
@@ -33,8 +33,8 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `answer` — Answer escalations or request a retry.
 - `abort` — Request irreversible build termination and cleanup.
 - `restack` — Request a node restack onto its current parent.
-- `hold` — Hold a landing, withdrawing consent.
-- `land` — Consent to a ready landing.
+- `hold` — Hold a merge, withdrawing consent.
+- `merge` — Consent to a ready merge.
 - `models` — Search Pi's model catalog.
 - `plugin` — Inspect, diagnose, and contract-test adapters.
 - `context` — Materialize the current phase's inputs.

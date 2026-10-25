@@ -65,7 +65,7 @@ describe('ticket grooming skill guidance', () => {
     expect(spec).toContain('Whenever grooming produces more than one ticket for a feature')
     expect(spec).toContain('../ab-guide/references/spec-standard.md#sizing-and-splitting')
     expect(spec).toContain('including when fleshing out an existing ticket')
-    expect(spec).toContain("repository's effective landing policy in `autobuild.toml`")
+    expect(spec).toContain("repository's effective merge policy in `autobuild.toml`")
     expect(spec).toContain('Ask the human when the')
     expect(spec).toContain('never changes the requested workflow state')
   })

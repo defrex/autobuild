@@ -2,7 +2,7 @@
 
 Autobuild organizes work as a tree rooted at the configured `baseBranch`.
 Work tickets are leaves; node tickets are finite integration points that collect
-children before landing into their parent. Nodes can nest. An omitted target
+children before merge into their parent. Nodes can nest. An omitted target
 means the root, so repositories can continue sending every leaf directly there.
 Blockers form a separate graph. In repositories with nodes, a blocker with a
 build resolves only when its change identity is present in the dependent's
@@ -12,10 +12,10 @@ See [restacking](restacking.md) for change identity and replay.
 
 Presence is checked only at claim, never to interrupt existing work. The newest
 build generation supplies evidence; ambiguous or unavailable evidence leaves the
-dependent queued. Confirmed landing SHA reachability can prove presence without
-a trailer, and a landed node transports its whole owned contribution. Empty
-completed nodes contribute nothing. Sibling work waits for landing into the common
-ancestor and demand the minimal restack path; same-node landings satisfy presence directly.
+dependent queued. Confirmed merge SHA reachability can prove presence without
+a trailer, and a merged node transports its whole owned contribution. Empty
+completed nodes contribute nothing. Sibling work waits for merge into the common
+ancestor and demand the minimal restack path; same-node merges satisfy presence directly.
 
 ## Choosing a destination
 
@@ -24,29 +24,29 @@ First decide whether the feature should be more than one ticket at all; the
 tickets cut at seams. Whenever grooming produces more than one ticket for a
 feature, explicitly choose root or a node before filing. Use a node when the set should reach the base branch
 as one integrated change, or intermediate states should not ship independently.
-Use root when every ticket is independently valuable and safe to land alone.
+Use root when every ticket is independently valuable and safe to merge alone.
 Nested nodes can collect a subfeature before contributing it to a larger feature.
 A node provides one integrated delivery to its parent under the configured forge
 method; it does not promise one physical Git commit.
 
 Blockers and targets are independent: blockers order work; targets decide where
-it lands. A blocker inside the same node resolves when its change lands into that
+it merges. A blocker inside the same node resolves when its change merges into that
 node, so a dependency chain can advance without waiting for root consent, subject
 to the normal claim gates and presence rules. Dependencies across destinations
 still need the presence evidence described above and in
 [blocker resolution](ticket-dependencies.md#when-a-blocker-resolves).
 
 Read the consuming repository's `autobuild.toml` and evaluate its effective
-[landing policy](landing-policy.md) for the actual ticket kinds, destinations and
-labels. Ordered `[[landing]]` rules use the first match; `from`, `into` and `label`
+[merge policy](merge-policy.md) for the actual ticket kinds, destinations and
+labels. Ordered `[[merge]]` rules use the first match; `from`, `into` and `label`
 predicates are ANDed, with omitted predicates acting as wildcards. Without a
-match, leaves default to auto and nodes to consent. Explain the resulting landing
+match, leaves default to auto and nodes to consent. Explain the resulting merge
 and consent flow to the human in plain terms. Ask when grooming does not make the
 destination choice clear. This decision is separate from workflow-state placement
 and never authorizes promoting tickets to ready.
 
 For example, **if** the matched rules require consent into root and allow automatic
-landing into nodes (the staged-release example in the policy reference), a
+merge into nodes (the staged-release example in the policy reference), a
 root-targeted chain waits for consent separately for each ticket and ships each
 intermediate change to the base branch. Under those same rules, children collect
 automatically in a node and the verified, complete node waits for consent once
@@ -96,12 +96,12 @@ capacity, effective display capacity and the nodes using descendant-held slots.
 Idle collecting nodes remain free.
 
 Claims freeze the destination build generation and branch. Missing, unopened,
-landed, closed or aborted targets leave work queued with diagnostics. The newest
+merged, closed or aborted targets leave work queued with diagnostics. The newest
 generation wins; a closed generation never falls back to an older open one.
 Source metadata and effective ancestry are different: `ab ticket tree` shows
 source targets, while build status shows the effective destination.
 
-## Collect, verify and land
+## Collect, verify and merge
 
 Node `verify:*` context additionally exposes `nodeVerification`: the frozen
 range, a JSON index path, contribution build slugs, preparation-time stored ticket
@@ -143,7 +143,7 @@ Each leaf runs the normal spec, plan/review, implement/review, verify and finali
 pipeline against its frozen destination.
 
 A node collects until every ticket targeting it is natively done or cancelled,
-all frozen child claims have settled, and at least one contribution has landed.
+all frozen child claims have settled, and at least one contribution has merged.
 Triage, backlog and ready children keep it incomplete. Exhaustive enumeration
 failures fail closed. Completeness is sampled again before verification and
 publication; tracker edits cannot be transactional with a forge write.
@@ -151,17 +151,17 @@ publication; tracker edits cannot be transactional with a forge write.
 The kernel runs all configured verify steps with normal path applicability on
 the exact node head and parent. Either moving invalidates eligibility, even a
 clean restack. Failed verification blocks the node and emits `integration.verification-failed` once per prepared cycle. Default `ab watch` includes it; `ab wait --for attention` also detects the current failure before notification. The fact names failed steps, head, parent and repair guidance. Watch baselines prior failures; reconcile status after arming. A new cycle can notify again, while historical facts do not keep a repaired node blocked. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled. Recheck current status before filing a repair, since the node may have advanced after notification. To recover, file a repair child targeting
-it; the repaired landed head permits a new cycle. If the contract changed, an
+it; the repaired merged head permits a new cycle. If the contract changed, an
 operator can explicitly revise the spec instead and verify again on the same head
 (see operator node spec revisions below). Historical reports keep their
-actual head/base citations. Integration grammar is collect → verify → land →
+actual head/base citations. Integration grammar is collect → verify → merge →
 close, with restacking and repair cycles along the way.
 
-[Landing policy](landing-policy.md) defaults nodes to consent. Once complete and
-verified, `ab land <slug>` authorizes landing; it refuses incomplete nodes and
+[Merge policy](merge-policy.md) defaults nodes to consent. Once complete and
+verified, `ab merge <slug>` authorizes merge; it refuses incomplete nodes and
 names open children. `ab hold <slug>` works before readiness and withdraws
 consent. Automatic authorization still requires every readiness and merge gate.
-A landed node completes its ticket and closes admission; it is not a perpetual
+A merged node completes its ticket and closes admission; it is not a perpetual
 staging branch. Releases remain separate maintainer operations.
 
 Human forge merges are an explicit escape hatch, including while incomplete,
@@ -173,7 +173,7 @@ children retain their frozen destination.
 ## Iterating inside a node
 
 Write the node spec as a finite integration charter: its goal, observable
-completion conditions for the whole, and destination and landing expectations
+completion conditions for the whole, and destination and merge expectations
 under the effective policy. Put feature specifics in spec-standard children.
 An open node supports three ways to iterate:
 
@@ -198,9 +198,9 @@ An open node supports three ways to iterate:
   restrictions.
 
 Open children keep the node incomplete, including triage, backlog and ready
-children. Completion remains finite: landed or otherwise ended nodes close
+children. Completion remains finite: merged or otherwise ended nodes close
 admission. Iteration does not relax verification of the exact head and parent,
-or the configured readiness, consent and landing gates described above.
+or the configured readiness, consent and merge gates described above.
 
 ## Changing a parent
 
@@ -212,11 +212,11 @@ new commit or PR. Descendants restack only on their own demand.
 
 The request is durable before the provider write. Source readback accepts the
 new effective ancestry; branch publication, PR retargeting and completion have
-separate receipts. Pending moves fence verification and landing and keep both
-parents incomplete. Reparenting revokes land consent; holds survive. Policy is
+separate receipts. Pending moves fence verification and merge and keep both
+parents incomplete. Reparenting revokes merge consent; holds survive. Policy is
 sampled again for the new parent, including when both parents have the same SHA.
 
-Cycles, unopened/terminal parents, landing or closing nodes, unsupported PR
+Cycles, unopened/terminal parents, merge or closing nodes, unsupported PR
 retargeting and busy writer operations refuse or defer the move with a reason.
 Invalid direct provider edits leave effective ancestry unchanged and produce
 durable diagnostics; restoring it clears the current refusal. Missing source
@@ -225,29 +225,29 @@ Git/PR effects without the tracker. Ambiguous writes are reread on recovery.
 Changing a claimed work ticket's target is refused before any combined patch is
 written: abort and re-dispatch instead.
 
-See [forge requirements](landing-policy.md#forge-requirements),
+See [forge requirements](merge-policy.md#forge-requirements),
 [restacking](restacking.md), and [migration from 0.x](migration-1.0.md).
 
 ## Integration detail
 
 Both dashboards show destination (with the configured-base annotation for root
-targets), row progress and steps, branch/restack state, and all open and landed
+targets), row progress and steps, branch/restack state, and all open and merged
 children with titles and states. Open children come first; live children show
-their current phase, unbuilt children read `queued`, contributions read `landed`.
+their current phase, unbuilt children read `queued`, contributions read `merged`.
 Cancelled tickets without contributions are excluded. Verification names the
 expected steps and only outcomes bound to the current node head and destination;
-failures name the repair-child instruction. Landing explains the rule and mode;
-ready consent names `l` and `ab land <slug>`. Conflicts name recorded files.
+failures name the repair-child instruction. Merge explains the rule and mode;
+ready consent names `l` and `ab merge <slug>`. Conflicts name recorded files.
 These are Store-only projections: additive `integration.observed.children`
 metadata carries source/id, optional title and contribution build identity;
 `node.item-conflicted.files` and conflicted `restack.replayed.files` retain paths.
 Older events remain readable, with explicit unavailable titles/files. Display
-metadata never changes completeness or landing eligibility.
+metadata never changes completeness or merge eligibility.
 
 ## Demand-driven parent freshness
 
 Collecting nodes may intentionally trail their parent. They refresh before
-verification and landing, for queued dependency presence, on operator request,
+verification and merge, for queued dependency presence, on operator request,
 and after accepted re-parenting. Descendants need independent demand; presence
 requests follow only the minimal proven ancestor path. See
 [restacking](restacking.md#timing-and-evidence) for timing, requests and distance.
@@ -257,7 +257,7 @@ requests follow only the minimal proven ancestor path. See
 Opened integration nodes poll every tick until their durable activity has been
 quiet for `policy.nodeIdleAfterSeconds` (default 600 seconds), then poll every
 `policy.nodeIdlePollSeconds` (default 120 seconds). Holds and waiting for consent
-qualify normally. Child claims, PR and landing activity, operator commands
+qualify normally. Child claims, PR and merge activity, operator commands
 (including repeated holds), restack requests and answers wake the next tick.
 GitHub-only changes are discovered on the next due check, within the idle
 interval plus normal tick scheduling while the dispatcher is running; failure,
@@ -279,10 +279,10 @@ Each kernel `spec.revised` records the exact artifact and operator identity
 Ticket-origin revisions re-pin assets; supplied bodies preserve asset pins.
 The node recollects and verifies the new revision, including on the same head
 and parent after a failed cycle. Earlier cycles remain historical evidence
-and cannot block or authorize landing under the replacement. Children keep
+and cannot block or authorize merge under the replacement. Children keep
 their specs, claims and targets; contributions are not restarted.
 Active verification/reconcile or writer work, restack/reparent work, pause,
-pending controls, landing intent and ended PRs refuse the no-escalation path.
+pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.

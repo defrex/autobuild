@@ -203,11 +203,11 @@ export interface DashboardBuild {
     | 'verifying'
     | 'verification failed'
     | 'awaiting consent'
-    | 'ready to land'
-    | 'human landing'
-    | 'fenced landing'
-    | 'unfenced landing'
-    | 'unverified landing'
+    | 'ready to merge'
+    | 'human merge'
+    | 'fenced merge'
+    | 'unfenced merge'
+    | 'unverified merge'
   slug: string
   status: EffectiveStatus
   /** True when the build is BOTH paused and blocked: blocked wins the status
@@ -437,7 +437,7 @@ export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
  * so the terminal row/detail and the web row/detail say the same words, and
  * so it names the per-build control that unblocks the parked build. */
 export function autoMergeConsentReason(slug: string): string {
-  return `Landing awaits consent — use ab land ${slug}; use ab hold ${slug} to withdraw consent`
+  return `Merge awaits consent — use ab merge ${slug}; use ab hold ${slug} to withdraw consent`
 }
 
 /**
@@ -976,10 +976,10 @@ export function projectBuildFromFacts(
   if (mergeCurrent && !landingAuthorized(state.landing)) {
     const reason =
       state.landing?.command?.kind === 'hold'
-        ? `Landing held — use ab land ${record.slug} when ready to release the hold`
+        ? `Merge held — use ab merge ${record.slug} when ready to release the hold`
         : state.landing?.decision?.mode === 'consent'
           ? autoMergeConsentReason(record.slug)
-          : 'Landing policy decision pending'
+          : 'Merge policy decision pending'
     steps[steps.length - 1] = { ...steps[steps.length - 1]!, reason }
   }
 
@@ -1046,7 +1046,7 @@ export function projectBuildFromFacts(
                     ? 'integration awaits verification'
                     : !landingAuthorized(state.landing)
                       ? 'integration awaits explicit per-build consent'
-                      : 'integration awaits guarded landing',
+                      : 'integration awaits guarded merge',
             }),
           ]
         : steps,
@@ -1426,11 +1426,11 @@ export function buildVocabulary(state: BuildState): {
     | 'verifying'
     | 'verification failed'
     | 'awaiting consent'
-    | 'ready to land'
-    | 'human landing'
-    | 'fenced landing'
-    | 'unfenced landing'
-    | 'unverified landing'
+    | 'ready to merge'
+    | 'human merge'
+    | 'fenced merge'
+    | 'unfenced merge'
+    | 'unverified merge'
 } {
   return {
     kind: state.kind === 'node' ? treeVocabulary.integrationKind : treeVocabulary.work,
@@ -1442,13 +1442,13 @@ export function buildVocabulary(state: BuildState): {
           integration:
             state.integration?.audit &&
             state.integration.audit.verifiedTree !== state.integration.audit.landedTree
-              ? 'unverified landing'
+              ? 'unverified merge'
               : state.integration?.landing?.provenance === 'human'
-                ? 'human landing'
+                ? 'human merge'
                 : state.integration?.landing
                   ? state.integration.landing.fenced
-                    ? 'fenced landing'
-                    : 'unfenced landing'
+                    ? 'fenced merge'
+                    : 'unfenced merge'
                   : state.nodeRestack?.parentRequest || state.nodeRestack?.parentChange
                     ? 'reparenting'
                     : integrationFailed(state)

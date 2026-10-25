@@ -6,7 +6,7 @@ baseBranch = "main"
 capacity = 4
 
 # First matching rule wins. Empty rules: leaves auto, nodes consent.
-landing = []
+merge = []
 
 # Commands are derived by the setup agent from this repository's actual toolchain.
 [commands]

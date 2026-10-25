@@ -54,6 +54,6 @@ A restart loses nothing. The dispatcher continues each build from its recorded p
 
 ## The operator agent stays outside
 
-Your operator agent is an external coding agent you direct, like Claude Code or Codex. It files and grooms tickets with you, operates the builds the repository's dispatcher dispatches, answers bounded escalations and manages landing consent, using the `ab` CLI locally or the same tools over MCP. You make the product calls. Autobuild never hosts or starts it, and its chat isn't part of the build's paper trail.
+Your operator agent is an external coding agent you direct, like Claude Code or Codex. It files and grooms tickets with you, operates the builds the repository's dispatcher dispatches, answers bounded escalations and manages merge consent, using the `ab` CLI locally or the same tools over MCP. You make the product calls. Autobuild never hosts or starts it, and its chat isn't part of the build's paper trail.
 
 Next: [operator surfaces](operator-surfaces.md) for the controls, [one build end to end](builds.md) for the phases.

@@ -40,14 +40,14 @@ also verifies byte for byte.
 
 Open `docs/assets/headline-wide.png` and inspect it at approximately the
 README's content width. Confirm the labels remain legible; intake and Harvest
-are enabled; per-build `landing enabled` and `landing requested` tokens and the
-selected `l land` / `o hold` controls are visible; Harvest is running with scan
+are enabled; per-build `merge enabled` and `merge requested` tokens and the
+selected `l merge` / `o hold` controls are visible; Harvest is running with scan
 complete and synthesize underway; and the five plausible builds collectively
 show plan, implement, code-review, verify, and a merged PR. Confirm a plan/review round count above
 one is visible. The headline must contain no blocked, paused, or held state,
 failure/error text, capture-fixture identifiers, Unicode stress sample,
 row-count preview, or truncation marker. The retired repository-wide auto-merge
-switch must be absent; do not require it as evidence of landing authorization.
+switch must be absent; do not require it as evidence of merge authorization.
 
 The adversarial `mixed-wide`, `mixed-narrow`, `unicode-transcript`, and
 `resume-prompt` frames are still produced under `.ab/dashboard-frames/` for the

@@ -255,7 +255,7 @@ This capability is independent of revision and comment capabilities and of the
 client version. Without it, both fields are projected away, preserving historical
 strict decoders. Current hosted clients send all three capability headers and
 default absent kind to `work`. Unfiltered listing includes all ticket states and
-empty nodes for `ab ticket tree`; dispatch and landing behavior are unchanged.
+empty nodes for `ab ticket tree`; dispatch and merge behavior are unchanged.
 
 ## Reading across upgrades
 
@@ -276,7 +276,7 @@ service never invents an identity for a backend that supplies none. This keeps
 released strict JSON decoders working without a new request capability.
 
 Unknown advisory facts are counted and skipped. Unknown decisive facts defer
-claiming, routing, landing and publication only for their build; status,
+claiming, routing, merge and publication only for their build; status,
 context and dashboards remain readable. One `build.compatibility-deferred`
 attention fact per decisive boundary appears in the default `ab watch` stream.
 Its diagnostic names unsupported types and producer releases: restart with a

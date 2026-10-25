@@ -94,7 +94,7 @@ describe('integration list projection', () => {
       { label: 'open', state: 'current' },
       { label: 'collect', state: 'pending' },
       { label: 'verify', state: 'pending' },
-      { label: 'land', state: 'pending', qualifier: 'consent' },
+      { label: 'merge', state: 'pending', qualifier: 'consent' },
     ])
   })
   test('current cycle progress, failure, repair and moved parents exclude stale evidence', () => {
@@ -138,7 +138,7 @@ describe('integration list projection', () => {
       },
     }
     state.prState = 'open'
-    expect(row(state).alert?.text).toBe('ready to land into main — press l, or ab land node')
+    expect(row(state).alert?.text).toBe('ready to merge into main — press l, or ab merge node')
     state.landing.command = { seq: 31, kind: 'hold' }
     expect(row(state).alert).toBeUndefined()
     expect(row(state).steps[4]?.qualifier).toBe('held')
