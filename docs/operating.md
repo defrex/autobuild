@@ -17,7 +17,7 @@ Your operator agent keeps work moving through `ab` or MCP. Under your instructio
 ## Choose a harness
 
 - **A local coding agent** at the repository root with the installed `ab-operate` skill, using the CLI or `bun ab mcp` (operator tools over stdio).
-- **An API client** using the authenticated Operator API contract.
+- **An API client** using the authenticated [Operator API contract](operator-api.md).
 
 We recommend the same model as your reviewer roles, since the agent interprets findings and escalation answers.
 

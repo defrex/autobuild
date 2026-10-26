@@ -41,7 +41,7 @@ Every environment needs the runtime, tools, dependencies and credentials; remote
 
 - File tickets and local git make all-local independent of GitHub.
 - The operator agent is external in both.
-- Choosing a remote Store alone doesn't make anything remote.
+- Choosing a remote Store alone does not move dispatch or build execution off this machine.
 - Mixed deployments work within adapter constraints, e.g. a local dispatcher with a hosted Store and remote sandboxes.
 
 See [Dispatcher hosting](dispatcher-hosting.md).

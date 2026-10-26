@@ -273,7 +273,8 @@ It warns and continues when the target is outside the range, naming the
 required service upgrade for a newer target or a compatible project range for
 an older one. An unavailable or malformed probe warns that connectivity may
 fail after upgrade. Legacy health without a range means exact-version matching;
-upgrade that service to the compatibility-window release first.
+the hosted instance must publish a compatibility window before clients can
+use release-line compatibility.
 
 A distribution fix reaches origin-mode guests after a release is cut and the
 dispatcher is upgraded. Guests continue to run the dispatcher's own version;

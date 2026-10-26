@@ -104,4 +104,4 @@ Run `bun ab connect` to check the instance, normalized origin and credential.
 Reconnect on this host/user if credentials are missing or rejected. A project
 must be actively registered with the instance; data alone grants no access.
 If access remains refused, give the instance operator the project identity and
-sanitized error. See the authentication contract.
+sanitized error. See the [authentication contract](remote-store-protocol.md#7-authentication-and-project-authority).

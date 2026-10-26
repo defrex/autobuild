@@ -76,7 +76,7 @@ model = "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
 Run the supported CLI from an HTTPS GitHub origin:
 
 ```sh
-bun ab dispatch --origin https://github.com/acme/app --plain --store https://builds.example.com
+bun ab dispatch --repository https://github.com/acme/app --plain --store https://builds.example.com
 ```
 
 Use a remote store that speaks the remote BuildStore protocol.
@@ -88,7 +88,7 @@ plugins. Export push-capable `GITHUB_TOKEN` or `GH_TOKEN`; forge credentials sta
 on the host. Sandbox provisioning needs `VERCEL_OIDC_TOKEN` or the durable
 `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` tuple. Guests receive only
 declared runtime API credentials and scoped execution grants.
-See `docs/setup.md` for origin-mode setup and [Workspaces](workspaces.md).
+See [origin-mode setup](setup.md#running-the-dispatcher-without-a-checkout-origin-mode) and [Workspaces](workspaces.md).
 
 ## Writing your own
 

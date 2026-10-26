@@ -111,10 +111,28 @@ test('docs renderer escapes page metadata', () => {
   expect(html).toContain('content="&quot;&lt;text&gt;&amp;"')
 })
 
-test('published pages link only within the site, and feature guides are text-only', () => {
+test('published pages keep navigation on-site and link only declared repository references', () => {
+  const references = new Map([
+    [
+      'docs/dispatcher-hosting.md',
+      ['docs/setup.md#running-the-dispatcher-without-a-checkout-origin-mode'],
+    ],
+    ['docs/operating.md', ['docs/operator-api.md']],
+    [
+      'docs/troubleshooting.md',
+      ['docs/remote-store-protocol.md#7-authentication-and-project-authority'],
+    ],
+  ])
   for (const page of DOCS_PAGES) {
-    expect(page.content, page.source).not.toContain(`${REPO_URL}/blob/`)
-    expect(page.content, page.source).not.toContain(`${REPO_URL}/tree/`)
+    const expected = (references.get(page.source) ?? []).map(
+      (path) => `${REPO_URL}/blob/main/${path}`,
+    )
+    const actual = [...page.content.matchAll(/href="([^"]+)"/g)]
+      .map((match) => match[1]!)
+      .filter(
+        (href) => href.startsWith(`${REPO_URL}/blob/`) || href.startsWith(`${REPO_URL}/tree/`),
+      )
+    expect(actual, page.source).toEqual(expected)
   }
   for (const page of DOCS_PAGES.slice(2))
     expect(page.content).not.toMatch(/<figure|<svg|<img|<script/)
