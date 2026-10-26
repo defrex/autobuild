@@ -854,7 +854,10 @@ mod tests {
             protocol::VERSION_HEADER,
             protocol::service_version().parse().unwrap(),
         );
-        headers.insert(protocol::PROTOCOL_HEADER, "5".parse().unwrap());
+        headers.insert(
+            protocol::PROTOCOL_HEADER,
+            protocol::protocol_version().parse().unwrap(),
+        );
         headers
     }
     #[test]

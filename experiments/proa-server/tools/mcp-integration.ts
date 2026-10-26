@@ -63,7 +63,7 @@ export async function withMcpServer<T>(
         PROA_DEV_AUTH: 'true',
         PROA_DEV_AUTH_EMAIL: 'operator@example.com',
         PROA_DEV_AUTH_CAPABILITY: capability,
-        AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+        AB_WEB_SUPER_USER_EMAILS: 'operator@example.com',
       }
       let child: ReturnType<typeof Bun.spawn> | undefined
       async function stop() {
@@ -75,7 +75,7 @@ export async function withMcpServer<T>(
       }
       async function restart(allowed = 'operator@example.com') {
         await stop()
-        serverEnv.AB_WEB_ALLOWED_EMAILS = allowed
+        serverEnv.AB_WEB_SUPER_USER_EMAILS = allowed
         child = Bun.spawn([executable], {
           cwd: runtime,
           env: serverEnv,

@@ -334,7 +334,7 @@
   "sources": {
     "packages/core/src/store/ticket-assets.ts": "413a5978b041a479657f2b2c3babbddd68cd8fc86cfbd94eb571af985b94cb74",
     "packages/core/src/store/ticket-asset-snapshots.ts": "bc476b7e22e9f8389eac7a344fb196b480d255dff7e227c9928f94d8c40dab3c",
-    "packages/postgres-store/src/store.ts": "bd8b4c7a1994232dc73dfa3221ecceb6f4cff424d72050e03ea9ad7db8972537"
+    "packages/postgres-store/src/store.ts": "13feb6f6048206c1a6db4e5d3fffddd9edbc524a07a2964d741dbb2ca86b8980"
   },
   "cases": [
     {

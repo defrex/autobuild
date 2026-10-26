@@ -310,7 +310,7 @@ mod tests {
             "GITHUB_CLIENT_ID" => Some("client-id".into()),
             "GITHUB_CLIENT_SECRET" => Some("client-secret".into()),
             "PROA_AUTH_URL" => Some("http://127.0.0.1:3000".into()),
-            "AB_WEB_ALLOWED_EMAILS" => Some("operator@example.com".into()),
+            "AB_WEB_SUPER_USER_EMAILS" => Some("operator@example.com".into()),
             _ => None,
         })
         .unwrap();

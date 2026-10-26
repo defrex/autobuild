@@ -61,10 +61,11 @@ fn escalation_rules(actor: &Value, payload: &Value) -> Result<(), String> {
                     "infrastructure-failure-limit"
                         | "dispatch-failure-limit"
                         | "execution-no-progress"
+                        | "publication-retry-limit"
                 )
             ))
     {
-        return Err("invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress may be raised outside the kernel".into());
+        return Err("invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress or policy/publication-retry-limit may be raised outside the kernel".into());
     }
     if payload["source"] == "policy" && payload.get("policyCause").is_none() {
         return Err("invalid payload for \"escalation.raised\": source \"policy\" requires a recognized policyCause".into());

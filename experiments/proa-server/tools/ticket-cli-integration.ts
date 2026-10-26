@@ -121,7 +121,7 @@ export async function ticketCliIntegration(
           GITHUB_CLIENT_ID: 'ticket-cli-proof',
           GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
           PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
-          AB_WEB_ALLOWED_EMAILS: actor,
+          AB_WEB_SUPER_USER_EMAILS: actor,
           AB_STORE_SECRET: secret,
         },
         stdout: Bun.file(join(runtime, 'native.log')),

@@ -219,11 +219,12 @@ fn escalation(actor: &J, payload: &J) -> Result<(), S> {
                 "infrastructure-failure-limit",
                 "dispatch-failure-limit",
                 "execution-no-progress",
+                "publication-retry-limit",
             ]
             .iter()
             .any(|c| same(&payload["policyCause"], c)))
     {
-        return Err(S::from("invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress may be raised outside the kernel"));
+        return Err(S::from("invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress or policy/publication-retry-limit may be raised outside the kernel"));
     }
     if same(&payload["source"], "policy") && payload.get("policyCause").is_none() {
         return Err(S::from("invalid payload for \"escalation.raised\": source \"policy\" requires a recognized policyCause"));
