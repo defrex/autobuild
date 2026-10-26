@@ -90,6 +90,10 @@
     "./connection": {
       "types": "./packages/core/src/connection.ts",
       "import": "./packages/core/src/connection.ts"
+    },
+    "./project-secrets": {
+      "types": "./packages/core/src/project-secrets.ts",
+      "import": "./packages/core/src/project-secrets.ts"
     }
   },
   "files": [
