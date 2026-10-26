@@ -96,16 +96,12 @@ bun ab builds --queued
 
 See [answering blocked builds](operating.md#answer-and-pause). Preserve event logs; let the kernel manage leases and recovery.
 
-## Hosted project selection
+## Remote project access
 
-**Symptom.** A project is missing from connected tools or the dashboard, or hosted dispatch ignores it despite valid credentials.
+**Symptom.** Remote requests refuse a project despite a configured URL.
 
-**Cause.** Registration, allowed-user access, project credentials and dispatcher selection are separate gates.
-
-- **Registration.** Check the active PostgreSQL project registry; build or ticket data doesn't register a project.
-- **Access.** Super users see all active entries; members see only their organizations’ projects; verify sign-in separately from credentials.
-- **Administration.** With deployment database credentials, an administrator runs `ab-hosted-store projects list`, `projects add` or `projects remove`. Mutations require `--user IDENTITY` for attribution; project tokens can't administer registrations.
-- **Dispatcher selection.** `AB_DISPATCHER_REPOSITORIES` in the hosted dispatch environment selects projects: unset selects every active registration; an explicit ordered list is intersected with current registrations.
-- **Dashboard fallback.** With no selection, the dashboard shows the first registered origin.
-
-Registry errors fail closed.
+Run `bun ab connect` to check the instance, normalized origin and credential.
+Reconnect on this host/user if credentials are missing or rejected. A project
+must be actively registered with the instance; data alone grants no access.
+If access remains refused, give the instance operator the project identity and
+sanitized error. See the [authentication contract](remote-store-protocol.md#7-authentication-and-project-authority).

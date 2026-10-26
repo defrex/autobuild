@@ -405,7 +405,13 @@ export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
     const sides = new Map<string, string | undefined>()
     for (const seam of SEAMS) for (const a of seam.adapters) sides.set(a.id, a.side)
     for (const chip of probe.chips) {
+      const seam = SEAMS.find((entry) => entry.id === chip.seam)
       const side = sides.get(chip.adapter)
+      if (side === 'local' && !seam?.adapters.some((adapter) => adapter.side === 'remote')) {
+        if (chip.pressed !== 'true')
+          problems.push(`fixed local chip ${chip.seam}/${chip.adapter} is not pressed`)
+        continue
+      }
       if (side === 'remote' && chip.pressed !== 'true') {
         problems.push(`remote chip ${chip.seam}/${chip.adapter} is not pressed`)
       }

@@ -55,94 +55,8 @@ An **acceptance check** is a repository-owned agent verify step that runs the bu
 Selection is explicit `--store` > nonblank `AB_STORE` > `[store] url` > the main
 checkout's `.autobuild/`. A configured service without a user credential fails
 with `ab connect` guidance. `AB_TOKEN` overrides the saved service/project
-credential. See [connecting a project](hosted-service.md#connect-a-project).
+credential. See [connecting a project](setup.md#connect-a-project).
 Changing the store requires restarting dispatch.
-
-## Hosted service and PostgreSQL BuildStore environment
-
-The optional `@defrex/autobuild-hosted-store-service` and its
-`@defrex/autobuild-postgres-store` adapter are configured entirely through the
-environment. They are published to npm as separate packages alongside the
-`@defrex/autobuild` CLI, so a CLI install never acquires the service,
-PostgreSQL, or blob-provider dependencies; a project that embeds the adapter
-or the service adds the package it needs (`bun add
-@defrex/autobuild-postgres-store` or `bun add
-@defrex/autobuild-hosted-store-service`). The cron-driven hosted dispatcher is
-separately published as `@defrex/autobuild-hosted-dispatcher`; a deployment
-opts into building by installing that package, and its `AB_DISPATCHER_*`
-variables are documented in the [hosted-dispatcher runbook](hosted-dispatcher.md),
-not here. The deployable web application still
-runs from a release checkout: choose the compatible tag shown in
-[GitHub Releases](https://github.com/defrex/autobuild/releases), clone that exact
-revision into a dedicated checkout, and run the idempotent migration there:
-
-```sh
-git clone --depth 1 --branch v0.6.0 --single-branch https://github.com/defrex/autobuild.git autobuild-v0.6.0
-cd autobuild-v0.6.0
-bun install --frozen-lockfile
-DATABASE_URL=postgres://… bun run postgres:migrate
-```
-
-Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
-`postgres:migrate` script is relative to that pinned checkout. A hosted build
-can run the same step itself: `bun run deploy:build` — run from the hosted
-store service package directory (`packages/hosted-store-service`), the Next.js
-project directory — migrates against the
-deployment's database URL, logs the host it prepared, and then builds the web
-application, failing the build when no database URL is configured or the
-schema is incompatible. The database
-identity needs permission to create tables during migration and to select,
-insert, and update those tables at runtime. The complete run, deployment, and
-token procedure is in the [hosted service
-guide](../packages/hosted-store-service/README.md); clients use the
-separate signed-user token described by the [operator API](operator-api.md).
-
-| Variable | Required when | Values / purpose |
-|---|---|---|
-| `AB_STORE_SECRET` | Hosted service | Nonblank HMAC signing secret. Service-side only; never give it to clients. |
-| `AB_HOST` | Optional, ordinary Bun host | Bind hostname; defaults to `0.0.0.0`. Vercel supplies its own listener. |
-| `PORT` | Optional, ordinary Bun host | Integer 1–65535; defaults to `3000`. Vercel supplies its own listener. |
-| `AB_STORE` | Remote client | Hosted service base URL used by the kernel, phase commands, and dashboard. |
-| `AB_TOKEN` | Authenticated remote client | Explicit project bearer credential override for CI; otherwise use ab connect. This is not the signing secret. |
-| `BETTER_AUTH_SECRET` | Web dashboard | Independent server-only session secret with at least 32 high-entropy characters. |
-| `BETTER_AUTH_URL` | Web dashboard | Exact HTTP(S) origin, without credentials or a path; HTTPS is mandatory in production. |
-| `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
-| `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
-| `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
-| `AB_WEB_SUPER_USER_EMAILS` | Web dashboard | Nonempty comma-separated super-user emails; matching is case-insensitive. Ordinary users require organization membership. |
-| `AB_WEB_REPOSITORIES` | Hosted service | Deprecated once-per-database bootstrap CSV for the durable project registry. Use owner commands thereafter; see [connected projects](setup.md#connected-projects). |
-
-GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
-the `user:email` scope (or GitHub App read-only email permission). Sessions are
-database-backed and represented in the browser only by an HTTP-only cookie.
-Membership or super-user removal takes effect on the next web API request or MCP tool call. Never expose these
-secrets, `AB_STORE_SECRET`, database/blob credentials, machine tokens, or OAuth
-account tokens through a `NEXT_PUBLIC_` variable.
-
-The following variables configure the service-side durable adapter (or a direct
-use of `@defrex/autobuild-postgres-store`).
-
-| Variable | Required when | Values / purpose |
-|---|---|---|
-| `DATABASE_URL` | Always, unless `AB_POSTGRES_URL` is set | Nonblank PostgreSQL connection URL under its conventional name, as Vercel's Neon and Postgres storage integrations inject it. |
-| `AB_POSTGRES_URL` | Optional override | Explicit Autobuild-specific connection URL; a nonblank value wins over `DATABASE_URL`. No other ambient variable is consulted. |
-| `AB_BLOB_BACKEND` | Always | `s3` or `vercel`. |
-| `AB_BLOB_PREFIX` | Optional | Object pathname prefix; redundant `/` characters are normalized. |
-| `AB_S3_BUCKET` | S3 | Bucket name. |
-| `AB_S3_REGION` | S3 | S3 signing region. |
-| `AB_S3_ENDPOINT` | Optional, S3 | Endpoint URL for an S3-compatible service. |
-| `AB_S3_ACCESS_KEY_ID` | S3 | Explicit access key; ambient AWS credential lookup is not used. |
-| `AB_S3_SECRET_ACCESS_KEY` | S3 | Explicit secret key. |
-| `AB_S3_SESSION_TOKEN` | Optional, S3 | Explicit temporary-credential session token. |
-| `AB_S3_FORCE_PATH_STYLE` | Optional, S3 | Exact boolean `true` or `false`. |
-| `AB_VERCEL_BLOB_ACCESS` | Vercel | `public` or `private`. |
-| `BLOB_READ_WRITE_TOKEN` | Vercel auth option | Blob read-write token. |
-| `VERCEL_OIDC_TOKEN` | Vercel OIDC option | Must be paired with `BLOB_STORE_ID` when no read-write token is supplied. |
-| `BLOB_STORE_ID` | Vercel OIDC option | Must be paired with `VERCEL_OIDC_TOKEN`. |
-
-S3 identities need `GetObject` and `PutObject` on the bucket/prefix. The adapter
-maps only a provider 404 to absence and propagates authorization/service errors.
-Vercel object names are deterministic and overwritten idempotently.
 
 ## Strict parsing and validation
 
@@ -188,7 +102,7 @@ instead: a push to the base branch is honored by a later tick without
 restarting anything. Hot fields apply immediately; restart-classified fields
 keep the startup-built adapters and file the existing restart-required notice
 (a long-lived origin-mode watch picks them up on its next process restart;
-the hosted cron entry point re-reads them on every invocation).
+origin-mode dispatch reads configuration from the forge).
 Each dispatch, build, check, or agent action captures the accepted configuration
 snapshot at its start boundary: work already running is not interrupted, while
 the next setup or pipeline step of the same in-flight build uses the new
@@ -857,7 +771,7 @@ before claims and list every available builtin and plugin provider.
 
 ### Vercel Sandbox
 
-Remote execution is explicit and requires the hosted HTTPS BuildStore plus its
+Remote execution is explicit and requires an HTTPS remote store that speaks the remote BuildStore protocol plus its
 scoped token, an HTTPS `github.com/owner/repository` origin, `forge = "github"`,
 and Vercel authentication. Use either `VERCEL_OIDC_TOKEN`, or all of
 `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID`. The dispatcher also
@@ -1197,7 +1111,7 @@ by reinstalling the archive before reuse, so an upgraded dispatcher retrofits
 its persistent guests. Cached registry generations deliver their own manifest
 version’s validated GitHub release asset, resolved on first guest use and cached
 separately from the normalized host archive. Local launches need no asset fetch; source generations deliver exact packed source bytes (see "Guest distribution version selection and delivery"
-in docs/setup.md for the release-and-upgrade delivery path and the hosted
+in docs/setup.md for the release-and-upgrade delivery path and the instance
 store's supported client window). Immediately
 before every build-child launch, the adapter verifies the
 provisioned absolute Bun executable and every referenced runtime again. A
@@ -3279,7 +3193,7 @@ the existing text-download projection.
 - for `forge = "github"`, either export a `GITHUB_TOKEN` or `GH_TOKEN` or run `gh auth login`:
   the kernel speaks the GitHub REST API directly, taking `GITHUB_TOKEN`, then `GH_TOKEN`, then the
   gh CLI's stored login (`gh auth token`) — so a local dispatcher needs only the gh login, while a
-  host without gh (hosted or sandboxed dispatchers) must export a token. Separately make sure the
+  host without gh (including sandboxed dispatchers) must export a token. Separately make sure the
   Git remote can fetch/push with the process's Git credentials;
 - Claude sessions invoke the local `claude` CLI and use its configured login;
   install Claude Code, launch `claude`, and complete login before dispatching;
@@ -3381,26 +3295,13 @@ progress is not shown. Harvest does not consume build capacity.
   A protected store reports 401 for a missing, invalid, or expired token and
   403 when the token is valid but scoped to another build/session.
 
-### Hosted project selection
-
-The durable PostgreSQL project registry controls dashboard, MCP and operator
-API access. Super users see every active entry; members see only their organizations’ projects. Administer it with
-`ab-hosted-store projects list|add|remove` using deployment database credentials;
-mutations require `--user IDENTITY` for declared attribution. See
-[connected projects](setup.md#connected-projects) for migration and retention.
-`AB_DISPATCHER_REPOSITORIES` optionally selects an ordered subset of current
-registrations. When unset, each authorized tick queries all active entries.
-Removed credential override keys are inert in dynamic mode; explicit-list
-configuration still rejects unknown override keys.
-
 ## Hosted service client compatibility
 
 A service accepts stable and prerelease clients from its own `major.minor`
 release line and the two preceding minor lines in the same major. A major starts a new family:
 X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
 Patch versions are interchangeable in both directions and must never change
-the protocol. Upgrade the service first, then projects independently within
-its window. Supported release lines retain their wire handlers and known
+the protocol. Keep project clients within the instance’s published window. Supported release lines retain their wire handlers and known
 protocol identities; an unknown protocol is refused independently of version.
 Stable and prerelease service and client identities share their numeric major/minor
 line. Malformed or missing identities, build metadata (`+…`), prefixes and
@@ -3440,9 +3341,7 @@ Commands and acknowledgements are sequence-correlated; hold acknowledgement
 requires confirmed native cancellation, while merge acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available
 through the MCP/operator build-control tools. The terminal uses `l` for merge and
-`o` for hold on the selected merge. The hosted web app offers **Merge** and
-**Hold** on a merge awaiting consent, with the same durable acknowledgements
-and merge gates. It does not provide a merge-policy editor.
+`o` for hold on the selected merge.
 
 The repository auto-merge default and its fan-out are retired. Historical events
 still replay; explicit old per-build commands map to consent/hold until a new
@@ -3518,7 +3417,7 @@ still use the checkout. A launcher freezes the currently installed distribution
 and production dependencies offline; all later local runners and agent CLIs use
 that same snapshot. Automatic adoption is enabled by default through `[upgrade]`
 below; a manual restart is required when automatic upgrades are disabled or the
-launcher contract changes. `--once`, origin mode and hosted cron retain their
+launcher contract changes. `--once` and origin mode retain their
 direct execution paths.
 
 ## `[upgrade]`
@@ -3659,20 +3558,9 @@ retry failed installs. Operator stop always wins over replacement startup.
 Set `automatic = false` to cancel pending preparation and retain manual restart
 behavior. A launcher contract change also requires a manual restart. A legacy v1 launcher
 without overlap supervision requires restart before another automatic adoption. `--once`,
-origin/hosted dispatch and direct development presentation modes do not auto-upgrade.
+origin-mode dispatch and direct development presentation modes do not auto-upgrade.
 `ab upgrade` still updates the pin/installation and merges skills locally, commits
 when eligible, and never pushes. Pinned dispatchers follow after that commit
 reaches the base branch; installed-mode dispatchers follow their replaced install.
 Source-mode dispatchers follow changes to packaged inputs merged to the base,
 including shipped canonical skills, without a version bump.
-
-
-The retired `AB_WEB_ALLOWED_EMAILS` variable is refused at startup, even if empty.
-Replace it with `AB_WEB_SUPER_USER_EMAILS`; review the list because these identities
-are deployment maintainers. Bootstrap the first organization through the
-[browser management contract](operator-api.md#organization-management-browser),
-then add members by email and assign legacy unassigned projects. Super users alone
-create orgs, set or clear the single owner, and assign or move projects. Owners
-manage their org's members. Removing the last membership or super-user designation
-revokes human access on the next request without re-login; existing project
-credentials remain valid until revoked.
