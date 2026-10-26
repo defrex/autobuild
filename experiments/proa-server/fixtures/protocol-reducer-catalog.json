@@ -54,7 +54,7 @@
     },
     "terminalGuard": {
       "scope": "build",
-      "version": 2,
+      "version": 3,
       "args": {
         "type": "object",
         "shape": {
@@ -105,12 +105,12 @@
     },
     "buildStreamSeed": {
       "scope": "build",
-      "version": 31,
+      "version": 34,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
     "buildReadFacts": {
       "scope": "build",
-      "version": 61,
+      "version": 68,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
     "effectiveConfig": {
@@ -134,7 +134,7 @@
     },
     "executionNoProgress": {
       "scope": "build",
-      "version": 5,
+      "version": 6,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
     "summaryBoundary": {
@@ -152,7 +152,7 @@
     },
     "build": {
       "scope": "build",
-      "version": 21,
+      "version": 24,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
     "harvest": {
@@ -190,7 +190,7 @@
       "version": 1,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
-    "logIndex": { "excluded": "finished value contains Maps and Sets", "version": 5 },
+    "logIndex": { "excluded": "finished value contains Maps and Sets", "version": 6 },
     "frozenPrImageHost": {
       "excluded": "finished contract can return top-level undefined, which is not JSON",
       "version": 1
@@ -208,7 +208,7 @@
     },
     "publicationState": {
       "excluded": "finished value contains executable selector functions",
-      "version": 5
+      "version": 6
     },
     "repositoryStateEvents": {
       "excluded": "returns a list of raw repository journal events",
@@ -279,7 +279,7 @@
     },
     "phaseFailures": {
       "scope": "build",
-      "version": 2,
+      "version": 3,
       "args": {
         "type": "object",
         "shape": {
@@ -328,7 +328,7 @@
     },
     "dashboardFacts": {
       "scope": "build",
-      "version": 2,
+      "version": 3,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
     "autoMergeDefault": {
@@ -472,6 +472,8 @@
     "finalize.step-started": "progress",
     "publication.requested": "progress",
     "publication.lost": "progress",
+    "publication.retry-scheduled": "failure",
+    "publication.retry-exhausted": "failure",
     "abort.remote-branch-deleted": "progress",
     "abort.local-branch-deleted": "progress",
     "abort.ticket-returned": "progress",
@@ -505,7 +507,11 @@
     "code-review.started": "progress",
     "code-review.verdict": "progress",
     "verify.reconcile-policy-captured": "progress",
+    "verify.config-captured": "progress",
+    "verify.config-superseded": "progress",
     "verify.started": "progress",
+    "verify.cancelled": "progress",
+    "verify.stage-failed": "progress",
     "verify.completed": "progress",
     "finalize.started": "progress",
     "finalize.completed": "progress",
@@ -543,6 +549,7 @@
     "execution-no-progress": "none",
     "setup-failure-limit": "none",
     "infrastructure-failure-limit": "none",
+    "publication-retry-limit": "none",
     "phase-attempt-limit": "matching-round",
     "non-retryable-phase-failure": "matching-round"
   },

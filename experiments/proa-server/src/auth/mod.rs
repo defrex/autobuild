@@ -52,7 +52,7 @@ impl Auth {
             sessions: Mutex::new(HashMap::new()),
             transactions: Mutex::new(HashMap::new()),
             allowed: Arc::new(|| {
-                std::env::var("AB_WEB_ALLOWED_EMAILS")
+                std::env::var("AB_WEB_SUPER_USER_EMAILS")
                     .ok()
                     .and_then(|s| emails(&s).ok())
                     .unwrap_or_default()

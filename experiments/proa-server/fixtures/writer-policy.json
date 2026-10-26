@@ -1,9 +1,9 @@
 {
   "sources": {
-    "packages/core/src/events/catalog.ts": "42dcb6096faa6519eb860934c403b070fd2f2d11d88f84f4bae02149230dc0d6",
-    "packages/core/src/events/repository.ts": "2c83a11aababe189a2d132bf634ddbcea38890ddd010806841a7bab853beb86f",
-    "packages/core/src/events/sessions.ts": "34038b6e8b37bb19fb3d5c0c1bb7c8210625582797dc655f9864f14b67d6ebdf",
-    "packages/core/src/events/policy.ts": "38e995c81ac2291b7df5fa80cf5e01e14214e1f94188d96ff139986a19838ac7"
+    "packages/core/src/events/catalog.ts": "6841ef6f4d72d7df5aba9b7820d397918409a9ebda220d18b66c90feddef942c",
+    "packages/core/src/events/repository.ts": "7e49ef392e8de682f7bc9f98ad52fb57b6b866b4328ab5dbdd9a14bb958e90f0",
+    "packages/core/src/events/sessions.ts": "51798b81bfd9982d770806c977780409baeb6ab2eff8e2766e4c3f17a5ddbaa5",
+    "packages/core/src/events/policy.ts": "0db86511f62ebd407f6510d2cb7ab3dc4d57497c9e3b5b650e2aec37b8c87ca3"
   },
   "actors": {
     "build": {
@@ -79,6 +79,8 @@
       "finalize.step-started": ["kernel"],
       "publication.requested": ["agent", "kernel"],
       "publication.lost": ["dispatcher"],
+      "publication.retry-scheduled": ["kernel", "dispatcher"],
+      "publication.retry-exhausted": ["kernel", "dispatcher"],
       "abort.remote-branch-deleted": ["dispatcher"],
       "abort.local-branch-deleted": ["dispatcher"],
       "abort.ticket-returned": ["dispatcher"],
@@ -112,7 +114,11 @@
       "code-review.started": ["kernel"],
       "code-review.verdict": ["agent"],
       "verify.reconcile-policy-captured": ["kernel"],
+      "verify.config-captured": ["kernel"],
+      "verify.config-superseded": ["kernel"],
       "verify.started": ["kernel"],
+      "verify.cancelled": ["kernel"],
+      "verify.stage-failed": ["kernel"],
       "verify.completed": ["kernel", "agent"],
       "finalize.started": ["kernel"],
       "finalize.completed": ["kernel"],
@@ -306,6 +312,8 @@
       "finalize.step-started": "decisive",
       "publication.requested": "decisive",
       "publication.lost": "decisive",
+      "publication.retry-scheduled": "decisive",
+      "publication.retry-exhausted": "decisive",
       "abort.remote-branch-deleted": "decisive",
       "abort.local-branch-deleted": "decisive",
       "abort.ticket-returned": "decisive",
@@ -339,7 +347,11 @@
       "code-review.started": "decisive",
       "code-review.verdict": "decisive",
       "verify.reconcile-policy-captured": "decisive",
+      "verify.config-captured": "decisive",
+      "verify.config-superseded": "decisive",
       "verify.started": "decisive",
+      "verify.cancelled": "decisive",
+      "verify.stage-failed": "decisive",
       "verify.completed": "decisive",
       "finalize.started": "decisive",
       "finalize.completed": "decisive",

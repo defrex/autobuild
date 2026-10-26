@@ -11,6 +11,8 @@ test('API read fixtures retain all four read surfaces and concrete failure/metad
     'detail-done',
     'detail-cleaning',
     'detail-pinned',
+    'detail-cycle-pin',
+    'dashboard-cycle-pin',
     'detail-bad-pin',
     'detail-sessions',
     'detail-verify-cycle',

@@ -2,18 +2,19 @@
   "format": 1,
   "checkpoint": "session-and-validation-foundation",
   "manifest": {
-    "sourceClosureSha256": "5ba42c297846e603d010f12a4809865c9540efeb3616414393a9733b2c58c410",
-    "sourceFiles": 820,
+    "sourceClosureSha256": "fb0ca0babf1bd6f925b815f321034a608fc6d9313cab94c4c5bcb1710e5ebed3",
+    "sourceFiles": 831,
     "generatorSha256": "4c0c9f5504831d71ca545567cd57d069aa6faec6d02923644bd849291a9d7fd0",
-    "documentationSha256": "891b81de36b1225c40f8ea817cd590bd8174e29fad4462fc10b4dd8e508fdd51",
+    "documentationSha256": "d08cf2d00df2cbc9aec44baca0dd4673da6a794a653a097264f1e709451a8556",
     "identity": {
       "version": "1.0.1",
-      "protocol": "5",
+      "protocol": "6",
       "window": {
         "minVersion": "1.0.0",
         "maxVersionExclusive": "1.1.0"
       },
       "historicalProtocols": {
+        "1.0": "4",
         "0.9": "3",
         "0.10": "3",
         "0.11": "3",
@@ -244,7 +245,7 @@
           },
           "body": {
             "kind": "conflict",
-            "error": "remote store version mismatch: client Autobuild (missing) protocol (missing); server Autobuild 1.0.1 protocol 5; service Autobuild 1.0.1 supports clients >=1.0.0 <1.1.0; supply a canonical Autobuild client version"
+            "error": "remote store version mismatch: client Autobuild (missing) protocol (missing); server Autobuild 1.0.1 protocol 6; service Autobuild 1.0.1 supports clients >=1.0.0 <1.1.0; supply a canonical Autobuild client version"
           },
           "sessions": []
         }
@@ -279,7 +280,7 @@
           },
           "body": {
             "kind": "conflict",
-            "error": "remote store version mismatch: client Autobuild invalid protocol 5; server Autobuild 1.0.1 protocol 5; service Autobuild 1.0.1 supports clients >=1.0.0 <1.1.0; supply a canonical Autobuild client version"
+            "error": "remote store version mismatch: client Autobuild invalid protocol 6; server Autobuild 1.0.1 protocol 6; service Autobuild 1.0.1 supports clients >=1.0.0 <1.1.0; supply a canonical Autobuild client version"
           },
           "sessions": []
         }
@@ -314,7 +315,7 @@
           },
           "body": {
             "kind": "conflict",
-            "error": "remote store version mismatch: client Autobuild 0.9.0 protocol 3; server Autobuild 1.0.1 protocol 5; service Autobuild 1.0.1 supports clients >=1.0.0 <1.1.0; upgrade the project's Autobuild into >=1.0.0 <1.1.0"
+            "error": "remote store version mismatch: client Autobuild 0.9.0 protocol 3; server Autobuild 1.0.1 protocol 6; service Autobuild 1.0.1 supports clients >=1.0.0 <1.1.0; upgrade the project's Autobuild into >=1.0.0 <1.1.0"
           },
           "sessions": []
         }
@@ -347,7 +348,7 @@
           },
           "body": {
             "kind": "conflict",
-            "error": "remote store version mismatch: client Autobuild 1.0.1 protocol 3; server Autobuild 1.0.1 protocol 5; supported clients >=1.0.0 <1.1.0; unsupported protocol identity"
+            "error": "remote store version mismatch: client Autobuild 1.0.1 protocol 3; server Autobuild 1.0.1 protocol 6; supported clients >=1.0.0 <1.1.0; unsupported protocol identity"
           },
           "sessions": []
         }

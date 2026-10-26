@@ -1,7 +1,7 @@
 {
   "format": 1,
   "clock": "2026-09-02T00:00:00.000Z",
-  "sourceHash": "161f06c25119d38bc7f2675b72d02b13944d193cc556ee371d93f92b3d0de5e8",
+  "sourceHash": "c52c0d2f56fc0a02a216b04a3451ad079172c6bda702f2d184c6585ebf8c05ac",
   "bindings": {
     "snapshot": "Generated ticket-snapshot UUIDs bound in deposit order",
     "manifestHash": "SHA256 of gzip manifest containing bound UUIDs; actual hash independently checked against bytes before binding"
@@ -57,15 +57,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -445,10 +437,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -614,6 +618,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -994,10 +1010,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -1164,6 +1192,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -1243,15 +1283,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -1646,10 +1678,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -1815,6 +1859,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -2179,10 +2235,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -2349,6 +2417,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -2428,15 +2508,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -2860,10 +2932,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -3030,6 +3114,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -3175,6 +3271,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -3542,10 +3650,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -3712,6 +3832,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -3858,6 +3990,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -3937,15 +4081,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -4369,10 +4505,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -4539,6 +4687,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -4684,6 +4844,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -5015,10 +5187,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -5185,6 +5369,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -5331,6 +5527,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -5410,15 +5618,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -5768,10 +5968,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -6095,10 +6307,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -6174,15 +6398,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -6562,10 +6778,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -6731,6 +6959,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -7059,10 +7299,22 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
-                "cycleSince": 0
+                "cycleSince": 4
               },
               "reconcileAttempts": 0,
               "observations": [],
@@ -7229,6 +7481,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -7308,15 +7572,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -7485,6 +7741,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -7546,6 +7803,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -7724,6 +7993,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -7792,6 +8062,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 5,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -7887,15 +8169,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -8078,6 +8352,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -8139,6 +8414,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -8345,6 +8632,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -8455,6 +8743,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 5,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -8608,15 +8908,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -8803,6 +9095,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -8864,6 +9157,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -9070,6 +9375,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -9180,6 +9486,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 5,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -9337,15 +9655,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -9537,6 +9847,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -9598,6 +9909,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -9804,6 +10127,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -9914,6 +10238,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 5,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -10099,15 +10435,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -10317,6 +10645,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -10378,6 +10707,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -10584,6 +10925,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -10694,6 +11036,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 5,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -10847,15 +11201,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -11084,6 +11430,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -11157,6 +11504,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -11380,6 +11739,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -11456,6 +11816,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 6,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -11562,15 +11934,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -11731,6 +12095,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -11792,6 +12157,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -11915,6 +12292,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -11976,6 +12354,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -12056,15 +12446,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -12247,6 +12629,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -12308,6 +12691,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -12506,6 +12901,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -12605,6 +13001,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 5,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -12699,15 +13107,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -12890,6 +13290,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3
                 }
@@ -12951,6 +13352,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -13157,6 +13570,7 @@
                   "phase": "implement",
                   "round": 1,
                   "source": "agent",
+                  "session": "phase",
                   "question": "Revise?",
                   "seq": 3,
                   "answer": "Operator replaced the spec; the build restarts from plan",
@@ -13267,6 +13681,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 5,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -13420,15 +13846,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -13669,6 +14087,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,
@@ -13931,6 +14361,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -14083,15 +14525,7 @@
           "sandbox": {
             "idleMinutes": 30,
             "environmentVariables": []
-          },
-          "invocationBudgetSeconds": 240,
-          "approvals": [
-            "builds.control:abort",
-            "builds.control:discard",
-            "builds.answer:revise-spec",
-            "sandbox.publish",
-            "tickets.move:ready"
-          ]
+          }
         },
         "tickets": {
           "source": "hosted",
@@ -14319,6 +14753,18 @@
                 "planReview": [],
                 "codeReview": []
               },
+              "verifyStage": {
+                "cycle": 0,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
+              },
               "verify": {
                 "maxAttemptSeen": 0,
                 "results": [],
@@ -14535,6 +14981,18 @@
               "reviewFindings": {
                 "planReview": [],
                 "codeReview": []
+              },
+              "verifyStage": {
+                "cycle": 4,
+                "concurrent": false,
+                "executionSeq": 0,
+                "members": {},
+                "owners": {},
+                "outcomes": {},
+                "cancellations": {},
+                "failures": [],
+                "implementations": {},
+                "superseded": []
               },
               "verify": {
                 "maxAttemptSeen": 0,

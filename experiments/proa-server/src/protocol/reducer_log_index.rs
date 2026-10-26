@@ -17,7 +17,7 @@ fn round_record(value: &mut Value, round: i64) -> &mut Value {
     &mut a[index][1]
 }
 pub(super) fn log_index(events: &[Value]) -> Value {
-    let mut value = json!({"readDeferrals":deferrals(events),"restack":crate::protocol::restack_values::reduce_leaf(events),"restartSeq":0,"plan":empty_loop(),"code":empty_loop(),"verifyCompleted":[],"verifyStarted":[],"maxVerifyAttemptEver":0,"lastReconcileCompletedSeq":0,"lastImplementCompletedSeq":0,"finalizeCompleted":false,"finalizeStepsDone":[],"reconcileNoProgressCount":0,"guidanceDeliveries":[]});
+    let mut value = json!({"readDeferrals":deferrals(events),"restack":crate::protocol::restack_values::reduce_leaf(events),"restartSeq":0,"plan":empty_loop(),"code":empty_loop(),"verifyCompleted":[],"verifyStarted":[],"maxVerifyAttemptEver":0,"verifyConfigBoundary":0,"lastReconcileCompletedSeq":0,"lastImplementCompletedSeq":0,"finalizeCompleted":false,"finalizeStepsDone":[],"reconcileNoProgressCount":0,"guidanceDeliveries":[]});
     let mut pending = serde_json::Map::new();
     let mut active_start: Option<Value> = None;
     let mut starts = Vec::new();
@@ -216,6 +216,10 @@ pub(super) fn log_index(events: &[Value]) -> Value {
                     .as_array_mut()
                     .unwrap()
                     .push(record)
+            }
+            "verify.config-captured" | "verify.config-superseded" => {
+                value["verifyConfigBoundary"] =
+                    json!(number(&value["verifyConfigBoundary"]).max(seq(event)));
             }
             "verify.reconcile-policy-captured" => value["reconcilePolicy"] = p.clone(),
             "finalize.completed" => value["finalizeCompleted"] = json!(true),

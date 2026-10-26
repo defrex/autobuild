@@ -8,7 +8,10 @@ import { resolve } from 'node:path'
 import { PostgresTicketSource } from '../../../packages/postgres-store/src/tickets'
 import { PostgresTicketPolicyStore } from '../../../packages/postgres-store/src/ticket-policy'
 import { PostgresCredentialStore } from '../../../packages/postgres-store/src/credentials'
-import manifest from '../../../package.json'
+import {
+  AUTOBUILD_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION,
+} from '../../../packages/core/src/store/remote/version'
 import { PostgresProjectRegistry } from '../../../packages/postgres-store/src/projects'
 import { migratePostgres } from '../../../packages/postgres-store/src/schema'
 import {
@@ -531,8 +534,8 @@ export async function ticketIntegration(adminUrl: string, env: Record<string, st
     const ready = JSON.parse(new TextDecoder().decode(first.value)) as { origin: string }
     const headers = {
       authorization: `Bearer ${credential.token}`,
-      'x-autobuild-version': manifest.version,
-      'x-autobuild-protocol-version': '5',
+      'x-autobuild-version': AUTOBUILD_VERSION,
+      'x-autobuild-protocol-version': REMOTE_STORE_PROTOCOL_VERSION,
       'content-type': 'application/json',
     }
     const httpCall = async (name: string, method: string, path: string, body?: unknown) => {

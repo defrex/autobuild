@@ -233,7 +233,7 @@ export async function agentProof() {
             kind: 'dispatcher-effective-config',
             content: JSON.stringify({
               ...root,
-              verify: { steps: verify.steps },
+              verify: { steps: verify.stages ?? verify.steps },
               finalize: { steps: finalize.steps },
             }),
           },
