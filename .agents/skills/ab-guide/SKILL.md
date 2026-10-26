@@ -1501,8 +1501,10 @@ arguments or responses. These sessionless commands use the saved owner
 credential and recheck current membership. The current setter owns the value,
 which serves every hosted build of that project. Hosted ticks resolve a fresh,
 complete encrypted set and override matching deployment variables for that
-project only; local dispatchers keep using their own environment. Failed
-configuration, decryption or refresh prevents that project's tick from dispatching.
+project only; local dispatchers keep using their own environment. For projects
+with saved secrets, failed configuration, decryption or refresh prevents dispatch.
+Projects without secrets continue with an empty set without encryption
+configuration. Every secret write still requires valid encryption configuration.
 List exposes only status, owner, timestamps and a keyed fingerprint. See the
 [write-only protocol](references/remote-store-protocol.md#project-secrets-v1).
 Sandbox forwarding rules remain separate; saving a secret does not grant

@@ -1686,4 +1686,7 @@ credentials directly and hidden input. The hosted dispatcher internally resolves
 the complete set per tick, validates the handoff under the mutation lock, overlays
 a fresh project environment, strips the encryption key, and redacts supplied
 values in output/errors. Effective-config artifacts serialize declarative config,
-not the process environment. No operator/MCP/raw-store accessor resolves plaintext.
+not the process environment. Empty snapshots bypass decryption/key validation only
+after reading and validating the complete version set under the project lock;
+new secrets invalidate an earlier empty handoff. Writes always validate the key.
+No operator/MCP/raw-store accessor resolves plaintext.

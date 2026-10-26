@@ -164,8 +164,10 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
   private async read(repo: string): Promise<{ rows: Row[]; payloads: SecretPayload[] }> {
     return this.sql.begin(async (tx) => {
       await this.lock(tx as SQL, repo)
-      const cipher = await this.cipher(tx as SQL)
       const rows: Row[] = await tx`SELECT * FROM project_secrets WHERE repo=${repo} ORDER BY name`
+      // Projects that have not opted into secrets need no encryption configuration.
+      if (rows.length === 0) return { rows, payloads: [] }
+      const cipher = await this.cipher(tx as SQL)
       const payloads = rows.map((r) => {
         validateSecretName(r.name)
         const payload = cipher.decrypt(context(repo, r.name, r.kind), r.payload) as SecretPayload
@@ -324,6 +326,8 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
         ) !== JSON.stringify(snapshot.versions)
       )
         return false
+      // The complete version set still matches, so an empty handoff is safe without a key.
+      if (rows.length === 0) return true
       const cipher = await this.cipher(tx as SQL)
       for (const row of rows) {
         validateSecretName(row.name)

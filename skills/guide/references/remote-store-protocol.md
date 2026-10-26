@@ -1422,7 +1422,11 @@ environment for that project only. Replacement/removal applies on the next tick.
 Resolution and handoff validate the complete generation/revision set; a stale
 handoff dispatches nothing. Encryption configuration errors, decryption failures,
 and refresh failures fail the affected project closed without a partial set;
-other projects can continue. Metadata remains available for diagnosis.
+other projects can continue. Projects without saved secrets resolve and supply an
+empty set without encryption configuration, including when another project has
+secrets. All secret mutations still require valid encryption configuration, even
+on an empty project. An empty snapshot becomes stale if a secret is added before
+handoff. Metadata remains available for diagnosis.
 
 Refreshing kinds are internal provider integrations, not arbitrary endpoint URLs
 or CLI write formats. Before delivery the resolver requires at least ten minutes

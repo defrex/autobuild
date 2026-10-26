@@ -55,11 +55,14 @@ live(
       ).rejects.toThrow('key-unavailable')
       await store.remove(repo, 'KIMI_API_KEY', 'member-c')
       expect(await store.list(repo)).toEqual([])
-      await expect(
-        new PostgresProjectSecrets(sql, projects, () =>
-          Buffer.alloc(32, 2).toString('base64'),
-        ).resolveForTick(repo, Date.now(), Date.now() + 1000),
-      ).rejects.toThrow('key-unavailable')
+      // Even after a verifier exists, empty resolution needs no decryption.
+      const empty = await new PostgresProjectSecrets(sql, projects, () => undefined).resolveForTick(
+        repo,
+        Date.now(),
+        Date.now() + 1000,
+      )
+      expect(empty.env).toEqual({})
+      expect(empty.versions).toEqual([])
       expect(
         (await sql`SELECT actor,action FROM project_secret_audit ORDER BY ts`).map(
           (r: Record<string, string>) => [r.actor, r.action],
@@ -556,4 +559,50 @@ live(
       )
       expect(calls).toBe(0)
     }),
+)
+
+live('empty snapshots need no key, while writes and nonempty resolution still fail closed', () =>
+  fixture(async (sql, _url, projects) => {
+    const emptyRepo = 'https://github.com/example/empty'
+    await projects.add(emptyRepo, 'owner')
+    const writer = new PostgresProjectSecrets(sql, projects, () => key)
+    for (const rawKey of [undefined, 'malformed', Buffer.alloc(32, 2).toString('base64')]) {
+      const store = new PostgresProjectSecrets(sql, projects, () => rawKey)
+      const snapshot = await store.resolveForTick(emptyRepo, Date.now() + 600000, Date.now() + 5000)
+      expect(snapshot.env).toEqual({})
+      expect(snapshot.versions).toEqual([])
+      await store.markSupplied(snapshot)
+    }
+    const unconfigured = new PostgresProjectSecrets(sql, projects, () => undefined)
+    await expect(unconfigured.set(emptyRepo, 'KIMI_API_KEY', 'secret', 'member')).rejects.toThrow(
+      'key-unavailable',
+    )
+    await expect(unconfigured.remove(emptyRepo, 'KIMI_API_KEY', 'member')).rejects.toThrow(
+      'key-unavailable',
+    )
+    // A verifier in another project must not turn an unused feature into an outage.
+    await writer.set(repo, 'KIMI_API_KEY', 'secret', 'member')
+    for (const rawKey of [undefined, 'malformed', Buffer.alloc(32, 2).toString('base64')]) {
+      const store = new PostgresProjectSecrets(sql, projects, () => rawKey)
+      const snapshot = await store.resolveForTick(emptyRepo, Date.now() + 600000, Date.now() + 5000)
+      await store.markSupplied(snapshot)
+      await expect(
+        store.resolveForTick(repo, Date.now() + 600000, Date.now() + 5000),
+      ).rejects.toThrow('key-unavailable')
+      await expect(store.set(emptyRepo, 'KIMI_API_KEY', 'secret', 'member')).rejects.toThrow(
+        'key-unavailable',
+      )
+      await expect(store.remove(emptyRepo, 'KIMI_API_KEY', 'member')).rejects.toThrow(
+        'key-unavailable',
+      )
+    }
+    const snapshot = await unconfigured.resolveForTick(
+      emptyRepo,
+      Date.now() + 600000,
+      Date.now() + 5000,
+    )
+    await writer.set(emptyRepo, 'KIMI_API_KEY', 'new-secret', 'member')
+    await expect(unconfigured.markSupplied(snapshot)).rejects.toThrow('stale-secrets')
+    expect((await writer.list(emptyRepo))[0]!.lastSuppliedAt).toBeNull()
+  }),
 )

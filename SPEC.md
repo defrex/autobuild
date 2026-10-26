@@ -4167,7 +4167,10 @@ No public surface returns material. Authority and process-control names are rese
 Every hosted tick resolves a coherent complete set, overlays project values onto
 its own deployment environment, and records revision-fenced supply timestamps at
 kernel handoff. Encryption keys are excluded from child environments. A failed
-resolution skips that project, without partial delivery. Local dispatch behavior
+resolution skips that project, without partial delivery. Projects without secrets
+resolve and hand off an empty set without encryption configuration; all secret
+mutations still require a valid key. Adding a secret invalidates an earlier empty
+snapshot before handoff. Local dispatch behavior
 is unchanged. Refresh kinds serialize external rotation with a committed CAS
 attempt, persist replacement state before delivery, and fail expired attempts
 without takeover. A failed credential requires explicit replacement. The public
