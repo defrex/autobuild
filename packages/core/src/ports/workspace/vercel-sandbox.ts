@@ -2036,17 +2036,26 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         )
       }
     }
-    const origin = this.origins.get(identity.workspaceRef) ?? cleanGithubOrigin(await this.origin())
-    const base = uploadPackPolicy(
-      origin,
-      this.options.config.gitPasswordEnv === undefined
-        ? undefined
-        : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
-    )
-    const refreshed = accountPolicy(base, this.options.accounts?.() ?? {}, this.options.env)
-    await sandbox.update({ networkPolicy: refreshed.policy }, { signal: this.operationSignal() })
-    if (refreshed.missing.length)
-      throw new Error(`Missing credentials: ${refreshed.missing.join('; ')}`)
+    let attention: string | undefined
+    const accounts = this.options.accounts?.() ?? {}
+    // Preserve legacy observation: without accounts there is no credential
+    // policy to refresh, and no additional provider write or failure point.
+    if (Object.keys(accounts).length) {
+      const origin =
+        this.origins.get(identity.workspaceRef) ?? cleanGithubOrigin(await this.origin())
+      const base = uploadPackPolicy(
+        origin,
+        this.options.config.gitPasswordEnv === undefined
+          ? undefined
+          : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
+      )
+      const refreshed = accountPolicy(base, accounts, this.options.env)
+      await sandbox.update({ networkPolicy: refreshed.policy }, { signal: this.operationSignal() })
+      if (refreshed.missing.length)
+        attention = `Missing credentials: ${refreshed.missing.join('; ')}`
+    }
+    const diagnosed = (observation: ExecutionObservation): ExecutionObservation =>
+      attention === undefined ? observation : { ...observation, attention }
     let observation: ExecutionObservation
     try {
       const command = await sandbox.getCommand(identity.commandId, {
@@ -2065,7 +2074,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           observation = { state: 'ended', exitCode: finished.exitCode }
         } catch (error) {
           if (isMissingVercelSandbox(error)) observation = { state: 'lost' }
-          else if (isInterruptedLongPoll(error)) return { state: 'running' }
+          else if (isInterruptedLongPoll(error)) return diagnosed({ state: 'running' })
           else throw error
         }
       }
@@ -2076,7 +2085,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // Deliberately outside the lookup/wait catch: an ambiguous stop must not
     // become proof of loss or command exit, even when its error resembles a
     // transport interruption.
-    return settled(observation)
+    return settled(diagnosed(observation))
   }
 
   // ── Operator sandbox capability (AUT-340) ─────────────────────────

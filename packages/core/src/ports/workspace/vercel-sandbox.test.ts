@@ -3623,8 +3623,42 @@ test('billing credentials stay out of all guest commands and rotate on observati
   expect(rotated).toContain('sentinel-rotated-credential')
   expect(rotated).not.toContain('sentinel-old-credential')
   delete env.ANTHROPIC_API_KEY
-  await expect(h.provider.buildExecution.observe!(execution.identity!)).rejects.toThrow(
-    'ANTHROPIC_API_KEY',
-  )
+  const missing = await h.provider.buildExecution.observe!(execution.identity!)
+  expect(missing.state).toBe('running')
+  expect(missing.attention).toContain('ANTHROPIC_API_KEY')
+  expect(missing.attention).toContain('first')
+  expect(missing.attention).toContain('replace the Kimi')
+  h.sandbox.detachedCommands.get(execution.identity!.commandId!)!.exitCode = 0
+  const exited = await h.provider.buildExecution.observe!(execution.identity!)
+  expect(exited).toMatchObject({ state: 'ended', exitCode: 0, attention: missing.attention })
+  expect(h.sandbox.stops).toBeGreaterThan(0)
   expect(JSON.stringify(h.sandbox.policies.at(-1))).not.toContain('sentinel-rotated-credential')
+})
+
+test('legacy observation makes no policy writes and still settles command exit', async () => {
+  const h = harness()
+  const workspace = await h.provider.provision({
+    repo: '/repo',
+    baseBranch: 'main',
+    branch: 'ab/legacy-observe',
+  })
+  h.sandbox.detachedWait = () => new Promise(() => undefined)
+  const execution = await h.provider.buildExecution.start({
+    slug: 'legacy-observe',
+    storeRef: 'https://store.example.test',
+    instance: 'i',
+    workspaceRef: workspace.ref,
+  })
+  const updates = h.sandbox.policies.length
+  h.sandbox.failRestore = true // Any newly introduced policy write would fail.
+  expect(await h.provider.buildExecution.observe!(execution.identity!)).toEqual({
+    state: 'running',
+  })
+  expect(h.sandbox.policies).toHaveLength(updates)
+  h.sandbox.detachedCommands.get(execution.identity!.commandId!)!.exitCode = 0
+  expect(await h.provider.buildExecution.observe!(execution.identity!)).toEqual({
+    state: 'ended',
+    exitCode: 0,
+  })
+  expect(h.sandbox.policies).toHaveLength(updates)
 })

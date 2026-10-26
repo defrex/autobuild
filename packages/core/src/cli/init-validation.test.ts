@@ -2422,3 +2422,81 @@ region = "china"
   ).toBe(true)
   expect(JSON.stringify(report)).not.toContain('sentinel-')
 })
+
+test.each(['primary', 'alternate'])(
+  'a Kimi account does not hide broken legacy Claude authentication on a %s route',
+  async (route) => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-mixed-account-readiness-'))
+    roots.push(repo)
+    const roles =
+      route === 'alternate'
+        ? `
+[roles.default]
+runtime="pi"
+model="pi/test"
+alternates=[{runtime="claude",model="claude-legacy"}]
+[roles.implement]
+runtime="claude"
+account="kimi"
+model="kimi-for-coding"
+alternates=[]
+`
+        : `
+[roles.default]
+runtime="claude"
+[roles.implement]
+account="kimi"
+model="kimi-for-coding"
+`
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `
+[tickets]
+source="file"
+readyState="Ready"
+[accounts.kimi]
+kind="kimi-code"
+credentialEnv="MEMBERSHIP"
+${roles}`,
+    )
+    const legacyModels: string[][] = []
+    const accountCalls: string[] = []
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: { AB_STORE: 'https://store.example', MEMBERSHIP: 'sentinel-membership' },
+      runtimes: {
+        pi: {
+          runner,
+          servesModels: ['pi/'],
+          initUsable: async () => ({ usable: true, reason: 'ready' }),
+        },
+        claude: {
+          runner,
+          servesModels: ['claude-'],
+          defaultModel: 'claude-default',
+          initUsable: async ({ models }) => {
+            legacyModels.push([...models])
+            return { usable: false, reason: 'legacy login is broken' }
+          },
+          oneShot: {
+            complete: async (input) => {
+              accountCalls.push(input.account!.name)
+              return { text: 'OK' }
+            },
+          },
+        },
+      },
+      openStore: () => readOnlyStore([]),
+    })
+    expect(accountCalls).toEqual(['kimi'])
+    expect(legacyModels).toEqual([[route === 'alternate' ? 'claude-legacy' : 'claude-default']])
+    expect(
+      report.checks.some(
+        (check) =>
+          check.name.startsWith('runtime claude') &&
+          check.status === 'fail' &&
+          check.detail.includes('legacy login is broken'),
+      ),
+    ).toBe(true)
+  },
+)

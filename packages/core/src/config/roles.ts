@@ -80,6 +80,8 @@ export interface RoleKeyDiagnostics {
 type StepTable = { kind: 'check' } | { kind: 'agent'; skill: string }
 
 export interface RuntimeReferenceGroup {
+  /** Account-free routes, retained separately when accounts are declared. */
+  legacyAuthentication?: { models: string[]; usesRuntimeDefaultModel: boolean }
   accountTargets?: Array<{ account: SelectedAccount; model?: string; references: string[] }>
   runtime: string
   /** Human-readable routes selecting this runtime, including alternates. */
@@ -114,6 +116,10 @@ export function effectiveRuntimeReferences(
     })),
   ]
 
+  const legacyAuthentication = new Map<
+    string,
+    { models: Set<string>; usesRuntimeDefaultModel: boolean }
+  >()
   const accountTargets = new Map<
     string,
     Array<{ account: SelectedAccount; model?: string; references: string[] }>
@@ -142,6 +148,15 @@ export function effectiveRuntimeReferences(
       accountTargets.set(runtime, targets)
     }
     if (runtime === undefined || runtime.trim() === '') return
+    if (!account) {
+      const legacy = legacyAuthentication.get(runtime) ?? {
+        models: new Set<string>(),
+        usesRuntimeDefaultModel: false,
+      }
+      if (model === undefined) legacy.usesRuntimeDefaultModel = true
+      else legacy.models.add(model)
+      legacyAuthentication.set(runtime, legacy)
+    }
     const group = grouped.get(runtime) ?? {
       references: new Set(),
       models: new Set(),
@@ -182,6 +197,14 @@ export function effectiveRuntimeReferences(
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([runtime, group]) => ({
       runtime,
+      ...(Object.keys(config.accounts ?? {}).length && legacyAuthentication.has(runtime)
+        ? {
+            legacyAuthentication: {
+              models: [...legacyAuthentication.get(runtime)!.models].sort(),
+              usesRuntimeDefaultModel: legacyAuthentication.get(runtime)!.usesRuntimeDefaultModel,
+            },
+          }
+        : {}),
       ...(accountTargets.has(runtime) ? { accountTargets: accountTargets.get(runtime)! } : {}),
       references: [...group.references].sort(),
       models: [...group.models].sort(),

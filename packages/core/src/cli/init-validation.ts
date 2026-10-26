@@ -75,14 +75,19 @@ function effectiveTargets(
   // Preserve eager registry/model/argument validation, but probe only routes
   // the pipeline can consume rather than every declared role table.
   createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds, config.accounts)
-  return effectiveRuntimeReferences(config).map((group) => {
+  return effectiveRuntimeReferences(config).flatMap((group) => {
+    const selected =
+      group.runtime === 'claude' && Object.keys(config.accounts).length
+        ? group.legacyAuthentication
+        : group
+    if (selected === undefined) return []
     const defaultModel = runtimes[group.runtime]?.defaultModel
     return {
       runtime: group.runtime,
       models: [
         ...new Set([
-          ...group.models,
-          ...(group.usesRuntimeDefaultModel && defaultModel !== undefined ? [defaultModel] : []),
+          ...selected.models,
+          ...(selected.usesRuntimeDefaultModel && defaultModel !== undefined ? [defaultModel] : []),
         ]),
       ].sort(),
     }
@@ -262,8 +267,6 @@ export async function runGuestReadinessProbe(opts: {
       }
     }
     for (const target of effectiveTargets(config, runtimes)) {
-      if (target.runtime === 'claude' && Object.keys(config.accounts).length) continue
-
       if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
       const probe = runtimes[target.runtime]?.initUsable
       if (probe === undefined) {
