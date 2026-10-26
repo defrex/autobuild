@@ -123,7 +123,7 @@ function ProjectMenu({
         onClick={() => setOpen((value) => !value)}
         onKeyDown={onTriggerKey}
       >
-        <span className="menu-label">{projectLabel(repo)}</span>
+        <span className="menu-label">{projectLabel(repo)}</span>{' '}
         <span className="menu-glyph" aria-hidden>
           ▾
         </span>

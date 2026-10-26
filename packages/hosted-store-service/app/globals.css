@@ -268,10 +268,9 @@ textarea {
   position: relative;
   min-width: 0;
 }
+/* Inline content, not flex: one underline runs from the label through the glyph. */
 .menu-trigger {
-  display: flex;
-  gap: 1ch;
-  align-items: baseline;
+  text-align: left;
 }
 .menu-label {
   overflow-wrap: anywhere;

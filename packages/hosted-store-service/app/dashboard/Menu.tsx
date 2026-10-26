@@ -55,7 +55,7 @@ export function Menu({
         onClick={() => setOpen((value) => !value)}
         onKeyDown={onTriggerKey}
       >
-        <span className="menu-label">{label}</span>
+        <span className="menu-label">{label}</span>{' '}
         <span className="menu-glyph" aria-hidden>
           ▾
         </span>
