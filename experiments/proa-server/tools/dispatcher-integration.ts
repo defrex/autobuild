@@ -151,7 +151,7 @@ export async function dispatcherIntegration(
         PROA_DEV_AUTH_EMAIL: 'operator@example.com',
         PROA_DEV_AUTH_CAPABILITY: capability,
         PROA_SESSION_SECRET: 'isolated-dispatcher-proof-secret-0000000000',
-        AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+        AB_WEB_SUPER_USER_EMAILS: 'operator@example.com',
         GITHUB_CLIENT_ID: undefined,
         GITHUB_CLIENT_SECRET: undefined,
       },

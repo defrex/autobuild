@@ -224,7 +224,7 @@ async fn execute(
             Ok((
                 201,
                 session
-                    .create_configured(repo, principal.user(), body["title"].as_str(), now)
+                    .create_http(repo, principal.user(), body["title"].as_str(), now)
                     .await?,
             ))
         }

@@ -1,11 +1,12 @@
 //! Release-line admission, matching core/store/remote/compatibility.ts.
 use super::error::OperatorError;
 use axum::http::HeaderMap;
-use semver::Version;
 
 pub const VERSION_HEADER: &str = "x-autobuild-version";
 pub const PROTOCOL_HEADER: &str = "x-autobuild-protocol-version";
-pub const PROTOCOL_VERSION: &str = "5";
+pub fn protocol_version() -> &'static str {
+    &crate::protocol::identity::ServiceIdentity::current().protocol_version
+}
 
 pub fn service_version() -> String {
     serde_json::from_str::<serde_json::Value>(include_str!("../../../../package.json"))
@@ -14,59 +15,14 @@ pub fn service_version() -> String {
         .expect("package version")
         .to_owned()
 }
-fn release(value: &str) -> Option<Version> {
-    // node-semver's parser is capped at 256 bytes and safe-integer components.
-    if value.len() > 256 || value.contains('+') {
-        return None;
-    }
-    let parsed = Version::parse(value).ok()?;
-    if parsed.to_string() != value
-        || [parsed.major, parsed.minor, parsed.patch]
-            .into_iter()
-            .any(|n| n > 9_007_199_254_740_991)
-    {
-        return None;
-    }
-    Some(parsed)
-}
 pub fn identity_error(
     client: Option<&str>,
     protocol: Option<&str>,
     service: &str,
     service_protocol: &str,
 ) -> Option<String> {
-    let server = release(service).expect("canonical service version");
-    let minimum = server.minor.saturating_sub(2);
-    let range = format!(
-        ">={}.{}.0 <{}.{}.0",
-        server.major,
-        minimum,
-        server.major,
-        server.minor + 1
-    );
-    let description = format!("service Autobuild {service} supports clients {range}");
-    let parsed = client.and_then(release);
-    let advice = match parsed.as_ref() {
-        None => Some(format!("{description}; supply a canonical Autobuild client version")),
-        Some(v) if (v.major,v.minor) < (server.major,minimum) => Some(format!("{description}; upgrade the project's Autobuild into {range}")),
-        Some(v) if (v.major,v.minor) >= (server.major,server.minor+1) => Some(format!("{description}; upgrade the service to at least {}.{}.0 before upgrading projects (service first)",v.major,v.minor)),
-        _ => None,
-    };
-    let expected = parsed.as_ref().and_then(|v| {
-        if (v.major, v.minor) == (server.major, server.minor) {
-            Some(service_protocol)
-        } else {
-            match (v.major, v.minor) {
-                (0, 9..=13) => Some("3"),
-                (0, 14) => Some("4"),
-                _ => None,
-            }
-        }
-    });
-    if advice.is_none() && expected.is_some() && expected == protocol {
-        return None;
-    }
-    Some(format!("remote store version mismatch: client Autobuild {} protocol {}; server Autobuild {service} protocol {service_protocol}; {}",client.unwrap_or("(missing)"),protocol.unwrap_or("(missing)"),advice.unwrap_or_else(||format!("supported clients {range}; unsupported protocol identity"))))
+    crate::protocol::identity::client_identity_error(client, protocol, service, service_protocol)
+        .expect("canonical service version")
 }
 pub fn check_identity(headers: &HeaderMap) -> Result<(), OperatorError> {
     let value = |name| headers.get(name).and_then(|v| v.to_str().ok());
@@ -74,7 +30,7 @@ pub fn check_identity(headers: &HeaderMap) -> Result<(), OperatorError> {
         value(VERSION_HEADER),
         value(PROTOCOL_HEADER),
         &service_version(),
-        PROTOCOL_VERSION,
+        protocol_version(),
     ) {
         None => Ok(()),
         Some(error) => Err(OperatorError::new(409, "conflict", error)),
@@ -145,9 +101,9 @@ mod oracle_tests {
                         .map_or(Some(current_version.as_str()), |value| value.as_str()),
                     request
                         .get("protocol")
-                        .map_or(Some(PROTOCOL_VERSION), |value| value.as_str()),
+                        .map_or(Some(protocol_version()), |value| value.as_str()),
                     &service_version(),
-                    PROTOCOL_VERSION,
+                    protocol_version(),
                 )
                 .unwrap();
                 assert_eq!(observation["status"], 409);

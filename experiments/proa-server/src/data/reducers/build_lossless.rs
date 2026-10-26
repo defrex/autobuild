@@ -1,3 +1,5 @@
+#[path = "verify_stage_lossless.rs"]
+mod verify_stage;
 use super::lossless::{compatibility, copy, max, number, pick, push, remove, with_seq};
 use crate::data::error::DataError;
 use crate::js_json as json;
@@ -15,7 +17,7 @@ pub struct BuildAcc {
 impl Default for BuildAcc {
     fn default() -> Self {
         Self {
-            state: json!({"compatibility":compatibility(),"compatibilityDeferredBoundary":0,"round":0,"openEscalations":[],"answeredEscalations":[],"reviewRoundCeilings":{},"landing":{},"autoMerge":{"requested":false},"restartSince":0,"pinnedAssets":[],"finalizeCompletedSeq":0,"finalizeSteps":[],"plan":{"round":0,"approved":false},"implement":{"round":0},"codeReviewApproved":false,"reviewFindings":{"planReview":[],"codeReview":[]},"verify":{"maxAttemptSeen":0,"results":[],"cycleSince":0},"reconcileAttempts":0,"observations":[],"setupFailures":[],"dispatchFailures":[],"executions":[],"infrastructureFailures":[],"cleanupAttempts":[],"sessions":{"open":[],"suspended":[],"totals":{},"nativeHandles":{}},"failures":{}}),
+            state: json!({"compatibility":compatibility(),"compatibilityDeferredBoundary":0,"round":0,"openEscalations":[],"answeredEscalations":[],"reviewRoundCeilings":{},"landing":{},"autoMerge":{"requested":false},"restartSince":0,"pinnedAssets":[],"finalizeCompletedSeq":0,"finalizeSteps":[],"plan":{"round":0,"approved":false},"implement":{"round":0},"codeReviewApproved":false,"reviewFindings":{"planReview":[],"codeReview":[]},"verifyStage":verify_stage::initial(),"verify":{"maxAttemptSeen":0,"results":[],"cycleSince":0},"reconcileAttempts":0,"observations":[],"setupFailures":[],"dispatchFailures":[],"executions":[],"infrastructureFailures":[],"cleanupAttempts":[],"sessions":{"open":[],"suspended":[],"totals":{},"nativeHandles":{}},"failures":{}}),
             attached: false,
             paused: false,
             terminal: None,
@@ -73,6 +75,8 @@ impl BuildAcc {
             .and_then(|s| s.to_scalar().ok())
             .unwrap_or_default();
         self.drains(e);
+        verify_stage::advance(&mut self.state["verifyStage"], e);
+        verify_stage::supersede(&mut self.state, &mut self.pending, e);
         if self.state.get("pollingActivity").is_none() {
             self.state["pollingActivity"] = json!({});
         }
@@ -302,12 +306,33 @@ impl BuildAcc {
                 }
                 self.complete(phase, e, &["round"]);
             }
+            "verify.config-captured" => {
+                self.state["verify"]["configPin"] = with_seq(p, e);
+                max(&mut self.state["verify"], "cycleSince", &e["seq"]);
+            }
+            "verify.config-superseded" | "integration.prepared" => {
+                max(&mut self.state["verify"], "cycleSince", &e["seq"]);
+            }
+            "verify.cancelled" => {
+                let key = verify_stage::key(p);
+                if self.state["verifyStage"]["cancellations"][&key]["seq"] == e["seq"] {
+                    self.complete(prefix("verify:", &p["step"]), e, &["attempt"]);
+                }
+            }
             "verify.started" => {
                 max(&mut self.state["verify"], "maxAttemptSeen", &p["attempt"]);
                 self.state["verify"]["currentStep"] = p["step"].clone();
                 self.start(prefix("verify:", &p["step"]), e, &["attempt"]);
             }
             "verify.completed" => {
+                if self.state["verifyStage"]["cancellations"]
+                    .get_js(&verify_stage::key(p))
+                    .is_some()
+                {
+                    self.state["lastEvent"] = e.clone();
+                    verify_stage::settle(&mut self.state);
+                    return Ok(());
+                }
                 let mut result = pick(
                     p,
                     &[
@@ -408,6 +433,14 @@ impl BuildAcc {
                     open["source"] = json!("policy");
                     open["deferral"] = json!("own-build-read");
                 }
+                if t == "escalation.raised" && e["actor"]["kind"] == "agent" {
+                    open["session"] = e["actor"]["session"].clone();
+                }
+                if t == "escalation.raised" && verify_stage::raised(&mut self.state, &open) {
+                    self.state["lastEvent"] = e.clone();
+                    verify_stage::settle(&mut self.state);
+                    return Ok(());
+                }
                 let a = self.state["openEscalations"].as_array_mut().unwrap();
                 if let Some(held) = a.iter_mut().find(|o| o["id"] == p["id"]) {
                     *held = open;
@@ -484,6 +517,7 @@ impl BuildAcc {
             _ => {}
         }
         self.state["lastEvent"] = e.clone();
+        verify_stage::settle(&mut self.state);
         Ok(())
     }
     pub fn finish(&self) -> Value {
@@ -499,7 +533,7 @@ impl BuildAcc {
             && s["nodeComparison"]["headSha"] == cycle["head"]
             && s["nodeComparison"]["parentSha"] == cycle["parent"]
             && s["verify"]["results"].as_array().unwrap().iter().any(|r| {
-                number(&r["seq"]) > number(&cycle["seq"])
+                number(&r["seq"]) > number(&cycle["seq"]).max(number(&s["verify"]["cycleSince"]))
                     && r["restackId"] == cycle["id"]
                     && r["outcome"] == "fail"
             });

@@ -96,7 +96,7 @@ pub async fn call(
         .uri(format!("/operator/v1/repos/{path}/tools/{name}"))
         .header("authorization", format!("Bearer {token}"))
         .header(protocol::VERSION_HEADER, protocol::service_version())
-        .header(protocol::PROTOCOL_HEADER, protocol::PROTOCOL_VERSION)
+        .header(protocol::PROTOCOL_HEADER, protocol::protocol_version())
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&input).unwrap()))
         .unwrap();

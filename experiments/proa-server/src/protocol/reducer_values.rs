@@ -893,7 +893,7 @@ fn dashboard_facts(events: &[Value]) -> Value {
             "plan-review.started" | "plan-review.verdict" => Some("plan-review".to_string()),
             "implement.started" | "implement.completed" => Some("implement".to_string()),
             "code-review.started" | "code-review.verdict" => Some("code-review".to_string()),
-            "verify.started" | "verify.completed" => {
+            "verify.started" | "verify.completed" | "verify.cancelled" => {
                 Some(format!("verify:{}", p["step"].as_str().unwrap()))
             }
             "finalize.started" | "finalize.completed" => Some("finalize".to_string()),

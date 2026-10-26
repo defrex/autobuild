@@ -1004,3 +1004,104 @@ its serialized OAuth store, in-memory browser-session lifetime, cold linked-buil
 cost and operational key rotation need consideration before adoption. My judgment
 is that rendering and native protocol reuse fit; the accumulated parity machinery
 and operational burden are material costs, not evidence that migration is free.
+
+## 2026-10-25 — refreshing the TypeScript oracles after node integration
+
+This is maintenance of the repository experiment. The refresh started at
+22:41 UTC from `7ec03b79c71f2c3e03c4b897e613c8983838090a`, the integrated
+Proa node over TypeScript main `b140507a`. The initial tooling run found
+27 failures and one loading error, rather than treating the historical node's
+26 failures as a new measurement. Installing the existing locked dependencies
+resolved the missing local S3 dependency.
+
+The actual drift included #747's removed hosted runner (obsolete config imports,
+validation and HTTP session wake inheritance); #748's verify configuration pins,
+cycle boundaries and grouped-stage serialization; #751's publication retry
+ledger; and #755's presence withdrawal and protocol 6 identity. #750's publication
+policy and #752's orderly handoff behavior changed the pinned source closure;
+existing native replay/attention boundaries are retained and checked against the
+new source-produced cases. #754 adds stage serialization regression coverage.
+The older super-user environment rename also exposed stale MCP seeds: the oracle
+now injects the source's explicit test access adapter and uses the current
+super-user setting, without consulting a production organization database.
+
+Every tracked fixture family was regenerated through its own tool. The base
+capture produced 19,642 provenance aliases in 6,003 distinct cases, including the
+actual dispatcher-upgrade and reducer tests. Subsidiary generators include all
+42 named reducers, 4,195 persisted Unicode payload cases and 25,814 persisted
+replays. MCP retains the real SDK descriptors, original execution schemas and
+all 33 tools. The base capture took about eight and a half minutes; the first
+39 subsidiary invocations took 14.7 seconds. MCP needed a second invocation
+after control generation because its positive seed reads `control-corpus.json`.
+This dependency is now documented. No expected response bytes were edited by
+hand; repository formatting was applied to generated JSON.
+
+Native repairs cover both scalar and lossless verify-stage/log-index/publication folds,
+including member ownership, cancellation/superseded escalation state and running
+member projection; captured artifact revisions in read/dashboard/landing projections; grouped-stage
+normalization and duplicate diagnostics, inert HTTP session creation, and exact
+scoped presence deletion. New executable cases cover older pinned config versus
+a newer deposit, superseded receipts, stage groups and removed config fields,
+encoded/trimmed IDs, idempotence, neighboring rows, delegated/project refusal
+and identity-before-auth ordering. Historical persisted runner facts still
+replay. The established ticket-attribution exception remains; no new exclusion
+was introduced.
+
+The first complete native gate also exposed an obsolete database seed: direct
+TypeScript connection approval now requires a browser principal. The persistence
+proof supplies an explicit super-user principal and a registered project; capture
+does the same for its approved state. This retains the experiment's existing
+project-scoped approval boundary (the earlier connection entry deliberately
+omits organization selection) while using the current store API. The focused
+PostgreSQL/S3 interchange proof passed after that seed correction.
+
+The integrated head also includes #736's concurrent verify/fail-fast contract,
+which the original native state had not yet carried. Beyond the paired stage
+folds, guidance now rechecks cancellation and uses compare-and-append, and a
+concurrent spec revision revalidates retained authorization at publication.
+The failure oracle's old `append` interception no longer exercised guidance's
+conditional write; it now intercepts both actual write paths and requires the
+injected publication error to occur. A new source/native case refuses a
+cancelled verifier without mutation. The focused operator aggregate passed all
+eight answer-failure cases and complete route/action/schema coverage. A ticket
+HTTP helper's remaining protocol-5 literal was replaced with the source protocol
+constant. The unchanged 161-test BuildStore contract and all protocol, ticket
+protocol and real ticket CLI family proofs passed in focused runs.
+
+
+Final validation used frozen code `ef12f1e8`; the following commit only records
+these measurements. Root checks, build checks and typechecking passed. Two full
+unit runs with the normal temporary directory each passed 8,453 tests with 49
+existing skips and zero failures (1,123.06s and 1,121.08s). All 123 experiment
+tooling tests passed after the last repairs. The complete native gate passed all
+61 stages in 1,318.4s: Cargo tests took 320.6s, linked Proa tests 436.6s, and the
+release build 291.4s (0/481 cached artifacts reused). This includes independent
+freshness checks, scalar/lossless replay, real database/S3 interchange, all 161
+BuildStore contract cases, operator/MCP, protocol and ticket/CLI proofs.
+
+The final offline capture build took 188.3s, reusing 479/481 artifacts in each
+linked stage. Capture and browser mutation/consent proofs passed; all 96 PNGs
+were opened against the immutable ANSI reference across both themes and widths.
+Palette, two typefaces, shell/menu, responsive wrapping, refusal drafts and
+confirmation states remain intact, with no visible horizontal overflow. Evidence
+is retained locally under `.ab/proa-frames-4Zu2B6` and
+`.ab/proa-refresh-evidence`; neither is a tracked deliverable.
+
+The measured refresh window was 22:41:02 UTC to 00:18 UTC the next day, about
+97 minutes including verification, queue waits and interrupted-session recovery.
+The first repair commit was at 23:06:40 (25m38s after starting, overlapping corpus
+generation/checks); later seed and conditional-write repairs continued until
+about 23:48. There was no exclusive active-work stopwatch, so these intervals
+must not be read as additive repair time. An earlier cold linked Proa test pass
+took 892.5s; verification dominated elapsed time. Capture waited roughly 22 minutes
+behind the serialized native gate across a shutdown/restart; that wait overlaps
+the gate, rather than adding another 22 minutes to the window.
+
+Operational retries also consumed time: an initial root run exhausted `/tmp`
+inodes. A mistaken long worktree-local TMPDIR retry broke Chromium Unix socket
+paths and fixture module resolution; it was cancelled and both normal-environment
+runs passed. An early capture was correctly stopped when sources changed during
+linking. Shutdown recovery regenerated phase scratch, recovered surviving logs
+and reran the interrupted capture build. These are measurement/harness costs,
+not semantic parity repairs or deployment performance claims. Dependency versions,
+product code, existing exclusions and ANSI reference bytes remain unchanged.

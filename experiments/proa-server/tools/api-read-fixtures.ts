@@ -44,6 +44,7 @@ type Seed =
   | 'done'
   | 'cleaning'
   | 'pinned'
+  | 'cycle-pin'
   | 'bad-pin'
   | 'integration'
   | 'held'
@@ -105,6 +106,7 @@ export function apiReadScenarios(): ApiReadScenario[] {
     'done',
     'cleaning',
     'pinned',
+    'cycle-pin',
     'bad-pin',
     'integration',
     'foreign',
@@ -122,6 +124,7 @@ export function apiReadScenarios(): ApiReadScenario[] {
     'done',
     'cleaning',
     'pinned',
+    'cycle-pin',
     'bad-pin',
     'integration',
     'harvest-multi',
@@ -371,7 +374,7 @@ export async function replayApiReadScenario(scenario: ApiReadScenario): Promise<
     if (seed === 'done')
       await append(apiReadSlug, 'build.completed', { outcome: 'merged' }, { kind: 'dispatcher' })
     if (seed === 'cleaning') await append(apiReadSlug, 'build.aborted', {})
-    if (seed === 'pinned' || seed === 'bad-pin')
+    if (seed === 'pinned' || seed === 'bad-pin' || seed === 'cycle-pin')
       await store.putArtifact(apiReadSlug, {
         kind: 'build-runner-effective-config',
         content:
@@ -386,6 +389,29 @@ export async function replayApiReadScenario(scenario: ApiReadScenario): Promise<
               ),
         metadata: { revision: 7, pipelineSource: { ref: 'branch-head', commit: 'c'.repeat(40) } },
       })
+    if (seed === 'cycle-pin') {
+      await append(apiReadSlug, 'verify.started', { step: 'unit', attempt: 1 })
+      await append(apiReadSlug, 'verify.completed', { step: 'unit', attempt: 1, outcome: 'fail' })
+      const capture = await append(apiReadSlug, 'verify.config-captured', {
+        cycle: 0,
+        artifact: { kind: 'build-runner-effective-config', rev: 0 },
+        head: 'c'.repeat(40),
+        identity: 'captured-build-config',
+        source: { ref: 'branch-head', commit: 'c'.repeat(40) },
+      })
+      await store.putArtifact(apiReadSlug, {
+        kind: 'build-runner-effective-config',
+        content: effectiveBuildConfigContent(config),
+        metadata: { revision: 8, pipelineSource: { ref: 'branch-head', commit: 'd'.repeat(40) } },
+      })
+      await append(apiReadSlug, 'verify.started', { step: 'pinned', attempt: 2 })
+      await append(apiReadSlug, 'verify.completed', { step: 'pinned', attempt: 2, outcome: 'pass' })
+      await append(apiReadSlug, 'verify.config-superseded', {
+        captureSeq: capture.seq,
+        head: 'd'.repeat(40),
+        identity: 'new-build-config',
+      })
+    }
     if (seed === 'integration') {
       await append(
         apiReadSlug,
