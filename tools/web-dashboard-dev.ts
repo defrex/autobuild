@@ -30,7 +30,10 @@ import { DISPATCHER } from '../packages/core/src/events/envelope'
 import type { E2eHarness } from '../packages/core/src/scenarios/harness'
 import type { BuildStore, Clock } from '../packages/core/src/store/types'
 import { migratePostgres } from '@defrex/autobuild-postgres-store/schema'
-import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
+import {
+  openPostgresBuildStoreFromEnv,
+  openPostgresProjectRegistryFromEnv,
+} from '@defrex/autobuild-postgres-store'
 import { prepareHappyScenario, prepareScenario } from './dashboard-capture'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
@@ -313,6 +316,13 @@ async function seed(): Promise<void> {
     }
   } finally {
     await target.close()
+  }
+  // The web app lists projects from the registry, not from the build log.
+  const registry = await openPostgresProjectRegistryFromEnv(env)
+  try {
+    for (const repo of Object.values(REPOSITORIES)) await registry.add(repo, IDENTITY)
+  } finally {
+    await registry.close()
   }
   const cookie = await mintSession(env)
   await Bun.write(SESSION_TOKEN_FILE, cookie)
