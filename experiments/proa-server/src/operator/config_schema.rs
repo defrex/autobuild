@@ -114,6 +114,23 @@ fn parse(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
                         result.aborted = true;
                     }
                 },
+                "merge-alias" => {
+                    if v.get("merge").is_some() && v.get("landing").is_some() {
+                        custom(
+                            &mut result.issues,
+                            &at(path, "merge"),
+                            "merge and deprecated landing cannot both be declared",
+                        );
+                        result.aborted = true;
+                    } else {
+                        let object = v.as_object_mut().expect("config object");
+                        let rules = object
+                            .remove("merge")
+                            .or_else(|| object.remove("landing"))
+                            .unwrap_or(json!([]));
+                        object.insert("landing".into(), rules);
+                    }
+                }
                 "tickets" => {
                     if v.get("readyState").is_none() {
                         v["readyState"] = json!("ready");
@@ -128,6 +145,11 @@ fn parse(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
                     }
                 }
                 _ => panic!("unported generated configuration transform"),
+            }
+        }
+        if !result.aborted && result.issues.is_empty() {
+            for check in array(&schema["checks"]) {
+                checks(check, kind, path, &mut result);
             }
         }
         return result;

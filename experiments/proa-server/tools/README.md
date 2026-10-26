@@ -235,7 +235,7 @@ fields never grant authority. Ordinary successful POSTs redirect with 303. Enhan
 POSTs request server-rendered HTML with `X-Proa-Fragment: 1`; a typed refusal is
 escaped inline with the draft retained. Polls preserve drafts, errors and pending
 confirmations, and responses from older polls cannot replace a mutation result.
-Landing consent remains API-only.
+Merge consent remains API-only.
 
 `bun tools/config-fixtures.ts` checks the source-derived native configuration
 grammar and the separate test-only differential corpus. Regenerate deliberately

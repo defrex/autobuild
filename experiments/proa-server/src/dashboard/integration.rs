@@ -17,6 +17,9 @@ fn step(label: &str, done: bool, active: bool) -> Value {
     json!({"label":label,"state":if done {"done"} else if active {"current"} else {"pending"}})
 }
 fn distance(s: &Value) -> String {
+    if s["prState"] == "merged" || s["prState"] == "closed" {
+        return String::new();
+    }
     let n = &s["nodeRestack"];
     let d = &n["distance"];
     let parent = n["observedParent"]
@@ -27,18 +30,15 @@ fn distance(s: &Value) -> String {
         && d["branch"] == s["baseBranch"]
         && &d["parent"] == parent
     {
-        if let Some(count) = d["count"].as_i64() {
+        if let Some(count) = d["count"].as_u64().filter(|n| *n <= 9_007_199_254_740_991) {
             return if count == 0 {
-                "parent current".into()
+                String::new()
             } else {
-                format!(
-                    "parent {count} commit{} ahead",
-                    if count == 1 { "" } else { "s" }
-                )
+                format!("+{count}")
             };
         }
     }
-    "parent distance unknown".into()
+    "+?".into()
 }
 fn prospective(s: &Value, rules: &Value, labels: &[&str]) -> (String, Value) {
     let into = if s["target"].is_null() {
@@ -114,11 +114,10 @@ pub fn project(
     pipeline: &Value,
 ) -> (Value, Value) {
     let destination = if !s["target"].is_null() {
-        format!(
-            "{} {}",
-            s["target"]["ticket"]["id"].as_str().unwrap_or_default(),
-            s["target"]["build"].as_str().unwrap_or_default()
-        )
+        s["target"]["ticket"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
     } else {
         s["baseBranch"]
             .as_str()
@@ -175,7 +174,7 @@ pub fn project(
     } else if current && !verified {
         verify["qualifier"] = json!(format!("{}/{}", passed.len(), expected.len()));
     }
-    let mut land = step("land", !s["integration"]["landing"].is_null(), ready);
+    let mut land = step("merge", !s["integration"]["landing"].is_null(), ready);
     land["qualifier"] = json!(mode);
     let mut row = json!({"destination":destination,"parentDistance":distance(s),"openChildren":open,"verified":verified,"children":if !o.is_null() && array(&o["diagnostics"]).is_empty(){json!({"known":true,"landed":contributions.len(),"building":0,"queued":open.len(),"total":contributions.len()+open.len()})}else{json!({"known":false})},"steps":[step("spec",!s["specRev"].is_null(),false),step("open",!s["nodeOpened"].is_null(),s["nodeOpened"].is_null()),step("collect",complete,!s["nodeOpened"].is_null()&&!complete),verify,land]});
     if s["janitor"]["attention"] == true {
@@ -185,7 +184,7 @@ pub fn project(
     } else if let Some(failure) = failure {
         row["alert"] = json!({"tone":"red","text":format!("{} failed — file a repair child targeting {ticket}",failure["step"].as_str().unwrap_or_default())});
     } else if ready && mode == "consent" && s["landing"]["command"]["kind"] != "land" {
-        row["alert"] = json!({"tone":"yellow","text":format!("ready to land into {destination} — press l, or ab land {}",record["slug"].as_str().unwrap_or_default())});
+        row["alert"] = json!({"tone":"yellow","text":format!("ready to merge into {destination} — press l, or ab merge {}",record["slug"].as_str().unwrap_or_default())});
     }
     let source = o["membershipSource"]
         .as_str()
@@ -206,7 +205,7 @@ pub fn project(
         }
         child["landed"] = json!(landed && !is_open);
         child["state"] = json!(if landed && !is_open {
-            "landed"
+            "merged"
         } else {
             "queued"
         });
@@ -225,7 +224,7 @@ pub fn project(
             .iter()
             .any(|c| array(&c["builds"]).iter().any(|b| b == contribution))
         {
-            children.push(json!({"source":source,"id":contribution,"builds":[contribution],"title":"title unavailable","state":"landed","landed":true}));
+            children.push(json!({"source":source,"id":contribution,"builds":[contribution],"title":"title unavailable","state":"merged","landed":true}));
         }
     }
     children.sort_by(|a, b| {
@@ -255,13 +254,13 @@ pub fn project(
             f["step"].as_str().unwrap_or_default()
         )
     } else if !complete {
-        format!("pending — runs on the node head against {destination} once every child has landed")
+        format!("pending — runs on the node head against {destination} once every child has merged")
     } else if verified {
         "verified on the current node head and destination".into()
     } else {
         "pending on the current node head and destination".into()
     };
-    let mut detail = json!({"parentDistance":distance(s),"destination":format!("{destination}{}",if s["target"].is_null(){" (the configured base branch)"}else{""}),"branch":record["branch"].as_str().or(s["nodeOpening"]["branch"].as_str()).unwrap_or("unknown branch"),"restack":if conflict.is_some(){"conflicted"}else if !s["nodeRestack"]["active"].is_null() || !r["active"].is_null(){"active"}else{"idle"},"children":children,"membershipKnown":!o.is_null()&&array(&o["diagnostics"]).is_empty(),"diagnostics":o.get("diagnostics").cloned().unwrap_or(json!(["child membership unknown"])),"verification":verification,"verifySteps":verify_steps,"landing":format!("{mode} — {rule}{}",if ready && mode=="consent" && s["landing"]["command"]["kind"]!="land" {format!(" — press l, or ab land {}",record["slug"].as_str().unwrap_or_default())}else{String::new()})});
+    let mut detail = json!({"parentDistance":distance(s),"destination":format!("{destination}{}",if s["target"].is_null(){" (the configured base branch)"}else{""}),"branch":record["branch"].as_str().or(s["nodeOpening"]["branch"].as_str()).unwrap_or("unknown branch"),"restack":if conflict.is_some(){"conflicted"}else if !s["nodeRestack"]["active"].is_null() || !r["active"].is_null(){"active"}else{"idle"},"children":children,"membershipKnown":!o.is_null()&&array(&o["diagnostics"]).is_empty(),"diagnostics":o.get("diagnostics").cloned().unwrap_or(json!(["child membership unknown"])),"verification":verification,"verifySteps":verify_steps,"landing":format!("{mode} — {rule}{}",if ready && mode=="consent" && s["landing"]["command"]["kind"]!="land" {format!(" — press l, or ab merge {}",record["slug"].as_str().unwrap_or_default())}else{String::new()})});
     if let Some(conflict) = conflict {
         detail["conflictFiles"] = conflict
             .get("files")
@@ -377,7 +376,7 @@ pub fn enrich(rows: &mut [Value], records: &[Value]) {
                 }
             }
             next["state"] = if child["landed"] == true {
-                json!("landed")
+                json!("merged")
             } else {
                 active
                     .and_then(|r| r["collectionIdentity"].get("phase"))

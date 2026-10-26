@@ -128,14 +128,14 @@ pub fn vocabulary(s: &Value) -> Value {
         out["integration"] = json!(if !i["audit"].is_null()
             && i["audit"]["verifiedTree"] != i["audit"]["landedTree"]
         {
-            "unverified landing"
+            "unverified merge"
         } else if i["landing"]["provenance"] == "human" {
-            "human landing"
+            "human merge"
         } else if !i["landing"].is_null() {
             if i["landing"]["fenced"] == true {
-                "fenced landing"
+                "fenced merge"
             } else {
-                "unfenced landing"
+                "unfenced merge"
             }
         } else if !s["nodeRestack"]["parentRequest"].is_null()
             || !s["nodeRestack"]["parentChange"].is_null()
@@ -147,7 +147,7 @@ pub fn vocabulary(s: &Value) -> Value {
             if !cycle_verified(s) {
                 "verifying"
             } else if super::landing::authorized(&s["landing"]) {
-                "ready to land"
+                "ready to merge"
             } else {
                 "awaiting consent"
             }

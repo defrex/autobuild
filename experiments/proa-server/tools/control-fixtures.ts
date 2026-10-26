@@ -175,7 +175,14 @@ export function controlScenarios(): ControlScenario[] {
       else name = 'harvest.control'
       return { ...scenario, id: `tool-${scenario.id}`, method: 'POST', path: `tools/${name}`, body }
     })
-  return [...scenarios, ...toolScenarios]
+  const mergeScenarios = toolScenarios
+    .filter((s) => (s.body as { action?: string }).action === 'land')
+    .map((s) => ({
+      ...s,
+      id: s.id.replace('tool-land-', 'tool-merge-'),
+      body: { ...(s.body as object), action: 'merge' },
+    }))
+  return [...scenarios, ...toolScenarios, ...mergeScenarios]
 }
 export async function replayControlScenario(scenario: ControlScenario) {
   const store = new MemoryBuildStore({ clock })
