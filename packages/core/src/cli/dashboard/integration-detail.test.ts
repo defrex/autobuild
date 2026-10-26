@@ -62,7 +62,7 @@ test('detail orders all children and names expected checks, destination and defa
   expect(d.landing).toContain('default rule')
   const s = state()
   s.target = { ticket: { source: 'fake', id: 'PARENT' }, build: 'parent' }
-  expect(detail(s).destination).toBe('PARENT parent')
+  expect(detail(s).destination).toBe('PARENT')
   s.kind = 'work'
   expect(projectIntegrationDetail(record, s, { gates: {} }, config, config)).toBeUndefined()
 })

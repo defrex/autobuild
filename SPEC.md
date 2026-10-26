@@ -1069,6 +1069,12 @@ The base-selection invariants make this safe with Git:
   result, including skips, cites the cycle's base and head. Those citations stay
   frozen throughout the cycle and survive clean waiting restacks; historical
   facts without citations remain readable. Upstream-only paths are excluded.
+- **Work distance is advisory durable telemetry.** Each admitted work target poll
+  samples destination-only commits (`BUILD..TARGET`), even when only the build
+  head changed. `target.distance` pins branch, target SHA, nullable build head
+  and nullable nonnegative count. Missing history/capability is unknown. Equal
+  samples are deduplicated; destination changes and rewrites invalidate samples.
+  Sampling never provisions a workspace, renders Git reads, or gates restacking.
 - **Observation never mutates a running workspace.** `target.moved` records an
   exact observed head, even during a session. Transactions freeze their target;
   later observations coalesce into one follow-on transaction for the newest
@@ -2420,8 +2426,11 @@ and unopened nodes. Paused or blocked nodes wait for their normal safety gates.
 A request arriving during replay survives until its parent and required identities
 are covered. Re-parenting invalidates requests for the old destination.
 
-Both dashboards show `parent N commits ahead`, `parent current`, or
-`parent distance unknown`. Distance counts commits reachable from the observed
+Both dashboards use `+N` beside the destination for commits it has that the
+build lacks, no suffix when current, and `+?` when unknown. Merged and closed
+builds omit the suffix. Terminal list rows put `→ destination +N` on the slug
+line; work steps follow immediately and integration progress keeps only the
+bar and child counts. Detail target/Parent fields use the same suffix. Distance counts commits reachable from the observed
 parent but not the last confirmed contribution base; it is not elapsed time or
 poll count. Samples are invalidated by replay or re-parenting. A stale node
 cannot verify or merge; inventory and child merges continue while it collects.
@@ -2776,7 +2785,7 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
+| Leaf restacking | `target.moved {branch, sha}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `phase.deferred`, `phase.deferral-escalated` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
@@ -2901,6 +2910,8 @@ restacking). Durable `node.restack-requested` facts retain operator/presence dem
 including destination, sampled parent, dependent ticket and required identities.
 Reservations freeze covered request ids; confirmed settlement acknowledges only
 that coverage, and `node.restack-satisfied` records coverage or destination change.
+`target.distance` records advisory leaf distance with immutable destination and
+build tips; null count means unknown (a known count requires a head).
 `node.parent-distance` records immutable base/parent/branch and count (null when unknown).
 It retains the previous contribution boundary, latest parent
 observation, complete replay prefix, active source item and merge proofs.

@@ -3,11 +3,13 @@ import type { EventPayload } from '../events/payloads'
 import { defineReducer } from './incremental'
 
 export interface LeafRestackState {
+  activityAt?: string
   initialBase?: string
   postStepAt?: number
   completedAt?: number
   finalizedAt?: number
   target?: { seq: number; branch: string; sha: string }
+  distance?: EventPayload<'target.distance'>
   active?: EventPayload<'restack.prepared'>
   replay?: EventPayload<'restack.replayed'>
   intent?: EventPayload<'restack.publish-intended'>
@@ -18,6 +20,7 @@ export interface LeafRestackState {
 }
 export function advanceLeafRestack(state: LeafRestackState, events: readonly AbEvent[]) {
   for (const event of events) {
+    if (event.type !== 'target.distance') state.activityAt = event.ts
     switch (event.type) {
       case 'workspace.provisioned':
         state.initialBase ??= event.payload.base.sha
@@ -26,13 +29,34 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         state.finalizedAt = event.seq
         break
       case 'node.parent-accepted':
+        delete state.distance
         delete state.target
         break
-      case 'target.moved':
-        state.target = { seq: event.seq, ...event.payload }
+      case 'pr.opened':
+        if (state.distance?.head !== event.payload.pr.headSha) delete state.distance
+        break
+      case 'implement.completed':
+        if (state.distance?.head !== event.payload.commits.head) delete state.distance
+        break
+      case 'restack.rewritten':
+      case 'reconcile.rewritten':
+        delete state.distance
         break
       case 'finalize.step-completed':
+        if (
+          event.payload.ok &&
+          event.payload.headSha &&
+          state.distance?.head !== event.payload.headSha
+        )
+          delete state.distance
         if (event.payload.ok && event.payload.headSha !== undefined) state.postStepAt = event.seq
+        break
+      case 'target.distance':
+        state.distance = event.payload
+        break
+      case 'target.moved':
+        delete state.distance
+        state.target = { seq: event.seq, ...event.payload }
         break
       case 'restack.prepared':
         state.active = event.payload
@@ -53,6 +77,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         } else state.initialVerification = false
         break
       case 'restack.completed':
+        if (state.distance?.head !== event.payload.headSha) delete state.distance
         state.completedAt = event.seq
         state.completed = event.payload
         state.gates[String(event.payload.cycle)] = event.payload
@@ -66,7 +91,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
   }
 }
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 4,
+  version: 5,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),

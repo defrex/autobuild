@@ -3098,7 +3098,8 @@ test('integration list has three routine lines, one alert and a 22-cell colored 
   const rendered = rd(model([row]), { color: true, width: 140, height: 40 })
   const start = rendered.findIndex((line) => stripAnsi(line).includes('integration-demo'))
   const body = rendered.slice(start, start + 3)
-  expect(stripAnsi(body[1]!)).toContain('integration → main')
+  expect(stripAnsi(body[0]!)).toContain('integration-demo → main')
+  expect(stripAnsi(body[1]!)).not.toContain('integration →')
   expect(stripAnsi(body[1]!)).toContain('8/11 merged · 2 building · 1 queued')
   expect(body[1]).toContain(`\x1b[32m${'━'.repeat(16)}`)
   expect(body[1]).toContain(`\x1b[36m${'━'.repeat(4)}`)
@@ -3186,4 +3187,54 @@ test('integration detail fits children by cells, sanitizes controls and scrolls 
     { color: false, width: 55, height: 14 },
   ).join('\n')
   expect(bottom).toContain('Merge')
+})
+
+test('destination suffixes share row semantics and work steps follow the header', () => {
+  for (const integration of [false, true])
+    for (const suffix of ['', '+7', '+?']) {
+      const row = build({
+        slug: 'distance-demo',
+        target: 'main',
+        targetDistance: suffix,
+        ...(integration
+          ? {
+              kind: 'integration' as const,
+              integrationRow: {
+                destination: 'main',
+                parentDistance: suffix,
+                openChildren: [],
+                children: { known: true as const, landed: 0, building: 0, queued: 0, total: 0 },
+                verified: false,
+                steps: [{ label: 'collect', state: 'current' as const }],
+              },
+            }
+          : {}),
+      })
+      const lines = rd(model([row]), { color: true, width: 160 })
+      const start = lines.findIndex((line) => stripAnsi(line).includes('distance-demo'))
+      expect(stripAnsi(lines[start]!)).toContain(
+        `distance-demo → main${suffix ? ` ${suffix}` : ''}`,
+      )
+      if (suffix) expect(lines[start]).toContain(`\x1b[2m${suffix}`)
+      expect(lines[start + 1]).not.toContain('work · target')
+      expect(lines[start + 1]).not.toContain('integration →')
+      expect(lines.join('\n')).not.toContain('commits ahead')
+    }
+})
+
+test('destination survives a long Unicode slug before yielding to the right cluster', () => {
+  const row = build({
+    slug: '日本語'.repeat(60),
+    target: 'main',
+    targetDistance: '+7',
+    pr: undefined,
+  })
+  for (const width of [12, 20, 30, 45, 64]) {
+    const lines = rd(model([row]), { color: true, width, height: 80 })
+    const header = lines.find((line) => stripAnsi(line).trimEnd().endsWith('RUNNING'))!
+    expect(header).toBeDefined()
+    expect(cellWidth(stripAnsi(header))).toBe(width - 1)
+    if (width >= 45) expect(stripAnsi(header)).toContain('→ main +7')
+    expect(lines.every((line) => cellWidth(stripAnsi(line)) <= width)).toBe(true)
+  }
 })

@@ -24,6 +24,7 @@ export const executionProgress = {
   'landing.native-enable-started': 'bookkeeping',
   'landing.forge-merged': 'progress',
   'landing.native-applied': 'bookkeeping',
+  'target.distance': 'bookkeeping',
   'target.moved': 'bookkeeping',
   'restack.prepared': 'progress',
   'restack.replayed': 'progress',
