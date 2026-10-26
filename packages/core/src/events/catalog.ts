@@ -55,6 +55,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'landing.native-enable-started': ['dispatcher'],
   'landing.forge-merged': ['kernel'],
   'landing.native-applied': ['dispatcher', 'kernel'],
+  'target.distance': ['dispatcher'],
   'target.moved': ['dispatcher', 'kernel'],
   'restack.prepared': ['kernel', 'dispatcher'],
   'restack.replayed': ['kernel', 'dispatcher'],

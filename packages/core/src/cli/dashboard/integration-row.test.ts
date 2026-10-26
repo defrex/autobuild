@@ -88,7 +88,7 @@ describe('integration list projection', () => {
     const state = node()
     delete state.nodeOpened
     state.target = { ticket: { source: 'fake', id: 'NODE-900' }, build: 'release-1.0' }
-    expect(row(state).destination).toBe('NODE-900 release-1.0')
+    expect(row(state).destination).toBe('NODE-900')
     expect(row(state).steps).toEqual([
       { label: 'spec', state: 'done' },
       { label: 'open', state: 'current' },
@@ -301,20 +301,20 @@ test('janitor attention appears on the shared row and clears without changing li
 
 test('parent distance matches immutable base, parent and branch; unknown is not zero', () => {
   const state = node()
-  expect(row(state).parentDistance).toBe('parent distance unknown')
+  expect(row(state).parentDistance).toBe('+?')
   state.nodeRestack = {
     items: [],
     contributionBase: 'base',
     observedParent: { branch: 'main', sha: 'parent' },
     distance: { base: 'base', parent: 'parent', branch: 'main', count: 3 },
   }
-  expect(row(state).parentDistance).toBe('parent 3 commits ahead')
+  expect(row(state).parentDistance).toBe('+3')
   state.nodeRestack.distance!.count = 1
-  expect(row(state).parentDistance).toBe('parent 1 commit ahead')
+  expect(row(state).parentDistance).toBe('+1')
   state.nodeRestack.distance!.count = 0
-  expect(row(state).parentDistance).toBe('parent current')
+  expect(row(state).parentDistance).toBe('')
   state.nodeRestack.contributionBase = 'new-base'
-  expect(row(state).parentDistance).toBe('parent distance unknown')
+  expect(row(state).parentDistance).toBe('+?')
 })
 
 test('grouped node repair prompts wait for an exact settled receipt and name every failure', () => {

@@ -1,3 +1,4 @@
+import { workTargetDistance } from './target-distance'
 import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { projectRollback, type DashboardRollback } from './rollback'
 import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
@@ -194,6 +195,7 @@ export interface DashboardBuild {
   }
   tree?: TreeProjection
   kind?: 'integration' | 'work'
+  targetDistance?: string
   target?: string
   integration?:
     | 'reparenting'
@@ -615,6 +617,8 @@ export function projectBuildFromFacts(
     return {
       slug: record.slug,
       ...buildVocabulary(state),
+      target: state.target?.ticket.id ?? state.baseBranch ?? config.baseBranch,
+      targetDistance: workTargetDistance(state, facts.log.restack),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
       integrationDetail: projectIntegrationDetail(
@@ -659,6 +663,9 @@ export function projectBuildFromFacts(
     return {
       slug: record.slug,
       ...buildVocabulary(state),
+      target: state.target?.ticket.id ?? state.baseBranch ?? config.baseBranch,
+      targetDistance:
+        state.kind === 'node' ? undefined : workTargetDistance(state, facts.log.restack),
       tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
       integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
       integrationDetail: projectIntegrationDetail(
@@ -763,18 +770,19 @@ export function projectBuildFromFacts(
   // already has the log in hand). A running build keeps its open interval live
   // (the renderer ticks it against `now`); a paused build freezes every open
   // interval at its acknowledgement (including while RESUMING), while a
-  // blocked build freezes at the latest durable event. Timers therefore do not
-  // advance behind either gate (AC 10). Each step scopes by the SAME seq boundary its state uses, so
+  // blocked build freezes at the latest non-distance durable event. Timers do
+  // not advance behind either gate (AC 10). Each step scopes by the SAME seq boundary its state uses, so
   // durations and states restart in lockstep (AC 12).
   const intervals = dashboard.intervals
   const pausedAt = state.status === 'paused' ? dashboard.pausedAt : undefined
+  const activityAt = facts.log.restack.activityAt ?? state.lastEvent?.ts
   const frozenNow =
     state.status === 'running'
       ? undefined
       : pausedAt !== undefined
         ? Date.parse(pausedAt)
-        : state.lastEvent !== undefined
-          ? Date.parse(state.lastEvent.ts)
+        : activityAt !== undefined
+          ? Date.parse(activityAt)
           : undefined
 
   // ── Shared derivations ────────────────────────────────────────────────────
@@ -959,11 +967,10 @@ export function projectBuildFromFacts(
     verifyDrained &&
     postStepsDrained &&
     activePhase === undefined
-  // Merge-ready start = the log's last-event ts: once the build drains the
-  // engine parks on `wait{awaiting-pr}` and appends nothing, so `lastEvent.ts`
-  // is exactly when it became merge-ready, ticking like a running phase (AC 9).
+  // Advisory distance refreshes must not restart the merge waiting clock.
+  // Retain the last lifecycle activity when the engine parks awaiting its PR.
   // Frozen at that same ts when the build is not running.
-  const lastMs = state.lastEvent !== undefined ? Date.parse(state.lastEvent.ts) : 0
+  const lastMs = activityAt === undefined ? 0 : Date.parse(activityAt)
   const mergeTiming: StepTiming | undefined = !mergeCurrent
     ? undefined
     : frozenNow !== undefined
@@ -1008,6 +1015,9 @@ export function projectBuildFromFacts(
   return {
     slug: record.slug,
     ...buildVocabulary(state),
+    target: state.target?.ticket.id ?? state.baseBranch ?? config.baseBranch,
+    targetDistance:
+      state.kind === 'node' ? undefined : workTargetDistance(state, facts.log.restack),
     tree: projectTree(record, state, facts.log.restack, pipeline.verify.steps),
     integrationRow: projectIntegrationRow(record, state, facts.log.restack, config),
     integrationDetail: projectIntegrationDetail(record, state, facts.log.restack, config, pipeline),

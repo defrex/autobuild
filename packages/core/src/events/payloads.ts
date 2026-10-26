@@ -1076,6 +1076,14 @@ export const eventPayloadSchemas = {
     attempt,
     baseSha: z.string().min(1),
   }),
+  'target.distance': z
+    .strictObject({
+      branch: z.string().min(1),
+      sha: gitOid,
+      head: gitOid.nullable(),
+      count: z.number().int().nonnegative().nullable(),
+    })
+    .refine((sample) => sample.count === null || sample.head !== null),
   'target.moved': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
   'restack.prepared': leafRestackSchema,
   'restack.replayed': z.strictObject({

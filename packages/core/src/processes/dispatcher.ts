@@ -1,3 +1,4 @@
+import { sampleTargetDistance } from '../kernel/target-distance'
 import { capturedBuildConfig } from './verify-cycle-config'
 import { publicationRetryGate } from '../kernel/publication-retry'
 import {
@@ -2248,6 +2249,67 @@ export class Dispatcher {
               }
             }
           }
+          if (
+            state.kind !== 'node' &&
+            state.status !== 'queued' &&
+            state.status !== 'aborted' &&
+            state.prState !== 'merged' &&
+            state.prState !== 'closed'
+          ) {
+            const facts = await this.store.buildFacts(record.slug)
+            const target = facts.log.restack.target
+            if (target && target.branch === facts.state.baseBranch) {
+              let sample = {
+                branch: target.branch,
+                sha: target.sha,
+                head: null,
+                count: null,
+              } as EventPayload<'target.distance'>
+              try {
+                sample = await sampleTargetDistance({
+                  ...target,
+                  buildBranch: record.branch ?? `ab/${record.slug}`,
+                  ...(facts.workspace && !isRemoteWorkspace(facts.workspace)
+                    ? { localPath: this.forgeWorkspacePathOf(facts.workspace) }
+                    : {}),
+                  exec: this.deps.exec,
+                  forge: this.deps.forge,
+                })
+              } catch (error) {
+                if (
+                  error instanceof ForgeRequestDeferred ||
+                  (isForgeFailure(error) && error.details.kind === 'rate-limited')
+                )
+                  throw error
+                if (facts.log.restack.distance?.count != null)
+                  report.janitorDiagnostics.push(
+                    `build ${record.slug}: target distance failed — ${error instanceof Error ? error.message : String(error)}`,
+                  )
+              }
+              const current = await this.store.buildFacts(record.slug)
+              if (
+                current.state.status !== 'done' &&
+                current.state.status !== 'aborted' &&
+                current.state.prState !== 'merged' &&
+                current.state.prState !== 'closed' &&
+                current.state.baseBranch === target.branch &&
+                current.log.restack.target?.sha === target.sha &&
+                current.log.restack.completedAt === facts.log.restack.completedAt &&
+                current.state.implement.commits?.head === facts.state.implement.commits?.head &&
+                (current.log.restack.distance?.branch !== sample.branch ||
+                  current.log.restack.distance?.sha !== sample.sha ||
+                  current.log.restack.distance?.head !== sample.head ||
+                  current.log.restack.distance?.count !== sample.count)
+              ) {
+                await this.store.append(record.slug, {
+                  actor: DISPATCHER,
+                  type: 'target.distance',
+                  payload: sample,
+                })
+                loaded = undefined
+              }
+            }
+          }
           if (state.pr) {
             await this.checkPr(
               record,
@@ -2267,7 +2329,7 @@ export class Dispatcher {
           }
           await completeNodePoll()
         } catch (error) {
-          if (error instanceof ForgeCooldown) {
+          if (error instanceof ForgeRequestDeferred) {
             attempted = false
             return
           }
