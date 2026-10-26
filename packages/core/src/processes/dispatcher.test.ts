@@ -10693,3 +10693,89 @@ test('advisory work samples refresh head and target, deduplicate across restart,
   expect(h.forge.rewrites).toEqual([])
   expect(h.launches).toEqual([])
 })
+
+test('advisory work samples deduplicate persisted JSON values with reordered keys', async () => {
+  const backing = new MemoryBuildStore({ clock: manualClock() })
+  const getReducerValue = backing.getReducerValue.bind(backing)
+  const storedOrders: string[][] = []
+  backing.getReducerValue = async (...args) => {
+    const result = await getReducerValue(...args)
+    return {
+      ...result,
+      // PostgreSQL jsonb normalizes object keys by length, then byte order.
+      value: JSON.parse(
+        JSON.stringify(result.value, (_key, value) => {
+          if (value === null || typeof value !== 'object' || Array.isArray(value)) return value
+          const reordered = Object.fromEntries(
+            Object.entries(value).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)),
+          )
+          if (
+            'branch' in reordered &&
+            'count' in reordered &&
+            'head' in reordered &&
+            'sha' in reordered
+          )
+            storedOrders.push(Object.keys(reordered))
+          return reordered
+        }),
+      ),
+    }
+  }
+  const h = harness({
+    store: backing,
+    exec: async (cmd) => ({
+      stdout: cmd[1] === 'rev-list' ? '3' : 'b'.repeat(40),
+      stderr: '',
+      exitCode: 0,
+    }),
+  })
+  const slug = await seedBuild(h)
+  await h.store.claimLease(slug, 'running', 3_600_000)
+  await h.dispatcher.tick()
+  await h.dispatcher.tick()
+  const resumed = harness({
+    store: backing,
+    forge: h.forge,
+    exec: async (cmd) => ({
+      stdout: cmd[1] === 'rev-list' ? '3' : 'b'.repeat(40),
+      stderr: '',
+      exitCode: 0,
+    }),
+  })
+  await resumed.dispatcher.tick()
+  expect(storedOrders).toContainEqual(['sha', 'head', 'count', 'branch'])
+  expect((await backing.getEvents(slug)).filter((e) => e.type === 'target.distance')).toHaveLength(
+    1,
+  )
+})
+
+test('deferred work distance comparisons preserve the known sample without diagnostics or log growth', async () => {
+  const { ForgeRequestDeferred } = await import('../ports/forge-request-context')
+  const forge = new FakeForge()
+  let deferred = false
+  let comparisons = 0
+  forge.compareBranches = async () => {
+    comparisons++
+    if (deferred) throw new ForgeRequestDeferred('request budget exhausted')
+    return { parentSha: 'b'.repeat(40), headSha: BASE_SHA, ahead: 3 }
+  }
+  const h = harness({ forge })
+  const slug = await seedBuild(h, { workspaceRemote: true })
+  await h.store.claimLease(slug, 'running', 3_600_000)
+  await h.dispatcher.tick()
+  const before = await h.store.getEvents(slug)
+  expect(before.filter((e) => e.type === 'target.distance').at(-1)?.payload).toMatchObject({
+    count: 3,
+  })
+  deferred = true
+  for (let poll = 0; poll < 2; poll++) {
+    const report = await h.dispatcher.tick()
+    expect(report.janitorDiagnostics).toEqual([])
+    expect(report.janitorFailed).toBe(0)
+    expect(await h.store.getEvents(slug)).toEqual(before)
+  }
+  deferred = false
+  await h.dispatcher.tick()
+  expect(comparisons).toBe(4)
+  expect(await h.store.getEvents(slug)).toEqual(before)
+})

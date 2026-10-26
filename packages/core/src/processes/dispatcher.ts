@@ -2277,7 +2277,7 @@ export class Dispatcher {
                 })
               } catch (error) {
                 if (
-                  error instanceof ForgeCooldown ||
+                  error instanceof ForgeRequestDeferred ||
                   (isForgeFailure(error) && error.details.kind === 'rate-limited')
                 )
                   throw error
@@ -2296,7 +2296,10 @@ export class Dispatcher {
                 current.log.restack.target?.sha === target.sha &&
                 current.log.restack.completedAt === facts.log.restack.completedAt &&
                 current.state.implement.commits?.head === facts.state.implement.commits?.head &&
-                JSON.stringify(current.log.restack.distance) !== JSON.stringify(sample)
+                (current.log.restack.distance?.branch !== sample.branch ||
+                  current.log.restack.distance?.sha !== sample.sha ||
+                  current.log.restack.distance?.head !== sample.head ||
+                  current.log.restack.distance?.count !== sample.count)
               ) {
                 await this.store.append(record.slug, {
                   actor: DISPATCHER,
@@ -2326,7 +2329,7 @@ export class Dispatcher {
           }
           await completeNodePoll()
         } catch (error) {
-          if (error instanceof ForgeCooldown) {
+          if (error instanceof ForgeRequestDeferred) {
             attempted = false
             return
           }
