@@ -180,7 +180,7 @@ project known payloads before adapting selector rows, while build and repository
 facts retain compatibility counts across incremental resumes. Unknown facts
 still advance sequence cursors. `kernel/mixed-version.ts` guards affected build
 decisions and deduplicates the default-watch attention fact. Other builds and
-read-only queries continue. The [hosted upgrade guarantee](hosted-service.md#reading-across-upgrades)
+read-only queries continue. The [hosted upgrade guarantee](remote-store-protocol.md)
 describes recovery and the supported-window boundary.
 
 All event-derived checkpoints include the combined read-catalog fingerprint in
@@ -1208,7 +1208,7 @@ metadata, not ordering. Runtime opens assert schema and never run DDL.
 The service exposes one lazy live reader to the operator server, web gateway,
 MCP and server-rendered repository picker. Initialization failures clear the
 cached promise for retry. The dispatcher opens its own shared pool and queries
-membership each invocation. See [owner workflow](setup.md#connected-projects).
+membership each invocation. See [owner workflow](remote-store-protocol.md#7-authentication-and-project-authority).
 
 ## Delegated execution authority
 

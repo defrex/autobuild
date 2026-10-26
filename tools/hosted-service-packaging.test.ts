@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test'
 import { checkDeploymentTemplates } from './hosted-service-packaging'
 import { replaceHostedServicePins, replacePackageVersion } from './release'
 
-test('deployment templates and documentation have matching released pins', async () => {
+test('deployment templates have matching released pins', async () => {
   await checkDeploymentTemplates()
 })
 test('releases bump exact deployment pins without changing source peer floors', () => {
@@ -58,16 +58,12 @@ test('deployment pin policy retains lower stable pins only for prerelease roots'
     }
     await writeFile(join(root, 'package.json'), '{"version":"1.0.0-beta.0"}')
     await addDeploymentFixture(root, '0.9.0')
-    await writeFile(join(root, 'docs/hosted-service.md'), 'drift')
-    await expect(checkDeploymentTemplates(root)).rejects.toThrow('Documentation')
-    await addDeploymentFixture(root, '0.9.0')
     await writeFile(join(root, 'packages/hosted-store-service/deployment/vercel.json'), '{}')
     await expect(checkDeploymentTemplates(root)).rejects.toThrow()
     await addDeploymentFixture(root, '0.9.0')
     const missing = '{"dependencies":{}}'
     for (const path of ['templates/hosted-service', 'packages/hosted-store-service/deployment'])
       await writeFile(join(root, path, 'package.json'), missing)
-    await writeFile(join(root, 'docs/hosted-service.md'), `${missing}{ "framework": "nextjs" }`)
     await expect(checkDeploymentTemplates(root)).rejects.toThrow('exact semver')
   } finally {
     await rm(root, { recursive: true, force: true })

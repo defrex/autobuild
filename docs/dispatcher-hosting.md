@@ -1,7 +1,7 @@
 ---
 title: "Dispatcher hosting"
 group: "reference"
-description: "Run the dispatcher locally or through bounded hosted invocations over durable state."
+description: "Run a local dispatcher with local or remote workspaces over durable state."
 label: "Dispatcher hosting"
 order: 11
 ---
@@ -10,7 +10,7 @@ order: 11
 
 ## Responsibility
 
-The dispatcher claims eligible tickets, starts and observes build runners, settles publication and merge, and recovers durable work. Local and hosted arrangements run the same kernel. Your operator agent acts through the CLI or MCP; Autobuild never starts it.
+The dispatcher claims eligible tickets, starts and observes build runners, settles publication and merge, and recovers durable work. Local and origin-mode arrangements run the same kernel. Your operator agent acts through the CLI or MCP; Autobuild never starts it.
 
 ## Shipped arrangements
 
@@ -40,7 +40,7 @@ The host needs:
 
 A service manager may own the process under an identity with the same configuration and credentials. To restart, stop gracefully and let drain and suspension finish; work resumes from durable state. A restart never answers escalations or grants merge consent. See [the dispatcher lifecycle](dispatcher.md).
 
-### Hosted scheduled dispatcher
+### Origin-mode dispatcher with remote workspaces
 
 Commit a remote-compatible configuration to the base branch:
 
@@ -73,40 +73,22 @@ model = "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
 ```
 <!-- seam-config:end -->
 
-- **Required:** hosted HTTP Store, GitHub forge, remote ticket source, remote workspace. Hosted tickets need the registered project's team key.
-- **Install the Sandbox plugin** in the project and make it available to the dispatcher deployment.
-- **Replace the example** runtime, model and provisioning commands with values for your account.
-
-Deploy `@defrex/autobuild-hosted-dispatcher` and mount its `dispatcherEndpoint()` at `/api/dispatch`; a store-only deployment never dispatches. Server-only environment includes:
+Run the supported CLI from an HTTPS GitHub origin:
 
 ```sh
-export AB_DISPATCHER_ORIGIN='https://builds.example.com'
-export CRON_SECRET='<schedule secret>'
-export GITHUB_TOKEN='<repository publication token>'
-export DATABASE_URL='<postgres connection URL>'
-export AI_GATEWAY_API_KEY='<runtime API credential>'
+bun ab dispatch --repository https://github.com/acme/app --plain --store https://builds.example.com
 ```
 
-Plus the Store's signing, blob and auth secrets, and registered projects.
-
-- **Authority.** A hosted invocation mints project-scoped authority; a separately launched origin-mode CLI uses its saved project credential or `AB_TOKEN`.
-- **Origin dispatch** reads configuration from the forge, needs exported forge credentials, and can't load checkout-relative plugins.
-- **Sandbox provisioning.** On Vercel, the invocation's OIDC identity authenticates; don't add `VERCEL_TOKEN`. Elsewhere, it needs a durable token, team and project, or short-lived OIDC credentials ([Workspaces](workspaces.md)).
-- **Guests** get only the declared runtime API credentials, never Store or forge secrets.
-
-Schedule authenticated invocations:
-
-```json
-{
-  "crons": [{ "path": "/api/dispatch", "schedule": "* * * * *" }]
-}
-```
-
-Build the distribution's guest archive into the function bundle before deploying; the function can't pack it at runtime.
-
-- **Bounded ticks:** a 240-second default work budget inside a 300-second route. Unfinished work resumes on later ticks; guests run independently.
-- **Overlap:** the repository supervisor lease makes overlapping invocations yield.
-- Selecting Postgres alone never moves dispatch here.
+Use a remote store that speaks the remote BuildStore protocol.
+Connect the project with `ab connect` or supply `AB_TOKEN`. Hosted tickets use
+that registered project's team key. Install the Sandbox plugin on the dispatcher
+host and replace the example runtime and model with your account's values.
+Origin mode reads configuration from the forge and cannot load checkout-relative
+plugins. Export push-capable `GITHUB_TOKEN` or `GH_TOKEN`; forge credentials stay
+on the host. Sandbox provisioning needs `VERCEL_OIDC_TOKEN` or the durable
+`VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` tuple. Guests receive only
+declared runtime API credentials and scoped execution grants.
+See [origin-mode setup](setup.md#running-the-dispatcher-without-a-checkout-origin-mode) and [Workspaces](workspaces.md).
 
 ## Writing your own
 
