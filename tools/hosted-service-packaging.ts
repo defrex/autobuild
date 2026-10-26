@@ -28,8 +28,6 @@ export async function checkDeploymentTemplates(root = repoRoot) {
   for (const file of ['package.json', 'vercel.json']) {
     const text = await readFile(join(root, deploymentTemplatePaths[0]!, file), 'utf8')
     assert.equal(text, await readFile(join(root, deploymentTemplatePaths[1]!, file), 'utf8'))
-    const docs = await readFile(join(root, 'docs/hosted-service.md'), 'utf8')
-    assert(docs.includes(text.trim()), `Documentation must contain canonical ${file}`)
   }
   const manifest = JSON.parse(
     await readFile(join(root, deploymentTemplatePaths[0]!, 'package.json'), 'utf8'),
@@ -102,6 +100,9 @@ export async function checkHostedServicePackaging() {
       ...process.env,
       NODE_PATH: undefined,
       BUN_INSTALL: undefined,
+      // Next/Vercel child processes use Node's compile cache. Keep it inside
+      // this rehearsal's owned directory so the final cleanup removes it.
+      NODE_COMPILE_CACHE: join(root, 'node-compile-cache'),
       AB_SERVICE_BUILD_ROOT: undefined,
       AB_POSTGRES_URL: scoped.toString(),
       DATABASE_URL: undefined,

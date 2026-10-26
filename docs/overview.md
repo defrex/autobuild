@@ -12,7 +12,7 @@ slug: ""
 Autobuild runs coding agents through a fixed pipeline that takes a groomed ticket to a verified pull request, with a separate workspace for each build. Three actors keep that work moving:
 
 - **You** decide goals, scope, tradeoffs, and how much authority to delegate.
-- **Your operator agent** is an external agent that writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, and answers questions within your instructions. The `ab` CLI is primarily its interface; remote agents use MCP.
+- **Your operator agent** is an external agent that writes specs, files and grooms tickets, operates the builds the repository's dispatcher dispatches, and answers questions within your instructions. The `ab` CLI is primarily its interface; agents without a shell can use local stdio MCP or the Operator API.
 - **The dispatcher** claims ready work and runs the durable pipeline, including isolated agent sessions, checks, and publication.
 
 

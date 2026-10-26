@@ -97,7 +97,7 @@ succeeds.
 
 For dependencies on any source, follow the
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
-Direct and hosted Linear record blockers after creating the issue, so a ready
+Direct Linear record blockers after creating the issue, so a ready
 issue can be claimed before `create --blocked-by` returns. Stage dependents in a
 known non-ready state, verify all blockers with `ab ticket show --json`, then use
 `ab ticket move` to publish the intended ready destination. Do not use the local

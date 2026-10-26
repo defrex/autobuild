@@ -13,7 +13,7 @@ Adapters supply storage, agent execution, code publication, workspaces and ticke
 
 ## Storage and tickets
 
-- **BuildStore.** Local SQLite with filesystem artifacts by default; a Postgres adapter, exposed over the network by the hosted HTTP service.
+- **BuildStore.** Local SQLite with filesystem artifacts by default; a remote store implementing the remote BuildStore protocol.
 - **Tickets.** Local files, Linear, or hosted tickets. A hosted Store doesn't require hosted tickets.
 
 See [Build store](build-store.md) and [Tickets](ticket-sources.md).
@@ -32,16 +32,16 @@ Every environment needs the runtime, tools, dependencies and credentials; remote
 
 | Piece | All local | All remote |
 |---|---|---|
-| Dispatcher | your machine | hosted, scheduled, origin-mode configuration |
+| Dispatcher | your machine | origin-mode CLI on an operator host |
 | Build runners, agents, checks | your machine, in git worktrees | Vercel Sandbox |
-| Store | local SQLite | hosted Store on Postgres |
+| Store | local SQLite | remote BuildStore protocol |
 | Tickets | file or any other source | a remote ticket source |
 | Forge | local git or GitHub | GitHub |
-| Operator access | terminal dashboard and local CLI | browser or MCP connector |
+| Operator access | terminal dashboard and local CLI | Operator API client |
 
 - File tickets and local git make all-local independent of GitHub.
 - The operator agent is external in both.
-- Choosing Postgres alone doesn't make anything remote.
+- Choosing a remote Store alone does not move dispatch or build execution off this machine.
 - Mixed deployments work within adapter constraints, e.g. a local dispatcher with a hosted Store and remote sandboxes.
 
 See [Dispatcher hosting](dispatcher-hosting.md).
@@ -60,7 +60,7 @@ See [Dispatcher hosting](dispatcher-hosting.md).
 - [Agent runtimes](agent-runtimes.md): Claude Code, Codex, Pi, models.
 - [Workspaces](workspaces.md): git worktree, Vercel Sandbox, provisioning.
 - [Forges](forges.md): GitHub, local git, publication adapters.
-- [Build store](build-store.md): SQLite, Postgres, HTTP, contracts.
-- [Dispatcher hosting](dispatcher-hosting.md): local processes, scheduled hosted ticks.
-- [Operator surfaces](operator-surfaces.md): terminal, web, CLI, MCP.
+- [Build store](build-store.md): SQLite, remote HTTP, contracts.
+- [Dispatcher hosting](dispatcher-hosting.md): local and origin-mode CLI processes.
+- [Operator surfaces](operator-surfaces.md): terminal, CLI, stdio MCP, Operator API.
 - [Writing a plugin](plugin-authoring.md): modules, contracts, packaging, publishing.

@@ -49,6 +49,11 @@ describe('static site', () => {
       .replaceAll('bun add -g @defrex/autobuild', INSTALL_COMMAND)
       .replaceAll('>ab init<', '>bun ab init<')
       .replaceAll('>ab dispatch<', '>bun ab dispatch<')
+      // hosted-protocol-docs authorizes these factual selector refinements.
+      .replace(/<button[^>]*>cron<\/button>/, '')
+      .replace('>Postgres<', '>remote store<')
+      .replace('>web UI<', '>Operator API<')
+      .replace('>MCP<', '>stdio MCP<')
     const reference = textOf(updatedReference)
     const landing = html
       .replace(
@@ -103,7 +108,7 @@ describe('static site', () => {
     expect(html.match(/<h1[ >]/g)).toHaveLength(1)
     expect(html.match(/<h2[ >]/g)).toHaveLength(html.match(/<section[ >]/g)!.length - 1)
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(7)
-    expect(html.match(/aria-pressed="false"/g)).toHaveLength(10)
+    expect(html.match(/aria-pressed="false"/g)).toHaveLength(9)
     expect(html).toContain(`href="${REPO_URL}"`)
     expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(6)
     expect(html).toContain('fully local')
