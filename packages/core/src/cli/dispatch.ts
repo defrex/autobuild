@@ -1,3 +1,4 @@
+import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import { capturedBuildConfig } from '../processes/verify-cycle-config'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { migrationIdentity } from '../kernel/ticket-migrations'
@@ -536,6 +537,11 @@ async function defaultWire(
     plugins,
   )
   const { runtimes } = createProductionRuntimes()
+  let accounts = config.accounts
+  opened.store = redactAccountStore(
+    opened.store,
+    accountRedactor(() => accounts, opts.env),
+  )
   let runtimeReferences = effectiveRuntimeReferences(config)
   // A local override relocates the whole tree. Remote stores still need local
   // scratch beneath the repository default. Plugin factories receive only
@@ -549,6 +555,7 @@ async function defaultWire(
     env: opts.env,
     storeRef: opened.storeRef,
     runtimeReferences: () => runtimeReferences,
+    accounts: () => accounts,
     sandboxSetupCommand: config.commands.setup,
     sandboxRoot: resolve(join(opened.localStateRoot, 'orchestrator-sandboxes')),
     sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
@@ -586,6 +593,7 @@ async function defaultWire(
     clock: systemClock,
     plugins,
     updateRuntimeReferences: (effectiveConfig) => {
+      accounts = effectiveConfig.accounts
       runtimeReferences = effectiveRuntimeReferences(effectiveConfig)
     },
   }
@@ -810,6 +818,7 @@ class DispatchLoop {
         signal,
         ...(resolvedSlug.model !== undefined ? { model: resolvedSlug.model } : {}),
         args: resolvedSlug.args,
+        account: resolvedSlug.account,
       })
       return result.text
     }
@@ -4364,6 +4373,7 @@ class DispatchLoop {
           this.wiring.runtimes,
           config.roles,
           config.policy.sessionBudgetSeconds,
+          config.accounts,
         )
         const deadline = new Date(
           Date.parse(retirement.startedAt) + config.policy.upgradeDrainSeconds * 1000,

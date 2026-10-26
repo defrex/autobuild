@@ -1,3 +1,4 @@
+import { selectedAccountSchema } from '../config/accounts'
 import { nativeSessionHandleSchema } from './native-session'
 import { runtimeIdentitySchema } from './runtime'
 import { stampCompatibility, type CompatibilityMetadata, repositoryEventPolicy } from './policy'
@@ -278,6 +279,7 @@ export const harvestEventPayloadSchemas = {
     model: z.string().optional(),
     /** Optional only so historical repository journals replay without migration. */
     args: z.array(z.string()).optional(),
+    account: selectedAccountSchema.optional(),
     step: z.enum(['synthesize', 'review']),
     round,
     /** Stream id this session's live view writes to (SPEC §9, session

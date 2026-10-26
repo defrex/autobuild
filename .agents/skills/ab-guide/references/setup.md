@@ -67,8 +67,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 ```
 
 Use a `vercel-ai-gateway/...` Pi model with `AI_GATEWAY_API_KEY` in the
-dispatcher environment. Do not copy `~/.pi`, OAuth refresh tokens, or any local
-runtime auth state, and do not attempt interactive login in a sandbox. Runtime
+dispatcher environment. For Claude Code, configure [accounts](accounts.md) with a manually provisioned `claude setup-token` credential or a Kimi Code membership key; use the unmodified runtime, your own subscription, and ordinary individual usage. Pi and Codex local auth state and OAuth refresh tokens are not copied, and interactive sandbox login is unsupported. Runtime
 names are open: a plugin runtime uses the same strict map, for example
 `[workspace.config.runtimeProvisioning.opencode]`, with its own immutable
 install and exact-version preflight commands.

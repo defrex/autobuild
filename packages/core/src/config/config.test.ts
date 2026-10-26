@@ -102,6 +102,7 @@ function parseError(toml: string, source?: string): ConfigError {
 describe('parseConfig — complete flattened surface', () => {
   test('every field merges where expected', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
+      accounts: {},
       upgrade: { automatic: true },
       landing: [],
       baseBranch: 'main',
@@ -190,6 +191,7 @@ describe('parseConfig — defaults', () => {
 
   test('a minimal valid [tickets] yields every other default', () => {
     expect(parseConfig(READY)).toEqual({
+      accounts: {},
       upgrade: { automatic: true },
       landing: [],
       baseBranch: 'main',

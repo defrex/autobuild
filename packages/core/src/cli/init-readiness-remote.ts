@@ -17,6 +17,21 @@ export async function validateRemoteReadiness(
   ctx: WorkspaceReadinessContext,
 ): Promise<InitValidationReport> {
   const vercel = ctx.providerConfig as VercelSandboxConfig
+  const hostChecks = Object.entries(ctx.accounts ?? {}).map(([name, descriptor]) => ({
+    name: `host account ${JSON.stringify(name)}`,
+    status: ctx.env[descriptor.credentialEnv] ? ('pass' as const) : ('fail' as const),
+    detail: ctx.env[descriptor.credentialEnv]
+      ? `${descriptor.credentialEnv} is present`
+      : `${descriptor.credentialEnv} is missing; ${descriptor.kind === 'claude-subscription' ? 'run claude setup-token and set the dispatcher variable' : 'provision the Kimi membership key'}`,
+  }))
+  if (hostChecks.some((check) => check.status === 'fail'))
+    return {
+      provider: 'vercel-sandbox',
+      context: 'Vercel Sandbox',
+      checks: hostChecks,
+      exitCode: 1,
+    }
+
   const remoteLine = await gitText(
     ctx.exec,
     ctx.repo,
@@ -69,6 +84,7 @@ export async function validateRemoteReadiness(
       exec: ctx.exec,
       ...(ctx.packageArchive !== undefined ? { packageArchive: ctx.packageArchive } : {}),
       runtimeReferences: [...ctx.runtimeReferences],
+      accounts: ctx.accounts,
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
       onSandbox: (name) => ctx.stdout(`Disposable Vercel Sandbox: ${name} (active)`),
     })
@@ -103,8 +119,13 @@ export async function validateRemoteReadiness(
             ? 'no workspace.config.provisioning steps declared'
             : `completed: ${remote.provisioning.join(', ')}`,
       },
+      ...hostChecks,
       ...guest.checks,
     ],
-    exitCode: guest.checks.some((check) => check.status === 'fail') ? 1 : 0,
+    exitCode:
+      guest.checks.some((check) => check.status === 'fail') ||
+      Object.values(ctx.accounts ?? {}).some((account) => !ctx.env[account.credentialEnv])
+        ? 1
+        : 0,
   }
 }
