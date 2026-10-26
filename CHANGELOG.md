@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## v1.1.0 — 2026-10-26
+
+This release runs verify steps in concurrent stages with opt-in fail-fast, re-pins verify configuration each cycle, and protects concurrent stages through effective config deposits. Merge terminology now replaces landing everywhere: `ab merge`, `[[merge]]` rules, MCP `merges.list` and `ab wait --for node-merged` are the new names, the old landing names still work as deprecated aliases, and `ab upgrade` migrates the config key. Each agent session now gets its own context directory under `.ab/`, so repository-authored skills must read hydrated inputs from `$AB_CONTEXT_DIR` instead of hardcoded `.ab/<file>` paths. The hosted side adds organization-scoped access with super-user and access management pages, the web dashboard moves to ANSI in light and dark, and reliability improves through transient-failure retries for restack and reconcile, orderly dispatcher handoffs no longer reported as lost, the embedded hosted operator runner removed, and an end to leaked temporary directories.
+
+- [#759](https://github.com/defrex/autobuild/pull/759) — Show merge targets and distance on dashboard slug lines
+- [#758](https://github.com/defrex/autobuild/pull/758) — Stop leaking temporary directories from tests and build sessions
+- [#757](https://github.com/defrex/autobuild/pull/757) — Use merge vocabulary across public interfaces
+- [#755](https://github.com/defrex/autobuild/pull/755) — Withdraw operator presence when a flagged watch is terminated
+- [#754](https://github.com/defrex/autobuild/pull/754) — Protect concurrent verify stages through effective config deposits
+- [#752](https://github.com/defrex/autobuild/pull/752) — Stop reporting orderly dispatcher handoffs as dispatcher.lost
+- [#751](https://github.com/defrex/autobuild/pull/751) — Retry transient restack and reconcile publication failures with backoff
+- [#750](https://github.com/defrex/autobuild/pull/750) — Allow untracked files during restack and reconcile publication
+- [#748](https://github.com/defrex/autobuild/pull/748) — Re-pin verify config each cycle and handle stale plan selections
+- [#747](https://github.com/defrex/autobuild/pull/747) — Remove the embedded hosted operator runner
+- [#746](https://github.com/defrex/autobuild/pull/746) — Isolate phase-context subprocess fixtures from inherited context
+- [#745](https://github.com/defrex/autobuild/pull/745) — Keep dashboard input raw across generation exits
+- [#741](https://github.com/defrex/autobuild/pull/741) — Capture web dashboard frames at full document height
+- [#740](https://github.com/defrex/autobuild/pull/740) — Let scoped node verifiers load contributor context
+- [#737](https://github.com/defrex/autobuild/pull/737) — Group this repository's verify steps into resource-safe stages
+- [#736](https://github.com/defrex/autobuild/pull/736) — Run verify steps in concurrent stages with opt-in fail-fast
+- [#734](https://github.com/defrex/autobuild/pull/734) — Add organization access management pages
+- [#731](https://github.com/defrex/autobuild/pull/731) — Move the web dashboard to ANSI in light and dark
+- [#730](https://github.com/defrex/autobuild/pull/730) — Add advisory operator presence to repository-wide watches
+- [#729](https://github.com/defrex/autobuild/pull/729) — Give each agent session its own context directory
+- [#727](https://github.com/defrex/autobuild/pull/727) — Scope hosted access by organization and add super-user management
+- [#726](https://github.com/defrex/autobuild/pull/726) — Read hydrated context from AB_CONTEXT_DIR in local verifier skills
+- [#725](https://github.com/defrex/autobuild/pull/725) — Split verification into build and integration steps, keep database-backed tests out of the unit suite, and rename the UI verify steps to ui-tui, ui-app and ui-website
+- [#723](https://github.com/defrex/autobuild/pull/723) — Keep seconds visible on dashboard timers past one hour
 - Use `ab merge` / `ab merges`, `[[merge]]` rules, MCP `merges.list`, and the `merge` action on `builds.control`. The old `land` / `landings` commands, `[[landing]]`, `landings.list`, and `land` action remain compatible deprecated aliases. `ab upgrade` migrates the config key. `ab wait --for node-merged` replaces `node-landed`, which remains an alias. Dashboard and documentation terminology now consistently says merge.
 
 Build sessions now hydrate inputs under `.ab/<phase>/` (or `.ab/verify-<step>/`
