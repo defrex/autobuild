@@ -86,10 +86,12 @@ export async function suiteCommands(mode: string, args: string[]): Promise<strin
         '--path-ignore-patterns=**/*.integration.test.ts',
         ...Array.from(
           new Bun.Glob('packages/*/src').scanSync({ cwd: checkoutRoot, onlyFiles: false }),
-        ).sort(),
-        'tools',
-        'bin',
-        'packages/hosted-store-service/app',
+        )
+          .sort()
+          .map((path) => `./${path}`),
+        './tools',
+        './bin',
+        './packages/hosted-store-service/app',
         ...args,
       ],
     ]
