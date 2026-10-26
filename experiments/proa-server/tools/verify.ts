@@ -118,7 +118,7 @@ export async function build(capture = false): Promise<string> {
   const commands = capture
     ? []
     : [
-        ['bun', 'test', 'tools'],
+        ['bun', 'test', './tools'],
         ['bun', join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '-p', 'tsconfig.json'],
         ['bun', 'tools/check-fixtures.ts'],
         ['bun', 'tools/operator-fixtures.ts'],
