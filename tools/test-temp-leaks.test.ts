@@ -276,7 +276,9 @@ test('unit collection includes owned roots and excludes experiment and substring
       await mkdir(join(fixture, root), { recursive: true })
       await writeFile(
         join(fixture, root, 'marker.test.ts'),
-        `import {test} from 'bun:test'; test('owned-root-${index}',()=>{});`,
+        `import {test} from 'bun:test';
+         import {writeFileSync} from 'node:fs';
+         test('owned-root-${index}',()=>{writeFileSync(${JSON.stringify(join(fixture, `owned-root-${index}`))},'ran')});`,
       )
     }
     const excluded = [
@@ -291,7 +293,8 @@ test('unit collection includes owned roots and excludes experiment and substring
     const result = Bun.spawnSync(command!, { cwd: fixture, timeout: 10000 })
     const output = result.stdout.toString() + result.stderr.toString()
     expect(result.exitCode, output).toBe(0)
-    for (const index of roots.keys()) expect(output).toContain(`owned-root-${index}`)
+    for (const index of roots.keys())
+      expect(await readFile(join(fixture, `owned-root-${index}`), 'utf8')).toBe('ran')
     expect(output).not.toContain('excluded-import:')
   } finally {
     await rm(fixture, { recursive: true, force: true })
