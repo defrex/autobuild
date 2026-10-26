@@ -128,7 +128,7 @@ Confirmed capabilities of the web app today:
   pipeline table with one row per nonterminal build: ticket id and slug,
   status, pipeline steps with elapsed time, pull request state, and controls
   (pause or resume, enable or disable auto merge, discard, abort). A harvest
-  row for the observation-harvest workflow. A build detail panel with
+  row for the observation-harvest workflow. Each build has its own page with
   escalations, an answer composer (guidance, retry, dismiss, review-round
   ceiling, revised spec from a supplied body or the amended ticket), session
   rows with token usage, and transcript viewing.

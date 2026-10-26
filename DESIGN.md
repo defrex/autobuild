@@ -110,13 +110,13 @@ Body is 15px, rising to 16px at 1280px, at 1.5 line height. Sans regular (400) c
 
 ## Layout
 
-The centered frame has a maximum width of 1180px, 24px side padding and 64px bottom padding. Below 720px, side padding is 16px and bottom padding 40px. The masthead and wrapping operator control line precede ruled rows. The desktop identity column is 6.5rem with a 16px gutter; slug, steps and inline details align beneath the title. The readable measure token is 72ch; sign-in centers within 56ch, answer composers within 80ch, sign-off regions within 88ch.
+The centered frame has a maximum width of 1180px, 24px side padding and 64px bottom padding. Below 720px, side padding is 16px and bottom padding 40px. The masthead and wrapping operator control line precede ruled rows. The desktop identity column is 6.5rem with a 16px gutter; slug, steps and build-page sections align beneath the title. The readable measure token is 72ch; sign-in centers within 56ch, answer composers within 80ch, sign-off regions within 88ch.
 
 At phone width the row identity stacks, content loses its desktop indent, and steps and controls wrap naturally. Escalation sign-off spans the viewport edge to edge, with full-width primary answer controls. The account menu stretches across the phone viewport; long identities and prose wrap without truncating the facts.
 
 **The Title First Rule.** The readable ticket title is the primary row text; use the slug when no title exists. Keep identity, status, slug and steps visible without opening detail.
 
-**The Flowing Document Rule.** The browser document owns scrolling. Masthead, controls, build rows and inline details remain in ordinary flow at natural height, without pinned content or nested scrolling panels. The account menu is the small anchored overlay exception, full-width on phones.
+**The Flowing Document Rule.** The browser document owns scrolling. Masthead, controls, build rows and build pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. The account menu is the small anchored overlay exception, full-width on phones.
 
 ## Elevation & Depth
 
@@ -144,7 +144,7 @@ A ruled masthead pairs the project identity, which is the project picker when mo
 
 ### Build rows, progress and detail
 
-A blue mono ticket id precedes the sans title; a mono lifecycle word sits to the right. The slug and PR/auto-merge facts form a secondary register, then the wrapping step list. Step timing keeps the terminal duration format: `38s`, `4m12s`, `1h04m07s`. Legend marks repeat the green, teal, amber and slack mapping while explaining it in plain sans. Opening detail unfolds the trail, sessions, transcript and Actions beneath the row; answering and abort confirmation have exclusive controls. Focused rows may quiet other titles, but critical status and messages stay legible.
+A blue mono ticket id precedes the sans title; a mono lifecycle word sits to the right. The slug and PR/auto-merge facts form a secondary register, then the wrapping step list. Step timing keeps the terminal duration format: `38s`, `4m12s`, `1h04m07s`. Legend marks repeat the green, teal, amber and slack mapping while explaining it in plain sans. Rows never expand in place: the title links to the build's own page, which repeats the row's identity and meta line under a back link, then carries the escalation answer, merge consent, Actions, pipeline, sessions and transcript. A blocked row keeps its red question and links to that page to answer; merge consent stays on the row as well. Answering and abort confirmation have exclusive controls on the page.
 
 ### Decision regions
 
@@ -174,5 +174,5 @@ Organizations and Projects in a separate “Super user” group for acknowledged
 ### Don't:
 - Don’t place amber text on the inset well or red wash; use the plain ground.
 - Don’t add shadows, gradients, pills, icon sets or emoji.
-- Don’t replace inline detail with a drawer or modal.
+- Don’t replace the build page with a drawer, modal or in-place expansion.
 - Don’t invent page numbers or decide a new app title; both remain human decisions.

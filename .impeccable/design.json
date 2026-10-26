@@ -469,7 +469,7 @@
       },
       {
         "name": "The Flowing Document Rule",
-        "body": "The browser document owns scrolling. Masthead, controls, build rows and inline details remain in ordinary flow at natural height, without pinned content or nested scrolling panels. The account menu is the small anchored overlay exception, full-width on phones.",
+        "body": "The browser document owns scrolling. Masthead, controls, build rows and build pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. The account menu is the small anchored overlay exception, full-width on phones.",
         "section": "layout"
       },
       {
@@ -492,7 +492,7 @@
     "donts": [
       "Don\u2019t place amber text on the inset well or red wash; use the plain ground.",
       "Don\u2019t add shadows, gradients, pills, icon sets or emoji.",
-      "Don\u2019t replace inline detail with a drawer or modal.",
+      "Don\u2019t replace the build page with a drawer, modal or in-place expansion.",
       "Don\u2019t invent page numbers or decide a new app title; both remain human decisions."
     ]
   }

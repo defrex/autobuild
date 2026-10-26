@@ -42,6 +42,8 @@ import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   BuildsView,
+  BuildPageView,
+  type BuildPageViewProps,
   type BuildsViewProps,
   DispatcherControls,
   type Selection,
@@ -151,7 +153,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       'RUNNING',
     ],
   })),
-  ...['wide', 'narrow', 'dimmed'].map((size) => ({
+  ...['wide', 'narrow'].map((size) => ({
     id: `builds-handoff-${size}`,
     width: size === 'narrow' ? 390 : 1440,
     height: 2200,
@@ -243,12 +245,6 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     width: 390,
     height: 4400,
     requires: ['integration into', 'unit failed', 'ready to merge into', 'merge(consent)'],
-  },
-  {
-    id: 'integration-dimmed',
-    width: 1440,
-    height: 2500,
-    requires: ['integration into', 'unit failed', 'ready to merge into'],
   },
 
   {
@@ -420,13 +416,9 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     height: 2000,
     requires: [
       'BLOCKED',
-      'CAP-PLAN',
       'repository PAUSED',
-      '(held)',
-      'QUEUED',
       'The build stopped to ask a person.',
       'Pipeline',
-      'The build stopped to ask a person.',
       'Answer escalation',
       'Sessions',
       'Transcript',
@@ -438,13 +430,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-detail-narrow',
     width: 390,
     height: 2600,
-    requires: [
-      'BLOCKED',
-      '(held)',
-      'The build stopped to ask a person.',
-      'Answer escalation',
-      'ABORT',
-    ],
+    requires: ['BLOCKED', 'The build stopped to ask a person.', 'Answer escalation', 'ABORT'],
   },
   {
     id: 'builds-mixed-answer-wide',
@@ -456,7 +442,6 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       'SUBMIT',
       'CANCEL',
       'The build stopped to ask a person.',
-      'Answer escalation',
     ],
   },
   {
@@ -620,37 +605,49 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
       repo={FIXTURE_REPO}
       model={model}
       now={RENDER_NOW}
-      detailOpen={false}
-      answerPending={false}
       onActivate={noop}
       onHoverPreview={noop}
+      onOpenBuild={noop}
       onRowBuildControl={noop}
-      onRowRequestAbort={noop}
-      onCancelAbort={noop}
-      onRowToggleDetail={noop}
-      onAnswerStepInput={noop}
-      onSubmitAnswerStep={noop}
-      onCancelAnswerStep={noop}
-      onAnswer={noop}
-      onTranscript={noop}
       onRowHarvest={noop}
       {...extra}
     />
   )
 }
 
-/** The first build parked on a human in the mixed scenario, selected for detail. */
-function blockedSelection(model: DashboardModel): Selection {
-  const blocked = model.builds.find((build) => build.blockers.length > 0)
-  if (!blocked) throw new Error('web dashboard capture: the mixed model has no blocked build')
-  return { kind: 'build', slug: blocked.slug }
+/** A build's own page, as the operator reaches it from its row. */
+function buildPage(model: DashboardModel, slug: string, extra: Partial<BuildPageViewProps> = {}) {
+  return (
+    <BuildPageView
+      repo={FIXTURE_REPO}
+      slug={slug}
+      model={model}
+      now={RENDER_NOW}
+      confirmingAbort={false}
+      answerPending={false}
+      onRowBuildControl={noop}
+      onRowRequestAbort={noop}
+      onCancelAbort={noop}
+      onAnswerStepInput={noop}
+      onSubmitAnswerStep={noop}
+      onCancelAnswerStep={noop}
+      onAnswer={noop}
+      onTranscript={noop}
+      {...extra}
+    />
+  )
 }
 
-/** A different mixed-model build, previewed while the blocked selection stays committed. */
-function hoverSelection(model: DashboardModel, selected: Selection): Selection {
-  const candidate = model.builds.find(
-    (build) => selected.kind !== 'build' || build.slug !== selected.slug,
-  )
+/** The first build parked on a human in the mixed scenario. */
+function blockedSlug(model: DashboardModel): string {
+  const blocked = model.builds.find((build) => build.blockers.length > 0)
+  if (!blocked) throw new Error('web dashboard capture: the mixed model has no blocked build')
+  return blocked.slug
+}
+
+/** A mixed-model build other than the blocked one, previewed under the pointer. */
+function hoverSelection(model: DashboardModel, blocked: string): Selection {
+  const candidate = model.builds.find((build) => build.slug !== blocked)
   if (!candidate) throw new Error('web dashboard capture: the mixed model has no hover candidate')
   return { kind: 'build', slug: candidate.slug }
 }
@@ -678,17 +675,14 @@ function actionableHarvestModel(model: DashboardModel): DashboardModel {
   }
 }
 
-function selectedBuildModel(
+function changedBuildModel(
   model: DashboardModel,
-  selection: Selection,
+  slug: string,
   changes: Partial<DashboardModel['builds'][number]>,
 ): DashboardModel {
-  if (selection.kind !== 'build') throw new Error('capture selection is not a build')
   return {
     ...model,
-    builds: model.builds.map((build) =>
-      build.slug === selection.slug ? { ...build, ...changes } : build,
-    ),
+    builds: model.builds.map((build) => (build.slug === slug ? { ...build, ...changes } : build)),
   }
 }
 
@@ -753,10 +747,7 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
   if (spec.id.startsWith('integration-detail-')) {
     const state = spec.id.slice('integration-detail-'.length)
     const slug = state === 'wide' || state === 'narrow' ? 'integration-with-pr' : `queue-${state}`
-    return shell(
-      builds(models.integration, { detailOpen: true, selection: { kind: 'build', slug } }),
-      { model: models.integration },
-    )
+    return shell(buildPage(models.integration, slug), { model: models.integration })
   }
   if (spec.id.startsWith('builds-verify-stages-')) {
     const model = verifyStagesCapture(models.happy)
@@ -768,15 +759,7 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
   }
   if (spec.id.startsWith('builds-handoff-')) {
     const model = handoffCapture(models.happy)
-    return shell(
-      builds(
-        model,
-        spec.id.endsWith('dimmed')
-          ? { detailOpen: true, selection: { kind: 'build', slug: model.builds[1]!.slug } }
-          : {},
-      ),
-      { model },
-    )
+    return shell(builds(model), { model })
   }
   switch (spec.id) {
     case 'builds-menu-wide':
@@ -809,14 +792,6 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       const capacity = models.capacity ?? models.integration
       return shell(builds(capacity), { model: capacity })
     }
-    case 'integration-dimmed':
-      return shell(
-        builds(models.integration, {
-          detailOpen: true,
-          selection: { kind: 'build', slug: 'integration-empty' },
-        }),
-        { model: models.integration },
-      )
     case 'integration-narrow': {
       const model = models.integrationNarrow ?? models.integration
       return shell(builds(model), { model })
@@ -855,104 +830,74 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       return shell(builds(models.mixed), { model: models.mixed })
     case 'builds-mixed-focus-wide':
       return shell(
-        builds(models.mixed, {
-          selection: blockedSelection(models.mixed),
-          pending: spec.controlPending ? 'capture:pending' : undefined,
-        }),
+        builds(models.mixed, { pending: spec.controlPending ? 'capture:pending' : undefined }),
         { model: models.mixed },
       )
     case 'builds-mixed-selected-narrow':
       return shell(
-        builds(models.mixed, {
-          selection: blockedSelection(models.mixed),
-          detailOpen: true,
+        buildPage(models.mixed, blockedSlug(models.mixed), {
           pending: spec.controlPending ? 'capture:pending' : undefined,
         }),
         { model: models.mixed },
       )
-    case 'builds-mixed-hover-wide': {
-      const selection = blockedSelection(models.mixed)
+    case 'builds-mixed-hover-wide':
       return shell(
         builds(models.mixed, {
-          selection,
-          hoverPreview: hoverSelection(models.mixed, selection),
+          hoverPreview: hoverSelection(models.mixed, blockedSlug(models.mixed)),
         }),
         { model: models.mixed },
       )
-    }
     case 'builds-mixed-paused-wide': {
-      const selection = blockedSelection(models.mixed)
-      const model = selectedBuildModel(models.mixed, selection, { status: 'paused' })
-      return shell(builds(model, { selection, detailOpen: true }), { model })
+      const slug = blockedSlug(models.mixed)
+      const model = changedBuildModel(models.mixed, slug, { status: 'paused' })
+      return shell(buildPage(model, slug), { model })
     }
     case 'builds-auto-merge-on-wide': {
-      const selection = blockedSelection(models.mixed)
-      const model = selectedBuildModel(models.mixed, selection, { autoMerge: 'enabled' })
-      return shell(builds(model, { selection, detailOpen: true }), { model })
+      const slug = blockedSlug(models.mixed)
+      const model = changedBuildModel(models.mixed, slug, { autoMerge: 'enabled' })
+      return shell(buildPage(model, slug), { model })
     }
     case 'builds-parked-no-consent-wide': {
       const model = parkedNoConsentModel(models.mixed)
       const parked = model.builds[0]
       if (parked === undefined) throw new Error('parked model has no build')
-      return shell(
-        builds(model, { selection: { kind: 'build', slug: parked.slug }, detailOpen: true }),
-        { model },
-      )
+      return shell(buildPage(model, parked.slug), { model })
     }
     case 'builds-post-reconcile-policy-wide':
     case 'builds-post-reconcile-policy-narrow':
-      return shell(
-        builds(models.mixed, {
-          selection: { kind: 'build', slug: 'complete-dashboard-evidence' },
-          detailOpen: true,
-        }),
-        { model: models.mixed },
-      )
+      return shell(buildPage(models.mixed, 'complete-dashboard-evidence'), {
+        model: models.mixed,
+      })
     case 'builds-native-sessions-wide':
     case 'builds-native-sessions-narrow': {
-      const selection = blockedSelection(models.mixed)
-      const model = selectedBuildModel(models.mixed, selection, {
-        sessions: nativeSessionCapture(),
-      })
-      return shell(builds(model, { selection, detailOpen: true }), { model })
+      const slug = blockedSlug(models.mixed)
+      const model = changedBuildModel(models.mixed, slug, { sessions: nativeSessionCapture() })
+      return shell(buildPage(model, slug), { model })
     }
     case 'builds-mixed-detail-wide':
     case 'builds-mixed-detail-narrow':
       return shell(
-        builds(models.mixed, {
-          selection: blockedSelection(models.mixed),
-          detailOpen: true,
-          transcript: FIXTURE_TRANSCRIPT,
-        }),
+        buildPage(models.mixed, blockedSlug(models.mixed), { transcript: FIXTURE_TRANSCRIPT }),
         { model: models.mixed },
       )
     case 'builds-mixed-answer-wide':
     case 'builds-mixed-answer-narrow': {
-      const selection = blockedSelection(models.mixed)
-      if (selection.kind !== 'build') throw new Error('blocked selection is not a build')
+      const slug = blockedSlug(models.mixed)
       return shell(
-        builds(models.mixed, {
-          selection,
-          detailOpen: true,
-          pending: spec.answerPending ? `${selection.slug}:answer` : undefined,
+        buildPage(models.mixed, slug, {
+          pending: spec.answerPending ? `${slug}:answer` : undefined,
           answerPending: spec.answerPending ?? false,
-          answerStep: { slug: selection.slug, escalationIds: ['esc-capture'], input: '' },
+          answerStep: { slug, escalationIds: ['esc-capture'], input: '' },
         }),
         { model: models.mixed },
       )
     }
     case 'builds-mixed-abort-wide': {
-      // The confirmation frame is the selected blocked row after leaving its answer step.
-      const selection = blockedSelection(models.mixed)
-      if (selection.kind !== 'build') throw new Error('blocked selection is not a build')
-      return shell(
-        builds(models.mixed, {
-          selection,
-          detailOpen: true,
-          confirmingAbort: selection.slug,
-        }),
-        { model: models.mixed },
-      )
+      // The confirmation frame is the blocked build's page after leaving its answer step.
+      const slug = blockedSlug(models.mixed)
+      return shell(buildPage(models.mixed, slug, { confirmingAbort: true }), {
+        model: models.mixed,
+      })
     }
     case 'builds-longrepo-narrow':
       return shell(builds(models.mixed), { model: models.mixed, repo: LONG_FIXTURE_REPO })
@@ -1039,7 +984,7 @@ export function captureStateCss(spec: WebFrameSpec): string {
   return [
     spec.emulateFineHover ? '.row[data-hovered] .rowhead { color: var(--live); }' : '',
     spec.emulateKeyboardFocus
-      ? '.row[data-selected] .rowhead { outline: 2px solid var(--live); outline-offset: 1px; }'
+      ? '.rows > .row:nth-child(1 of :not(.harvest)) .rowhead { outline: 2px solid var(--live); outline-offset: 1px; }'
       : '',
   ]
     .filter(Boolean)

@@ -389,11 +389,11 @@ test('rendered build controls follow previews and direct controls name their tar
   const end = html.indexOf('id="build-implement-blocked-dashboard"', start)
   const row = html.slice(start, end)
 
-  expect(row).toContain(`aria-label="Open details for ${slug}"`)
-  expect(row).toContain('aria-expanded="false"')
-  expect(row).toContain(`aria-controls="detail-${slug}"`)
+  expect(row).toContain(
+    `aria-label="Open ${slug}" href="/build/${slug}?repo=${encodeURIComponent('example/repository')}"`,
+  )
+  expect(row).not.toContain('aria-expanded')
   expect(row).not.toContain(`aria-label="Auto merge off for ${slug}"`)
-  expect(row).toContain('aria-pressed="true"')
   expect(row).not.toContain('role="toolbar"')
   for (const label of ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
     expect(row).not.toContain(`aria-label="${label} ${slug}"`)
@@ -419,18 +419,14 @@ test('web dashboard removes obsolete auto-merge controls', async () => {
   expect(html).not.toContain('class="word am"')
 })
 
-test('hover frame keeps committed and preview state independent', async () => {
+test('hover frame previews one row without selecting it', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-hover-wide')
   if (!spec) throw new Error('hover frame spec is missing')
   const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
 
-  expect(html.match(/data-selected="true"/g)).toHaveLength(1)
+  expect(html).not.toContain('data-selected="true"')
   expect(html.match(/data-hovered="true"/g)).toHaveLength(1)
-  const selectedRow = html.match(/<li class="row"[^>]*data-selected="true"[^>]*>/)?.[0]
-  const hoveredRow = html.match(/<li class="row"[^>]*data-hovered="true"[^>]*>/)?.[0]
-  expect(selectedRow).toBeDefined()
-  expect(hoveredRow).toBeDefined()
-  expect(selectedRow).not.toBe(hoveredRow)
+  expect(html.match(/<li class="row"[^>]*data-hovered="true"[^>]*>/)?.[0]).toBeDefined()
   expect(evidenceText(html)).not.toContain('ABORT')
   expect(evidenceText(html)).not.toContain('DETAILS')
   expect(evidenceText(html)).not.toContain('Unresolved blockers')
@@ -441,15 +437,16 @@ test('hover frame keeps committed and preview state independent', async () => {
   )
 })
 
-test('expanded detail is controlled and named by the build title', async () => {
+test('the build page is named by its slug and links back to the list', async () => {
   const fixtures = models()
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
   const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
   const slug = 'plan-blocked-dashboard'
 
-  expect(html).toContain(`aria-label="Close details for ${slug}"`)
-  expect(html).toContain(`aria-expanded="true" aria-controls="detail-${slug}"`)
-  expect(html).toContain(`id="detail-${slug}" aria-label="${slug} detail"`)
+  expect(html).toContain(`<article class="build-page" aria-label="${slug}">`)
+  expect(html).toContain(`aria-label="${slug} detail"`)
+  expect(html).toContain(`href="/?repo=${encodeURIComponent('example/repository')}"`)
+  expect(html).not.toContain('class="rows"')
 })
 
 test('answer frames expose only row-local submit and cancel while retaining focused input and detail', async () => {
@@ -467,9 +464,7 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     expect(html).toContain('<input autofocus="" type="text"')
     expect(toolbar).toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
     expect(toolbar).toContain('aria-label="CANCEL answer for plan-blocked-dashboard"')
-    expect(html).toMatch(
-      /<button type="button" class="rowhead" disabled="" aria-label="(?:Open|Close) details for plan-blocked-dashboard"/,
-    )
+    expect(html).toContain('<h2 class="rowhead">')
     expect(html).not.toContain('class="word am"')
     expect(evidenceText(toolbar ?? '')).toBe(' SUBMIT CANCEL ')
     for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
@@ -478,10 +473,6 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     expect(html).not.toContain('aria-label="RESUME implement-blocked-dashboard"')
     expect(html).not.toContain('class="fastext"')
   }
-  const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
-  expect(evidenceText(await renderWebFrame(wide, fixtures, { css: '', fontCss: '' }))).toContain(
-    'Answer escalation',
-  )
 })
 
 test('pending answer context disables row-local submit and cancel', async () => {
@@ -559,13 +550,12 @@ test('a frame missing its evidence fails the capture by name', async () => {
   expect(() => checkEvidence(spec, html)).toThrow(/required evidence "NOT PRESENT"/)
 })
 
-test('the parked no-consent frame renders the shared reason in row and detail (f_b163d7ca)', async () => {
+test('the parked no-consent frame renders the shared reason on the build page (f_b163d7ca)', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-parked-no-consent-wide')
   if (!spec) throw new Error('builds-parked-no-consent-wide frame spec is missing')
   const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
   const reason = 'Merge awaits consent'
-  // Both surfaces, same words: the row register and the open detail register.
-  expect(evidenceText(html).split(reason)).toHaveLength(4)
+  expect(evidenceText(html)).toContain(reason)
   expect(evidenceText(html)).toContain('ab merge complete-dashboard-evidence')
   expect(evidenceText(html)).toContain('merge consent')
   expect(evidenceText(html)).not.toContain('merge not ready')

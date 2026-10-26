@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { awaitingConsent, BuildsView, LandingSignoff, type Selection } from './BuildsView'
+import { awaitingConsent, BuildPageView, BuildsView, LandingSignoff } from './BuildsView'
 
 const noop = () => {}
 
@@ -34,33 +34,43 @@ function model(build: DashboardBuild): DashboardModel {
 }
 
 function renderBuildsView(build: DashboardBuild): string {
-  const selection: Selection = { kind: 'build', slug: build.slug }
   return renderToStaticMarkup(
     <BuildsView
       repo="owner/repo"
       model={model(build)}
       now={0}
-      detailOpen
-      selection={selection}
-      answerPending={false}
       onActivate={noop}
       onHoverPreview={noop}
+      onOpenBuild={noop}
       onRowBuildControl={noop}
-      onRowRequestAbort={noop}
-      onCancelAbort={noop}
-      onRowToggleDetail={noop}
-      onAnswerStepInput={noop}
-      onSubmitAnswerStep={noop}
-      onCancelAnswerStep={noop}
-      onAnswer={noop}
-      onTranscript={noop}
       onRowHarvest={noop}
     />,
   )
 }
 
-test('a pinned build surfaces its pipeline source and config revision in the detail', () => {
-  const html = renderBuildsView(
+function renderBuildPage(build: DashboardBuild, slug = build.slug): string {
+  return renderToStaticMarkup(
+    <BuildPageView
+      repo="owner/repo"
+      slug={slug}
+      model={model(build)}
+      now={0}
+      confirmingAbort={false}
+      answerPending={false}
+      onRowBuildControl={noop}
+      onRowRequestAbort={noop}
+      onCancelAbort={noop}
+      onAnswerStepInput={noop}
+      onSubmitAnswerStep={noop}
+      onCancelAnswerStep={noop}
+      onAnswer={noop}
+      onTranscript={noop}
+    />,
+  )
+}
+
+test('a pinned build surfaces its pipeline source and config revision on its page', () => {
+  const html = renderBuildPage(
     pinnedBuild({
       pipelineSource: { ref: 'branch-head', commit: 'a'.repeat(40) },
       effectiveConfigRev: 3,
@@ -71,7 +81,7 @@ test('a pinned build surfaces its pipeline source and config revision in the det
 })
 
 test('a build without pinned fields renders the no-pin path: no pipeline entry', () => {
-  const html = renderBuildsView(pinnedBuild({}))
+  const html = renderBuildPage(pinnedBuild({}))
   expect(html).not.toContain('>pipeline <')
   expect(html).not.toContain('autobuild.toml@')
 })
@@ -103,7 +113,8 @@ test('integration list uses shared words and qualifiers, accessible states and f
   expect(html).toContain('merge<span class="note">(consent)</span>')
   expect(html).toContain('class="sr-only">, current')
   expect(html).toContain('integration-alert warn')
-  expect(html).toContain('old-detail-step')
+  expect(html).not.toContain('old-detail-step')
+  expect(renderBuildPage(row)).toContain('old-detail-step')
   expect(html).not.toContain('→')
   expect(html).not.toContain('━')
   row.integrationRow.children = { known: false }
@@ -151,7 +162,7 @@ test('integration detail uses the shared facts and text progress within the exis
     verifySteps: [{ step: 'unit', outcome: 'fail' }],
     landing: 'consent — press l, or ab merge demo',
   }
-  const html = renderBuildsView(build)
+  const html = renderBuildPage(build)
   for (const fact of [
     'Hand-pushed changes',
     'original',
@@ -189,25 +200,48 @@ test('title leads while slug remains a machine value, with slug fallback', () =>
   expect(renderBuildsView(row)).toContain('class="build-title">demo</span>')
 })
 
-test('blocked rows show complete question, plain explanation and a single answer composer', () => {
+test('blocked rows show the question and link to the page that answers it', () => {
   const row = pinnedBuild({})
   row.status = 'blocked'
   row.blockers = ['Should the link expire?']
-  const html = renderBuildsView(row)
-  expect(html).toContain('! Should the link expire?')
-  expect(html).toContain(
+  const list = renderBuildsView(row)
+  expect(list).toContain('<p class="sub alert">! Should the link expire?</p>')
+  expect(list).toContain('href="/build/demo?repo=owner%2Frepo">answer escalation</a>')
+  expect(list).not.toContain('class="composer"')
+  expect(list).toContain('aria-label="Step marks"')
+
+  const page = renderBuildPage(row)
+  expect(page).toContain('! Should the link expire?')
+  expect(page).toContain(
     'The build stopped to ask a person. Your answer resumes it from where it paused.',
   )
-  expect(html.match(/class="composer"/g)).toHaveLength(1)
-  expect(html).toContain('class="btn primary"')
-  expect(html).toContain('aria-label="Step marks"')
+  expect(page.match(/class="composer"/g)).toHaveLength(1)
+  expect(page).toContain('class="btn primary"')
+  expect(page).toContain('href="/?repo=owner%2Frepo"')
+})
+
+test('list titles link to the build page and nothing expands in place', () => {
+  const html = renderBuildsView(pinnedBuild({}))
+  expect(html).toContain(
+    'class="rowhead" aria-label="Open demo" href="/build/demo?repo=owner%2Frepo"',
+  )
+  expect(html).not.toContain('class="detail')
+  expect(html).not.toContain('aria-expanded')
+})
+
+test('a build page for a slug no longer active says so with a way back', () => {
+  const html = renderBuildPage(pinnedBuild({}), 'gone')
+  expect(html).toContain('gone is not an active build.')
+  expect(html).toContain('href="/?repo=owner%2Frepo"')
+  expect(html).not.toContain('class="detail')
 })
 
 test('auto-merge deferrals remain alerts without escalation controls or stop/resume copy', () => {
   const row = pinnedBuild({})
   const reason = 'Auto-merge gate could not apply consent for PR #12: the PR has merge conflicts'
   row.blockers = [reason]
-  const html = renderBuildsView(row)
+  expect(renderBuildsView(row)).not.toContain('answer escalation')
+  const html = renderBuildPage(row)
   expect(html).toContain(`<p class="sub alert">! ${reason}</p>`)
   expect(html).not.toContain('Escalation for')
   expect(html).not.toContain('The build stopped to ask a person.')
@@ -230,6 +264,8 @@ test('failed integration nodes keep their integration alert without a duplicate 
     alert: { tone: 'red', text: 'unit failed — file a repair child targeting NODE-900' },
   }
   const html = renderBuildsView(row)
+  expect(html).not.toContain('answer escalation')
+  expect(renderBuildPage(row)).not.toContain('class="composer"')
   expect(html).toContain('integration-alert alert')
   expect(html).toContain('unit failed — file a repair child targeting NODE-900')
   expect(html).not.toContain('! verification failed: file a repair child targeting this node')
