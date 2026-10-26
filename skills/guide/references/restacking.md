@@ -57,10 +57,18 @@ Both dashboards use `+N` beside the destination for commits it has that the
 build lacks, no suffix when current, and `+?` when unknown. Merged and closed
 builds omit the suffix. Terminal list rows put `→ destination +N` on the slug
 line; work steps follow immediately and integration progress keeps only the
-bar and child counts. Detail target/Parent fields use the same suffix. Distance counts commits reachable from the observed
-parent but not the last confirmed contribution base; it is not elapsed time or
-poll count. Samples are invalidated by replay or re-parenting. A stale node
-cannot verify or merge; inventory and child merges continue while it collects.
+bar and child counts. Detail target/Parent fields use the same suffix.
+
+Work distance counts destination commits absent from the sampled current build
+head (`BUILD..TARGET`). It is advisory durable telemetry refreshed during normal
+target polls, including when the build head changes. Unavailable or stale samples
+are unknown; this observation does not change merge or restack decisions.
+
+Integration parent distance counts commits reachable from the observed parent
+but not the last confirmed contribution base; it is not elapsed time or poll
+count. Samples are invalidated by replay or re-parenting. This freshness gate
+applies to nodes: a stale node cannot verify or merge; inventory and child merges
+continue while it collects.
 
 Restack and reconcile publication reject tracked modifications with the existing
 clean-worktree error. Nonignored untracked files do not block publication and
