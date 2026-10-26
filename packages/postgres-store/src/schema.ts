@@ -17,7 +17,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 17
+export const SCHEMA_VERSION = 18
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -862,7 +862,24 @@ export const OPERATOR_PRESENCE_DDL = `CREATE TABLE IF NOT EXISTS operator_presen
   repo text NOT NULL, id text NOT NULL, host text NOT NULL, pid integer NOT NULL,
   started_at timestamptz NOT NULL, heartbeat_at timestamptz NOT NULL, PRIMARY KEY (repo,id)
 );`
-export const SCHEMA_DDL = `${SCHEMA_V16_DDL}\n${OPERATOR_PRESENCE_DDL}`
+export const SCHEMA_V17_DDL = `${SCHEMA_V16_DDL}\n${OPERATOR_PRESENCE_DDL}`
+export const SCHEMA_V17_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V17_DDL)
+  .digest('hex')
+export const PROJECT_SECRETS_DDL = `
+CREATE TABLE IF NOT EXISTS project_secrets (
+ repo text NOT NULL, name text NOT NULL, kind text NOT NULL, owner text NOT NULL,
+ set_at timestamptz NOT NULL, fingerprint text NOT NULL, payload text NOT NULL,
+ generation text NOT NULL, revision bigint NOT NULL, status text NOT NULL CHECK (status IN ('ready','refreshing','failed')),
+ failure_code text, last_supplied_at timestamptz, attempt_id text, attempt_deadline timestamptz,
+ PRIMARY KEY (repo,name)
+);
+CREATE TABLE IF NOT EXISTS project_secret_keys (id text PRIMARY KEY, verifier text NOT NULL);
+CREATE TABLE IF NOT EXISTS project_secret_audit (
+ id text PRIMARY KEY, repo text NOT NULL, name text NOT NULL, actor text NOT NULL,
+ ts timestamptz NOT NULL, action text NOT NULL CHECK (action IN ('set','remove'))
+);`
+export const SCHEMA_DDL = `${SCHEMA_V17_DDL}\n${PROJECT_SECRETS_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -960,6 +977,34 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  project_secrets: [
+    ['repo', 'text', true],
+    ['name', 'text', true],
+    ['kind', 'text', true],
+    ['owner', 'text', true],
+    ['set_at', 'timestamp with time zone', true],
+    ['fingerprint', 'text', true],
+    ['payload', 'text', true],
+    ['generation', 'text', true],
+    ['revision', 'bigint', true],
+    ['status', 'text', true],
+    ['failure_code', 'text', false],
+    ['last_supplied_at', 'timestamp with time zone', false],
+    ['attempt_id', 'text', false],
+    ['attempt_deadline', 'timestamp with time zone', false],
+  ],
+  project_secret_keys: [
+    ['id', 'text', true],
+    ['verifier', 'text', true],
+  ],
+  project_secret_audit: [
+    ['id', 'text', true],
+    ['repo', 'text', true],
+    ['name', 'text', true],
+    ['actor', 'text', true],
+    ['ts', 'timestamp with time zone', true],
+    ['action', 'text', true],
+  ],
   operator_presence: [
     ['repo', 'text', true],
     ['id', 'text', true],
@@ -1166,6 +1211,11 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'project_secrets|p|repo,name||||',
+  'project_secrets|c|||||',
+  'project_secret_keys|p|id||||',
+  'project_secret_audit|p|id||||',
+  'project_secret_audit|c|||||',
   'operator_presence|p|repo,id||||',
   'project_ticket_policy|p|repo||||',
   'ticket_grants|p|id||||',
@@ -1545,6 +1595,7 @@ export async function migratePostgres(
       await tx`SELECT pg_advisory_xact_lock(470281941)`
       await tx.unsafe(SCHEMA_V14_DDL)
       await tx.unsafe(OPERATOR_PRESENCE_DDL)
+      await tx.unsafe(PROJECT_SECRETS_DDL)
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
@@ -1725,6 +1776,8 @@ export async function migratePostgres(
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 17 && marker.checksum === SCHEMA_V17_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 16 && marker.checksum === SCHEMA_V16_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 15 && marker.checksum === SCHEMA_V15_CHECKSUM) {

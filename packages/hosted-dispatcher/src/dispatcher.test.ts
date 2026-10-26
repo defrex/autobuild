@@ -1,3 +1,4 @@
+import { emptySecrets } from './testing/secrets'
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import type { DispatchOpts } from '@defrex/autobuild/cli'
@@ -21,9 +22,9 @@ async function issueDispatcherCredential(
   return token
 }
 const createHostedDispatcher = (options: HostedDispatcherOptions) =>
-  realCreateHostedDispatcher({ issueDispatcherCredential, ...options })
+  realCreateHostedDispatcher({ issueDispatcherCredential, openSecrets: emptySecrets, ...options })
 const createDispatcherEndpoint = (options: HostedDispatcherOptions) =>
-  realCreateDispatcherEndpoint({ issueDispatcherCredential, ...options })
+  realCreateDispatcherEndpoint({ issueDispatcherCredential, openSecrets: emptySecrets, ...options })
 
 const storeEnv = {
   AB_STORE_SECRET: 'test-signing-secret',
