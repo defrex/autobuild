@@ -365,9 +365,36 @@ fn head(payload: &Value) -> Value {
 }
 fn publication(events: &[Value]) -> Value {
     let mut ledger: Vec<Value> = Vec::new();
+    let mut retries: Vec<Value> = Vec::new();
     for e in events {
         let p = &e["payload"];
         let t = e["type"].as_str().unwrap();
+        if matches!(
+            t,
+            "publication.retry-scheduled" | "publication.retry-exhausted" | "escalation.answered"
+        ) {
+            retries.push(e.clone());
+        }
+        if matches!(
+            t,
+            "restack.completed" | "restack.contended" | "reconcile.contended"
+        ) || (t == "reconcile.completed" && p.get("rewriteId").is_some())
+        {
+            let id = p.get("id").or_else(|| p.get("rewriteId"));
+            let operation = if t.starts_with("restack.") {
+                "restack"
+            } else {
+                "reconcile"
+            };
+            retries.retain(|event| {
+                event["type"] == "escalation.answered"
+                    || event["payload"]["operation"] != operation
+                    || event["payload"].get("rewriteId") != id
+            });
+        }
+        if t == "workspace.released" {
+            retries.clear();
+        }
         let mut item = match t {
             "publication.requested" => Some(json!({"t":"request","seq":e["seq"],"event":e})),
             "restack.completed" => {
@@ -411,7 +438,7 @@ fn publication(events: &[Value]) -> Value {
             ledger.push(json!({"t":"barrier","seq":e["seq"]}))
         }
     }
-    json!({"ledger":ledger})
+    json!({"ledger":ledger,"retries":retries})
 }
 fn summary_boundary(events: &[Value]) -> Option<Value> {
     let mut occurrence = None;

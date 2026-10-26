@@ -515,6 +515,7 @@ export async function proveProtocolCompatibility(executable: string) {
             ['/builds', 'GET', undefined],
             ['/builds', 'POST', '{'],
             ['/repos/missing/reducer-values', 'POST', '{'],
+            ['/repos/missing/operator-presence/operator', 'DELETE', undefined],
           ] as const) {
             const init = {
               method,

@@ -187,7 +187,7 @@ async fn tcp_development_path_supplies_peer() {
         "PROA_DEV_AUTH" => Some("true".into()),
         "PROA_DEV_AUTH_EMAIL" => Some("operator@example.com".into()),
         "PROA_DEV_AUTH_CAPABILITY" | "PROA_SESSION_SECRET" => Some("a".repeat(40)),
-        "AB_WEB_ALLOWED_EMAILS" => Some("operator@example.com".into()),
+        "AB_WEB_SUPER_USER_EMAILS" => Some("operator@example.com".into()),
         _ => None,
     })
     .unwrap();

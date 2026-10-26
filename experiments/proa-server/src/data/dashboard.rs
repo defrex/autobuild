@@ -214,8 +214,10 @@ impl DataReader {
                     .artifact(
                         repo,
                         Scope::Build(&slug),
-                        "build-runner-effective-config",
-                        None,
+                        state["verify"]["configPin"]["artifact"]["kind"]
+                            .as_str()
+                            .unwrap_or("build-runner-effective-config"),
+                        state["verify"]["configPin"]["artifact"]["rev"].as_i64(),
                     )
                     .await
                     .ok()

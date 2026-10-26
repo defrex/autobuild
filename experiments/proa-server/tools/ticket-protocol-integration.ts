@@ -477,7 +477,7 @@ export async function ticketProtocolReadIntegration(executable: string) {
             kind: 'dispatcher-effective-config',
             content: JSON.stringify({
               ...root,
-              verify: { steps: verify.steps },
+              verify: { steps: verify.stages ?? verify.steps },
               finalize: { steps: finalize.steps },
             }),
           })

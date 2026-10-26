@@ -164,7 +164,7 @@ export async function replay(
         kind: 'dispatcher-effective-config',
         content: JSON.stringify({
           ...root,
-          verify: { steps: verify.steps, ...verify.stepConfigs },
+          verify: { steps: verify.stages ?? verify.steps, ...verify.stepConfigs },
           finalize: { steps: finalize.steps, ...finalize.stepConfigs },
         }),
       },
@@ -554,8 +554,12 @@ export async function withCaptureSeed<T>(
           digest: randomBytes(32).toString('hex'),
         })
         connect[status] = request.code
+        if (status === 'approved') await registry.add(request.repo, 'seed@example.com')
         if (status === 'approved' || status === 'denied')
-          await connections.decide(request.code, 'seed@example.com', status === 'approved')
+          await connections.decide(request.code, 'seed@example.com', status === 'approved', {
+            email: 'seed@example.com',
+            isSuperUser: () => true,
+          })
         if (status === 'expired') {
           connectionNow = new Date()
           await connections.lookup(request.code, 'seed@example.com')

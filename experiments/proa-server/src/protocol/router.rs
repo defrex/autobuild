@@ -166,9 +166,7 @@ async fn authorize(
             Some("sessions") if path.len() > 1 => Some(Scope::Session(&path[1])),
             _ => None,
         };
-        delegation::authorize_resource(&state.store, principal, scope, method).await?;
-        if method == "GET"
-            && path.len() == 3
+        if (path.len() == 3 || (path.len() == 4 && method == "DELETE"))
             && path[0] == "repos"
             && path[2] == "operator-presence"
             && matches!(principal, Principal::Delegated(_))
@@ -179,6 +177,7 @@ async fn authorize(
                 "operator presence requires repository operator authority",
             ));
         }
+        delegation::authorize_resource(&state.store, principal, scope, method).await?;
         if let Some(scope) = scope {
             delegation::mutation_needs_body(principal, scope, method, path, raw_path)?;
         }
@@ -469,6 +468,17 @@ async fn dispatch(state: MachineState, req: Request) -> Result<Response, Protoco
             "not-found",
             format!("no route: {method} /repos/:repo/sessions"),
         ));
+    }
+    if parts.len() == 4
+        && parts[0] == "repos"
+        && parts[2] == "operator-presence"
+        && method == "DELETE"
+    {
+        state
+            .store
+            .remove_operator_presence(parts[1], parts[3])
+            .await?;
+        return Ok(reply(200, json!({"ok": true})));
     }
     if parts.len() == 3 && parts[0] == "repos" && parts[2] == "operator-presence" {
         return match method.as_str() {
