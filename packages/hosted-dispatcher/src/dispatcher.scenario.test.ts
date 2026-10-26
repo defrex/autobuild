@@ -1,3 +1,4 @@
+import { emptySecrets } from './testing/secrets'
 import {
   temporaryDirectories as ownTempDirectories,
   temporaryOriginScratch,
@@ -542,6 +543,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   }
 
   const endpoint = createDispatcherEndpoint({
+    openSecrets: emptySecrets,
     issueDispatcherCredential,
     openProjectRegistry: async () => credentialRegistry,
     env: {
@@ -813,6 +815,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       return new Date(clockBase + (boundedCalls > 3 ? 30_000 : 0))
     }) as Clock
     const boundedEndpoint = createDispatcherEndpoint({
+      openSecrets: emptySecrets,
       issueDispatcherCredential,
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
@@ -854,6 +857,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       { state: 'Ready' },
     )
     const secondEndpoint = createDispatcherEndpoint({
+      openSecrets: emptySecrets,
       issueDispatcherCredential,
       openProjectRegistry: async () => credentialRegistry,
       env: {

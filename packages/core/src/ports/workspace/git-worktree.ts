@@ -45,7 +45,12 @@ export const spawnExec: Exec = async (cmd, opts) => {
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, ...opts.env, AB_DISPATCH_GENERATION: undefined },
+    env: {
+      ...process.env,
+      ...opts.env,
+      AB_DISPATCH_GENERATION: undefined,
+      AB_PROJECT_SECRETS_KEY: undefined,
+    },
     ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   })
   const [stdout, stderr, exitCode] = await Promise.all([

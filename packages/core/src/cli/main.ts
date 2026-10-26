@@ -1,3 +1,4 @@
+import { abSecrets } from './secrets'
 import { currentTicketRef } from '../kernel/ticket-migrations'
 import { upgradeFollowup } from './upgrade-followup'
 import { parseDispatchArgs } from './dispatch-args'
@@ -106,6 +107,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'init',
   'connect',
   'disconnect',
+  'secrets',
   'upgrade',
   'update',
   'ticket',
@@ -488,6 +490,23 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
+    case 'secrets': {
+      const parsed = parseArgs(
+        rest,
+        { json: 'boolean' },
+        'usage: ab secrets list [--json] | set NAME | remove NAME',
+      )
+      if (parsed.positionals.length > 2)
+        throw new Error('Secrets values must be supplied through stdin')
+      await abSecrets(parsed.positionals[0], parsed.positionals[1], {
+        cwd: deps.workspacePath,
+        env: deps.processEnv ?? process.env,
+        exec: deps.exec ?? spawnExec,
+        print: stdout,
+        json: parsed.flags.get('json') === true,
+      })
+      return 0
+    }
     case 'connect':
     case 'disconnect': {
       const usage = command === 'connect' ? 'usage: ab connect [url]' : 'usage: ab disconnect'

@@ -249,7 +249,10 @@ export function slugNamingPrompt(spec: string): string {
 function definedEnv(env: Record<string, string | undefined>): Record<string, string> {
   const defined: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined && !['AB_TOKEN', 'AB_TICKET_TOKEN', 'AB_TICKET_URL'].includes(key))
+    if (
+      value !== undefined &&
+      !['AB_TOKEN', 'AB_TICKET_TOKEN', 'AB_TICKET_URL', 'AB_PROJECT_SECRETS_KEY'].includes(key)
+    )
       defined[key] = value
   }
   return defined

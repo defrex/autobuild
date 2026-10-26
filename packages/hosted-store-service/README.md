@@ -169,3 +169,20 @@ create orgs, set or clear the single owner, and assign or move projects. Owners
 manage their org's members. Removing the last membership or super-user designation
 revokes human access on the next request without re-login; existing project
 credentials remain valid until revoked.
+
+
+## Project-secret encryption
+
+Set `AB_PROJECT_SECRETS_KEY` in the service and cron deployment configuration to
+base64 encoding of exactly 32 random bytes, generated with `openssl rand -base64 32`.
+Keep it outside the database and source control, backed up with deployment secrets.
+The adapter validates the key for every write and whenever a project has secrets
+to resolve. A deployment verifier detects a different key, including writes to an
+empty project after the first encrypted write. Missing, malformed or wrong keys
+fail writes and nonempty resolution closed; metadata remains readable. Projects
+without secrets continue dispatching without an encryption key, even when another
+project has secrets. Empty snapshots still reject handoff if a secret was added
+since resolution.
+The key is never forwarded into kernel/child environments. Rotation is unsupported.
+Refreshing provider kinds are internal integrations; this release has no real
+OpenAI kind or sign-in endpoint. Static secrets use the connected owner's CLI.

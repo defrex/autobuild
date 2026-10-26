@@ -1,3 +1,9 @@
+import { ProjectSecretError } from '@defrex/autobuild/project-secrets'
+import {
+  openPostgresProjectSecretsFromEnv,
+  type ProjectSecretsResolver,
+  type SecretSnapshot,
+} from '@defrex/autobuild-postgres-store/project-secrets'
 import { openPostgresCredentialStoreFromEnv } from '@defrex/autobuild-postgres-store/credentials'
 import {
   openPostgresProjectRegistryFromEnv,
@@ -249,6 +255,7 @@ export interface HostedDispatcherTickSummary {
 }
 
 export interface HostedDispatcherOptions {
+  openSecrets?: (env: HostedDispatcherEnv) => Promise<ProjectSecretsResolver>
   issueDispatcherCredential?: (repo: string, creator: string, expiresAt: Date) => Promise<string>
   openProjectRegistry?: (env: HostedDispatcherEnv) => Promise<ProjectRegistryReader>
   /** Service environment; defaults to `process.env`. */
@@ -341,6 +348,12 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
     return projectPromise
   }
 
+  let secrets: Promise<ProjectSecretsResolver> | undefined
+  const openSecrets = () =>
+    (secrets ??= (options.openSecrets ?? openPostgresProjectSecretsFromEnv)(env).catch((error) => {
+      secrets = undefined
+      throw error
+    }))
   const clock: Clock = options.clock ?? (() => new Date())
   const dispatch = options.dispatch ?? ((opts: DispatchOpts) => abDispatch(opts))
   const log = options.log ?? ((line: string) => console.log(line))
@@ -387,6 +400,32 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             }
           })
         let token: string
+        let snapshot: SecretSnapshot
+        let resolver: ProjectSecretsResolver
+        try {
+          resolver = await openSecrets()
+          snapshot = await resolver.resolveForTick(
+            repository,
+            clock().getTime() + 600_000,
+            deadlineAt,
+          )
+        } catch (error) {
+          const message =
+            error instanceof ProjectSecretError ? error.message : 'project secrets unavailable'
+          repositories.push({ repository, outcome: 'failed', runId, error: message })
+          logError(`${LOG_PREFIX} ${invocation}: ${repository} ${message}`)
+          continue
+        }
+        const redact = (line: string) =>
+          Object.values(snapshot.env)
+            .flatMap((value) => [
+              value,
+              JSON.stringify(value).slice(1, -1),
+              ...value.split(/\r?\n/),
+            ])
+            .filter(Boolean)
+            .sort((a, b) => b.length - a.length)
+            .reduce((text, value) => text.replaceAll(value, '[redacted]'), line)
         try {
           token = await issue(
             repository,
@@ -394,18 +433,20 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             new Date(clock().getTime() + config.tokenTtlSeconds * 1000),
           )
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
+          const message = redact(error instanceof Error ? error.message : String(error))
           repositories.push({ repository, outcome: 'failed', runId, error: message })
           logError(
-            `${LOG_PREFIX} ${invocation}: ${repository} credential issuance failed: ${errorDetail(error)}`,
+            `${LOG_PREFIX} ${invocation}: ${repository} credential issuance failed: ${redact(errorDetail(error))}`,
           )
           continue
         }
         const childEnv: Record<string, string | undefined> = {
           ...env,
+          ...snapshot.env,
           AB_STORE: config.origin,
           AB_TOKEN: token,
         }
+        delete childEnv.AB_PROJECT_SECRETS_KEY
         // A Vercel Function receives the deployment's OIDC token as a request
         // header, not as VERCEL_OIDC_TOKEN; hand it to the kernel under that
         // name so the Sandbox SDK authenticates as the deployment. An explicit
@@ -424,6 +465,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           childEnv.GH_TOKEN = forgeOverride
         }
         try {
+          await resolver.markSupplied(snapshot)
           await dispatch({
             // `targetRepo` here is a caller-facing identity token, not a
             // path: origin mode (AUT-302) has no checkout. `abDispatch`
@@ -436,8 +478,8 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             plain: true,
             env: childEnv,
             exec: spawnExec,
-            stdout,
-            stderr,
+            stdout: (line) => stdout(redact(line)),
+            stderr: (line) => stderr(redact(line)),
             kernelRunId: runId,
             deadlineAt,
           })
@@ -446,10 +488,10 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             `${LOG_PREFIX} ${invocation}: ${repository} ticked run=${runId} ms=${Date.now() - startedAt}`,
           )
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
+          const message = redact(error instanceof Error ? error.message : String(error))
           repositories.push({ repository, outcome: 'failed', runId, error: message })
           logError(
-            `${LOG_PREFIX} ${invocation}: ${repository} failed run=${runId} ms=${Date.now() - startedAt}: ${errorDetail(error)}`,
+            `${LOG_PREFIX} ${invocation}: ${repository} failed run=${runId} ms=${Date.now() - startedAt}: ${redact(errorDetail(error))}`,
           )
         }
       }

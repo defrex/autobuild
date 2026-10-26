@@ -1,3 +1,9 @@
+import { projectSecretsHandler } from './project-secrets'
+import {
+  openPostgresProjectSecretsFromEnv,
+  type ProjectSecretsManagement,
+} from '@defrex/autobuild-postgres-store/project-secrets'
+import { accessForEnv } from './web/access'
 import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
 import {
   PostgresTicketGrantStore,
@@ -70,6 +76,8 @@ export interface HostedStoreErrorContext {
 }
 
 export interface HostedStoreServiceOptions {
+  openSecrets?: (env: HostedStoreEnv) => Promise<ProjectSecretsManagement>
+  secretMembership?: (user: string, repo: string) => Promise<boolean>
   diagnostic?: (message: string) => void
   issueDispatcherCredential?: (repo: string, creator: string, expiresAt: Date) => Promise<string>
   openCredentials?: (env: HostedStoreEnv) => Promise<CredentialReader>
@@ -818,12 +826,31 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     machineAuth,
     baseURL: hostedPublicOrigin(env) ?? '',
   })
+  let secrets: Promise<ProjectSecretsManagement> | undefined
+  const access = accessForEnv(env)
+  const secretHandler = projectSecretsHandler({
+    auth: machineAuth,
+    canAccess:
+      options.secretMembership ??
+      (async (user, repo) => {
+        const actor = await access.principal(user)
+        return !!actor && (await access.canAccess(actor, repo))
+      }),
+    store: () =>
+      (secrets ??= (options.openSecrets ?? openPostgresProjectSecretsFromEnv)(env).catch(
+        (error) => {
+          secrets = undefined
+          throw error
+        },
+      )),
+  })
   return {
     projects,
     machineAuth,
     fetch(req: Request): Promise<Response> {
       return withRepositoryReads(async () => {
         const url = new URL(req.url)
+        if (url.pathname.startsWith('/secrets/v1/')) return secretHandler(req)
         if (url.pathname.startsWith('/connect/v1/')) return connectionHandler(req)
         if (req.method === 'GET' && url.pathname === '/health') {
           return Response.json({
