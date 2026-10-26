@@ -28,8 +28,6 @@ export async function checkDeploymentTemplates(root = repoRoot) {
   for (const file of ['package.json', 'vercel.json']) {
     const text = await readFile(join(root, deploymentTemplatePaths[0]!, file), 'utf8')
     assert.equal(text, await readFile(join(root, deploymentTemplatePaths[1]!, file), 'utf8'))
-    const docs = await readFile(join(root, 'docs/hosted-service.md'), 'utf8')
-    assert(docs.includes(text.trim()), `Documentation must contain canonical ${file}`)
   }
   const manifest = JSON.parse(
     await readFile(join(root, deploymentTemplatePaths[0]!, 'package.json'), 'utf8'),

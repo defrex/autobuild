@@ -19,6 +19,4 @@ export async function addDeploymentFixture(root: string, pin: string, servicePin
     await writeFile(join(root, path, 'package.json'), manifest)
     await writeFile(join(root, path, 'vercel.json'), vercel)
   }
-  await mkdir(join(root, 'docs'), { recursive: true })
-  await writeFile(join(root, 'docs/hosted-service.md'), manifest + vercel)
 }

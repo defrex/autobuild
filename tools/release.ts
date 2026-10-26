@@ -956,16 +956,6 @@ export async function runRelease(
         })
     }
 
-    const serviceDocs = Bun.file(resolve(root, 'docs/hosted-service.md'))
-    if (await serviceDocs.exists())
-      manifestCandidates.push({
-        path: 'docs/hosted-service.md',
-        content: (await serviceDocs.text()).replace(
-          /("@defrex\/autobuild(?:-hosted-store-service)?"\s*:\s*")\d+\.\d+\.\d+(?:-[^" ]+)?(")/g,
-          `$1${version}$2`,
-        ),
-      })
-
     manifestCandidates.unshift(
       { path: 'CHANGELOG.md', content: changelog.content },
       { path: 'README.md', content: replaceReadmeInstall(readmeText, version) },

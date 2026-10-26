@@ -50,6 +50,6 @@ bun ab dispatch
 - **One writer.** Don't run old and new dispatchers at once.
 - **Durable resume.** Work resumes from durable state after a clean stop. Restart doesn't answer escalations.
 - **Old behavior.** Drain old work before switching if it must keep the old execution behavior; no claim-version switch preserves it.
-- **Hosted services.** Upgrade the hosted service before its connected projects, within its compatibility window.
+- **Remote clients.** Check the instance’s `/health` compatibility window before upgrading connected projects.
 
 Read [Infrastructure seams](seams.md) and [Repository configuration](configuration-overview.md) before changing infrastructure or merge policy.

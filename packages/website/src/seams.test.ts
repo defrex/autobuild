@@ -5,7 +5,7 @@ describe('seam model', () => {
   test('opens fully local with one adapter per seam', () => {
     const state = initialState()
     expect(Object.keys(state)).toHaveLength(SEAMS.length)
-    expect(summary(state)).toEqual({ remoteCount: 0, total: 6, knob: 0, label: 'fully local' })
+    expect(summary(state)).toEqual({ remoteCount: 0, total: 5, knob: 0, label: 'fully local' })
   })
 
   test('setAll remote is fully remote and selects Codex for runtime', () => {
@@ -32,11 +32,10 @@ describe('seam model', () => {
     let state = initialState()
     for (const [seam, adapter] of [
       ['tickets', 'linear'],
-      ['dispatcher', 'cron'],
       ['workspace', 'vercel-sandbox'],
       ['forge', 'github'],
-      ['store', 'postgres'],
-      ['operators', 'web-ui'],
+      ['store', 'remote-store'],
+      ['operators', 'operator-api'],
     ] as const)
       state = selectAdapter(state, seam, adapter)
     expect(summary(state).label).toBe('fully remote')
@@ -45,17 +44,17 @@ describe('seam model', () => {
     expect(selectAdapter(state, 'runtime', 'codex').runtime).toBe('codex')
   })
 
-  test('mixed selections report N of M, excluding runtime', () => {
-    let state = selectAdapter(initialState(), 'dispatcher', 'cron')
-    expect(summary(state)).toMatchObject({ remoteCount: 1, total: 6, label: '1 of 6 seams remote' })
+  test('mixed selections report N of M, excluding one-sided seams', () => {
+    let state = selectAdapter(initialState(), 'workspace', 'vercel-sandbox')
+    expect(summary(state)).toMatchObject({ remoteCount: 1, total: 5, label: '1 of 5 seams remote' })
     state = selectAdapter(state, 'runtime', 'codex')
-    expect(summary(state).total).toBe(6)
-    expect(summary(state).knob).toBeCloseTo(1 / 6)
+    expect(summary(state).total).toBe(5)
+    expect(summary(state).knob).toBeCloseTo(1 / 5)
   })
 
   test('neutral adapters count as not remote', () => {
     const state = selectAdapter(setAll(initialState(), 'remote'), 'tickets', 'hosted')
-    expect(summary(state).label).toBe('5 of 6 seams remote')
+    expect(summary(state).label).toBe('4 of 5 seams remote')
   })
 
   test('the track goes remote unless everything is remote already', () => {
@@ -74,4 +73,18 @@ describe('seam model', () => {
     for (const seam of SEAMS)
       expect(seam.adapters.map((a) => a.id)).toContain(state[seam.id] as string)
   })
+})
+
+test('dispatcher remains local at both extremes and removed offerings cannot select', () => {
+  for (const side of ['local', 'remote'] as const) {
+    const state = setAll(initialState(), side)
+    expect(state.dispatcher).toBe('local-process')
+    expect(selectAdapter(state, 'dispatcher', 'cron')).toBe(state)
+    expect(selectAdapter(state, 'operators', 'web-ui')).toBe(state)
+    expect(selectAdapter(state, 'operators', 'mcp').operators).toBe('mcp')
+  }
+  expect(
+    SEAMS.find((seam) => seam.id === 'operators')?.adapters.find((adapter) => adapter.id === 'mcp')
+      ?.label,
+  ).toBe('stdio MCP')
 })

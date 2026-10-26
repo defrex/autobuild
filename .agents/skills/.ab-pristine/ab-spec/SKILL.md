@@ -119,7 +119,7 @@ say you will operate it. The human's explicit instructions override either defau
 If grooming established prerequisites, follow the complete
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
 A single `ab ticket create --blocked-by` invocation does not publish atomically:
-Linear (including hosted Linear) exposes the issue before separate blocker writes.
+Linear exposes the issue before separate blocker writes.
 For a ready destination, create in a known non-ready staging state, pass all
 blockers at creation, read back and verify them, then move to ready last. The
 human's requested final placement still wins; temporary staging needs no new

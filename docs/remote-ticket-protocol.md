@@ -1,6 +1,7 @@
 # Hosted ticket protocol
 
-The hosted ticket protocol exposes the complete `TicketSource` port without
+A conforming hosted instance implements this normative remote ticket contract
+for the complete `TicketSource` port without
 exposing backend credentials. It shares the Autobuild and remote protocol
 version headers with the remote BuildStore. The version must be in the
 published service window and the protocol must
@@ -10,13 +11,12 @@ A service accepts stable and prerelease clients from its own `major.minor`
 release line and the two preceding minor lines in the same major. A major starts a new family:
 X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
 Patch versions are interchangeable in both directions and must never change
-the protocol. Upgrade the service first, then projects independently within
-its window. Supported release lines retain their wire handlers and known
+the protocol. Clients must remain within the instance’s published compatibility window. Supported release lines retain their wire handlers and known
 protocol identities; an unknown protocol is refused independently of version.
 Stable and prerelease service and client identities share their numeric major/minor
 line. Malformed or missing identities, build metadata (`+…`), prefixes and
 whitespace are refused with HTTP 409.
-A newer client is told to upgrade the service; a client below the window is
+A newer client receives an instance-upgrade diagnostic; a client below the window is
 told to upgrade the project's Autobuild. Diagnostics name the service version
 and supported range.
 
@@ -43,25 +43,13 @@ every request. Revocation takes effect on the next request without affecting
 other credentials. Unknown, expired or revoked credentials receive `401 auth`;
 removed projects receive `403 auth` with `project not registered`.
 
-The deployment owner runs these commands locally with database access:
-
-```sh
-ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
-ab-hosted-store credentials list https://github.com/acme/app
-ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
-```
-
-Issue prints the secret once; list contains metadata only. Issue optionally
-accepts `--ttl-seconds N` or `--expires-at ISO-8601`. For administrative/non-interactive issuance, set the returned token as
-`AB_TOKEN`. Interactive project onboarding uses `ab connect <service-url>`;
-it saves the credential outside the repository and commits no secret. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
-retired: the service responds that the credential format changed and points
-to `credentials issue`. Supported old protocol shapes still work with a new
-credential; protocol compatibility does not restore retired authentication.
-
-`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
-break-glass credential. It can cross project boundaries. Keep it owner-only:
-never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
+Obtain a project credential with `ab connect <instance-url>` or from the
+instance, and use `AB_TOKEN` on non-interactive clients. Interactive connection
+saves the credential outside the repository. Retired credential formats are
+refused with a credential-format-changed diagnostic; supported old protocol
+shapes still require current credentials. Compatibility does not restore retired
+authentication. Versioned, attributed owner-admin credentials are an explicit
+cross-project exception and must never be supplied to build agents.
 
 Hosted tickets, comments, blockers, creation-key deduplication and assets belong
 to exactly one registered project, even when projects use the same team key.
@@ -133,12 +121,6 @@ MCP ticket surfaces refuse with a message naming that project and source: its
 tickets live in its own source, accessed directly by its dispatcher. This is a
 409 conflict, not an empty queue. The dispatcher's direct adapters are unchanged.
 
-`AB_TICKET_BACKEND` and `LINEAR_API_KEY` are removed service settings. Their
-presence (even blank or unknown values) is ignored and emits one startup removal
-message. `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
-`AB_TICKET_DOING_STATE` and `AB_TICKET_DONE_STATE` are removed and ignored,
-including malformed values. These retired settings do not prevent startup.
-
 ## Operations
 
 The operation names and `input` values are:
@@ -185,18 +167,6 @@ is `dependency-states`: each result's `id` echoes the requested id for correlati
 while its `blockedBy` edges are canonical. Raw historical events and artifacts
 remain unchanged. These rules apply only to hosted tickets, not file or Linear ids.
 
-Upgrade the service with its environment-aware migration command before serving
-requests. The transactional migration preserves storage keys and assigns existing
-tickets numbers in `(created_at, id)` order within each project. It first resolves
-legacy team ownership, then reads each populated project's current independent
-ticket policy. Projects without that policy use their selected effective
-configuration through the configured blob backend. Independent-policy projects
-need no uploaded config or blob access. Missing or invalid fallback config,
-missing `teamKey`, or inaccessible required blobs abort the entire migration
-unchanged with a project diagnostic. Restore that config/blob access and rerun;
-an ownership assignment alone cannot supply a readable prefix. Empty projects
-need no config lookup. Re-running a completed migration does not renumber tickets.
-
 ## Errors and conformance
 
 Errors are JSON `{ "error": string, "kind": "validation" | "not-found" |
@@ -205,10 +175,9 @@ or backend construction. Responses never include exception causes, stacks,
 environment values, or credentials. Client 401/403 responses become
 `AuthError`; other backend messages remain actionable.
 
-The shared `TicketSource` contract is normative for the database adapter and
-the hosted client/server pair. PostgreSQL migration and isolation tests prove
-project partitions. The direct Linear client retains its separate opt-in
-GraphQL contract; no Linear adapter ships through the hosted ticket entry point.
+The shared `TicketSource` contract is normative for protocol implementations.
+Project partitions must be isolated. The direct Linear client retains its
+separate opt-in GraphQL contract; this protocol does not proxy Linear.
 
 Every ticket returned by list, get, or create requires a boolean `resolved`,
 with the same source-native completion semantics as `DependencyState.resolved`.
