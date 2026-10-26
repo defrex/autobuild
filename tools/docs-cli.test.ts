@@ -10,7 +10,14 @@ test('CLI inventory covers the help catalog exactly once in the specified groups
     [...section.matchAll(/^- `([a-z]+)` —/gm)].map((match) => match[1]!)
   const humanCommands = commands(human!)
   const agentCommands = commands(agent!)
-  expect(humanCommands.sort()).toEqual(['connect', 'disconnect', 'dispatch', 'init', 'upgrade'])
+  expect(humanCommands.sort()).toEqual([
+    'connect',
+    'disconnect',
+    'dispatch',
+    'init',
+    'secrets',
+    'upgrade',
+  ])
   expect([...humanCommands, ...agentCommands].sort()).toEqual(
     HELP_CATALOG.map((entry) => entry.name).sort(),
   )

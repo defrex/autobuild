@@ -37,7 +37,7 @@ function requireOperator(env: ConnectOptions['env']) {
   )
     throw new Error('connect and disconnect are unavailable inside build or harvest sessions')
 }
-async function project(opts: ConnectOptions) {
+export async function connectedProject(opts: ConnectOptions) {
   requireOperator(opts.env)
   const checkout = await resolveMainRepo(opts.cwd, opts.exec)
   const remote = await opts.exec(['git', 'remote', 'get-url', 'origin'], { cwd: checkout })
@@ -97,7 +97,7 @@ async function atomicConfig(path: string, before: string, after: string) {
 }
 export async function abConnect(raw: string | undefined, opts: ConnectOptions): Promise<void> {
   if (opts.tickets && opts.builds) throw new Error('Choose --tickets or --builds')
-  const p = await project(opts)
+  const p = await connectedProject(opts)
   if (opts.tickets && (p.table.tickets as { source?: string } | undefined)?.source !== 'hosted')
     throw new Error('ab connect --tickets requires [tickets] source = "hosted"')
   const credentials = new ProjectCredentials(opts.env)
@@ -309,7 +309,7 @@ export async function abConnect(raw: string | undefined, opts: ConnectOptions): 
 }
 export async function abDisconnect(opts: ConnectOptions): Promise<void> {
   if (opts.tickets && opts.builds) throw new Error('Choose --tickets or --builds')
-  const p = await project(opts)
+  const p = await connectedProject(opts)
   if (
     !opts.tickets &&
     !opts.builds &&
