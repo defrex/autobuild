@@ -100,6 +100,9 @@ export async function checkHostedServicePackaging() {
       ...process.env,
       NODE_PATH: undefined,
       BUN_INSTALL: undefined,
+      // Next/Vercel child processes use Node's compile cache. Keep it inside
+      // this rehearsal's owned directory so the final cleanup removes it.
+      NODE_COMPILE_CACHE: join(root, 'node-compile-cache'),
       AB_SERVICE_BUILD_ROOT: undefined,
       AB_POSTGRES_URL: scoped.toString(),
       DATABASE_URL: undefined,
