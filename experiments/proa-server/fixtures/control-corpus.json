@@ -1,7 +1,7 @@
 {
   "format": 1,
   "clock": "2026-09-02T00:00:00.000Z",
-  "sourceHash": "ea16006694e637ced31de96afc88d883b892b4482950e44ad4a79f6688bec458",
+  "sourceHash": "9ba3286d2872e985c4249ff4912c29f3d3087a9cfa25e0c53da73735b8091035",
   "fixtures": [
     {
       "scenario": {
@@ -110,6 +110,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -238,6 +250,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -383,6 +407,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -553,6 +589,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -720,6 +768,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -882,6 +942,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -1064,6 +1136,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -1232,6 +1316,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -1351,6 +1447,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -1412,6 +1509,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -1528,6 +1637,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -1589,6 +1699,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -1751,6 +1873,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -1908,6 +2042,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -2040,6 +2186,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -2167,6 +2325,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -2313,6 +2483,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -2453,6 +2635,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -2611,6 +2805,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -2806,6 +3012,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -2987,6 +3205,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -3155,6 +3385,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -3274,6 +3516,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -3335,6 +3578,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -3451,6 +3706,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -3512,6 +3768,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -3674,6 +3942,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -3831,6 +4111,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -3963,6 +4255,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -4090,6 +4394,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -4236,6 +4552,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -4376,6 +4704,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -4534,6 +4874,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -4697,6 +5049,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -4878,6 +5242,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -5079,6 +5455,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -5207,6 +5595,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -5268,6 +5657,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -5384,6 +5785,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -5445,6 +5847,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -5607,6 +6021,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -5764,6 +6190,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -5895,6 +6333,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -6046,6 +6496,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -6200,6 +6662,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -6370,6 +6844,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -6536,6 +7022,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -6731,6 +7229,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -6919,6 +7429,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -7120,6 +7642,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -7248,6 +7782,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -7309,6 +7844,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -7456,6 +8003,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -7510,6 +8058,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -7681,6 +8241,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -7838,6 +8410,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -7969,6 +8553,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -8120,6 +8716,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -8273,6 +8881,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -8413,6 +9033,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -8571,6 +9203,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -8734,6 +9378,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -8916,6 +9572,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -9084,6 +9752,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -9203,6 +9883,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -9264,6 +9945,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -9380,6 +10073,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -9441,6 +10135,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -9603,6 +10309,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -9760,6 +10478,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -9892,6 +10622,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -10019,6 +10761,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -10165,6 +10919,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -10304,6 +11070,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -10462,6 +11240,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -10624,6 +11414,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -10806,6 +11608,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -10973,6 +11787,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -11092,6 +11918,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -11153,6 +11980,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -11268,6 +12107,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -11329,6 +12169,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -11491,6 +12343,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -11648,6 +12512,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -11780,6 +12656,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -11907,6 +12795,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -12052,6 +12952,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -12227,6 +13139,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -12384,6 +13308,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -12584,6 +13520,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -12764,6 +13712,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -12970,6 +13930,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -13089,6 +14061,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -13150,6 +14123,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -13297,6 +14282,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -13356,6 +14342,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -13518,6 +14516,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -13674,6 +14684,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -13910,6 +14932,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -14171,6 +15205,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -14321,6 +15367,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -14382,6 +15429,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -14529,6 +15588,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -14590,6 +15650,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -14733,6 +15805,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -14873,6 +15957,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -14993,6 +16089,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -15054,6 +16151,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -15193,6 +16302,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Continue with care",
@@ -15253,6 +16363,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -15405,6 +16527,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -15466,6 +16589,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -15652,6 +16787,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5,
               "answer": "Continue with care",
@@ -15708,6 +16844,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -15864,6 +17012,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -16005,6 +17165,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -16141,6 +17313,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -16195,6 +17368,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -16359,6 +17544,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Continue with care",
@@ -16419,6 +17605,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -16548,6 +17746,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -16609,6 +17808,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -16748,6 +17959,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Operator requested a bare retry with no feedback",
@@ -16808,6 +18020,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -16959,6 +18183,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -17020,6 +18245,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -17206,6 +18443,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5,
               "answer": "Operator requested a bare retry with no feedback",
@@ -17262,6 +18500,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -17417,6 +18667,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -17558,6 +18820,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -17693,6 +18967,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -17747,6 +19022,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -17911,6 +19198,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Operator requested a bare retry with no feedback",
@@ -17971,6 +19259,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -18100,6 +19400,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -18161,6 +19462,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -18277,6 +19590,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -18338,6 +19652,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -18489,6 +19815,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -18550,6 +19877,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -18697,6 +20036,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -18758,6 +20098,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -18904,6 +20256,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -19045,6 +20409,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -19180,6 +20556,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -19234,6 +20611,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -19375,6 +20764,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -19429,6 +20819,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -19559,6 +20961,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -19620,6 +21023,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -19736,6 +21151,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -19797,6 +21213,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -19949,6 +21377,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -20010,6 +21439,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -20157,6 +21598,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -20218,6 +21660,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -20365,6 +21819,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -20506,6 +21972,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -20642,6 +22120,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -20696,6 +22175,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -20837,6 +22328,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -20891,6 +22383,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -21022,6 +22526,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -21083,6 +22588,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -21199,6 +22716,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -21260,6 +22778,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -21413,6 +22943,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -21474,6 +23005,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -21621,6 +23164,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -21682,6 +23226,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -21830,6 +23386,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -21971,6 +23539,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -22108,6 +23688,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -22162,6 +23743,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -22303,6 +23896,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -22357,6 +23951,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -22525,6 +24131,7 @@
               "phase": "implement",
               "round": 1,
               "source": "stall",
+              "session": "session-test",
               "question": "Dismiss?",
               "refs": ["f_real"],
               "seq": 4
@@ -22597,6 +24204,18 @@
                 }
               ]
             ]
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -22776,6 +24395,7 @@
               "phase": "implement",
               "round": 1,
               "source": "stall",
+              "session": "session-test",
               "question": "Dismiss?",
               "refs": ["f_real"],
               "seq": 4,
@@ -22846,6 +24466,18 @@
                 }
               ]
             ]
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -23029,6 +24661,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -23236,6 +24880,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -23418,6 +25074,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -23626,6 +25294,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -23747,6 +25427,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -23808,6 +25489,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -23973,6 +25666,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Operator replaced the spec; the build restarts from plan",
@@ -24039,6 +25733,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 5,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -24185,6 +25891,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -24341,6 +26059,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -24502,6 +26232,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -24657,6 +26399,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -24818,6 +26572,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -24958,6 +26724,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -25105,6 +26883,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -25245,6 +27035,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -25390,6 +27192,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -25544,6 +27358,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -25707,6 +27533,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -25847,6 +27685,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -25992,6 +27842,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -26147,6 +28009,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -26364,6 +28238,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -26549,6 +28435,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -26752,6 +28650,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -26915,6 +28825,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -27110,6 +29032,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -27171,6 +29094,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -27319,6 +29254,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -27380,6 +29316,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -27551,6 +29499,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -27678,6 +29638,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -27826,6 +29798,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -27995,6 +29979,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -28166,6 +30162,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -28328,6 +30336,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -28513,6 +30533,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -28681,6 +30713,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -28803,6 +30847,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -28864,6 +30909,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -28980,6 +31037,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -29041,6 +31099,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -29206,6 +31276,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -29363,6 +31445,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -29498,6 +31592,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -29625,6 +31731,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -29774,6 +31892,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -29914,6 +32044,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -30075,6 +32217,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -30270,6 +32424,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -30454,6 +32620,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -30622,6 +32800,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -30744,6 +32934,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -30805,6 +32996,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -30921,6 +33124,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -30982,6 +33186,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -31147,6 +33363,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -31304,6 +33532,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -31439,6 +33679,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -31566,6 +33818,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -31715,6 +33979,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -31855,6 +34131,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -32016,6 +34304,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -32179,6 +34479,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -32363,6 +34675,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -32564,6 +34888,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -32695,6 +35031,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -32756,6 +35093,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -32872,6 +35221,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -32933,6 +35283,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -33098,6 +35460,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -33255,6 +35629,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -33389,6 +35775,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -33540,6 +35938,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -33697,6 +36107,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -33867,6 +36289,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -34036,6 +36470,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -34231,6 +36677,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -34422,6 +36880,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -34623,6 +37093,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -34754,6 +37236,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -34815,6 +37298,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -34962,6 +37457,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -35016,6 +37512,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -35190,6 +37698,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -35347,6 +37867,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -35481,6 +38013,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -35632,6 +38176,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -35788,6 +38344,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -35928,6 +38496,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -36089,6 +38669,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -36252,6 +38844,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -36437,6 +39041,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -36605,6 +39221,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -36727,6 +39355,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -36788,6 +39417,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -36904,6 +39545,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -36965,6 +39607,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -37130,6 +39784,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -37287,6 +39953,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -37422,6 +40100,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -37549,6 +40239,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -37698,6 +40400,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -37837,6 +40551,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -37999,6 +40725,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -38160,6 +40898,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -38345,6 +41095,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -38512,6 +41274,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -38634,6 +41408,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -38695,6 +41470,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -38810,6 +41597,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -38871,6 +41659,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -39036,6 +41836,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -39193,6 +42005,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -39328,6 +42152,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -39455,6 +42291,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -39603,6 +42451,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -39778,6 +42638,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -39938,6 +42810,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -40138,6 +43022,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -40321,6 +43217,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -40527,6 +43435,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -40649,6 +43569,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -40710,6 +43631,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -40857,6 +43790,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -40916,6 +43850,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -41081,6 +44027,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -41237,6 +44195,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -41477,6 +44447,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -41737,6 +44719,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -41890,6 +44884,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -41951,6 +44946,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -42098,6 +45105,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -42159,6 +45167,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -42307,6 +45327,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -42447,6 +45479,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -42570,6 +45614,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -42631,6 +45676,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -42770,6 +45827,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Continue with care",
@@ -42830,6 +45888,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -42985,6 +46055,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -43046,6 +46117,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -43232,6 +46315,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5,
               "answer": "Continue with care",
@@ -43288,6 +46372,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -43447,6 +46543,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -43588,6 +46696,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -43727,6 +46847,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -43781,6 +46902,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -43945,6 +47078,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Continue with care",
@@ -44005,6 +47139,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -44137,6 +47283,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -44198,6 +47345,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -44337,6 +47496,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Operator requested a bare retry with no feedback",
@@ -44397,6 +47557,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -44551,6 +47723,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -44612,6 +47785,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -44798,6 +47983,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5,
               "answer": "Operator requested a bare retry with no feedback",
@@ -44854,6 +48040,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -45012,6 +48210,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -45153,6 +48363,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -45291,6 +48513,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -45345,6 +48568,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -45509,6 +48744,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Operator requested a bare retry with no feedback",
@@ -45569,6 +48805,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -45701,6 +48949,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -45762,6 +49011,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -45878,6 +49139,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -45939,6 +49201,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -46093,6 +49367,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -46154,6 +49429,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -46301,6 +49588,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -46362,6 +49650,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -46511,6 +49811,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -46652,6 +49964,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -46790,6 +50114,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -46844,6 +50169,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -46985,6 +50322,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -47039,6 +50377,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -47172,6 +50522,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -47233,6 +50584,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -47349,6 +50712,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -47410,6 +50774,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -47565,6 +50941,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -47626,6 +51003,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -47773,6 +51162,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -47834,6 +51224,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -47984,6 +51386,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -48125,6 +51539,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -48264,6 +51690,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -48318,6 +51745,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -48459,6 +51898,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -48513,6 +51953,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -48647,6 +52099,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -48708,6 +52161,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -48824,6 +52289,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -48885,6 +52351,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -49041,6 +52519,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -49102,6 +52581,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -49249,6 +52740,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -49310,6 +52802,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -49461,6 +52965,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -49602,6 +53118,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -49742,6 +53270,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -49796,6 +53325,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -49937,6 +53478,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -49991,6 +53533,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -50162,6 +53716,7 @@
               "phase": "implement",
               "round": 1,
               "source": "stall",
+              "session": "session-test",
               "question": "Dismiss?",
               "refs": ["f_real"],
               "seq": 4
@@ -50234,6 +53789,18 @@
                 }
               ]
             ]
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -50413,6 +53980,7 @@
               "phase": "implement",
               "round": 1,
               "source": "stall",
+              "session": "session-test",
               "question": "Dismiss?",
               "refs": ["f_real"],
               "seq": 4,
@@ -50483,6 +54051,18 @@
                 }
               ]
             ]
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -50667,6 +54247,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -50876,6 +54468,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -51000,6 +54604,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3
             }
@@ -51061,6 +54666,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -51226,6 +54843,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 3,
               "answer": "Operator replaced the spec; the build restarts from plan",
@@ -51292,6 +54910,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 5,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -51440,6 +55070,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -51596,6 +55238,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -51762,6 +55416,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -51917,6 +55583,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -52083,6 +55761,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -52222,6 +55912,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -52371,6 +56073,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -52510,6 +56224,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -52657,6 +56383,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -52811,6 +56549,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -52976,6 +56726,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -53116,6 +56878,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -53263,6 +57037,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -53418,6 +57204,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -53637,6 +57435,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -53822,6 +57632,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -54027,6 +57849,18 @@
             "planReview": [],
             "codeReview": []
           },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
           "verify": {
             "maxAttemptSeen": 0,
             "results": [],
@@ -54190,6 +58024,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -54387,6 +58233,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -54448,6 +58295,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,
@@ -54596,6 +58455,7 @@
               "phase": "implement",
               "round": 1,
               "source": "agent",
+              "session": "session-test",
               "question": "What next?",
               "seq": 5
             }
@@ -54657,6 +58517,18 @@
           "reviewFindings": {
             "planReview": [],
             "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
           },
           "verify": {
             "maxAttemptSeen": 0,

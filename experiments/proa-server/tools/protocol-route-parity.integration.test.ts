@@ -65,6 +65,12 @@ export async function proveProtocolRouteParity(executable: string) {
         // source's joined route tail is split again by its subroute handlers.
         await compare(prefixes.build)
         await compare(prefixes.repo)
+        await compare(`${prefixes.repo}/operator-presence/id%2Fwith%252Fslash`, 'DELETE')
+        await compare(`${prefixes.repo}/operator-presence%2Fid`, 'DELETE', undefined, 404)
+        await compare(`${prefixes.repo}/operator-presence/id/extra`, 'DELETE', undefined, 404)
+        await compare(`${prefixes.repo}/operator-presence/id`, 'GET', undefined, 404)
+        for (const id of ['%20', 'x'.repeat(257)])
+          await compare(`${prefixes.repo}/operator-presence/${id}`, 'DELETE', undefined, 500)
         const missingRepo = 'absent/route-repo'
         for (const method of ['GET', 'DELETE']) {
           const missing = await compare(

@@ -2,7 +2,7 @@
  * HTTP runners must register an assertion for every row before claiming coverage.
  */
 export type ProtocolCase = {
-  method: 'GET' | 'POST' | 'PUT'
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   path: string
   status: number[]
   body: string
@@ -76,6 +76,7 @@ for (const action of ['begin', 'finish'])
   route('POST', `/repos/:repo/tick/${action}`, [200], 'fenced tick result')
 route('GET', '/repos/:repo/operator-presence', [200], 'fresh operator presence[]')
 route('POST', '/repos/:repo/operator-presence', [200], 'operator presence')
+route('DELETE', '/repos/:repo/operator-presence/:id', [200], '{ok:true}')
 route('GET', '/repos/:repo/sessions', [200], 'SessionRecord[]')
 route('POST', '/repos/:repo/sessions', [201], 'SessionRecord')
 const assets = '/repos/:repo/tickets/:id/assets'

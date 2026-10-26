@@ -10,6 +10,7 @@ test('inventory retains shared, indirect and current-client-only route families'
     'POST /builds/:slug/deposits/conditional',
     'GET /repos/:repo/change-position',
     'POST /repos/:repo/operator-presence',
+    'DELETE /repos/:repo/operator-presence/:id',
     'GET /repos/:repo/build-digests',
     'GET /repos/:repo/tickets/:id/assets/file',
     'GET /builds/:slug/ticket-assets/file',

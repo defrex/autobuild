@@ -30,7 +30,7 @@ pub fn integration_failed(s: &Value) -> bool {
         && s["nodeComparison"]["headSha"] == c["head"]
         && s["nodeComparison"]["parentSha"] == c["parent"]
         && array(&s["verify"]["results"]).iter().any(|r| {
-            number(&r["seq"]) > number(&c["seq"])
+            number(&r["seq"]) > number(&c["seq"]).max(number(&s["verify"]["cycleSince"]))
                 && r["restackId"] == c["id"]
                 && r["outcome"] == "fail"
         })
@@ -45,7 +45,7 @@ pub fn cycle_verified(s: &Value) -> bool {
     let receipts: Vec<_> = array(&s["verify"]["results"])
         .iter()
         .filter(|r| {
-            number(&r["seq"]) > number(&c["seq"])
+            number(&r["seq"]) > number(&c["seq"]).max(number(&s["verify"]["cycleSince"]))
                 && r["restackId"] == c["id"]
                 && r["headSha"] == c["head"]
                 && r["baseSha"] == c["parent"]

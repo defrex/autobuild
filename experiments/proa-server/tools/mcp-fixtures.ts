@@ -15,6 +15,7 @@ import { validateEventWrite } from '../../../packages/core/src/events/catalog'
 import { MemoryBuildStore } from '../../../packages/core/src/store/memory'
 import { createHostedStoreService } from '../../../packages/hosted-store-service/src/service'
 import { MemoryTicketPolicyStore } from '../../../packages/postgres-store/src/ticket-policy'
+import { testAccess } from '../../../packages/hosted-store-service/src/testing/access'
 import { testProjects } from '../../../packages/hosted-store-service/src/testing/projects'
 import { createMcpEndpoint } from '../../../packages/hosted-store-service/src/web/mcp'
 import type { WebAuth } from '../../../packages/hosted-store-service/src/web/auth'
@@ -38,7 +39,7 @@ export function mcpOracle() {
     GITHUB_CLIENT_ID: 'offline',
     GITHUB_CLIENT_SECRET: 'offline',
     AB_WEB_AUTH_PROVIDERS: 'github',
-    AB_WEB_ALLOWED_EMAILS: 'operator@example.com',
+    AB_WEB_SUPER_USER_EMAILS: 'operator@example.com',
     AB_WEB_REPOSITORIES: mcpRepo,
     AB_POSTGRES_URL: 'postgres://offline',
     AB_STORE_SECRET: secret,
@@ -79,6 +80,7 @@ export function mcpOracle() {
     endpoint: createMcpEndpoint({
       projects,
       config,
+      access: testAccess(env, projects),
       auth,
       storeSecret: secret,
       delegate: (request) => delegate.fetch(request),
