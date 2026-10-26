@@ -353,11 +353,8 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'builds-multirepo-wide',
     width: 1440,
     height: 1000,
-    requires: [
-      `repo ${FIXTURE_REPO} ${ALTERNATE_FIXTURE_REPO}`,
-      FIXTURE_REPO,
-      ALTERNATE_FIXTURE_REPO,
-    ],
+    requires: [`Projects github.com/${FIXTURE_REPO} ${ALTERNATE_FIXTURE_REPO}`],
+    forbids: ['https://'],
   },
   {
     id: 'builds-mixed-rest-wide',
@@ -589,6 +586,7 @@ function shell(
     repositories?: readonly string[]
     error?: string
     menuOpen?: boolean
+    projectMenuOpen?: boolean
   } = {},
 ) {
   const repo = opts.repo ?? FIXTURE_REPO
@@ -600,6 +598,7 @@ function shell(
       clock={opts.model ? FIXTURE_CLOCK : undefined}
       error={opts.error}
       menuOpen={opts.menuOpen}
+      projectMenuOpen={opts.projectMenuOpen}
       onRepo={noop}
       onSignOut={noop}
       controls={
@@ -848,7 +847,9 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'builds-multirepo-wide':
       return shell(builds(models.happy), {
         model: models.happy,
-        repositories: [FIXTURE_REPO, ALTERNATE_FIXTURE_REPO],
+        repo: `https://github.com/${FIXTURE_REPO}`,
+        repositories: [`https://github.com/${FIXTURE_REPO}`, ALTERNATE_FIXTURE_REPO],
+        projectMenuOpen: true,
       })
     case 'builds-mixed-rest-wide':
       return shell(builds(models.mixed), { model: models.mixed })

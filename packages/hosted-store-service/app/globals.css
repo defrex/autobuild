@@ -293,6 +293,20 @@ textarea {
   display: block;
   padding: 5px 16px;
 }
+.project-menu .menu-list {
+  left: 0;
+  right: auto;
+  min-width: 100%;
+}
+.project-menu .menu-item {
+  width: 100%;
+  text-align: left;
+  white-space: nowrap;
+}
+.project-menu [aria-checked="true"] {
+  font-weight: 700;
+  text-decoration: none;
+}
 .menu-label-heading {
   color: var(--slack);
   font-size: 0.93em;
@@ -567,9 +581,6 @@ textarea {
 .selectwrap {
   display: inline-block;
   min-width: 0;
-}
-.repo select {
-  width: auto;
 }
 .controls,
 .providers {

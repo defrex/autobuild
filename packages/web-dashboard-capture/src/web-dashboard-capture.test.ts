@@ -272,7 +272,7 @@ test('Harvest acknowledge is rendered as a run-qualified row control', async () 
   expect(html).toContain('>ACKNOWLEDGE</button>')
 })
 
-test('singleton capture frames omit the repository selector', async () => {
+test('singleton capture frames omit the project picker', async () => {
   const fixtures = models()
   const singletonFrames = WEB_FRAME_SPECS.filter(
     (spec) => spec.id.startsWith('builds-') && spec.id !== 'builds-multirepo-wide',
@@ -282,21 +282,24 @@ test('singleton capture frames omit the repository selector', async () => {
     const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
     expect(nav, spec.id).toBeDefined()
-    expect(nav, spec.id).not.toContain('<label class="repo">')
+    expect(html, spec.id).not.toContain('project-menu')
     expect(nav, spec.id).not.toContain('<select')
   }
 })
 
-test('multi-repository capture frame exposes the selector and both options', async () => {
+test('multi-repository capture frame opens the masthead project picker', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-multirepo-wide')
   if (!spec) throw new Error('multi-repository frame spec is missing')
   const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  const header = html.match(/<header class="masthead"[\s\S]*?<\/header>/)?.[0]
 
-  expect(html).toContain('<label class="repo">')
-  expect(html).toContain('<span class="slack">repo </span>')
-  expect(html).toContain('<select>')
-  expect(html).toContain('<option selected="">example/repository</option>')
-  expect(html).toContain('<option>example/alternate</option>')
+  expect(header).toContain('class="menu project-menu"')
+  expect(header).toContain('aria-expanded="true"')
+  expect(header).toContain('aria-checked="true" data-autofocus="true"')
+  expect(header).toContain('>github.com/example/repository</button>')
+  expect(header).toContain('>example/alternate</button>')
+  expect(html).not.toContain('https://github.com')
+  expect(html).not.toContain('<select')
 })
 test('signed-in frames are tabless and Builds ticket ids remain plain text', async () => {
   const fixtures = models()

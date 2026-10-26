@@ -4,11 +4,12 @@ import { OperatorShell } from './Shell'
 
 const noop = () => {}
 
-function renderShell(repositories: readonly string[]): string {
+function renderShell(repositories: readonly string[], projectMenuOpen = false): string {
   return renderToStaticMarkup(
     <OperatorShell
       repo={repositories[0] ?? ''}
       repositories={repositories}
+      projectMenuOpen={projectMenuOpen}
       identity="operator@example.com"
       onRepo={noop}
       onSignOut={noop}
@@ -30,7 +31,7 @@ test('shell omits the repository control when none are configured', () => {
   const html = renderShell([])
 
   expect(html).toContain('no repository configured')
-  expect(html).not.toContain('class="repo"')
+  expect(html).not.toContain('project-menu')
   expect(html).not.toContain('<select')
   expectTabless(html)
 })
@@ -39,31 +40,36 @@ test('shell omits the repository control for one repository', () => {
   const html = renderShell(['example/repository'])
 
   expect(html).toContain('<span class="project">example/repository</span>')
-  expect(html).not.toContain('class="repo"')
+  expect(html).not.toContain('project-menu')
   expect(html).not.toContain('<select')
   expectTabless(html)
 })
 
-test('shell renders every repository when there is a choice', () => {
-  const html = renderShell(['example/repository', 'example/alternate'])
+test('shell turns the masthead project into a picker when there is a choice', () => {
+  const closed = renderShell(['https://github.com/example/repository', 'example/alternate'])
+  const header = closed.match(/<header class="masthead"[\s\S]*?<\/header>/)?.[0]
 
-  expect(html).toContain('<label class="repo">')
-  expect(html).toContain('<span class="slack">repo </span>')
-  expect(html).toContain('<select>')
-  expect(html).toContain('<option selected="">example/repository</option>')
-  expect(html).toContain('<option>example/alternate</option>')
-  expectTabless(html)
+  expect(header).toContain('class="menu project-menu"')
+  expect(header).toContain('<span class="menu-label">github.com/example/repository</span>')
+  expect(header).not.toContain('https://')
+  expect(header).not.toContain('example/alternate')
+  expect(closed).not.toContain('<select')
+  expectTabless(closed)
+
+  const open = renderShell(['https://github.com/example/repository', 'example/alternate'], true)
+  expect(open).toContain('role="menuitemradio" aria-checked="true"')
+  expect(open).toContain('>github.com/example/repository</button>')
+  expect(open).toContain('role="menuitemradio" aria-checked="false"')
+  expect(open).toContain('>example/alternate</button>')
 })
 
-test('shell composes selector, page controls, and the clock in one named landmark', () => {
+test('shell composes page controls and the clock in one named landmark', () => {
   const html = renderShell(['example/repository', 'example/alternate'])
   const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
 
   expect(nav).toBeDefined()
   expect(html.match(/aria-label="Operator controls"/g)).toHaveLength(1)
-  expect(nav!.indexOf('class="repo"')).toBeLessThan(
-    nav!.indexOf('data-testid="dispatcher-controls"'),
-  )
+  expect(nav).not.toContain('example/alternate')
   expect(nav!.indexOf('data-testid="dispatcher-controls"')).toBeLessThan(
     nav!.indexOf('class="clock"'),
   )

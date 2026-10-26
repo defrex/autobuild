@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { AccountMenu } from '../access/AccountMenu'
+import { useMenuDisclosure } from './Menu'
 
 export interface OperatorShellProps {
   repo: string
@@ -12,6 +13,8 @@ export interface OperatorShellProps {
   clock?: string
   /** Initial account-menu disclosure for offline presentation fixtures. */
   menuOpen?: boolean
+  /** Initial project-picker disclosure for offline presentation fixtures. */
+  projectMenuOpen?: boolean
   pending?: boolean
   error?: string
   onRepo: (repo: string) => void
@@ -23,7 +26,7 @@ export interface OperatorShellProps {
 
 /**
  * The frame every operator page shares: a one-row masthead carrying the
- * repository title and the account menu; then the control line
+ * project picker and the account menu; then the control line
  * with the poll clock pinned right. Pure presentation so a fixture can render
  * the same frame the operator sees.
  */
@@ -34,6 +37,7 @@ export function OperatorShell({
   isSuperUser,
   clock,
   menuOpen,
+  projectMenuOpen,
   pending,
   error,
   onRepo,
@@ -46,7 +50,12 @@ export function OperatorShell({
       <header className="masthead">
         <h1 className="masthead-copy title">
           <span className="brand">Autobuild</span>{' '}
-          <span className="project">{repo || 'no repository configured'}</span>
+          <ProjectMenu
+            repo={repo}
+            repositories={repositories}
+            initiallyOpen={projectMenuOpen}
+            onRepo={onRepo}
+          />
         </h1>
         <AccountMenu
           identity={identity}
@@ -56,18 +65,6 @@ export function OperatorShell({
         />
       </header>
       <nav className="line navline" aria-label="Operator controls">
-        {repositories.length > 1 && (
-          <label className="repo">
-            <span className="slack">repo </span>
-            <span className="selectwrap repo-selectwrap">
-              <select value={repo} onChange={(event) => onRepo(event.target.value)}>
-                {repositories.map((name) => (
-                  <option key={name}>{name}</option>
-                ))}
-              </select>
-            </span>
-          </label>
-        )}
         {controls}
         <span className="spacer" />
         <span className="clock" data-pending={pending ? '' : undefined}>
@@ -84,5 +81,74 @@ export function OperatorShell({
         {children}
       </div>
     </main>
+  )
+}
+
+/** A repository identity without its URL scheme: `github.com/org/repo`. */
+export function projectLabel(repo: string): string {
+  return repo.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+}
+
+/**
+ * The masthead's project name doubles as the project picker when more than
+ * one project is reachable: the same ghost-word trigger and outlined panel as
+ * the account menu, anchored left under the name.
+ */
+function ProjectMenu({
+  repo,
+  repositories,
+  initiallyOpen,
+  onRepo,
+}: {
+  repo: string
+  repositories: readonly string[]
+  initiallyOpen?: boolean
+  onRepo: (repo: string) => void
+}) {
+  const { open, setOpen, close, rootRef, triggerRef, listRef, listId, onListKey, onTriggerKey } =
+    useMenuDisclosure(initiallyOpen)
+  if (repositories.length < 2) {
+    return <span className="project">{repo ? projectLabel(repo) : 'no repository configured'}</span>
+  }
+  return (
+    <span ref={rootRef} className="menu project-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="word menu-trigger project"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-label={`Project ${projectLabel(repo)}`}
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={onTriggerKey}
+      >
+        <span className="menu-label">{projectLabel(repo)}</span>
+        <span className="menu-glyph" aria-hidden>
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div ref={listRef} className="menu-list" role="menu" id={listId} onKeyDown={onListKey}>
+          <div className="menu-label-heading">Projects</div>
+          {repositories.map((name) => (
+            <button
+              key={name}
+              type="button"
+              role="menuitemradio"
+              aria-checked={name === repo}
+              data-autofocus={name === repo || undefined}
+              className="word menu-item project"
+              onClick={() => {
+                close()
+                if (name !== repo) onRepo(name)
+              }}
+            >
+              {projectLabel(name)}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
   )
 }

@@ -39,43 +39,9 @@ export function Menu({
   /** Extra class on the wrapper for placement. */
   className?: string
 }) {
-  const [open, setOpen] = useState(initiallyOpen)
   const { theme, choose } = useTheme()
-  const rootRef = useRef<HTMLSpanElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
-  const listId = useId()
-
-  useEffect(() => {
-    if (!open) return
-    const outside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', outside)
-    return () => document.removeEventListener('pointerdown', outside)
-  }, [open])
-
-  useEffect(() => {
-    if (open) listRef.current?.querySelector<HTMLElement>('[role^=menuitem]')?.focus()
-  }, [open])
-
-  const close = () => {
-    setOpen(false)
-    triggerRef.current?.focus()
-  }
-
-  const onListKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    const buttons = [...(listRef.current?.querySelectorAll<HTMLElement>('[role^=menuitem]') ?? [])]
-    const index = buttons.indexOf(document.activeElement as HTMLElement)
-    if (event.key === 'Escape' || event.key === 'Tab') {
-      event.preventDefault()
-      close()
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      const step = event.key === 'ArrowDown' ? 1 : -1
-      buttons[(index + step + buttons.length) % buttons.length]?.focus()
-    }
-  }
+  const { open, setOpen, close, rootRef, triggerRef, listRef, listId, onListKey, onTriggerKey } =
+    useMenuDisclosure(initiallyOpen)
 
   return (
     <span ref={rootRef} className={`menu${className ? ` ${className}` : ''}`}>
@@ -87,12 +53,7 @@ export function Menu({
         aria-expanded={open}
         aria-controls={listId}
         onClick={() => setOpen((value) => !value)}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' && !open) {
-            event.preventDefault()
-            setOpen(true)
-          }
-        }}
+        onKeyDown={onTriggerKey}
       >
         <span className="menu-label">{label}</span>
         <span className="menu-glyph" aria-hidden>
@@ -157,4 +118,62 @@ export function Menu({
       )}
     </span>
   )
+}
+
+/**
+ * The disclosure behavior every drop-down shares: focus moves into the panel
+ * on open (to a `data-autofocus` item when one is marked), arrows walk its items, and Escape, Tab, or an outside pointer
+ * closes it with focus back on the trigger.
+ */
+export function useMenuDisclosure(initiallyOpen = false) {
+  const [open, setOpen] = useState(initiallyOpen)
+  const rootRef = useRef<HTMLSpanElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const listId = useId()
+
+  useEffect(() => {
+    if (!open) return
+    const outside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', outside)
+    return () => document.removeEventListener('pointerdown', outside)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const items = listRef.current
+    ;(
+      items?.querySelector<HTMLElement>('[data-autofocus]') ??
+      items?.querySelector<HTMLElement>('[role^=menuitem]')
+    )?.focus()
+  }, [open])
+
+  const close = () => {
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+
+  const onListKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const buttons = [...(listRef.current?.querySelectorAll<HTMLElement>('[role^=menuitem]') ?? [])]
+    const index = buttons.indexOf(document.activeElement as HTMLElement)
+    if (event.key === 'Escape' || event.key === 'Tab') {
+      event.preventDefault()
+      close()
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      buttons[(index + step + buttons.length) % buttons.length]?.focus()
+    }
+  }
+
+  const onTriggerKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowDown' && !open) {
+      event.preventDefault()
+      setOpen(true)
+    }
+  }
+
+  return { open, setOpen, close, rootRef, triggerRef, listRef, listId, onListKey, onTriggerKey }
 }
