@@ -115,6 +115,9 @@ impl Registry<'_> {
                 )
             }
             "builds.control" => {
+                if input["action"] == "merge" {
+                    input["action"] = json!("land");
+                }
                 service
                     .control(
                         repo,
@@ -212,7 +215,7 @@ impl Registry<'_> {
                 )
             }
             "tickets.tree" => super::registry_views::ticket_tree(reader, writer, repo).await,
-            "landings.list" => super::registry_views::landings(reader, repo).await,
+            "merges.list" | "landings.list" => super::registry_views::landings(reader, repo).await,
             name if name.starts_with("tickets.") => {
                 let id = input["id"].as_str().unwrap_or_default().to_owned();
                 let (method, segments) = match name {

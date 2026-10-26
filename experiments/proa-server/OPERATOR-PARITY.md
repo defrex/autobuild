@@ -21,7 +21,7 @@ and gzip manifest and checks byte lengths/hashes. Referenced immutable snapshots
 are not removed by notes/config retention.
 
 Answers preserve sequential prefix and retry semantics. Idle node revisions use
-writer/runner fences and exact-tail guards. Landing reobserves live source/frozen
+writer/runner fences and exact-tail guards. Merge consent reobserves live source/frozen
 children before the guarded consent write. Bulk control preserves hold, intake,
 then eligible build ordering and exact partial progress.
 
@@ -33,7 +33,7 @@ actual checked case IDs to source-derived oracle results, requires every case in
 every executable manifest, and binds evidence to both TypeScript and native/proof
 source hashes. Inventories, validation/auth failures and unknown-resource-only
 responses cannot establish operation coverage. All 33 routes, seven actions,
-six answer variants and 25 advertised HTTP tools require positive or applicable
+six answer variants and 26 advertised HTTP tools require positive or applicable
 domain-refusal witnesses.
 
 The replay combines session/Unicode/JSON boundaries, strict source-generated Zod
@@ -41,7 +41,14 @@ schemas, API detail/dashboard/repository/harvest projections, all build controls
 node completeness, ticket spec/asset repinning, repository controls, delegation,
 hosted ticket mutations and generic registry dispatch. Reads include CLEANING,
 run-correlated effective config, runtime attaches, handoffs, telemetry, capacity,
-raw artifacts and bounded session streams. Config normalization and issue bytes
+raw artifacts and bounded session streams. The registry accepts `merge` and legacy `land` controls with identical durable
+outcomes, and both `merges.list` and `landings.list` execute populated consent
+queues and pinned-config refusals. The typed HTTP control still uses `land`;
+tool dispatch normalizes the public alias. Configuration accepts either `merge`
+or `landing`, rejects both (including empty arrays), and normalizes to internal
+`landing` state. Historical event names remain intact.
+
+Config normalization and issue bytes
 are differentially checked over the actual source grammar and its nodes.
 
 Failure proofs use isolated SQL triggers and a local proxy forwarding signed
@@ -65,7 +72,7 @@ requires destructive confirmation, and preserves drafts, refusal text, focus and
 caret across polls. CSRF, Origin and project refusals leave facts unchanged.
 Spec revision's deterministic fact is kernel-authored after the signed human
 answer; the proof compares the source actor sequence rather than relabeling it.
-No web landing consent or ticket authoring is offered.
+No web merge consent or ticket authoring is offered.
 
 The final linked executable's hash, served asset hashes, frame review and browser
 proof are retained with ignored capture evidence. See `tools/README.md` for the

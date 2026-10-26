@@ -77,6 +77,24 @@ export function restackFixtures() {
   const prefixes = (id: string, name: 'nodeRestack' | 'leafRestack', log: Write[]) => {
     for (let i = 0; i <= log.length; i++) add(`${id}/${i}`, name, log.slice(0, i))
   }
+  const sample = event('target.distance', { branch: 'main', sha: 'parent', head: 'head', count: 3 })
+  for (const change of [
+    event('target.moved', { branch: 'main', sha: 'next' }),
+    event('node.parent-accepted', { id: 'parent', target: 'main' }),
+    event('pr.opened', { pr: { headSha: 'next' } }),
+    event('implement.completed', { commits: { head: 'next' } }),
+    event('restack.rewritten', {}),
+    event('reconcile.rewritten', {}),
+    event('finalize.step-completed', { ok: true, headSha: 'next' }),
+    event('restack.completed', { id: 'tx', headSha: 'next', cycle: 1 }),
+  ])
+    prefixes(`leaf-distance/${change.type}`, 'leafRestack', [sample, change])
+  prefixes('leaf-distance-retained', 'leafRestack', [
+    sample,
+    event('pr.opened', { pr: { headSha: 'head' } }),
+    event('implement.completed', { commits: { head: 'head' } }),
+    event('finalize.step-completed', { ok: true, headSha: 'head' }),
+  ])
   const requested = event('node.restack-requested', {
     id: 'r1',
     reason: 'operator',

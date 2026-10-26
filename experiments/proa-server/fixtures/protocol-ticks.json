@@ -3,7 +3,7 @@
     "packages/core/src/store/repo-tick.ts": "e3f914a574db714364364b01f8be12ee3ce94803e449ea85438709912a9dfe03",
     "packages/core/src/events/repository.ts": "7e49ef392e8de682f7bc9f98ad52fb57b6b866b4328ab5dbdd9a14bb958e90f0",
     "packages/core/src/ports/forge-telemetry.ts": "f1124819196d45310b296d5bd1f6829bc0846dd1b81e6ac3143bb2f3395f94e1",
-    "packages/core/src/processes/dispatcher.ts": "78904340121ae76b76834a1dde24c8e5c4c368dfabd34d2a1021a88aeffc6cc3",
+    "packages/core/src/processes/dispatcher.ts": "09fc3e77d5f51a5d376fecabf70633475db4f26e063187a9a210a1638b2b2342",
     "experiments/proa-server/tools/protocol-tick-fixtures.ts": "76453665687c69b0839e39764b8da192f88c2dee178f9e19debfb89091d56094"
   },
   "cases": [
