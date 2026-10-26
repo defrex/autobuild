@@ -34,10 +34,7 @@ export const SEAMS: Seam[] = [
     id: 'dispatcher',
     name: 'dispatcher',
     caption: 'what starts builds',
-    adapters: [
-      { id: 'local-process', label: 'local process', side: 'local' },
-      { id: 'cron', label: 'cron', side: 'remote' },
-    ],
+    adapters: [{ id: 'local-process', label: 'local process', side: 'local' }],
   },
   {
     id: 'workspace',
@@ -76,7 +73,7 @@ export const SEAMS: Seam[] = [
     caption: 'where state lives',
     adapters: [
       { id: 'sqlite', label: 'SQLite', side: 'local' },
-      { id: 'postgres', label: 'Postgres', side: 'remote' },
+      { id: 'remote-store', label: 'remote store', side: 'remote' },
     ],
     open: '+ HTTP protocol',
   },
@@ -86,8 +83,8 @@ export const SEAMS: Seam[] = [
     caption: 'how you watch',
     adapters: [
       { id: 'terminal', label: 'terminal', side: 'local' },
-      { id: 'web-ui', label: 'web UI', side: 'remote' },
-      { id: 'mcp', label: 'MCP' },
+      { id: 'operator-api', label: 'Operator API', side: 'remote' },
+      { id: 'mcp', label: 'stdio MCP' },
     ],
   },
 ]
@@ -116,7 +113,7 @@ export function selectAdapter(state: SeamState, seamId: string, adapterId: strin
 }
 
 /**
- * Two-sided seams move to `side`; a seam without both sides (runtime) selects its
+ * Two-sided seams move to `side`; a seam without both sides (dispatcher and runtime) selects its
  * `sideDefault` adapter for that side, or keeps its selection when it has none.
  */
 export function setAll(state: SeamState, side: Side): SeamState {

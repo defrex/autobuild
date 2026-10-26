@@ -224,3 +224,25 @@ test('seam overview reuses the selector and links every seam guide', async () =>
   const seams = files[overview.file]!
   expect(seams.indexOf('</article>')).toBeLessThan(seams.indexOf('class="seam-selector"'))
 })
+
+test('retired server documentation has no source, route or link in the site', async () => {
+  const files = await buildFiles()
+  for (const slug of [
+    'hosted-service',
+    'hosted-dispatcher',
+    'hosted-dispatcher-cutover-validation',
+    'mcp',
+  ]) {
+    expect(await Bun.file(join(import.meta.dir, '../../../docs', `${slug}.md`)).exists()).toBe(
+      false,
+    )
+    expect(DOCS_PAGES.some((page) => page.path === `/docs/${slug}/`)).toBe(false)
+    expect(files[`docs/${slug}/index.html`]).toBeUndefined()
+    for (const content of Object.values(files)) {
+      if (typeof content !== 'string') continue
+      expect(content).not.toMatch(
+        new RegExp(`(?:href|src)=["'][^"']*(?:/docs/${slug}/|(?:^|/)${slug}\\.md)`),
+      )
+    }
+  }
+})
