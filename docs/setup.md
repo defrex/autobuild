@@ -32,7 +32,7 @@ maintainer before selecting it:
 - a dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`;
 - for a private repository, a separate read-only clone identity named by
   `gitUsernameEnv` and `gitPasswordEnv`;
-- an HTTPS hosted service reachable from Vercel, configured through `ab connect <url>`;
+- a remote store that speaks the remote BuildStore protocol and is reachable from Vercel, configured through `ab connect <url>`;
 - each selected role and alternate's runtime/model, its pinned
   `[workspace.config.runtimeProvisioning.<runtime>]` commands, and the API
   credential names it needs in `[workspace.config].environmentVariables`.
@@ -156,7 +156,7 @@ to `workspace.config.provisioning` (or a package dependency to setup) while
 retaining the universal image; add a runtime credential name to
 `environmentVariables` and its value to the dispatcher environment; correct the
 Vercel team/project credential set; provide separate private-clone credentials;
-use an HTTPS GitHub origin and hosted Store; authorize the Store token; or commit
+use an HTTPS GitHub origin and remote Store; authorize the Store token; or commit
 and push the selected base branch.
 
 ## Keep per-build records in separate fragments
@@ -183,7 +183,7 @@ shared edit surface; the repository owns the release-time assembly tooling.
 ## Repository identity is the origin, not a checkout path
 
 Repository identity in the Store, dispatcher, `ab builds`, `ab build status`,
-`ab repository status`, and the web app is the repository's **normalized origin
+`ab repository status` is the repository's **normalized origin
 URL** (`https://github.com/owner/repository`), not a checkout's absolute path.
 Two checkouts of the same repository — on different hosts, or a dispatcher and
 its sandboxes — agree on one identity.
@@ -245,15 +245,14 @@ sources agree with the running system by construction:
   runs the dispatcher's own code.
 - **Origin mode** (checkout-less dispatcher): the guest archive is the release
   asset `autobuild-<version>.tgz` fetched from the canonical repository at the
-  **running dispatcher's version** (read from the deployed distribution's
+  **running dispatcher's version** (read from the installed distribution's
   `package.json`), so the guest runs the dispatcher's own release.
 
 A service accepts stable and prerelease clients from its own `major.minor`
 release line and the two preceding minor lines in the same major. A major starts a new family:
 X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
 Patch versions are interchangeable in both directions and must never change
-the protocol. Upgrade the service first, then projects independently within
-its window. Supported release lines retain their wire handlers and known
+the protocol. Keep project clients within the instance’s published window. Supported release lines retain their wire handlers and known
 protocol identities; an unknown protocol is refused independently of version.
 Stable and prerelease service and client identities share their numeric major/minor
 line. Malformed or missing identities, build metadata (`+…`), prefixes and
@@ -274,11 +273,12 @@ It warns and continues when the target is outside the range, naming the
 required service upgrade for a newer target or a compatible project range for
 an older one. An unavailable or malformed probe warns that connectivity may
 fail after upgrade. Legacy health without a range means exact-version matching;
-upgrade that service to the compatibility-window release first.
+the hosted instance must publish a compatibility window before clients can
+use release-line compatibility.
 
 A distribution fix reaches origin-mode guests after a release is cut and the
 dispatcher is upgraded. Guests continue to run the dispatcher's own version;
-the hosted service must support that release line.
+the instance must support that release line.
 
 Provisioning records the installed distribution's identity — package version
 and remote-store protocol version — in the guest's
@@ -305,28 +305,13 @@ perspective:
 Local `git-worktree` dispatch keeps working from a checkout exactly as before;
 apart from the identity change, `ab dispatch` behaves as it did.
 
-## Hosted deployment variables
-
-A hosted-store deployment configures its web/auth variables once — see the
-hosted service README and the complete environment reference in the pinned
-distribution checkout: `BETTER_AUTH_URL`, `AB_WEB_SUPER_USER_EMAILS`,
-and the optional `AB_WEB_MCP_RESOURCE` — the protected
-resource the hosted MCP server (docs/mcp.md) binds its OAuth tokens to,
-defaulting to `<BETTER_AUTH_URL>/mcp`. Set it only when a proxy or custom
-domain fronts the deployment under a different public URL than
-`BETTER_AUTH_URL`; the value must be an absolute http(s) URL (https in
-production) or every MCP client's discovery binds tokens to the wrong
-resource.
-
-
 ## Connect a project
 
 From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
 The CLI prints a verification URL and short code and attempts to open a browser.
 Sign in as an allowed owner, check the full repository identity and code, and
 approve or deny. Another device can open the printed URL, or visit `/connect`
-and enter the code. Approval requires the web-enabled service origin; a
-standalone machine-only listener cannot present browser consent. Requests
+and enter the code. Approval uses the instance’s browser consent endpoint. Requests
 expire after ten minutes. Denial and timeout leave local configuration unchanged.
 
 On approval the service registers the project and issues a project credential.
@@ -358,55 +343,6 @@ main checkout's `.autobuild/`. `AB_TOKEN` overrides the exact service/project's
 saved credential for CI and other non-interactive hosts. A service override
 never borrows another service's credential. Build and harvest sessions keep
 their explicit scoped authority.
-
-## Connected projects
-
-Migrate PostgreSQL from the pinned release before deploying (`bun run
-postgres:migrate`). The service keeps an independent, durable project registry;
-existing build or ticket data does not register a project. An administrator
-with deployment database credentials manages it without redeploying:
-
-```sh
-ab-hosted-store projects list
-ab-hosted-store projects add https://github.com/owner/project --user owner@example.com
-ab-hosted-store projects remove https://github.com/owner/project --user owner@example.com
-```
-
-From a source checkout, substitute `bun packages/hosted-store-service/src/bin.ts`
-for `ab-hosted-store`. Configure `AB_POSTGRES_URL` or `DATABASE_URL` in that
-process. Database possession grants administration; `--user` is declared audit
-attribution, not a verified login. Ordinary project/store tokens cannot manage
-registrations. Each entry records the normalized origin URL, addition time,
-and adding identity. SSH git spellings normalize to HTTPS; local paths and
-credential-bearing HTTPS URLs are rejected. Duplicate adds preserve metadata;
-remove is idempotent, and re-adding records a fresh addition.
-
-Super users can operate every registered project. Organization members can
-operate only active projects assigned to their organizations; legacy unassigned
-projects are visible only to super users. Membership is granted by normalized
-email, including before first sign-in, and is rechecked on every request. The dashboard,
-MCP discovery and calls, and every operator API route consult current
-registration. Removal hides a project from all these surfaces and subsequent
-hosted dispatcher invocations; builds, events, artifacts and tickets remain,
-and re-registration restores access. Already-started work is not cancelled.
-Project credentials issued by connect authorize only their registered project. Administrative credential issuance remains available for non-interactive hosts.
-
-Link directly to `/?repo=<URL-encoded normalized origin>`. The page selects the
-first registered origin when the requested one is missing or removed, and an
-empty registry shows no project data or controls. Registry errors fail closed;
-there is no environment fallback on database failure.
-
-`AB_WEB_REPOSITORIES` is deprecated. A nonempty CSV is imported exactly once per
-database, on the first registry initialization with that variable configured,
-with actor `system:AB_WEB_REPOSITORIES`. The import and durable marker commit
-atomically across concurrent starts. An absent variable does not consume the
-marker. Later restarts or edits to the variable never re-add removed projects;
-use the owner commands for subsequent administration.
-
-The hosted dispatcher queries current registrations on every authorized
-invocation. With `AB_DISPATCHER_REPOSITORIES` unset, it serves all registered
-projects; an explicit list preserves its order and is intersected with current
-registration. An empty registry is a successful zero-project invocation.
 
 ## Authoring an agent verifier
 
@@ -480,45 +416,8 @@ cannot select another project. See [local builds with hosted tickets](#local-bui
 
 The service never contacts Linear. Projects with external sources (including
 file and Linear) keep using those sources directly through their dispatcher;
-service ticket HTTP, operator and MCP surfaces refuse with project/source
-feedback rather than returning an empty queue. Removed `AB_TICKET_BACKEND` and
-`LINEAR_API_KEY` values are ignored with one startup removal message, including
-blank/unknown values. Removed `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
-`AB_TICKET_DOING_STATE` and `AB_TICKET_DONE_STATE` values are ignored even when
-malformed. None of these retired settings prevents startup.
-
-The environment-aware migration imports `AB_WEB_REPOSITORIES` once before
-ownership preflight, including released main-v9 deployments without registry
-tables. A failed migration rolls back the import, main-schema promotion and
-ticket changes together. Owner `projects add` and `tickets assign-team` commands
-bootstrap only the registry/recovery journals and work while the main marker
-is still v9. Without the retired environment, first register the intended
-project with `ab-hosted-store projects add REPOSITORY --user IDENTITY`, then
-assign the team and rerun migration. A successful one-time import is never
-reapplied from later environment edits.
-
-Ticket schema v1 migration assigns each whole legacy team to its sole claimant
-among registered projects' latest effective configs, reading their actual blob
-bytes. Projects with no dispatcher run or no effective-config reference make
-no team claim and do not block other projects. Unclaimed teams still fail closed.
-When inferring ownership, a selected configuration whose revision/blob is missing,
-unreadable or invalid stops unchanged with recovery guidance. Restore the selected
-configuration or assign every remaining legacy team explicitly; complete owner
-assignments to registered projects bypass unrelated configuration reads. Conflicts
-and asset ownership mismatches also stop unchanged. Resolve ownership, then rerun:
-
-```sh
-ab-hosted-store tickets assign-team TEAM https://github.com/acme/app --user owner@example.com
-ab-postgres-store migrate
-```
-
-The assignment journal works before v2 assertion, retains the actor, and grants
-no future cross-project access. Migration preserves ids, states, comments,
-blockers, timestamps and assets. Populated-v1 migration and deployment builds
-require the running service's blob backend, access mode, credentials and prefix
-(`AB_BLOB_PREFIX`), not just PostgreSQL access. `deploy:build` inherits this
-environment and migration failure stops Next build. Fresh databases, empty v1
-queues and v2 reruns stay SQL-only and do not initialize blob storage.
+service ticket HTTP and operator surfaces refuse with project/source
+feedback rather than returning an empty queue.
 
 ## Local builds with hosted tickets
 
@@ -589,16 +488,3 @@ access, revalidate and restart dispatch to refresh its startup diagnostics.
 Changing the connected ticket source does not itself migrate in-flight builds.
 Follow [ticket migration](ticket-migration.md), keeping the existing BuildStore
 and recording continuity before resuming build-related ticket writes.
-
-
-The retired `AB_WEB_ALLOWED_EMAILS` variable is refused at startup, even if empty.
-Replace it with `AB_WEB_SUPER_USER_EMAILS`; review the list because these identities
-are deployment maintainers. Open Organizations from the account menu to create
-the first organization, then Members to add people by email and choose an owner,
-and Projects to assign legacy unassigned projects. The
-[browser management contract](operator-api.md#organization-management-browser)
-also documents the underlying HTTP routes. Super users alone
-create orgs, set or clear the single owner, and assign or move projects. Owners
-manage their org's members. Removing the last membership or super-user designation
-revokes human access on the next request without re-login; existing project
-credentials remain valid until revoked.

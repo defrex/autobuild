@@ -112,9 +112,16 @@ describe('website capture', () => {
       chips: [
         { seam: 'tickets', adapter: 'linear', pressed: 'true' },
         { seam: 'tickets', adapter: 'local-files', pressed: 'false' },
+        { seam: 'dispatcher', adapter: 'local-process', pressed: 'true' },
       ],
     })
     expect(probeProblems(remote, ok)).toEqual([])
+    expect(
+      probeProblems(remote, {
+        ...ok,
+        chips: [{ seam: 'dispatcher', adapter: 'local-process', pressed: 'false' }],
+      }),
+    ).toEqual(['fixed local chip dispatcher/local-process is not pressed'])
     ok.chips[0]!.pressed = 'false'
     expect(probeProblems(remote, ok)).toHaveLength(1)
     ok.chips[0]!.pressed = 'true'
@@ -224,7 +231,9 @@ describe('website capture', () => {
                 pressed: (
                   seam.id === 'runtime'
                     ? adapter.id === 'codex'
-                    : adapter.side === 'remote'
+                    : seam.id === 'dispatcher'
+                      ? adapter.id === 'local-process'
+                      : adapter.side === 'remote'
                 )
                   ? 'true'
                   : 'false',

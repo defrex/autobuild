@@ -5,7 +5,7 @@
     "title": "How Autobuild works",
     "group": "start",
     "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
-    "textHash": "e932f9240afb2183cc5ca3a13e7749729e2b04d85519bf45cdae3e8535c2a289",
+    "textHash": "9fd3996d3223ed393e2980a26c569f6c1e7a77c479ca784d176da597e6e851f8",
     "headings": ["From a ticket to a change", "Where it fits", "Using these docs"],
     "code": []
   },
@@ -159,7 +159,7 @@
     "title": "Working with your operator agent",
     "group": "guides",
     "description": "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you.",
-    "textHash": "4635d524f7596c468f18533a9fb4649b035f1a3bae0bc1fd77d5898c7016f1f0",
+    "textHash": "7fd03a09cc1df2e4440bd4c66e2c482cc877ce32fd9073dc59b6054924095651",
     "headings": [
       "Choose a harness",
       "Give the agent memory",
@@ -184,7 +184,7 @@
     "title": "Infrastructure seams",
     "group": "reference",
     "description": "Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.",
-    "textHash": "1bbe3f778e3441794f3fa180815371dc0a2bc22bdb34df963ff10fb8b5896e7b",
+    "textHash": "1512e2a00e4b24d9f75dc91405a06cf3660c6f81f58c942564160630e5f23682",
     "headings": [
       "Storage and tickets",
       "Agents, code, and workspaces",

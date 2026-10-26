@@ -39,9 +39,10 @@ bun ab builds --store /srv/autobuild/project-store
 
 Keep the database and blob directory together, durable and writable by the dispatcher identity.
 
-### Postgres with object storage
+### Remote HTTP client and protocol
 
-The server-side `@defrex/autobuild-postgres-store` package persists to PostgreSQL plus S3-compatible storage or Vercel Blob. The CLI never connects to PostgreSQL directly (no `[store] provider`); a repository selects the HTTP service:
+A hosted instance must implement the remote BuildStore protocol.
+The CLI connects over HTTP, never directly to a database.
 
 <!-- seam-config:start -->
 ```toml
@@ -53,45 +54,6 @@ source = "file"
 readyState = "ready"
 ```
 <!-- seam-config:end -->
-
-In the service project:
-
-```sh
-bun add @defrex/autobuild-postgres-store
-export DATABASE_URL='<postgres connection URL>'
-# AB_POSTGRES_URL overrides DATABASE_URL when nonblank.
-```
-
-```ts
-import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
-
-const store = await openPostgresBuildStoreFromEnv(process.env)
-```
-
-- **Migrate first** with the matching release's idempotent migration. Migration needs schema-creation permission; runtime needs access to the resulting tables.
-- **One blob backend.** S3 needs a bucket, prefix and GetObject/PutObject credentials; Vercel Blob needs a read-write token, or an OIDC identity plus store ID.
-- **Database and blob secrets** never leave the service.
-
-```sh
-# S3-compatible storage
-export AB_BLOB_BACKEND='s3'
-export AB_S3_BUCKET='autobuild-artifacts'
-export AB_S3_REGION='us-east-1'
-export AB_S3_ACCESS_KEY_ID='<object-store identity>'
-export AB_S3_SECRET_ACCESS_KEY='<object-store secret>'
-# Optional: AB_S3_ENDPOINT, AB_S3_FORCE_PATH_STYLE, AB_S3_SESSION_TOKEN, AB_BLOB_PREFIX
-```
-
-```sh
-# Alternatively, Vercel Blob
-export AB_BLOB_BACKEND='vercel'
-export AB_VERCEL_BLOB_ACCESS='private'
-export BLOB_READ_WRITE_TOKEN='<blob read-write token>'
-# Or supply VERCEL_OIDC_TOKEN and BLOB_STORE_ID together instead of the token.
-```
-
-
-### Remote HTTP client and service
 
 `[store] url` selects the shipped HTTP client. Connect once per host and user, from a checkout with the intended origin:
 

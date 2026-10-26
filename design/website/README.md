@@ -498,3 +498,19 @@ figure now use merge vocabulary. The four desktop/phone local/remote reference
 PNGs are refreshed from the real website capture. Reviewed all 36 website frames
 in overview sheets and the phone page at full resolution; captures report no
 sideways overflow at 390px, unchanged section gaps and zero animated figures.
+
+
+## Protocol offerings (2026-10-26, hosted-protocol-docs)
+
+The approved `hosted-protocol-docs` spec’s “Concept and reference pages”
+seam-option-list criterion authorizes this factual refinement. It removes the
+cron choice, keeps the dispatcher seam terminal-only, replaces web UI with
+Operator API, labels MCP as stdio MCP and Postgres as remote store, and changes
+the switchable-seam count from six to five.
+
+All four local/remote desktop/phone reference PNGs came from `bun run
+capture:website` and were reviewed against their preceding references. Reviewed
+all 59 captured PNGs in overview sheets and the four landing frames separately.
+Every 390px overflow probe passes. Desktop section gaps remain 288px and phone
+gaps 192px; phones gain 56px from the authorized chip wrapping. No layout,
+typography, palette or interaction-model changes accompany the new labels.
