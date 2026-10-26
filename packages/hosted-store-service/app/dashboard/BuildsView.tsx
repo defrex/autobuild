@@ -23,10 +23,12 @@ import {
   type DashboardModel,
   type TranscriptPresentation,
 } from '@defrex/autobuild/operator-presentation'
+import Link from 'next/link'
 import {
   type CSSProperties,
   type PointerEvent,
   type PointerEventHandler,
+  type ReactNode,
   useEffect,
   useRef,
   useState,
@@ -37,9 +39,9 @@ import {
   Flash,
   LoadingRows,
   MessagePreview,
-  Rule,
   StepLine,
 } from './frame'
+import { buildLink, projectLink } from './project-selection'
 import { pipelineProvenance } from './view-model'
 
 export type Selection = { kind: 'build'; slug: string } | { kind: 'harvest' }
@@ -68,8 +70,8 @@ interface RowClickTarget {
 
 /**
  * Whether a pointer click landed on the row itself rather than on a control,
- * a link, a field, or the unfolded detail. Only such clicks toggle detail, so
- * every explicit action keeps its own meaning.
+ * a link, or a field. Only such clicks open the build, so every explicit
+ * action keeps its own meaning.
  */
 export function isRowSurfaceClick(target: RowClickTarget | null, selectedText = ''): boolean {
   if (selectedText.length > 0) return false
@@ -97,23 +99,33 @@ export interface BuildsViewProps {
   pending?: string
   selection?: Selection
   hoverPreview?: Selection
-  detailOpen: boolean
-  confirmingAbort?: string
-  answerStep?: { slug: string; escalationIds: string[]; input: string }
-  answerPending: boolean
-  transcript?: TranscriptPresentation
   onActivate: (selection: Selection) => void
   onHoverPreview: (selection: Selection | undefined) => void
+  onOpenBuild: (slug: string) => void
+  onRowBuildControl: (slug: string, action: BuildControlAction) => void
+  onRowHarvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
+}
+
+export type AnswerStep = { slug: string; escalationIds: string[]; input: string }
+
+export interface BuildPageViewProps {
+  repo: string
+  slug: string
+  model?: DashboardModel
+  now: number
+  pending?: string
+  confirmingAbort: boolean
+  answerStep?: AnswerStep
+  answerPending: boolean
+  transcript?: TranscriptPresentation
   onRowBuildControl: (slug: string, action: BuildControlAction) => void
   onRowRequestAbort: (slug: string) => void
   onCancelAbort: () => void
-  onRowToggleDetail: (slug: string) => void
   onAnswerStepInput: (input: string) => void
   onSubmitAnswerStep: () => void
   onCancelAnswerStep: () => void
   onAnswer: (slug: string, body: OperatorAnswerRequest) => void
   onTranscript: (build: DashboardBuild, kind: string, rev: number) => void
-  onRowHarvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
 }
 
 type Tone = 'alert' | 'warn' | 'live' | 'ok'
@@ -180,7 +192,7 @@ export function buildRowActions(row: DashboardBuild): BuildRowAction[] {
 }
 
 export function BuildsView(props: BuildsViewProps) {
-  const { model, repo, now, selection, hoverPreview, detailOpen, confirmingAbort } = props
+  const { model, repo, now, selection, hoverPreview } = props
   const preview = (next: Selection) => (event: PointerEvent) => {
     if (
       canPreviewPointer(
@@ -208,13 +220,6 @@ export function BuildsView(props: BuildsViewProps) {
     '--ticket-w': `${widths.ticket}ch`,
     '--status-w': `${widths.status}ch`,
   }
-  const selectedBuild =
-    selection?.kind === 'build'
-      ? model.builds.find((row) => row.slug === selection.slug)
-      : undefined
-  // Focus by dimming only while a build's detail is unfolded; a bare
-  // selection (or a closed detail) leaves every row at full color.
-  const focused = detailOpen && selectedBuild !== undefined
   return (
     <DashboardSurface>
       {(model.warningLines?.length ||
@@ -244,7 +249,6 @@ export function BuildsView(props: BuildsViewProps) {
         className="rows"
         style={vars}
         data-ticket-col={widths.ticket}
-        data-focused={focused || undefined}
         aria-label="Build pipelines"
         onPointerLeave={() => props.onHoverPreview(undefined)}
       >
@@ -255,7 +259,6 @@ export function BuildsView(props: BuildsViewProps) {
             hasTicketColumn={widths.ticket > 0}
             selected={selection?.kind === 'harvest'}
             hovered={hoverPreview?.kind === 'harvest'}
-            dimmed={focused}
             pending={props.pending}
             onPointerEnter={preview({ kind: 'harvest' })}
             onActivate={props.onActivate}
@@ -268,25 +271,12 @@ export function BuildsView(props: BuildsViewProps) {
             row={row}
             model={model}
             now={now}
+            href={buildLink(repo, row.slug)}
             pending={props.pending}
-            selected={selection?.kind === 'build' && selection.slug === row.slug}
             hovered={hoverPreview?.kind === 'build' && hoverPreview.slug === row.slug}
-            dimmed={focused && !(selection?.kind === 'build' && selection.slug === row.slug)}
-            detailOpen={detailOpen}
-            confirmingAbort={confirmingAbort === row.slug}
-            answerStep={props.answerStep}
-            answerPending={props.answerPending}
-            transcript={props.transcript}
             onPointerEnter={preview({ kind: 'build', slug: row.slug })}
+            onOpen={props.onOpenBuild}
             onRowBuildControl={props.onRowBuildControl}
-            onRowRequestAbort={props.onRowRequestAbort}
-            onRowToggleDetail={props.onRowToggleDetail}
-            onCancelAbort={props.onCancelAbort}
-            onAnswerStepInput={props.onAnswerStepInput}
-            onSubmitAnswerStep={props.onSubmitAnswerStep}
-            onCancelAnswerStep={props.onCancelAnswerStep}
-            onAnswer={props.onAnswer}
-            onTranscript={props.onTranscript}
           />
         ))}
         {model.builds.length === 0 && !model.harvest && <li className="slack">no active builds</li>}
@@ -404,7 +394,6 @@ function HarvestRow({
   hasTicketColumn,
   selected,
   hovered,
-  dimmed,
   pending,
   onPointerEnter,
   onActivate,
@@ -415,7 +404,6 @@ function HarvestRow({
   hasTicketColumn: boolean
   selected: boolean
   hovered: boolean
-  dimmed: boolean
   pending?: string
   onPointerEnter: PointerEventHandler<HTMLLIElement>
   onActivate: BuildsViewProps['onActivate']
@@ -428,7 +416,6 @@ function HarvestRow({
       data-status={harvest.status}
       data-selected={selected || undefined}
       data-hovered={hovered || undefined}
-      data-dimmed={dimmed || undefined}
       onPointerEnter={onPointerEnter}
       onClick={(event) => {
         if (isRowSurfaceClick(event.target as Element, window.getSelection()?.toString()))
@@ -490,123 +477,46 @@ function BuildRow({
   row,
   model,
   now,
+  href,
   pending,
-  selected,
   hovered,
-  dimmed,
-  detailOpen,
-  confirmingAbort,
-  answerStep,
-  answerPending,
-  transcript,
   onPointerEnter,
+  onOpen,
   onRowBuildControl,
-  onRowRequestAbort,
-  onRowToggleDetail,
-  onCancelAbort,
-  onAnswerStepInput,
-  onSubmitAnswerStep,
-  onCancelAnswerStep,
-  onAnswer,
-  onTranscript,
 }: {
   row: DashboardBuild
   model: DashboardModel
   now: number
+  href: string
   pending?: string
-  selected: boolean
   hovered: boolean
-  dimmed: boolean
-  detailOpen: boolean
-  confirmingAbort: boolean
-  answerStep?: BuildsViewProps['answerStep']
-  answerPending: boolean
-  transcript?: TranscriptPresentation
   onPointerEnter: PointerEventHandler<HTMLLIElement>
+  onOpen: BuildsViewProps['onOpenBuild']
   onRowBuildControl: BuildsViewProps['onRowBuildControl']
-  onRowRequestAbort: BuildsViewProps['onRowRequestAbort']
-  onRowToggleDetail: BuildsViewProps['onRowToggleDetail']
-  onCancelAbort: BuildsViewProps['onCancelAbort']
-  onAnswerStepInput: BuildsViewProps['onAnswerStepInput']
-  onSubmitAnswerStep: BuildsViewProps['onSubmitAnswerStep']
-  onCancelAnswerStep: BuildsViewProps['onCancelAnswerStep']
-  onAnswer: BuildsViewProps['onAnswer']
-  onTranscript: BuildsViewProps['onTranscript']
 }) {
   const tone = statusTone(row.status)
-  const ceiling = reviewCeilingText(row)
-  const detailId = `detail-${encodeURIComponent(row.slug)}`
-  const open = selected && detailOpen
-  const answering = selected && answerStep?.slug === row.slug
-  const held = model.repositoryPaused && row.status === 'queued'
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: the row surface is a pointer convenience; the title button is the keyboard path
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the row surface is a pointer convenience; the title link is the keyboard path
     <li
       className="row"
       id={`build-${encodeURIComponent(row.slug)}`}
       data-status={row.status}
-      data-selected={selected || undefined}
       data-hovered={hovered || undefined}
-      data-dimmed={dimmed || undefined}
       onPointerEnter={onPointerEnter}
       onClick={(event) => {
-        if (
-          !answering &&
-          isRowSurfaceClick(event.target as Element, window.getSelection()?.toString())
-        )
-          onRowToggleDetail(row.slug)
+        if (isRowSurfaceClick(event.target as Element, window.getSelection()?.toString()))
+          onOpen(row.slug)
       }}
     >
-      <div className="rowline">
-        <span className="lane" aria-hidden />
-        <button
-          type="button"
-          className="rowhead"
-          disabled={answering}
-          aria-label={`${open ? 'Close' : 'Open'} details for ${row.slug}`}
-          aria-pressed={selected}
-          aria-expanded={open}
-          aria-controls={detailId}
-          onClick={() => onRowToggleDetail(row.slug)}
-        >
-          <span className="ticket">{row.ticketId ?? ''}</span>
-          <span className="build-title">{row.collectionIdentity?.title || row.slug}</span>
-        </button>
-        <span className="status" data-status={row.status}>
-          <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
-        </span>
-      </div>
-      <div className="build-meta">
-        <span className="slug">{row.slug}</span>
-        {!row.integrationRow && row.target && (
-          <>
-            {' '}
-            · {row.kind ?? 'work'} · target <span className="machine">{row.target}</span>
-            {row.targetDistance && <span className="slack"> {row.targetDistance}</span>}
-            {row.integration ? ` · ${row.integration}` : ''}
-          </>
-        )}
-        {
-          <span className="tokens">
-            {!row.integrationRow && <span>{mergeSummary(row)}</span>}
-            {row.pr && (
-              <a
-                className="pr"
-                data-pr={row.pr.state}
-                href={row.pr.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                PR {row.pr.state}
-              </a>
-            )}
-            {held && <span className="warn held">(held)</span>}
-            {row.draining && <span className="warn draining">(draining)</span>}
-            {row.alsoPaused && <span className="warn">(paused)</span>}
-          </span>
+      <BuildSummary
+        row={row}
+        model={model}
+        heading={
+          <Link className="rowhead" href={href} aria-label={`Open ${row.slug}`}>
+            <BuildHeading row={row} />
+          </Link>
         }
-      </div>
-      {!row.integrationRow && ceiling && <p className="sub">{ceiling}</p>}
+      />
       {row.integrationRow ? (
         <>
           <p className="sub integration-progress">
@@ -660,69 +570,19 @@ function BuildRow({
       {!row.integrationRow && row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />
       )}
-      {!row.integrationRow && row.status === 'blocked' && row.blockers.length > 0 && (
-        <section className="signoff" aria-label={`Escalation for ${row.slug}`}>
-          {row.blockers.map((blocker) => (
-            <p className="q" key={blocker}>
-              ! {blocker}
-            </p>
-          ))}
-          <p className="why">
-            The build stopped to ask a person. Your answer resumes it from where it paused.
-          </p>
-          {answering && (
-            <>
-              <BlockedAnswerStep
-                blocker={row.blockers[0] ?? ''}
-                input={answerStep.input}
-                pending={answerPending}
-                onInput={onAnswerStepInput}
-                onSubmit={onSubmitAnswerStep}
-                onCancel={onCancelAnswerStep}
-              />
-              <div
-                className="controls actions"
-                role="toolbar"
-                aria-label={`Controls for ${row.slug}`}
-                onKeyDown={(event) => handleRowControlKey(event, onCancelAnswerStep)}
-              >
-                <button
-                  type="button"
-                  className="btn primary action"
-                  disabled={pending !== undefined || answerPending}
-                  aria-label={`SUBMIT answer for ${row.slug}`}
-                  onClick={onSubmitAnswerStep}
-                >
-                  SUBMIT
-                </button>
-                <button
-                  type="button"
-                  className="word action"
-                  disabled={pending !== undefined || answerPending}
-                  aria-label={`CANCEL answer for ${row.slug}`}
-                  onClick={onCancelAnswerStep}
-                >
-                  CANCEL
-                </button>
-              </div>
-            </>
-          )}
-          {!answering && (
-            <AnswerComposer
-              build={row}
-              busy={pending !== undefined || answerPending}
-              onAnswer={onAnswer}
-            />
-          )}
-        </section>
-      )}
       {!row.integrationRow &&
-        row.status !== 'blocked' &&
         row.blockers.map((blocker) => (
           <p className="sub alert" key={blocker}>
             ! {blocker}
           </p>
         ))}
+      {!row.integrationRow && row.status === 'blocked' && row.blockers.length > 0 && (
+        <p className="sub">
+          <Link className="word answer-link" href={href}>
+            answer escalation
+          </Link>
+        </p>
+      )}
       {awaitingConsent(row) && (
         <LandingSignoff
           slug={row.slug}
@@ -730,24 +590,205 @@ function BuildRow({
           onControl={onRowBuildControl}
         />
       )}
-      {open && (
+    </li>
+  )
+}
+
+function BuildHeading({ row }: { row: DashboardBuild }) {
+  return (
+    <>
+      <span className="ticket">{row.ticketId ?? ''}</span>
+      <span className="build-title">{row.collectionIdentity?.title || row.slug}</span>
+    </>
+  )
+}
+
+/** Identity, status, and the meta line a build shows in its row and atop its page. */
+function BuildSummary({
+  row,
+  model,
+  heading,
+}: {
+  row: DashboardBuild
+  model: DashboardModel
+  heading: ReactNode
+}) {
+  const ceiling = reviewCeilingText(row)
+  const held = model.repositoryPaused && row.status === 'queued'
+  return (
+    <>
+      <div className="rowline">
+        <span className="lane" aria-hidden />
+        {heading}
+        <span className="status" data-status={row.status}>
+          <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
+        </span>
+      </div>
+      <div className="build-meta">
+        <span className="slug">{row.slug}</span>
+        {!row.integrationRow && row.target && (
+          <>
+            {' '}
+            · {row.kind ?? 'work'} · target <span className="machine">{row.target}</span>
+            {row.targetDistance && <span className="slack"> {row.targetDistance}</span>}
+            {row.integration ? ` · ${row.integration}` : ''}
+          </>
+        )}
+        {
+          <span className="tokens">
+            {!row.integrationRow && <span>{mergeSummary(row)}</span>}
+            {row.pr && (
+              <a
+                className="pr"
+                data-pr={row.pr.state}
+                href={row.pr.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                PR {row.pr.state}
+              </a>
+            )}
+            {held && <span className="warn held">(held)</span>}
+            {row.draining && <span className="warn draining">(draining)</span>}
+            {row.alsoPaused && <span className="warn">(paused)</span>}
+          </span>
+        }
+      </div>
+      {!row.integrationRow && ceiling && <p className="sub">{ceiling}</p>}
+    </>
+  )
+}
+
+/** A build's own page: its identity, any escalation to answer, and its full detail. */
+export function BuildPageView(props: BuildPageViewProps) {
+  const { model, repo, slug, now, pending, answerStep, answerPending } = props
+  const back = (
+    <nav className="crumbs" aria-label="Breadcrumb">
+      <Link className="word" href={projectLink(repo, '')}>
+        <span aria-hidden>← </span>builds
+      </Link>
+    </nav>
+  )
+  if (!model) {
+    return (
+      <DashboardSurface>
+        {back}
+        <LoadingRows label={`Loading ${slug}.`} />
+      </DashboardSurface>
+    )
+  }
+  const row = model.builds.find((build) => build.slug === slug)
+  if (!row) {
+    return (
+      <DashboardSurface>
+        {back}
+        <p className="slack build-missing">
+          {slug} is not an active build. It may have merged, closed, or been aborted.
+        </p>
+      </DashboardSurface>
+    )
+  }
+  const answering = answerStep?.slug === row.slug
+  return (
+    <DashboardSurface>
+      {back}
+      <article className="build-page" aria-label={row.slug}>
+        <header className="build-head">
+          <BuildSummary
+            row={row}
+            model={model}
+            heading={
+              <h2 className="rowhead">
+                <BuildHeading row={row} />
+              </h2>
+            }
+          />
+        </header>
+        {!row.integrationRow && row.status === 'blocked' && row.blockers.length > 0 && (
+          <section className="signoff" aria-label={`Escalation for ${row.slug}`}>
+            {row.blockers.map((blocker) => (
+              <p className="q" key={blocker}>
+                ! {blocker}
+              </p>
+            ))}
+            <p className="why">
+              The build stopped to ask a person. Your answer resumes it from where it paused.
+            </p>
+            {answering && answerStep && (
+              <>
+                <BlockedAnswerStep
+                  blocker={row.blockers[0] ?? ''}
+                  input={answerStep.input}
+                  pending={answerPending}
+                  onInput={props.onAnswerStepInput}
+                  onSubmit={props.onSubmitAnswerStep}
+                  onCancel={props.onCancelAnswerStep}
+                />
+                <div
+                  className="controls actions"
+                  role="toolbar"
+                  aria-label={`Controls for ${row.slug}`}
+                  onKeyDown={(event) => handleRowControlKey(event, props.onCancelAnswerStep)}
+                >
+                  <button
+                    type="button"
+                    className="btn primary action"
+                    disabled={pending !== undefined || answerPending}
+                    aria-label={`SUBMIT answer for ${row.slug}`}
+                    onClick={props.onSubmitAnswerStep}
+                  >
+                    SUBMIT
+                  </button>
+                  <button
+                    type="button"
+                    className="word action"
+                    disabled={pending !== undefined || answerPending}
+                    aria-label={`CANCEL answer for ${row.slug}`}
+                    onClick={props.onCancelAnswerStep}
+                  >
+                    CANCEL
+                  </button>
+                </div>
+              </>
+            )}
+            {!answering && (
+              <AnswerComposer
+                build={row}
+                busy={pending !== undefined || answerPending}
+                onAnswer={props.onAnswer}
+              />
+            )}
+          </section>
+        )}
+        {!row.integrationRow &&
+          row.status !== 'blocked' &&
+          row.blockers.map((blocker) => (
+            <p className="sub alert" key={blocker}>
+              ! {blocker}
+            </p>
+          ))}
+        {awaitingConsent(row) && (
+          <LandingSignoff
+            slug={row.slug}
+            pending={pending !== undefined}
+            onControl={props.onRowBuildControl}
+          />
+        )}
         <BuildDetail
-          id={detailId}
           build={row}
           now={now}
           pending={pending}
-          transcript={transcript}
-          confirmingAbort={confirmingAbort}
+          transcript={props.transcript}
+          confirmingAbort={props.confirmingAbort}
           answerStep={answering ? answerStep : undefined}
-          onRowBuildControl={onRowBuildControl}
-          onRowRequestAbort={onRowRequestAbort}
-          onCancelAbort={onCancelAbort}
-          onCancelAnswerStep={onCancelAnswerStep}
-          onTranscript={onTranscript}
-          onClose={() => onRowToggleDetail(row.slug)}
+          onRowBuildControl={props.onRowBuildControl}
+          onRowRequestAbort={props.onRowRequestAbort}
+          onCancelAbort={props.onCancelAbort}
+          onCancelAnswerStep={props.onCancelAnswerStep}
+          onTranscript={props.onTranscript}
         />
-      )}
-    </li>
+      </article>
+    </DashboardSurface>
   )
 }
 
@@ -805,7 +846,6 @@ function BlockedAnswerStep({
 type AnswerChoice = OperatorAnswerRequest['resolution'] | 'revise-spec-ticket'
 
 function BuildDetail({
-  id,
   build,
   now,
   pending,
@@ -817,21 +857,18 @@ function BuildDetail({
   onCancelAbort,
   onCancelAnswerStep,
   onTranscript,
-  onClose,
 }: {
-  id: string
   build: DashboardBuild
   now: number
   pending?: string
   transcript?: TranscriptPresentation
   confirmingAbort: boolean
-  answerStep?: BuildsViewProps['answerStep']
-  onRowBuildControl: BuildsViewProps['onRowBuildControl']
-  onRowRequestAbort: BuildsViewProps['onRowRequestAbort']
-  onCancelAbort: BuildsViewProps['onCancelAbort']
-  onCancelAnswerStep: BuildsViewProps['onCancelAnswerStep']
-  onTranscript: BuildsViewProps['onTranscript']
-  onClose: () => void
+  answerStep?: AnswerStep
+  onRowBuildControl: BuildPageViewProps['onRowBuildControl']
+  onRowRequestAbort: BuildPageViewProps['onRowRequestAbort']
+  onCancelAbort: BuildPageViewProps['onCancelAbort']
+  onCancelAnswerStep: BuildPageViewProps['onCancelAnswerStep']
+  onTranscript: BuildPageViewProps['onTranscript']
 }) {
   const answering = answerStep !== undefined
   const abortConfirmationId = `abort-confirmation-${encodeURIComponent(build.slug)}`
@@ -842,17 +879,9 @@ function BuildDetail({
   return (
     <article
       className={build.integrationDetail ? 'detail integration-detail' : 'detail'}
-      id={id}
       aria-label={`${build.slug} detail`}
     >
       <div className="kv">
-        {build.target && !build.integrationDetail && (
-          <span>
-            {build.kind ?? 'work'} · target {build.target}
-            {build.targetDistance ? ` ${build.targetDistance}` : ''}
-            {build.integration ? ` · ${build.integration}` : ''}
-          </span>
-        )}
         {build.ticketId && (
           <span>
             <span className="k">ticket </span>
@@ -1147,13 +1176,6 @@ function BuildDetail({
         )}
         {transcript && <Transcript value={transcript} />}
       </section>
-
-      <div className="controls">
-        <button type="button" className="word" aria-label="Close detail" onClick={onClose}>
-          <span aria-hidden>× </span>close
-        </button>
-      </div>
-      <Rule />
     </article>
   )
 }
@@ -1209,7 +1231,7 @@ function AnswerComposer({
 }: {
   build: DashboardBuild
   busy: boolean
-  onAnswer: BuildsViewProps['onAnswer']
+  onAnswer: BuildPageViewProps['onAnswer']
 }) {
   const [resolution, setResolution] = useState<AnswerChoice>('guidance')
   const [text, setText] = useState('')
@@ -1304,7 +1326,7 @@ export function LandingSignoff({
 }: {
   slug: string
   pending: boolean
-  onControl: BuildsViewProps['onRowBuildControl']
+  onControl: BuildPageViewProps['onRowBuildControl']
 }) {
   return (
     <section

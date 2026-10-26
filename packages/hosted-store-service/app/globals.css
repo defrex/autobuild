@@ -784,8 +784,29 @@ input.short {
 .pr[data-pr="conflicted"] {
   color: var(--red);
 }
-.rows[data-focused] .row[data-dimmed] .build-title {
-  color: var(--slack);
+a.rowhead {
+  text-decoration: none;
+}
+.crumbs {
+  margin-top: 20px;
+  font-size: 0.93em;
+}
+.build-page {
+  display: grid;
+  gap: 0;
+  margin-top: 16px;
+  min-width: 0;
+}
+.build-head {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.build-head .rowhead {
+  font-size: 1em;
+  font-weight: 400;
+}
+.build-missing {
+  margin-top: 20px;
 }
 .row[data-selected] .rowhead {
   text-decoration: underline;

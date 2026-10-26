@@ -14,9 +14,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from './api'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { projectLink } from './project-selection'
+import { buildLink, projectLink } from './project-selection'
 import {
+  type AnswerStep,
   type BuildControlAction,
+  BuildPageView,
   BuildsView,
   DispatcherControls,
   type HarvestControl,
@@ -35,7 +37,15 @@ interface ClientProps {
   isSuperUser?: boolean
   initialSelection: string
   repositories: readonly string[]
+  /** Set on a build's own page; absent on the builds list. */
+  buildSlug?: string
 }
+
+/**
+ * The last snapshot per project, kept across client navigations so moving
+ * between the list and a build page renders at once while the next poll runs.
+ */
+const snapshotCache = new Map<string, OperatorDashboardSnapshot>()
 
 export type AnswerModeKeyAction = 'cancel' | 'submit' | 'consume' | 'pass'
 
@@ -49,18 +59,6 @@ export function answerModeKeyAction(key: string, editorTarget: boolean): AnswerM
   return 'pass'
 }
 
-interface RowControlHandlerDependencies {
-  selection?: Selection
-  setSelection: (selection: Selection | undefined) => void
-  clearTranscript: () => void
-  clearAnswerStep: () => void
-  setConfirmingAbort: (slug: string | undefined) => void
-  setDetailOpen: (value: boolean | ((open: boolean) => boolean)) => void
-  isAnswerPending: () => boolean
-  control: (slug: string, action: BuildControlAction) => void
-  harvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
-}
-
 interface ClosestTarget {
   closest: (selectors: string) => unknown
 }
@@ -71,51 +69,12 @@ export function isNativeKeyboardActivation(key: string, target: ClosestTarget | 
   return key === ' ' && target?.closest('button') != null
 }
 
-/** Target-aware row interactions, extracted so their state policy is directly testable. */
-export function createRowControlHandlers(deps: RowControlHandlerDependencies) {
-  const selectTarget = (next: Selection) => {
-    const changed = !sameSelection(deps.selection, next)
-    deps.setSelection(next)
-    deps.clearTranscript()
-    deps.setConfirmingAbort(undefined)
-    deps.clearAnswerStep()
-    if (changed) deps.setDetailOpen(false)
-  }
-  return {
-    buildControl(slug: string, action: BuildControlAction) {
-      selectTarget({ kind: 'build', slug })
-      deps.control(slug, action)
-    },
-    requestAbort(slug: string) {
-      selectTarget({ kind: 'build', slug })
-      deps.setConfirmingAbort(slug)
-    },
-    toggleDetail(slug: string) {
-      if (deps.isAnswerPending()) return
-      deps.clearTranscript()
-      deps.setConfirmingAbort(undefined)
-      deps.clearAnswerStep()
-      if (deps.selection?.kind === 'build' && deps.selection.slug === slug) {
-        // Closing detail releases the selection: the row returns to rest.
-        deps.setSelection(undefined)
-        deps.setDetailOpen(false)
-      } else {
-        deps.setSelection({ kind: 'build', slug })
-        deps.setDetailOpen(true)
-      }
-    },
-    runHarvest(body: Extract<HarvestControl, { action: 'run' }>) {
-      selectTarget({ kind: 'harvest' })
-      deps.harvest(body)
-    },
-  }
-}
-
 export function DashboardClient({
   identity,
   isSuperUser,
   repositories,
   initialSelection,
+  buildSlug,
 }: ClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -128,18 +87,11 @@ export function DashboardClient({
     lastRegistryRefresh.current = Date.now()
     routerRef.current.refresh()
   }, [])
-  const [snapshot, setSnapshot] = useState<OperatorDashboardSnapshot>()
+  const [snapshot, setSnapshot] = useState(() => snapshotCache.get(repo))
   const [selection, setSelection] = useState<Selection>()
   const [hoverPreview, setHoverPreview] = useState<Selection>()
-  const [detailOpen, setDetailOpen] = useState(false)
-  const detailOpenRef = useRef(false)
-  detailOpenRef.current = detailOpen
   const [confirmingAbort, setConfirmingAbort] = useState<string>()
-  const [answerStep, setAnswerStep] = useState<{
-    slug: string
-    escalationIds: string[]
-    input: string
-  }>()
+  const [answerStep, setAnswerStep] = useState<AnswerStep>()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<string>()
   const [now, setNow] = useState(Date.now())
@@ -147,6 +99,8 @@ export function DashboardClient({
   const [pollPending, setPollPending] = useState(false)
   const answerPending = useRef(false)
   const refresherRef = useRef<DashboardRefresher | undefined>(undefined)
+  const repoRef = useRef(repo)
+  repoRef.current = repo
 
   // The refresher owns the poll loop and lives for the component's lifetime, so
   // it must be created before the repository effect below hands it a repo.
@@ -157,6 +111,7 @@ export function DashboardClient({
           return await api.dashboard(repository, signal)
         } catch (cause) {
           if (!signal.aborted && cause instanceof api.WebOperatorError && cause.status === 404) {
+            snapshotCache.delete(repository)
             setSnapshot(undefined)
             setTranscript(undefined)
             setSelection(undefined)
@@ -169,7 +124,11 @@ export function DashboardClient({
       },
       visible: () => !document.hidden,
       onSnapshot: (next) => {
-        setSnapshot((old) => ({ ...next, model: reconcileDashboard(old?.model, next.model) }))
+        setSnapshot((old) => {
+          const reconciled = { ...next, model: reconcileDashboard(old?.model, next.model) }
+          snapshotCache.set(repoRef.current, reconciled)
+          return reconciled
+        })
         setAnswerStep((step) => {
           if (!step || answerPending.current) return step
           const build = next.model.builds.find((row) => row.slug === step.slug)
@@ -197,17 +156,9 @@ export function DashboardClient({
 
   const requestRefresh = useCallback(() => refresherRef.current?.request() ?? Promise.resolve(), [])
 
-  // A repository change resets local view state and hands the refresher the new
-  // repo, which aborts any in-flight work for the previous one.
+  // Pages are keyed by project, so the repo is fixed for this instance; hand it
+  // to the refresher once it exists.
   useEffect(() => {
-    setSnapshot(undefined)
-    setTranscript(undefined)
-    setHoverPreview(undefined)
-    setSelection(undefined)
-    setAnswerStep(undefined)
-    setConfirmingAbort(undefined)
-    setDetailOpen(false)
-    setError(undefined)
     refresherRef.current?.setRepo(repo)
   }, [repo])
   // The now-ticker pauses with the document like the refresher above: no
@@ -226,13 +177,10 @@ export function DashboardClient({
     }
   }, [])
 
-  /** A selection that carries nothing (no open detail, no local step) returns to rest. */
+  /** After an action, the harvest selection and any abort confirmation return to rest. */
   const releaseSelection = () => {
-    if (!detailOpenRef.current) {
-      setSelection(undefined)
-      setTranscript(undefined)
-      setConfirmingAbort(undefined)
-    }
+    setSelection(undefined)
+    setConfirmingAbort(undefined)
   }
   const act = async (key: string, operation: () => Promise<unknown>) => {
     setPending(key)
@@ -250,31 +198,13 @@ export function DashboardClient({
   }
 
   const model = snapshot?.model
-  const selectedBuild =
-    selection?.kind === 'build'
-      ? model?.builds.find((row) => row.slug === selection.slug)
-      : undefined
+  const pageBuild = buildSlug ? model?.builds.find((row) => row.slug === buildSlug) : undefined
+  const listHref = projectLink(repo, '')
 
-  const select = (next: Selection | undefined) => {
-    setSelection(next)
-    setTranscript(undefined)
-    setConfirmingAbort(undefined)
-    setAnswerStep(undefined)
-  }
   const activate = (next: Selection) => {
-    if (answerPending.current) return
-    setConfirmingAbort(undefined)
-    if (sameSelection(selection, next)) {
-      deselect()
-      return
-    }
-    select(next)
-    setDetailOpen(next.kind === 'build')
+    setSelection(sameSelection(selection, next) ? undefined : next)
   }
-  const deselect = () => {
-    select(undefined)
-    setDetailOpen(false)
-  }
+  const openBuild = (slug: string) => router.push(buildLink(repo, slug))
   const control = (slug: string, action: BuildControlAction) => {
     setConfirmingAbort(undefined)
     const key = `${slug}:${action}`
@@ -308,17 +238,6 @@ export function DashboardClient({
     void act(`bulk-${action}`, () => api.bulk(repo, action))
   const harvest = (body: HarvestControl) =>
     void act(`harvest-${body.action}`, () => api.harvest(repo, body))
-  const rowControls = createRowControlHandlers({
-    selection,
-    setSelection,
-    clearTranscript: () => setTranscript(undefined),
-    clearAnswerStep: () => setAnswerStep(undefined),
-    setConfirmingAbort,
-    setDetailOpen,
-    isAnswerPending: () => answerPending.current,
-    control,
-    harvest,
-  })
   const answer = (slug: string, body: OperatorAnswerRequest) => {
     const key = `${slug}:answer`
     setPending(key)
@@ -415,47 +334,44 @@ export function DashboardClient({
       return
     }
     if (editorTarget) return
-    const available = selectedBuild ? buildActionAvailability(selectedBuild) : undefined
+    const available = pageBuild ? buildActionAvailability(pageBuild) : undefined
     const repository = repositoryActionAvailability(model)
     const busy = pending !== undefined
     switch (event.key) {
       case 'Enter':
-        if (busy) return
-        if (confirmingAbort === selectedBuild?.slug && selectedBuild) {
+        if (!busy && pageBuild && confirmingAbort === pageBuild.slug) {
           event.preventDefault()
-          control(selectedBuild.slug, 'abort')
-        } else if (selection?.kind === 'build') {
-          event.preventDefault()
-          if (detailOpen) deselect()
-          else setDetailOpen(true)
+          control(pageBuild.slug, 'abort')
         }
         return
       case 'Escape':
-        if (confirmingAbort) {
-          setConfirmingAbort(undefined)
-          releaseSelection()
-        } else deselect()
+        if (confirmingAbort) setConfirmingAbort(undefined)
+        else if (buildSlug) router.push(listHref)
+        else setSelection(undefined)
         return
       case 'a':
-        if (!busy && selectedBuild && available?.abort) setConfirmingAbort(selectedBuild.slug)
+        if (!busy && pageBuild && available?.abort) setConfirmingAbort(pageBuild.slug)
         return
       case 'p':
         if (busy) return
-        if (selectedBuild) {
-          if (available?.primary === 'pause' || available?.primary === 'cancel-pause')
-            control(selectedBuild.slug, available.primary)
+        if (buildSlug) {
+          if (
+            pageBuild &&
+            (available?.primary === 'pause' || available?.primary === 'cancel-pause')
+          )
+            control(pageBuild.slug, available.primary)
         } else if (selection?.kind === 'harvest') {
           if (model.harvest?.action) harvest({ action: 'run', run: model.harvest.run })
         } else if (repository.bulkPause) bulk('pause')
         return
       case 'r':
         if (busy) return
-        if (selectedBuild) {
-          if (available?.primary === 'resume') control(selectedBuild.slug, 'resume')
+        if (buildSlug) {
+          if (pageBuild && available?.primary === 'resume') control(pageBuild.slug, 'resume')
         } else if (!selection && repository.bulkResume) bulk('resume')
         return
       case 'd':
-        if (!busy && selectedBuild && available?.discard) control(selectedBuild.slug, 'discard')
+        if (!busy && pageBuild && available?.discard) control(pageBuild.slug, 'discard')
         return
       case 'i':
         if (!busy) setting('intake', model.drained)
@@ -482,9 +398,8 @@ export function DashboardClient({
       error={repo ? error : 'no repository configured'}
       onRepo={(next) => {
         if (answerPending.current) return
-        setHoverPreview(undefined)
-        router.push(projectLink(next, searchParams.toString()))
-        deselect()
+        // A build belongs to one project, so switching from its page lands on the list.
+        router.push(projectLink(next, buildSlug ? '' : searchParams.toString()))
       }}
       onSignOut={async () => {
         await fetch('/api/auth/sign-out', { method: 'POST' })
@@ -504,36 +419,47 @@ export function DashboardClient({
         ) : null
       }
     >
-      {repo && (
-        <BuildsView
-          repo={repo}
-          model={model}
-          now={now}
-          pending={pending}
-          selection={selection}
-          hoverPreview={hoverPreview}
-          detailOpen={detailOpen}
-          confirmingAbort={confirmingAbort}
-          answerStep={answerStep}
-          answerPending={answerPending.current}
-          transcript={transcript}
-          onActivate={activate}
-          onHoverPreview={setHoverPreview}
-          onRowBuildControl={rowControls.buildControl}
-          onRowRequestAbort={rowControls.requestAbort}
-          onCancelAbort={() => {
-            setConfirmingAbort(undefined)
-            releaseSelection()
-          }}
-          onRowToggleDetail={rowControls.toggleDetail}
-          onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
-          onSubmitAnswerStep={submitAnswerStep}
-          onCancelAnswerStep={cancelAnswerStep}
-          onAnswer={answer}
-          onTranscript={loadTranscript}
-          onRowHarvest={rowControls.runHarvest}
-        />
-      )}
+      {repo &&
+        (buildSlug ? (
+          <BuildPageView
+            repo={repo}
+            slug={buildSlug}
+            model={model}
+            now={now}
+            pending={pending}
+            confirmingAbort={confirmingAbort === buildSlug}
+            answerStep={answerStep}
+            answerPending={answerPending.current}
+            transcript={transcript}
+            onRowBuildControl={control}
+            onRowRequestAbort={setConfirmingAbort}
+            onCancelAbort={() => setConfirmingAbort(undefined)}
+            onAnswerStepInput={(input) =>
+              setAnswerStep((step) => (step ? { ...step, input } : step))
+            }
+            onSubmitAnswerStep={submitAnswerStep}
+            onCancelAnswerStep={cancelAnswerStep}
+            onAnswer={answer}
+            onTranscript={loadTranscript}
+          />
+        ) : (
+          <BuildsView
+            repo={repo}
+            model={model}
+            now={now}
+            pending={pending}
+            selection={selection}
+            hoverPreview={hoverPreview}
+            onActivate={activate}
+            onHoverPreview={setHoverPreview}
+            onOpenBuild={openBuild}
+            onRowBuildControl={control}
+            onRowHarvest={(body) => {
+              setSelection({ kind: 'harvest' })
+              harvest(body)
+            }}
+          />
+        ))}
     </OperatorShell>
   )
 }
