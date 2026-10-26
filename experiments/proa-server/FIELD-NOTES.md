@@ -1216,3 +1216,48 @@ and command manifests, checks, unit runs, cleanup probes and visual review),
 `.ab/proa-build-I96zNT/` (offline capture build), and
 `.ab/proa-frames-wjRlt4/` (96 frames, inventory, probes and browser proofs).
 These paths are ignored evidence, not tracked deliverables.
+
+### 2026-10-26 — cleanup guidance resolved
+
+Operator guidance authorized test-only cleanup repairs in this build. The
+producer is now confirmed: the seven real-Chromium negative fixtures in
+`tools/capture.test.ts`. Running that file alone through the unchanged
+`runInspected` guard passed all 17 assertions but left exactly seven
+`org.chromium.Chromium.*` entries. The complete experiment tooling subset also
+passed all 123 tests while leaking those same seven entries. No bisection of
+product tests was needed after this isolated reproduction.
+
+`captureFrames` killed Chromium's process group with SIGKILL in its normal
+finally path. Awaiting the killed leader and removing its explicit profile did
+not let Chromium unlink its OS-temp singleton sockets. Commit `8dabd374` now
+requests CDP `Browser.close` and awaits browser exit, retaining a five-second
+process-group kill fallback for unresponsive browsers. Each invocation also
+owns a short OS-temp directory for Chromium's TMPDIR/TMP/TEMP, removed after
+exit alongside the existing explicit profile. The short path avoids Unix socket
+path limits. No product files, dependency pins, fixture values, guard behavior
+or allowlists changed.
+
+The inspected experiment tooling rerun passed all 123 tests in 21.37s with no
+residue. Root `check`, `check:build` and `typecheck` passed. The complete root
+`bun run test` passed 8,494 tests with 49 skips, zero failures and no leaked
+entries in 1,032.58s; its process exited zero. This supersedes the cleanup
+blocker recorded above. The full 61-stage native gate passed again on
+`8dabd374`, with 962.65s of recorded stage time, including all 161 unchanged
+BuildStore HTTP contract tests, operator/MCP proofs and release build.
+
+Full capture and browser proofs passed again, producing all 96 inventory
+frames in `.ab/proa-frames-g6szjq/`. Of these, 62 are byte-identical to the
+previous individually inspected evidence; the 34 changed images were reviewed
+in nine color sheets. Differences reflect elapsed durations and regenerated
+connection/client identifiers. Both grounds, typefaces, flat shell/menu and
+phone wrapping remain intact. Linked capture builds reused 481/481 artifacts
+at both descriptor and final stages. Native logs and stage timings are in
+`.ab/proa-build-YiupiK/`; diagnosis, root checks and before/after leak logs are
+in `.ab/cleanup/`.
+
+This guidance round occupied approximately 03:32–03:52 UTC (20 minutes),
+including overlapping diagnosis, cleanup repair, full validation and waiting.
+It adds no fixture regeneration or native repair cost to the earlier refresh;
+no exclusive active-work time was measured. The earlier approximately
+78-minute refresh window and this separate guidance window are reported
+separately rather than treating the intervening operator wait as implementation.
