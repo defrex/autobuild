@@ -245,3 +245,55 @@ test('failed child diagnostics survive leak reporting and the owned root is remo
     await rm(fixture, { recursive: true, force: true })
   }
 })
+
+test('unit commands anchor every owned root and preserve caller arguments', async () => {
+  const packages = Array.from(
+    new Bun.Glob('packages/*/src').scanSync({ cwd: checkoutRoot, onlyFiles: false }),
+  )
+    .sort()
+    .map((path) => `./${path}`)
+  expect(await suiteCommands('unit', ['--timeout', '12345'])).toEqual([
+    [
+      process.execPath,
+      'test',
+      '--path-ignore-patterns=**/*.integration.test.ts',
+      ...packages,
+      './tools',
+      './bin',
+      './packages/hosted-store-service/app',
+      '--timeout',
+      '12345',
+    ],
+  ])
+})
+
+test('unit collection includes owned roots and excludes experiment and substring collisions', async () => {
+  const fixture = await inspectionRoot()
+  try {
+    const [command] = await suiteCommands('unit', [])
+    const roots = command!.slice(3)
+    for (const [index, root] of roots.entries()) {
+      await mkdir(join(fixture, root), { recursive: true })
+      await writeFile(
+        join(fixture, root, 'marker.test.ts'),
+        `import {test} from 'bun:test'; test('owned-root-${index}',()=>{});`,
+      )
+    }
+    const excluded = [
+      'experiments/proa-server/tools/data-services.test.ts',
+      `unrelated/${roots[0]!.replace(/^\.\//, '')}/collision.test.ts`,
+      'tools/excluded.integration.test.ts',
+    ]
+    for (const path of excluded) {
+      await mkdir(join(fixture, path, '..'), { recursive: true })
+      await writeFile(join(fixture, path), `throw Error('excluded-import:${path}');`)
+    }
+    const result = Bun.spawnSync(command!, { cwd: fixture, timeout: 10000 })
+    const output = result.stdout.toString() + result.stderr.toString()
+    expect(result.exitCode, output).toBe(0)
+    for (const index of roots.keys()) expect(output).toContain(`owned-root-${index}`)
+    expect(output).not.toContain('excluded-import:')
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
