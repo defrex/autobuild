@@ -331,15 +331,19 @@ async function seed(): Promise<void> {
 
 async function serve(): Promise<void> {
   const env = devEnv()
-  const cookie = await Bun.file(SESSION_TOKEN_FILE)
-    .text()
-    .catch(() => null)
-  if (!cookie) throw new Error('no session token; run `seed` first')
+  const sessionCookie = () =>
+    Bun.file(SESSION_TOKEN_FILE)
+      .text()
+      .catch(() => null)
+  if (!(await sessionCookie())) throw new Error('no session token; run `seed` first')
 
   Bun.serve({
     hostname: '127.0.0.1',
     port: SIGN_IN_PORT,
-    fetch() {
+    async fetch() {
+      // Read per request: `seed` resets the database and mints a new session
+      // while `serve` keeps running.
+      const cookie = await sessionCookie()
       // Cookies ignore ports, so a host-only cookie set here reaches :3100.
       return new Response(null, {
         status: 303,
