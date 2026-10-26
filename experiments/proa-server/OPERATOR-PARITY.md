@@ -41,15 +41,16 @@ schemas, API detail/dashboard/repository/harvest projections, all build controls
 node completeness, ticket spec/asset repinning, repository controls, delegation,
 hosted ticket mutations and generic registry dispatch. Reads include CLEANING,
 run-correlated effective config, runtime attaches, handoffs, telemetry, capacity,
-raw artifacts and bounded session streams. The registry accepts `merge` and legacy `land` controls with identical durable
+raw artifacts and bounded session streams.
+
+The registry accepts `merge` and legacy `land` controls with identical durable
 outcomes, and both `merges.list` and `landings.list` execute populated consent
 queues and pinned-config refusals. The typed HTTP control still uses `land`;
 tool dispatch normalizes the public alias. Configuration accepts either `merge`
 or `landing`, rejects both (including empty arrays), and normalizes to internal
 `landing` state. Historical event names remain intact.
 
-Config normalization and issue bytes
-are differentially checked over the actual source grammar and its nodes.
+Config normalization and issue bytes are differentially checked over the actual source grammar and its nodes.
 
 Failure proofs use isolated SQL triggers and a local proxy forwarding signed
 requests to the real local S3 fixture. They exercise surviving answer prefixes,
