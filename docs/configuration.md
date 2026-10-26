@@ -20,6 +20,155 @@ example](#complete-example) is valid on its own.
 
 An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
 
+## `[accounts]`
+
+Named accounts select billing for the unmodified Claude Code runtime, using
+only the user's own subscription within ordinary individual usage. Provision
+credentials manually on the dispatcher host; Autobuild never runs
+`claude setup-token`, signs in, or collects its output.
+
+<!-- config-fragment:accounts -->
+```toml
+[accounts.personal]
+kind = "claude-subscription"
+credentialEnv = "CLAUDE_CODE_OAUTH_TOKEN"
+
+[accounts.kimi]
+kind = "kimi-code"
+credentialEnv = "KIMI_CODE_KEY"
+region = "overseas"
+
+[accounts.kimi-china]
+kind = "kimi-code"
+credentialEnv = "KIMI_CHINA_KEY"
+region = "china"
+
+[roles.implement]
+runtime = "claude"
+account = "kimi"
+model = "kimi-for-coding"
+```
+
+`account` inherits independently on roles and alternates. Without an explicit
+selection, a Claude route chooses the sole Claude subscription account; multiple
+subscription accounts require an explicit selection. Account references on other
+runtimes are rejected. Repositories with no accounts retain legacy authentication.
+Locally a Claude subscription can use its named token or the host login; Kimi
+requires its membership key. Invalid credentials need renewal (`claude setup-token`
+for Claude, replacement membership key for Kimi); quota and overload failures
+retain alternate fallback.
+
+Choose the region of your Kimi membership. The default `overseas` selects
+`https://api.kimi.ai/coding/`; `china` selects `https://api.kimi.com/coding/`.
+The base URL and egress hostname are fixed together and cannot be overridden
+independently. There is no cross-region retry or assertion that keys work across
+regions. Claude Code keeps its native User-Agent.
+
+In Vercel Sandbox the guest holds stable nonsecret placeholders, including when
+credential variables are explicitly allowlisted. The host egress policy replaces
+an exact account placeholder header only on its provider's exact hostname.
+The next dispatcher observation tick refreshes credentials for subsequent
+requests without reprovisioning. Changing a local dispatcher's `.env` still needs
+a restart. Accounts are deployment-owned descriptors; configuration artifacts
+contain variable names, never values. Validation reports host credential presence
+and makes one minimal Claude Code model request per declared account, including
+unused accounts, in the disposable sandbox.
+
+<!-- configuration-reference:accounts -->
+
+#### `accounts`
+
+**TOML key:** `accounts`
+
+- **Type:** `table`
+- **Default:** `{}`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named Claude subscription or Kimi Code billing accounts. Descriptors contain credential variable names only.
+
+**Constraints:** Entry names: nonempty
+
+#### `accounts.<name>`
+
+**TOML key:** `accounts.<name>`
+
+- **Type:** `strict table | strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named nonsecret billing account descriptor.
+
+**Constraints:** None beyond the input type.
+
+#### `accounts.<name>.kind` (kind = "claude-subscription")
+
+**TOML key:** `accounts.<name>.kind`
+
+- **Type:** `"claude-subscription"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "claude-subscription"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Claude subscription or Kimi Code membership using the unmodified Claude runtime.
+
+**Constraints:** None beyond the input type.
+
+#### `accounts.<name>.credentialEnv` (kind = "claude-subscription")
+
+**TOML key:** `accounts.<name>.credentialEnv`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "claude-subscription"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Dispatcher-host environment variable holding the credential; never the credential itself.
+
+**Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
+
+#### `accounts.<name>.kind` (kind = "kimi-code")
+
+**TOML key:** `accounts.<name>.kind`
+
+- **Type:** `"kimi-code"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "kimi-code"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Claude subscription or Kimi Code membership using the unmodified Claude runtime.
+
+**Constraints:** None beyond the input type.
+
+#### `accounts.<name>.credentialEnv` (kind = "kimi-code")
+
+**TOML key:** `accounts.<name>.credentialEnv`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "kimi-code"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Dispatcher-host environment variable holding the credential; never the credential itself.
+
+**Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
+
+#### `accounts.<name>.region` (kind = "kimi-code")
+
+**TOML key:** `accounts.<name>.region`
+
+- **Type:** `"overseas" | "china"`
+- **Default:** `"overseas"`
+- **Required:** Optional when kind = "kimi-code"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Membership region: overseas (default) or china. Selects the base URL and exact egress host together.
+
+**Constraints:** None beyond the input type.
+
+<!-- configuration-reference:/accounts -->
+
 ## `[store]`
 
 <!-- configuration-reference:store -->
@@ -62,7 +211,7 @@ Changing the store requires restarting dispatch.
 
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
-command references are errors. The open maps are `[commands]`, `[roles]`,
+command references are errors. The open maps are `[accounts]`, `[commands]`, `[roles]`,
 `[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
 `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
 validates repository-defined command, role, and step entries.
@@ -123,8 +272,8 @@ the worktree file has uncommitted edits, because the clean/dirty comparison
 could not be performed (non-git workspace or a transient git error), or because
 the branch head never carried the file — the deposit records the source
 `worktree-dirty` with no commit. The build still runs the worktree bytes, but
-provenance declines to attribute them to any commit. **Deployment-owned** sections — `[roles]`
-(runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and
+provenance declines to attribute them to any commit. **Deployment-owned** sections — `[accounts]` and `[roles]`
+(runtime, model, account, args, alternates, per-role `sessionBudgetSeconds`) and
 `[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
 `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
 dispatcher itself and are never interpreted by the build runner.
@@ -185,6 +334,7 @@ These fields hot-reload:
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's selection applies unless unknown names require default-all fallback, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
+| `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary; credentials refresh on observation ticks. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
@@ -1187,12 +1337,11 @@ Vercel images or package managers.
 Vercel workspaces return an absolute guest `path` plus an opaque sandbox-name
 `ref`; they omit dispatcher-local path evidence. Branch config, relative/package
 plugins, installed skills, setup, runtimes, checks, and phase CLI commands all
-resolve in the guest checkout. Only names in `environmentVariables` plus scoped `AB_STORE`/`AB_TOKEN` enter
+resolve in the guest checkout. Only names in `environmentVariables`, declared account placeholders, and scoped `AB_STORE`/`AB_TOKEN` enter
 commands—dispatcher environment variables are never copied wholesale. Pi in a
 sandbox should use an API-key provider such as `vercel-ai-gateway/...` with
 `AI_GATEWAY_API_KEY`; never copy dispatcher `~/.pi` state, OAuth refresh tokens,
-or attempt an interactive login. The same API-key-only rule applies to Codex,
-Claude Code, and plugin runtimes.
+or attempt an interactive login. Codex and plugin runtimes retain their existing API authentication. Claude Code can instead select a declared billing account, whose real credential stays on the host.
 
 The opt-in live lifecycle suite is
 `packages/core/src/scenarios/vercel-sandbox.live.test.ts`. Set
@@ -1889,6 +2038,19 @@ session starts, with a copyable table and all registered runtime names.
 
 **Constraints:** None beyond the input type.
 
+#### `roles.<name>.account`
+
+**TOML key:** `roles.<name>.account`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
+
+**Constraints:** minimum length 1; matches /\S/
+
 #### `roles.<name>.runtime`
 
 **TOML key:** `roles.<name>.runtime`
@@ -1966,6 +2128,19 @@ session starts, with a copyable table and all registered runtime names.
 **Description:** Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op.
 
 **Constraints:** Omission inherits the base alternate list, otherwise resolves to an empty list; each alternate overlays the resolved primary axes.
+
+#### `roles.<name>.alternates[].account`
+
+**TOML key:** `roles.<name>.alternates[].account`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
+
+**Constraints:** minimum length 1; matches /\S/
 
 #### `roles.<name>.alternates[].runtime`
 

@@ -64,6 +64,7 @@ function escapeRegex(literal: string): string {
  * [verify]. `kind` is in both unions; one documented row satisfies it.
  */
 const TABLE_FIELDS: Record<string, string[]> = {
+  accounts: ['kind', 'credentialEnv', 'region'],
   upgrade: ['automatic'],
   merge: Object.keys(landingRuleSchema.shape),
   landing: [],

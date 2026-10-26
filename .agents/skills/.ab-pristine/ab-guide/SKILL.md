@@ -380,7 +380,7 @@ evaluated as config logic.
 
 **Strictness:** unknown top-level keys/tables and unknown keys inside known
 tables are **errors**, not warnings — a typo must not silently disable a
-verifier. The open maps are `[commands]`, `[roles]`, `[workspace.config]`,
+verifier. The open maps are `[accounts]`, `[commands]`, `[roles]`, `[workspace.config]`,
 `[workspace.config.runtimeProvisioning]`, `[verify.<step>]`, and
 `[finalize.<step>]`. Autobuild strictly validates the
 repository-defined command, role, and step entries. `[workspace.config]` is
@@ -563,7 +563,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 
 `timeoutSeconds` is required (60–86400; Hobby currently caps at 2700), `vcpus`
 is 1–32, and optional `region`/unique `failoverRegions` select placement. Only
-the named runtime variables and scoped `AB_STORE`/`AB_TOKEN` enter guest
+the named runtime variables, declared account placeholders, and scoped `AB_STORE`/`AB_TOKEN` enter guest
 commands. Never list Store, Forge, Vercel, or private-clone credentials there.
 Every effective primary/alternate runtime needs a strict
 `runtimeProvisioning` entry with pinned `install` and exact-version `preflight`
@@ -571,8 +571,7 @@ commands; runtime names remain open for plugins. Install/preflight runs before
 the marker in every fresh/replacement/readiness sandbox, and preflight reruns
 before every child. Failures name the runtime, role/alternate, and field and
 start no agent. Keep runtime installation out of `commands.setup`. Pi over
-`vercel-ai-gateway/...` uses `AI_GATEWAY_API_KEY`; never copy OAuth tokens,
-`~/.pi`, or interactive login state. The clone identity is upload-pack-only and
+`vercel-ai-gateway/...` uses `AI_GATEWAY_API_KEY`; never copy Pi state or OAuth refresh tokens. Claude Code can select named [accounts](references/accounts.md): subscription tokens or region-bound Kimi Code keys stay on the dispatcher, with placeholders in the guest and exact-host/header egress transforms. Use the unmodified runtime, your own subscription and ordinary individual usage. Provision credentials manually; Autobuild never invokes `claude setup-token`. The clone identity is upload-pack-only and
 scrubbed from Git config before an agent starts. Agents cannot push. Remote phase terminals deposit a durable
 publication request and park; that successful `ab done` is the one terminal and
 must not be repeated. After VM stop and lease release, the local kernel
@@ -921,20 +920,39 @@ the agent never pushes. An unchanged `HEAD` creates and pushes no commit. Dirty
 output, rewritten history, Git errors, and publication failures record the
 step as failed and file an observation while the green build continues.
 
+### `[accounts]`
+
+An open map of account name to a strict, nonsecret descriptor. Both account kinds
+use the unmodified Claude Code runtime and the user's own subscription for ordinary
+individual usage. Provision credentials manually on the dispatcher host. Full
+examples, remedies and regional routing are in [billing accounts](references/accounts.md).
+
+| Field | Meaning |
+|---|---|
+| `kind` | `claude-subscription` for a setup-token credential, or `kimi-code` for a membership API key. |
+| `credentialEnv` | Portable dispatcher environment variable identifier, excluding reserved `AB_` control names. |
+| `region` | Kimi only: `overseas` (default) or `china`; endpoint and egress host are selected together. |
+
 ### `[roles]`
 
-An **open map** of role name → `{ runtime?, model?, args?, extensions?, sessionBudgetSeconds?, alternates? }`.
-The three primary axes, session budget, and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
+An **open map** of role name → `{ runtime?, model?, account?, args?, extensions?, sessionBudgetSeconds?, alternates? }`.
+The four primary axes, session budget, and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
 runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
 with a copyable fix and all registered runtime names. Three runtimes ship:
+Named `[accounts]` are deployment-owned nonsecret descriptors, adopted atomically
+with `[roles]`. The `account` axis inherits independently on primary and alternate
+routes. A Claude route defaults to the sole Claude subscription account, and
+ambiguity or incompatible runtimes fail validation. See [billing accounts](references/accounts.md)
+for manual provisioning, Kimi regions, placeholders, renewal and rotation timing.
+
 **`claude`** (local Claude Code CLI), **`codex`** (local Codex CLI; unqualified
 `gpt-*` ids), and **`pi`** (local Pi CLI 0.84.3 or newer; provider-qualified ids
 such as the independent `openai-codex/gpt-5.6-sol` route). Pi runs headlessly
 through RPC and uses that local installation's login and model catalog;
 Autobuild does not install it. `ab models [query]` lists the local catalog, and
 `ab models --available` filters it to configured credentials. Claude and Codex
-delegate an omitted model to their CLI default; Pi declares `kimi-coding/k3`.
+delegate an omitted model to their CLI default; a Claude route selecting a Kimi Code account defaults to `kimi-for-coding`; Pi declares `kimi-coding/k3`.
 Trusted plugins may register additional runtime names;
 they use the same role inheritance, default-model compatibility validation,
 session event attribution, and optional one-shot capability path as builtins.
@@ -947,7 +965,7 @@ release. The repository workflow resolves `harvest` and `harvest-review`. Two
 non-phase judgments use the same runtime/model/args resolver: `slug` optionally
 proposes pre-build naming, and `upgrade` proposes a resolution only when a
 vendored skill merge conflicts. Both are tool-free one-shots and receive the
-role's effective `args`. Missing slug capability uses the deterministic title fallback;
+role's effective `args` and selected account. Missing slug capability uses the deterministic title fallback;
 unavailable upgrade judgment retains the conflict for manual resolution.
 
 A declared key that none of those routes requests is resolved and validated
@@ -963,6 +981,7 @@ consumed by the core `plan` phase, and nothing is reported.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
+| `account` | Named billing account; inherits independently on primaries and alternates. Omission selects the sole Claude subscription account for a Claude route. |
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
 | `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Only model and parsed protocol/output-mode spellings are rejected eagerly. |
 | `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role and directs migration to `args`. |

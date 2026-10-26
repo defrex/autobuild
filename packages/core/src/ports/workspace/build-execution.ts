@@ -107,10 +107,15 @@ export interface BuildExecutionHandle {
  * A command exit without confirmed teardown is not terminal. `ended` carries the observed
  * exit code; `lost` means the provider proved the environment/command no
  * longer exists without an exit code. */
-export type ExecutionObservation =
+export type ExecutionObservation = (
   | { state: 'running' }
   | { state: 'ended'; exitCode?: number }
   | { state: 'lost' }
+) & {
+  /** Actionable host diagnosis, independent of command liveness. Callers must
+   * persist attention without suppressing observation or terminal settlement. */
+  attention?: string
+}
 
 /** The substitutable seam at the workspace boundary. A remote workspace
  * provider may implement this by starting the fixed build process beside its

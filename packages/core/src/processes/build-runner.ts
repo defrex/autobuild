@@ -1,3 +1,4 @@
+import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import {
   capturedBuildConfig,
   refreshVerifyCycle,
@@ -755,6 +756,7 @@ export class BuildRunner {
       runtime: old.runner,
       model: old.model,
       args: old.args ?? [],
+      account: old.account,
       sessionBudgetSeconds: (old.budgetMs ?? resolved.sessionBudgetSeconds * 1000) / 1000,
     }
   }
@@ -908,6 +910,15 @@ export class BuildRunner {
   private boundaryResolver: RuntimeResolver
 
   constructor(private readonly deps: BuildRunnerDeps) {
+    const redactor = accountRedactor(
+      () => this.boundaryConfig?.accounts ?? deps.config.accounts,
+      () => ({
+        ...process.env,
+        ...deps.sessionEnv,
+      }),
+    )
+    deps.store = redactAccountStore(deps.store, redactor)
+
     this.deps = {
       ...deps,
       store: withDrainingExecution(
@@ -926,6 +937,7 @@ export class BuildRunner {
       deps.runtimes,
       deps.config.roles,
       deps.config.policy.sessionBudgetSeconds,
+      deps.config.accounts,
     )
   }
 
@@ -938,6 +950,7 @@ export class BuildRunner {
       this.deps.runtimes,
       config.roles,
       config.policy.sessionBudgetSeconds,
+      config.accounts,
     )
     return config
   }
@@ -2722,6 +2735,7 @@ export class BuildRunner {
         session,
         role: step,
         runner: target.runtime,
+        ...(target.account === undefined ? {} : { account: target.account }),
         ...(target.model !== undefined ? { model: target.model } : {}),
         phase: 'finalize',
         round: 1,
@@ -2734,6 +2748,7 @@ export class BuildRunner {
           session,
           role: step,
           runner: target.runtime,
+          ...(target.account === undefined ? {} : { account: target.account }),
           ...(target.model !== undefined ? { model: target.model } : {}),
           args: [...target.args],
           phase: 'finalize',
@@ -2757,6 +2772,7 @@ export class BuildRunner {
             invocation: slug,
             buildSlug: slug,
             workspacePath,
+            ...(target.account === undefined ? {} : { account: target.account }),
             ...(target.model !== undefined ? { model: target.model } : {}),
             ...(target.args !== undefined ? { args: target.args } : {}),
             env: await this.sessionEnvFor('finalize@1', session, step),
@@ -2835,6 +2851,7 @@ export class BuildRunner {
         index,
         session,
         runner: target.runtime,
+        ...(target.account === undefined ? {} : { account: target.account }),
         ...(target.model !== undefined ? { model: target.model } : {}),
         error: failure.message,
         ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
@@ -2872,6 +2889,7 @@ export class BuildRunner {
       session,
       role: step,
       runner: runnerName,
+      ...(resolved.account === undefined ? {} : { account: resolved.account }),
       ...(model !== undefined ? { model } : {}),
       phase: 'finalize',
       round: 1,
@@ -2885,6 +2903,7 @@ export class BuildRunner {
         session,
         role: step,
         runner: runnerName,
+        ...(resolved.account === undefined ? {} : { account: resolved.account }),
         ...(model !== undefined ? { model } : {}),
         args: [...args],
         phase: 'finalize',
@@ -2905,6 +2924,7 @@ export class BuildRunner {
           invocation: slug,
           buildSlug: slug,
           workspacePath,
+          ...(resolved.account === undefined ? {} : { account: resolved.account }),
           ...(model !== undefined ? { model } : {}),
           ...(args !== undefined ? { args } : {}),
           env: await this.sessionEnvFor('finalize@1', session, step),
@@ -3482,6 +3502,7 @@ export class BuildRunner {
       runtime: primary.runtime,
       model: primary.model,
       args: primary.args,
+      account: primary.account,
     })
     let primaryLive =
       spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
@@ -3507,6 +3528,7 @@ export class BuildRunner {
         session,
         role: spec.role,
         runner: target.runtime,
+        ...(target.account === undefined ? {} : { account: target.account }),
         ...(target.model !== undefined ? { model: target.model } : {}),
         phase: spec.phase,
         round: spec.round,
@@ -3519,6 +3541,7 @@ export class BuildRunner {
           session,
           role: spec.role,
           runner: target.runtime,
+          ...(target.account === undefined ? {} : { account: target.account }),
           ...(target.model !== undefined ? { model: target.model } : {}),
           args: [...target.args],
           phase: spec.phase,
@@ -3554,6 +3577,7 @@ export class BuildRunner {
                 invocation: slug,
                 buildSlug: slug,
                 workspacePath,
+                ...(target.account === undefined ? {} : { account: target.account }),
                 ...(target.model !== undefined ? { model: target.model } : {}),
                 ...(target.args !== undefined ? { args: target.args } : {}),
                 env: await this.sessionEnvFor(spec.abPhase, session),
@@ -3747,6 +3771,7 @@ export class BuildRunner {
         index,
         session,
         runner: target.runtime,
+        ...(target.account === undefined ? {} : { account: target.account }),
         ...(target.model !== undefined ? { model: target.model } : {}),
         error: failure.message,
         ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
@@ -3785,13 +3810,14 @@ export class BuildRunner {
     // the runtime/model on the same payload say what was resolved.
     const resolved = this.resolveSessionRole(spec.role, ...(spec.roleAliases ?? []))
     const { runner, runtime: runnerName, model, args, sessionBudgetSeconds } = resolved
-    const route = JSON.stringify({ runtime: runnerName, model, args })
+    const route = JSON.stringify({ runtime: runnerName, model, args, account: resolved.account })
     // SPEC §9: the stream opens before the bracket's first turn — its id is
     // already known when `session.started` appends.
     const streamBracket = await this.openSessionStream(resolved, {
       session,
       role: spec.role,
       runner: runnerName,
+      ...(resolved.account === undefined ? {} : { account: resolved.account }),
       ...(model !== undefined ? { model } : {}),
       phase: spec.phase,
       round: spec.round,
@@ -3818,6 +3844,7 @@ export class BuildRunner {
         session,
         role: spec.role,
         runner: runnerName,
+        ...(resolved.account === undefined ? {} : { account: resolved.account }),
         ...(model !== undefined ? { model } : {}),
         args: [...args],
         phase: spec.phase,
@@ -3857,6 +3884,7 @@ export class BuildRunner {
           invocation: slug,
           buildSlug: slug,
           workspacePath,
+          ...(resolved.account === undefined ? {} : { account: resolved.account }),
           ...(model !== undefined ? { model } : {}),
           ...(args !== undefined ? { args } : {}),
           env: await this.sessionEnvFor(spec.abPhase, session),
@@ -4229,6 +4257,9 @@ export class BuildRunner {
           )
         : undefined
     return {
+      AB_ACCOUNT_CREDENTIAL_ENVS: JSON.stringify(
+        Object.values(this.boundaryConfig.accounts).map((account) => account.credentialEnv),
+      ),
       AB_STORE: 'local',
       ...this.deps.sessionEnv,
       ...(token ? { AB_TOKEN: token } : {}),
