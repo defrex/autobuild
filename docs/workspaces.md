@@ -47,7 +47,7 @@ Run `bun ab init`, install and authenticate your runtime, then run `bun ab init 
 
 Runs build-runners, agents and checks on remote machines. Install `@defrex/autobuild-vercel-sandbox`, register it in `plugins`, and commit your setup and configuration so remote clones see them. Requires:
 
-- an HTTPS hosted BuildStore
+- a remote store that speaks the remote BuildStore protocol over HTTPS
 - an HTTPS `github.com/owner/repository` origin and `forge = "github"`
 - a push-capable `GITHUB_TOKEN` or `GH_TOKEN` on the dispatcher (a `gh` login isn't enough)
 - `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID` on the dispatcher host

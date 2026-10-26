@@ -28,5 +28,5 @@ function chips(state: SeamState): string {
 export function seamSelector(): string {
   const state = initialState()
   const s = summary(state)
-  return `<div class="seam-selector" data-lean="${lean(s.knob)}"><div class="toggle"><button class="word" type="button" data-set="local" aria-label="Set every seam to local">local</button><button class="track" type="button" data-track aria-label="Move every seam to remote"><span class="rail"></span><span class="knob" style="left: ${knobLeft(s.knob)}"></span></button><button class="word" type="button" data-set="remote" aria-label="Set every seam to remote">remote</button><span role="status" class="dim" data-status>${s.label}</span></div><div class="seams">${chips(state)}</div></div>`
+  return `<div class="seam-selector" data-lean="${lean(s.knob)}"><div class="toggle"><button class="word" type="button" data-set="local" aria-label="Set switchable seams to local">local</button><button class="track" type="button" data-track aria-label="Move switchable seams to remote"><span class="rail"></span><span class="knob" style="left: ${knobLeft(s.knob)}"></span></button><button class="word" type="button" data-set="remote" aria-label="Set switchable seams to remote">remote</button><span role="status" class="dim" data-status>${s.label}</span></div><div class="seams">${chips(state)}</div></div>`
 }

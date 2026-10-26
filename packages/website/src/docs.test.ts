@@ -111,10 +111,28 @@ test('docs renderer escapes page metadata', () => {
   expect(html).toContain('content="&quot;&lt;text&gt;&amp;"')
 })
 
-test('published pages link only within the site, and feature guides are text-only', () => {
+test('published pages keep navigation on-site and link only declared repository references', () => {
+  const references = new Map([
+    [
+      'docs/dispatcher-hosting.md',
+      ['docs/setup.md#running-the-dispatcher-without-a-checkout-origin-mode'],
+    ],
+    ['docs/operating.md', ['docs/operator-api.md']],
+    [
+      'docs/troubleshooting.md',
+      ['docs/remote-store-protocol.md#7-authentication-and-project-authority'],
+    ],
+  ])
   for (const page of DOCS_PAGES) {
-    expect(page.content, page.source).not.toContain(`${REPO_URL}/blob/`)
-    expect(page.content, page.source).not.toContain(`${REPO_URL}/tree/`)
+    const expected = (references.get(page.source) ?? []).map(
+      (path) => `${REPO_URL}/blob/main/${path}`,
+    )
+    const actual = [...page.content.matchAll(/href="([^"]+)"/g)]
+      .map((match) => match[1]!)
+      .filter(
+        (href) => href.startsWith(`${REPO_URL}/blob/`) || href.startsWith(`${REPO_URL}/tree/`),
+      )
+    expect(actual, page.source).toEqual(expected)
   }
   for (const page of DOCS_PAGES.slice(2))
     expect(page.content).not.toMatch(/<figure|<svg|<img|<script/)
@@ -223,4 +241,26 @@ test('seam overview reuses the selector and links every seam guide', async () =>
   }
   const seams = files[overview.file]!
   expect(seams.indexOf('</article>')).toBeLessThan(seams.indexOf('class="seam-selector"'))
+})
+
+test('retired server documentation has no source, route or link in the site', async () => {
+  const files = await buildFiles()
+  for (const slug of [
+    'hosted-service',
+    'hosted-dispatcher',
+    'hosted-dispatcher-cutover-validation',
+    'mcp',
+  ]) {
+    expect(await Bun.file(join(import.meta.dir, '../../../docs', `${slug}.md`)).exists()).toBe(
+      false,
+    )
+    expect(DOCS_PAGES.some((page) => page.path === `/docs/${slug}/`)).toBe(false)
+    expect(files[`docs/${slug}/index.html`]).toBeUndefined()
+    for (const content of Object.values(files)) {
+      if (typeof content !== 'string') continue
+      expect(content).not.toMatch(
+        new RegExp(`(?:href|src)=["'][^"']*(?:/docs/${slug}/|(?:^|/)${slug}\\.md)`),
+      )
+    }
+  }
 })
