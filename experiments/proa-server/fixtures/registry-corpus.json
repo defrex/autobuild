@@ -1,7 +1,20 @@
 {
-  "sourceHash": "c1704425300bbe8fcf228a59e7d2dc8a6faa9fa2d4c0f2c7ef63c065b68b4c3f",
+  "sourceHash": "3f5d393565f66679ffdbdcde297791c26c74517e4ae9a3aa7b47f269846b17a0",
   "clock": "2026-09-02T00:00:00.000Z",
   "schemas": {
+    "merges.list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository identity as the store keys it: the checkout\u2019s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+        }
+      },
+      "required": ["repo"],
+      "additionalProperties": false
+    },
     "landings.list": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -159,8 +172,8 @@
         },
         "action": {
           "type": "string",
-          "enum": ["pause", "cancel-pause", "resume", "land", "hold", "abort", "discard"],
-          "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"land\" for landing consent or \"hold\" to withdraw consent \u2014 or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
+          "enum": ["pause", "cancel-pause", "resume", "merge", "land", "hold", "abort", "discard"],
+          "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"merge\" (deprecated alias \"land\") for merge consent or \"hold\" to withdraw consent \u2014 or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
         }
       },
       "required": ["repo", "slug", "action"],
@@ -740,6 +753,169 @@
     }
   },
   "cases": [
+    {
+      "name": "merges.list",
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": null,
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received null\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": [],
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received array\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {},
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"repo\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets"
+      },
+      "output": {
+        "repo": "acme/widgets"
+      }
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "extra": "unknown"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"slug\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "scope": "unknown"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"scope\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"scope\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "action": "pause"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"action\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"action\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "resolution": "retry",
+        "slug": "missing",
+        "text": "forbidden"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"slug\",\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"slug\\\", \\\"text\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "cursor": 0,
+        "slug": "missing"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"slug\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"slug\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "document": "notes\nbytes"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"document\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"document\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "expectedRevision": " ",
+        "id": "missing"
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"expectedRevision\",\n      \"id\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"expectedRevision\\\", \\\"id\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": null
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": -1
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 31
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "cursor": 0,
+        "waitSeconds": 1.5
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "kind": "spec",
+        "rev": -1
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "slug": "missing",
+        "resolution": "review-round-ceiling",
+        "ceiling": 9007199254740992
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"slug\",\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"slug\\\", \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets",
+        "id": "missing",
+        "target": 3
+      },
+      "error": "invalid input for tool \"merges.list\": [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+    },
     {
       "name": "landings.list",
       "error": "invalid input for tool \"landings.list\": [\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received undefined\"\n  }\n]"
@@ -1902,14 +2078,14 @@
     {
       "name": "builds.control",
       "input": {},
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"repo\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"repo\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
       "input": {
         "repo": "acme/widgets"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1917,7 +2093,7 @@
         "repo": "acme/widgets",
         "extra": "unknown"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1925,7 +2101,7 @@
         "repo": "acme/widgets",
         "slug": "missing"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1933,7 +2109,7 @@
         "repo": "acme/widgets",
         "scope": "unknown"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"scope\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"scope\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"scope\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"scope\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1951,7 +2127,7 @@
         "slug": "missing",
         "text": "forbidden"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"text\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"text\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"text\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1960,7 +2136,7 @@
         "cursor": 0,
         "slug": "missing"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1968,7 +2144,7 @@
         "repo": "acme/widgets",
         "document": "notes\nbytes"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"document\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"document\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"document\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"document\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1977,7 +2153,7 @@
         "expectedRevision": " ",
         "id": "missing"
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"expectedRevision\",\n      \"id\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"expectedRevision\\\", \\\"id\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"expectedRevision\",\n      \"id\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"expectedRevision\\\", \\\"id\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1986,7 +2162,7 @@
         "id": "missing",
         "target": null
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -1995,7 +2171,7 @@
         "slug": "missing",
         "cursor": -1
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"cursor\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -2005,7 +2181,7 @@
         "cursor": 0,
         "waitSeconds": 31
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -2015,7 +2191,7 @@
         "cursor": 0,
         "waitSeconds": 1.5
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"cursor\",\n      \"waitSeconds\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"cursor\\\", \\\"waitSeconds\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -2025,7 +2201,7 @@
         "kind": "spec",
         "rev": -1
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"kind\",\n      \"rev\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"kind\\\", \\\"rev\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -2035,7 +2211,7 @@
         "resolution": "review-round-ceiling",
         "ceiling": 9007199254740992
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"resolution\",\n      \"ceiling\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"resolution\\\", \\\"ceiling\\\"\"\n  }\n]"
     },
     {
       "name": "builds.control",
@@ -2044,7 +2220,7 @@
         "id": "missing",
         "target": 3
       },
-      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
+      "error": "invalid input for tool \"builds.control\": [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"slug\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"pause\",\n      \"cancel-pause\",\n      \"resume\",\n      \"merge\",\n      \"land\",\n      \"hold\",\n      \"abort\",\n      \"discard\"\n    ],\n    \"path\": [\n      \"action\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"pause\\\"|\\\"cancel-pause\\\"|\\\"resume\\\"|\\\"merge\\\"|\\\"land\\\"|\\\"hold\\\"|\\\"abort\\\"|\\\"discard\\\"\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"id\",\n      \"target\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"id\\\", \\\"target\\\"\"\n  }\n]"
     },
     {
       "name": "builds.answer",
@@ -4827,6 +5003,20 @@
     },
     {
       "name": "builds.list",
+      "input": {
+        "repo": "acme/widgets"
+      },
+      "result": []
+    },
+    {
+      "name": "merges.list",
+      "input": {
+        "repo": "acme/widgets"
+      },
+      "result": []
+    },
+    {
+      "name": "landings.list",
       "input": {
         "repo": "acme/widgets"
       },

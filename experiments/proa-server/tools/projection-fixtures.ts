@@ -126,6 +126,21 @@ export function generateProjection() {
         },
         { ...attached, build: slug, seq: 2 },
       ] as unknown as AbEvent[]
+      if (slug === 'root-work') {
+        const sha = 'a'.repeat(40)
+        for (const [type, payload] of [
+          ['target.moved', { branch: 'main', sha }],
+          ['target.distance', { branch: 'main', sha, head: 'b'.repeat(40), count: 7 }],
+        ] as const)
+          events.push({
+            build: slug!,
+            seq: events.length + 1,
+            ts: clock,
+            actor: { kind: 'dispatcher' },
+            type,
+            payload,
+          } as AbEvent)
+      }
       if (slug === 'root') {
         const observed = witnessEvent(
           'build',

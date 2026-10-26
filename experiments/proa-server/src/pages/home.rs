@@ -44,6 +44,7 @@ struct RowView {
     href: String,
     depth: String,
     landing: Value,
+    target_label: String,
     steps: Vec<StepView>,
     pr_href: String,
     pr_label: String,
@@ -159,7 +160,7 @@ impl HomePage {
                 let child_counts = if row["integrationRow"].is_object() {
                     if counts["known"] == true {
                         format!(
-                            "{}/{} landed · {} building · {} queued",
+                            "{}/{} merged · {} building · {} queued",
                             counts["landed"], counts["total"], counts["building"], counts["queued"]
                         )
                     } else {
@@ -191,6 +192,18 @@ impl HomePage {
                     ),
                     depth: row["depth"].as_u64().unwrap_or(0).to_string(),
                     landing: proa_server::dashboard::landing::policy(&row["landing"]),
+                    target_label: {
+                        let suffix = row["integrationRow"]["parentDistance"]
+                            .as_str()
+                            .or(row["targetDistance"].as_str())
+                            .unwrap_or("+?");
+                        format!(
+                            "{}{}{}",
+                            text(&row["target"]),
+                            if suffix.is_empty() { "" } else { " " },
+                            suffix
+                        )
+                    },
                     steps,
                 }
             })
@@ -401,8 +414,8 @@ impl<L: DataLoader> WebRenderSync<L> for RowNode<'_> {
                         " · "
                         {text(&row["kind"])}
                         " · target "
-                        {text(&row["target"])}
-                        " · landing "
+                        {view.target_label.as_str()}
+                        " · merge "
                         {text(&view.landing)}
                     </p>
                     {RowTokens(view)}

@@ -119,6 +119,7 @@
     "pr.closed": ["dispatcher"],
     "pr.conflicted": ["dispatcher"],
     "reconcile.progress-checked": ["kernel"],
+    "target.distance": ["dispatcher"],
     "target.moved": ["dispatcher", "kernel"],
     "restack.prepared": ["kernel", "dispatcher"],
     "restack.replayed": ["kernel", "dispatcher"],

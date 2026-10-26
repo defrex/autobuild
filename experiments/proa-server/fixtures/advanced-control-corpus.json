@@ -1,7 +1,7 @@
 {
   "format": 1,
   "clock": "2026-09-02T00:00:00.000Z",
-  "sourceHash": "c52c0d2f56fc0a02a216b04a3451ad079172c6bda702f2d184c6585ebf8c05ac",
+  "sourceHash": "cec078fcdc46253bcf116ad99fc4f22a0933619316f81547a9c9a299a009e0be",
   "bindings": {
     "snapshot": "Generated ticket-snapshot UUIDs bound in deposit order",
     "manifestHash": "SHA256 of gzip manifest containing bound UUIDs; actual hash independently checked against bytes before binding"
@@ -19,7 +19,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -66,7 +65,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -1245,7 +1245,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -1292,7 +1291,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -2470,7 +2470,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -2517,7 +2516,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -4043,7 +4043,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -4090,7 +4089,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -5580,7 +5580,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -5627,7 +5626,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -6360,7 +6360,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -6407,7 +6406,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -7534,7 +7534,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -7581,7 +7580,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -8131,7 +8131,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -8178,7 +8177,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -8870,7 +8870,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -8917,7 +8916,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -9617,7 +9617,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -9664,7 +9663,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -10397,7 +10397,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -10444,7 +10443,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -11163,7 +11163,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -11210,7 +11209,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -11896,7 +11896,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -11943,7 +11942,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -12408,7 +12408,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -12455,7 +12454,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": false,
       "tickets": [
@@ -13069,7 +13069,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -13116,7 +13115,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -13808,7 +13808,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -13855,7 +13854,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [
@@ -14487,7 +14487,6 @@
         "ticketScanIntervalSeconds": 60,
         "forge": "github",
         "plugins": [],
-        "landing": [],
         "workspace": {
           "provider": "git-worktree",
           "config": {}
@@ -14534,7 +14533,8 @@
           "claimedState": "doing",
           "doneState": "done",
           "triageState": "triage"
-        }
+        },
+        "landing": []
       },
       "ticketBackend": true,
       "tickets": [

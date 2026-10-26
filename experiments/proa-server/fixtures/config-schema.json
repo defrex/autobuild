@@ -1,8 +1,8 @@
 {
   "format": 1,
   "source": {
-    "config/schema.ts": "ffa839733541abbee21326a776f5eb08a80ac111f87b7073a992d9f8b61fa759",
-    "config/landing.ts": "3448156ab099cca9282f819cc0f2926243193549c7c6d73b7b7a178a9c519fc2",
+    "config/schema.ts": "5c536a83ce5066641358f04774ab892bae3593494635d2a93b5291e13dba79fe",
+    "config/landing.ts": "38576588b402bc18916657dbe7ef038253a7c0e5cf35cd946d67b27ae34ca60f",
     "config/roles.ts": "e126da778a1102eae56f9afa71a6a3549559edb5bb5df2dacacaf71f9498bc76",
     "config/reference-metadata.ts": "b597b3d526329e0990fac6673d93374e4b88f12865991f5f3352875910025a89",
     "connection.ts": "ebebdad022f49a5492ad38dc7baa8051a5a737b51f3aa04846aebd084d815a75",
@@ -13,437 +13,108 @@
     "ports/workspace/provider-capabilities.ts": "47578ab79dc91b8f3c61f91d26f103f977eae081cc522efc866af90414ea3729"
   },
   "grammar": {
-    "type": "object",
-    "properties": {
-      "store": {
-        "type": "optional",
-        "inner": {
-          "type": "object",
-          "properties": {
-            "url": {
-              "type": "pipe",
-              "input": {
-                "type": "string"
-              },
-              "transform": "service-url",
-              "source": "(value, ctx) => {\n    try {\n      return normalizeServiceURL(value);\n    } catch (error) {\n      ctx.addIssue({ code: \"custom\", message: error.message });\n      return z.NEVER;\n    }\n  }"
-            }
-          },
-          "strict": true
-        }
-      },
-      "upgrade": {
-        "type": "prefault",
-        "inner": {
-          "type": "object",
-          "properties": {
-            "automatic": {
-              "type": "default",
-              "inner": {
-                "type": "boolean"
-              },
-              "default": true
-            }
-          },
-          "strict": true
-        },
-        "default": {}
-      },
-      "baseBranch": {
-        "type": "default",
-        "inner": {
-          "type": "string",
-          "checks": [
-            {
-              "op": "min_length",
-              "minimum": 1
-            }
-          ]
-        },
-        "default": "main"
-      },
-      "capacity": {
-        "type": "default",
-        "inner": {
-          "type": "number",
-          "checks": [
-            {
-              "op": "number_format",
-              "format": "safeint"
-            },
-            {
-              "op": "greater_than",
-              "value": 0,
-              "inclusive": false
-            }
-          ]
-        },
-        "default": 1
-      },
-      "ticketScanIntervalSeconds": {
-        "type": "default",
-        "inner": {
-          "type": "number",
-          "checks": [
-            {
-              "op": "number_format",
-              "format": "safeint"
-            },
-            {
-              "op": "greater_than",
-              "value": 0,
-              "inclusive": false
-            }
-          ]
-        },
-        "default": 60
-      },
-      "forge": {
-        "type": "default",
-        "inner": {
-          "type": "string",
-          "checks": [
-            {
-              "op": "nonblank",
-              "error": "forge adapter name must be nonblank",
-              "source": "(value) => value.trim().length > 0"
-            }
-          ]
-        },
-        "default": "github"
-      },
-      "plugins": {
-        "type": "default",
-        "inner": {
-          "type": "array",
-          "element": {
-            "type": "string",
-            "checks": [
-              {
-                "op": "nonblank",
-                "error": "plugin module specifiers must be nonblank",
-                "source": "(value) => value.trim().length > 0"
-              }
-            ]
-          }
-        },
-        "default": []
-      },
-      "landing": {
-        "type": "default",
-        "inner": {
-          "type": "array",
-          "element": {
+    "type": "pipe",
+    "input": {
+      "type": "object",
+      "properties": {
+        "store": {
+          "type": "optional",
+          "inner": {
             "type": "object",
             "properties": {
-              "into": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "nonblank",
-                      "error": "into must be root, node, or a nonblank node ticket id",
-                      "source": "(value) => value.trim().length > 0"
-                    }
-                  ]
-                }
-              },
-              "from": {
-                "type": "optional",
-                "inner": {
-                  "type": "enum",
-                  "values": ["leaf", "node"]
-                }
-              },
-              "label": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "nonblank",
-                      "error": "label must be nonblank (labels match exactly, including case)",
-                      "source": "(value) => value.trim().length > 0"
-                    }
-                  ]
-                }
-              },
-              "mode": {
-                "type": "enum",
-                "values": ["auto", "consent"]
+              "url": {
+                "type": "pipe",
+                "input": {
+                  "type": "string"
+                },
+                "transform": "service-url",
+                "source": "(value, ctx) => {\n    try {\n      return normalizeServiceURL(value);\n    } catch (error) {\n      ctx.addIssue({ code: \"custom\", message: error.message });\n      return z.NEVER;\n    }\n  }"
               }
             },
             "strict": true
           }
         },
-        "default": []
-      },
-      "pr": {
-        "type": "optional",
-        "inner": {
-          "type": "object",
-          "properties": {
-            "imageHost": {
-              "type": "optional",
-              "inner": {
-                "type": "object",
-                "properties": {
-                  "provider": {
-                    "type": "literal",
-                    "values": ["github-release"]
-                  },
-                  "repository": {
-                    "type": "string",
-                    "checks": [
-                      {
-                        "op": "string_format",
-                        "error": "expected exactly one non-blank GitHub repository pair in \"owner/repo\" form",
-                        "format": "regex",
-                        "pattern": "^[^/\\s]+\\/[^/\\s]+$",
-                        "patternDisplay": "/^[^/\\s]+\\/[^/\\s]+$/"
-                      }
-                    ]
-                  },
-                  "releaseId": {
-                    "type": "number",
-                    "checks": [
-                      {
-                        "op": "number_format",
-                        "format": "safeint"
-                      },
-                      {
-                        "op": "greater_than",
-                        "value": 0,
-                        "inclusive": false
-                      }
-                    ]
-                  }
+        "upgrade": {
+          "type": "prefault",
+          "inner": {
+            "type": "object",
+            "properties": {
+              "automatic": {
+                "type": "default",
+                "inner": {
+                  "type": "boolean"
                 },
-                "strict": true
+                "default": true
               }
-            }
-          },
-          "strict": true
-        }
-      },
-      "workspace": {
-        "type": "prefault",
-        "inner": {
-          "type": "object",
-          "properties": {
-            "provider": {
-              "type": "default",
-              "inner": {
-                "type": "string",
-                "checks": [
-                  {
-                    "op": "nonblank",
-                    "error": "[workspace].provider must be a nonblank provider name",
-                    "source": "(value) => value.trim().length > 0"
-                  }
-                ]
-              },
-              "default": "git-worktree"
             },
-            "config": {
-              "type": "map",
-              "label": "[workspace.config]",
-              "keys": "any",
-              "value": {
-                "type": "unknown"
-              }
-            }
+            "strict": true
           },
-          "strict": true
+          "default": {}
         },
-        "default": {}
-      },
-      "commands": {
-        "type": "map",
-        "label": "[commands]",
-        "keys": "nonempty",
-        "value": {
-          "type": "string",
-          "checks": [
-            {
-              "op": "min_length",
-              "minimum": 1
-            }
-          ]
-        }
-      },
-      "verify": {
-        "type": "steps",
-        "label": "[verify]",
-        "steps": {
+        "baseBranch": {
           "type": "default",
           "inner": {
-            "type": "array",
-            "element": {
-              "type": "union",
-              "options": [
-                {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
-                },
-                {
-                  "type": "array",
-                  "element": {
-                    "type": "string",
-                    "checks": [
-                      {
-                        "op": "min_length",
-                        "minimum": 1
-                      }
-                    ]
-                  },
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "error": "verify stage must not be empty",
-                      "minimum": 1
-                    }
-                  ]
-                }
-              ]
-            }
+            "type": "string",
+            "checks": [
+              {
+                "op": "min_length",
+                "minimum": 1
+              }
+            ]
           },
-          "default": []
+          "default": "main"
         },
-        "table": {
-          "type": "union",
-          "options": [
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "literal",
-                  "values": ["check"]
-                },
-                "command": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
-                },
-                "failFast": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "boolean"
-                  }
-                },
-                "afterReconcile": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "boolean"
-                  }
-                },
-                "paths": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "array",
-                    "element": {
-                      "type": "string",
-                      "checks": [
-                        {
-                          "op": "path-glob"
-                        }
-                      ]
-                    },
-                    "checks": [
-                      {
-                        "op": "min_length",
-                        "error": "paths must contain at least one repository-relative glob",
-                        "minimum": 1
-                      }
-                    ]
-                  }
-                },
-                "always": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "boolean"
-                  }
-                }
+        "capacity": {
+          "type": "default",
+          "inner": {
+            "type": "number",
+            "checks": [
+              {
+                "op": "number_format",
+                "format": "safeint"
               },
-              "strict": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "literal",
-                  "values": ["agent"]
-                },
-                "skill": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
-                },
-                "failFast": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "boolean"
-                  }
-                },
-                "afterReconcile": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "boolean"
-                  }
-                },
-                "paths": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "array",
-                    "element": {
-                      "type": "string",
-                      "checks": [
-                        {
-                          "op": "path-glob"
-                        }
-                      ]
-                    },
-                    "checks": [
-                      {
-                        "op": "min_length",
-                        "error": "paths must contain at least one repository-relative glob",
-                        "minimum": 1
-                      }
-                    ]
-                  }
-                },
-                "always": {
-                  "type": "optional",
-                  "inner": {
-                    "type": "boolean"
-                  }
-                }
-              },
-              "strict": true
-            }
-          ],
-          "discriminator": "kind"
+              {
+                "op": "greater_than",
+                "value": 0,
+                "inclusive": false
+              }
+            ]
+          },
+          "default": 1
         },
-        "afterReconcile": true
-      },
-      "finalize": {
-        "type": "steps",
-        "label": "[finalize]",
-        "steps": {
+        "ticketScanIntervalSeconds": {
+          "type": "default",
+          "inner": {
+            "type": "number",
+            "checks": [
+              {
+                "op": "number_format",
+                "format": "safeint"
+              },
+              {
+                "op": "greater_than",
+                "value": 0,
+                "inclusive": false
+              }
+            ]
+          },
+          "default": 60
+        },
+        "forge": {
+          "type": "default",
+          "inner": {
+            "type": "string",
+            "checks": [
+              {
+                "op": "nonblank",
+                "error": "forge adapter name must be nonblank",
+                "source": "(value) => value.trim().length > 0"
+              }
+            ]
+          },
+          "default": "github"
+        },
+        "plugins": {
           "type": "default",
           "inner": {
             "type": "array",
@@ -451,509 +122,140 @@
               "type": "string",
               "checks": [
                 {
-                  "op": "min_length",
-                  "error": "finalize.steps entries must be nonempty step names",
-                  "minimum": 1
+                  "op": "nonblank",
+                  "error": "plugin module specifiers must be nonblank",
+                  "source": "(value) => value.trim().length > 0"
                 }
               ]
             }
           },
           "default": []
         },
-        "table": {
-          "type": "union",
-          "options": [
-            {
+        "merge": {
+          "type": "optional",
+          "inner": {
+            "type": "array",
+            "element": {
               "type": "object",
               "properties": {
-                "kind": {
-                  "type": "literal",
-                  "values": ["check"]
+                "into": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "nonblank",
+                        "error": "into must be root, node, or a nonblank node ticket id",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
                 },
-                "command": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
-                }
-              },
-              "strict": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "literal",
-                  "values": ["agent"]
+                "from": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "enum",
+                    "values": ["leaf", "node"]
+                  }
                 },
-                "skill": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
+                "label": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "nonblank",
+                        "error": "label must be nonblank (labels match exactly, including case)",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "mode": {
+                  "type": "enum",
+                  "values": ["auto", "consent"]
                 }
               },
               "strict": true
             }
-          ],
-          "discriminator": "kind"
+          }
         },
-        "afterReconcile": false
-      },
-      "roles": {
-        "type": "map",
-        "label": "[roles]",
-        "keys": "nonempty",
-        "value": {
-          "type": "object",
-          "properties": {
-            "runtime": {
-              "type": "optional",
-              "inner": {
-                "type": "string",
-                "checks": [
-                  {
-                    "op": "min_length",
-                    "minimum": 1
+        "landing": {
+          "type": "optional",
+          "inner": {
+            "type": "array",
+            "element": {
+              "type": "object",
+              "properties": {
+                "into": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "nonblank",
+                        "error": "into must be root, node, or a nonblank node ticket id",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
                   }
-                ]
-              }
-            },
-            "model": {
-              "type": "optional",
-              "inner": {
-                "type": "string",
-                "checks": [
-                  {
-                    "op": "min_length",
-                    "minimum": 1
+                },
+                "from": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "enum",
+                    "values": ["leaf", "node"]
                   }
-                ]
-              }
-            },
-            "args": {
-              "type": "optional",
-              "inner": {
-                "type": "array",
-                "element": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
+                },
+                "label": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "nonblank",
+                        "error": "label must be nonblank (labels match exactly, including case)",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "mode": {
+                  "type": "enum",
+                  "values": ["auto", "consent"]
                 }
-              }
-            },
-            "extensions": {
-              "type": "optional",
-              "inner": {
-                "type": "array",
-                "element": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
-                }
-              }
-            },
-            "sessionBudgetSeconds": {
-              "type": "optional",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              }
-            },
-            "alternates": {
-              "type": "optional",
-              "inner": {
-                "type": "array",
-                "element": {
+              },
+              "strict": true
+            }
+          }
+        },
+        "pr": {
+          "type": "optional",
+          "inner": {
+            "type": "object",
+            "properties": {
+              "imageHost": {
+                "type": "optional",
+                "inner": {
                   "type": "object",
                   "properties": {
-                    "runtime": {
-                      "type": "optional",
-                      "inner": {
-                        "type": "string",
-                        "checks": [
-                          {
-                            "op": "min_length",
-                            "minimum": 1
-                          }
-                        ]
-                      }
+                    "provider": {
+                      "type": "literal",
+                      "values": ["github-release"]
                     },
-                    "model": {
-                      "type": "optional",
-                      "inner": {
-                        "type": "string",
-                        "checks": [
-                          {
-                            "op": "min_length",
-                            "minimum": 1
-                          }
-                        ]
-                      }
-                    },
-                    "args": {
-                      "type": "optional",
-                      "inner": {
-                        "type": "array",
-                        "element": {
-                          "type": "string",
-                          "checks": [
-                            {
-                              "op": "min_length",
-                              "minimum": 1
-                            }
-                          ]
+                    "repository": {
+                      "type": "string",
+                      "checks": [
+                        {
+                          "op": "string_format",
+                          "error": "expected exactly one non-blank GitHub repository pair in \"owner/repo\" form",
+                          "format": "regex",
+                          "pattern": "^[^/\\s]+\\/[^/\\s]+$",
+                          "patternDisplay": "/^[^/\\s]+\\/[^/\\s]+$/"
                         }
-                      }
+                      ]
                     },
-                    "extensions": {
-                      "type": "optional",
-                      "inner": {
-                        "type": "array",
-                        "element": {
-                          "type": "string",
-                          "checks": [
-                            {
-                              "op": "min_length",
-                              "minimum": 1
-                            }
-                          ]
-                        }
-                      }
-                    }
-                  },
-                  "strict": true
-                }
-              }
-            }
-          },
-          "strict": true
-        }
-      },
-      "policy": {
-        "type": "prefault",
-        "inner": {
-          "type": "object",
-          "properties": {
-            "upgradeDrainSeconds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 900
-            },
-            "sessionBudgetSeconds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 3600
-            },
-            "stallRounds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 3
-            },
-            "maxVerifyAttempts": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 3
-            },
-            "maxDispatchAttempts": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 3
-            },
-            "maxSetupAttempts": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 3
-            },
-            "maxInfrastructureAttempts": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 3
-            },
-            "maxReconcileAttempts": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 3
-            },
-            "maxReviewRounds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 6
-            },
-            "harvestThreshold": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 5
-            },
-            "janitorFailureAttentionSeconds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 600
-            },
-            "nodeIdleAfterSeconds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 600
-            },
-            "nodeIdlePollSeconds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 120
-            },
-            "janitorBackoffMaxSeconds": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": false
-                  }
-                ]
-              },
-              "default": 300
-            },
-            "harvestMaxDrift": {
-              "type": "default",
-              "inner": {
-                "type": "number",
-                "checks": [
-                  {
-                    "op": "number_format",
-                    "format": "safeint"
-                  },
-                  {
-                    "op": "greater_than",
-                    "value": 0,
-                    "inclusive": true
-                  }
-                ]
-              },
-              "default": 3
-            }
-          },
-          "strict": true
-        },
-        "default": {}
-      },
-      "orchestrator": {
-        "type": "prefault",
-        "inner": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "default",
-              "inner": {
-                "type": "boolean"
-              },
-              "default": false
-            },
-            "sandbox": {
-              "type": "prefault",
-              "inner": {
-                "type": "object",
-                "properties": {
-                  "idleMinutes": {
-                    "type": "default",
-                    "inner": {
+                    "releaseId": {
                       "type": "number",
                       "checks": [
                         {
@@ -966,59 +268,326 @@
                           "inclusive": false
                         }
                       ]
-                    },
-                    "default": 30
+                    }
                   },
-                  "environmentVariables": {
-                    "type": "default",
+                  "strict": true
+                }
+              }
+            },
+            "strict": true
+          }
+        },
+        "workspace": {
+          "type": "prefault",
+          "inner": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "default",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "nonblank",
+                      "error": "[workspace].provider must be a nonblank provider name",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                },
+                "default": "git-worktree"
+              },
+              "config": {
+                "type": "map",
+                "label": "[workspace.config]",
+                "keys": "any",
+                "value": {
+                  "type": "unknown"
+                }
+              }
+            },
+            "strict": true
+          },
+          "default": {}
+        },
+        "commands": {
+          "type": "map",
+          "label": "[commands]",
+          "keys": "nonempty",
+          "value": {
+            "type": "string",
+            "checks": [
+              {
+                "op": "min_length",
+                "minimum": 1
+              }
+            ]
+          }
+        },
+        "verify": {
+          "type": "steps",
+          "label": "[verify]",
+          "steps": {
+            "type": "default",
+            "inner": {
+              "type": "array",
+              "element": {
+                "type": "union",
+                "options": [
+                  {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "element": {
+                      "type": "string",
+                      "checks": [
+                        {
+                          "op": "min_length",
+                          "minimum": 1
+                        }
+                      ]
+                    },
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "error": "verify stage must not be empty",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "default": []
+          },
+          "table": {
+            "type": "union",
+            "options": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "literal",
+                    "values": ["check"]
+                  },
+                  "command": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  },
+                  "failFast": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "boolean"
+                    }
+                  },
+                  "afterReconcile": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "boolean"
+                    }
+                  },
+                  "paths": {
+                    "type": "optional",
                     "inner": {
                       "type": "array",
                       "element": {
                         "type": "string",
                         "checks": [
                           {
-                            "op": "min_length",
-                            "minimum": 1
+                            "op": "path-glob"
                           }
                         ]
-                      }
-                    },
-                    "default": []
+                      },
+                      "checks": [
+                        {
+                          "op": "min_length",
+                          "error": "paths must contain at least one repository-relative glob",
+                          "minimum": 1
+                        }
+                      ]
+                    }
+                  },
+                  "always": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "boolean"
+                    }
                   }
                 },
                 "strict": true
               },
-              "default": {}
-            }
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "literal",
+                    "values": ["agent"]
+                  },
+                  "skill": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  },
+                  "failFast": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "boolean"
+                    }
+                  },
+                  "afterReconcile": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "boolean"
+                    }
+                  },
+                  "paths": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "array",
+                      "element": {
+                        "type": "string",
+                        "checks": [
+                          {
+                            "op": "path-glob"
+                          }
+                        ]
+                      },
+                      "checks": [
+                        {
+                          "op": "min_length",
+                          "error": "paths must contain at least one repository-relative glob",
+                          "minimum": 1
+                        }
+                      ]
+                    }
+                  },
+                  "always": {
+                    "type": "optional",
+                    "inner": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "strict": true
+              }
+            ],
+            "discriminator": "kind"
           },
-          "strict": true
+          "afterReconcile": true
         },
-        "default": {}
-      },
-      "tickets": {
-        "type": "prefault",
-        "inner": {
-          "type": "pipe",
-          "input": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "optional",
-                "inner": {
-                  "type": "string"
-                }
-              },
-              "source": {
+        "finalize": {
+          "type": "steps",
+          "label": "[finalize]",
+          "steps": {
+            "type": "default",
+            "inner": {
+              "type": "array",
+              "element": {
                 "type": "string",
                 "checks": [
                   {
-                    "op": "nonblank",
-                    "error": "[tickets].source must be a nonblank builtin or plugin ticket source name",
-                    "source": "(value) => value.trim().length > 0"
+                    "op": "min_length",
+                    "error": "finalize.steps entries must be nonempty step names",
+                    "minimum": 1
                   }
                 ]
+              }
+            },
+            "default": []
+          },
+          "table": {
+            "type": "union",
+            "options": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "literal",
+                    "values": ["check"]
+                  },
+                  "command": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                },
+                "strict": true
               },
-              "readyLabels": {
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "literal",
+                    "values": ["agent"]
+                  },
+                  "skill": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                },
+                "strict": true
+              }
+            ],
+            "discriminator": "kind"
+          },
+          "afterReconcile": false
+        },
+        "roles": {
+          "type": "map",
+          "label": "[roles]",
+          "keys": "nonempty",
+          "value": {
+            "type": "object",
+            "properties": {
+              "runtime": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              },
+              "model": {
+                "type": "optional",
+                "inner": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                }
+              },
+              "args": {
                 "type": "optional",
                 "inner": {
                   "type": "array",
@@ -1033,159 +602,643 @@
                   }
                 }
               },
-              "readyState": {
+              "extensions": {
                 "type": "optional",
                 "inner": {
-                  "type": "string",
-                  "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
-                  "checks": [
-                    {
-                      "op": "nonblank",
-                      "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
-                      "source": "(s) => s.trim().length > 0"
-                    }
-                  ]
+                  "type": "array",
+                  "element": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  }
                 }
               },
-              "readyAssignee": {
+              "sessionBudgetSeconds": {
                 "type": "optional",
                 "inner": {
-                  "type": "string",
+                  "type": "number",
                   "checks": [
                     {
-                      "op": "assignee",
-                      "error": "[tickets].readyAssignee must be \"me\" (the owner of the API key) or a user email address (e.g. \"person@example.com\")",
-                      "source": "(s) => s === \"me\" || s === s.trim() && /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(s)"
-                    }
-                  ]
-                }
-              },
-              "teamKey": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
-                }
-              },
-              "claimedState": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
+                      "op": "number_format",
+                      "format": "safeint"
                     },
                     {
-                      "op": "nonblank",
-                      "error": "state must be nonblank",
-                      "source": "(value) => value.trim().length > 0"
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
                     }
                   ]
                 }
               },
-              "doneState": {
+              "alternates": {
                 "type": "optional",
                 "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
+                  "type": "array",
+                  "element": {
+                    "type": "object",
+                    "properties": {
+                      "runtime": {
+                        "type": "optional",
+                        "inner": {
+                          "type": "string",
+                          "checks": [
+                            {
+                              "op": "min_length",
+                              "minimum": 1
+                            }
+                          ]
+                        }
+                      },
+                      "model": {
+                        "type": "optional",
+                        "inner": {
+                          "type": "string",
+                          "checks": [
+                            {
+                              "op": "min_length",
+                              "minimum": 1
+                            }
+                          ]
+                        }
+                      },
+                      "args": {
+                        "type": "optional",
+                        "inner": {
+                          "type": "array",
+                          "element": {
+                            "type": "string",
+                            "checks": [
+                              {
+                                "op": "min_length",
+                                "minimum": 1
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "extensions": {
+                        "type": "optional",
+                        "inner": {
+                          "type": "array",
+                          "element": {
+                            "type": "string",
+                            "checks": [
+                              {
+                                "op": "min_length",
+                                "minimum": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
                     },
-                    {
-                      "op": "nonblank",
-                      "error": "state must be nonblank",
-                      "source": "(value) => value.trim().length > 0"
-                    }
-                  ]
-                }
-              },
-              "createState": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    },
-                    {
-                      "op": "nonblank",
-                      "error": "state must be nonblank",
-                      "source": "(value) => value.trim().length > 0"
-                    }
-                  ]
-                }
-              },
-              "triageState": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    },
-                    {
-                      "op": "nonblank",
-                      "error": "state must be nonblank",
-                      "source": "(value) => value.trim().length > 0"
-                    }
-                  ]
-                }
-              },
-              "proposalState": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    },
-                    {
-                      "op": "nonblank",
-                      "error": "state must be nonblank",
-                      "source": "(value) => value.trim().length > 0"
-                    }
-                  ]
-                }
-              },
-              "dir": {
-                "type": "optional",
-                "inner": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
+                    "strict": true
+                  }
                 }
               }
             },
-            "strict": true,
-            "checks": [
-              {
-                "op": "tickets-cross"
-              }
-            ]
-          },
-          "transform": "tickets",
-          "source": "(tickets) => ({\n  ...tickets,\n  readyState: tickets.readyState ?? \"ready\",\n  ...tickets.source === \"hosted\" && tickets.url !== void 0 ? { url: normalizeServiceURL(tickets.url, \"tickets.url\") } : {}\n})"
+            "strict": true
+          }
         },
-        "default": {
-          "source": "file"
+        "policy": {
+          "type": "prefault",
+          "inner": {
+            "type": "object",
+            "properties": {
+              "upgradeDrainSeconds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 900
+              },
+              "sessionBudgetSeconds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 3600
+              },
+              "stallRounds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 3
+              },
+              "maxVerifyAttempts": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 3
+              },
+              "maxDispatchAttempts": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 3
+              },
+              "maxSetupAttempts": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 3
+              },
+              "maxInfrastructureAttempts": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 3
+              },
+              "maxReconcileAttempts": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 3
+              },
+              "maxReviewRounds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 6
+              },
+              "harvestThreshold": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 5
+              },
+              "janitorFailureAttentionSeconds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 600
+              },
+              "nodeIdleAfterSeconds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 600
+              },
+              "nodeIdlePollSeconds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 120
+              },
+              "janitorBackoffMaxSeconds": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": false
+                    }
+                  ]
+                },
+                "default": 300
+              },
+              "harvestMaxDrift": {
+                "type": "default",
+                "inner": {
+                  "type": "number",
+                  "checks": [
+                    {
+                      "op": "number_format",
+                      "format": "safeint"
+                    },
+                    {
+                      "op": "greater_than",
+                      "value": 0,
+                      "inclusive": true
+                    }
+                  ]
+                },
+                "default": 3
+              }
+            },
+            "strict": true
+          },
+          "default": {}
+        },
+        "orchestrator": {
+          "type": "prefault",
+          "inner": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "default",
+                "inner": {
+                  "type": "boolean"
+                },
+                "default": false
+              },
+              "sandbox": {
+                "type": "prefault",
+                "inner": {
+                  "type": "object",
+                  "properties": {
+                    "idleMinutes": {
+                      "type": "default",
+                      "inner": {
+                        "type": "number",
+                        "checks": [
+                          {
+                            "op": "number_format",
+                            "format": "safeint"
+                          },
+                          {
+                            "op": "greater_than",
+                            "value": 0,
+                            "inclusive": false
+                          }
+                        ]
+                      },
+                      "default": 30
+                    },
+                    "environmentVariables": {
+                      "type": "default",
+                      "inner": {
+                        "type": "array",
+                        "element": {
+                          "type": "string",
+                          "checks": [
+                            {
+                              "op": "min_length",
+                              "minimum": 1
+                            }
+                          ]
+                        }
+                      },
+                      "default": []
+                    }
+                  },
+                  "strict": true
+                },
+                "default": {}
+              }
+            },
+            "strict": true
+          },
+          "default": {}
+        },
+        "tickets": {
+          "type": "prefault",
+          "inner": {
+            "type": "pipe",
+            "input": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string"
+                  }
+                },
+                "source": {
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "nonblank",
+                      "error": "[tickets].source must be a nonblank builtin or plugin ticket source name",
+                      "source": "(value) => value.trim().length > 0"
+                    }
+                  ]
+                },
+                "readyLabels": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "array",
+                    "element": {
+                      "type": "string",
+                      "checks": [
+                        {
+                          "op": "min_length",
+                          "minimum": 1
+                        }
+                      ]
+                    }
+                  }
+                },
+                "readyState": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "error": "[tickets].readyState is required \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\"). Omitting it would make every ticket from the source eligible, including completed ones.",
+                    "checks": [
+                      {
+                        "op": "nonblank",
+                        "error": "[tickets].readyState must not be blank \u2014 name the one workflow state a ticket must sit in to be dispatched (e.g. \"ready\").",
+                        "source": "(s) => s.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "readyAssignee": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "assignee",
+                        "error": "[tickets].readyAssignee must be \"me\" (the owner of the API key) or a user email address (e.g. \"person@example.com\")",
+                        "source": "(s) => s === \"me\" || s === s.trim() && /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(s)"
+                      }
+                    ]
+                  }
+                },
+                "teamKey": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                },
+                "claimedState": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      },
+                      {
+                        "op": "nonblank",
+                        "error": "state must be nonblank",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "doneState": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      },
+                      {
+                        "op": "nonblank",
+                        "error": "state must be nonblank",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "createState": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      },
+                      {
+                        "op": "nonblank",
+                        "error": "state must be nonblank",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "triageState": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      },
+                      {
+                        "op": "nonblank",
+                        "error": "state must be nonblank",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "proposalState": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      },
+                      {
+                        "op": "nonblank",
+                        "error": "state must be nonblank",
+                        "source": "(value) => value.trim().length > 0"
+                      }
+                    ]
+                  }
+                },
+                "dir": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  }
+                }
+              },
+              "strict": true,
+              "checks": [
+                {
+                  "op": "tickets-cross"
+                }
+              ]
+            },
+            "transform": "tickets",
+            "source": "(tickets) => ({\n  ...tickets,\n  readyState: tickets.readyState ?? \"ready\",\n  ...tickets.source === \"hosted\" && tickets.url !== void 0 ? { url: normalizeServiceURL(tickets.url, \"tickets.url\") } : {}\n})"
+          },
+          "default": {
+            "source": "file"
+          }
         }
-      }
+      },
+      "strict": true
     },
-    "strict": true,
+    "transform": "merge-alias",
+    "source": "(input, ctx) => {\n  if (input.merge !== void 0 && input.landing !== void 0) {\n    ctx.addIssue({\n      code: \"custom\",\n      path: [\"merge\"],\n      message: \"merge and deprecated landing cannot both be declared\"\n    });\n    return z.NEVER;\n  }\n  const { merge, landing, ...rest } = input;\n  return { ...rest, landing: merge ?? landing ?? [] };\n}",
     "checks": [
       {
         "op": "root-cross"
@@ -1565,6 +1618,7 @@
     "pr.closed",
     "pr.conflicted",
     "reconcile.progress-checked",
+    "target.distance",
     "target.moved",
     "restack.prepared",
     "restack.replayed",

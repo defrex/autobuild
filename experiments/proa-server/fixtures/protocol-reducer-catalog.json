@@ -29,7 +29,7 @@
     },
     "leafRestack": {
       "scope": "build",
-      "version": 4,
+      "version": 5,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
     "baseBranchValue": {
@@ -105,7 +105,7 @@
     },
     "buildStreamSeed": {
       "scope": "build",
-      "version": 34,
+      "version": 35,
       "args": { "type": "object", "shape": {}, "strict": true }
     },
     "buildReadFacts": {
@@ -415,6 +415,7 @@
     "landing.native-enable-started": "bookkeeping",
     "landing.forge-merged": "progress",
     "landing.native-applied": "bookkeeping",
+    "target.distance": "bookkeeping",
     "target.moved": "bookkeeping",
     "restack.prepared": "progress",
     "restack.replayed": "progress",
