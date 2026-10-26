@@ -87,3 +87,11 @@ export function createMachineAuth(options: {
     },
   }
 }
+
+export function requireProjectOwner(
+  principal: MachinePrincipal,
+): Extract<MachinePrincipal, { kind: 'project' }> {
+  if (principal.kind !== 'project' || principal.credential.purpose !== 'project-owner')
+    throw new MachineAuthError(403, 'project owner credential required')
+  return principal
+}

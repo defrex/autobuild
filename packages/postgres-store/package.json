@@ -50,6 +50,10 @@
     "./organizations": {
       "types": "./src/organizations.ts",
       "import": "./src/organizations.ts"
+    },
+    "./project-secrets": {
+      "types": "./src/project-secrets.ts",
+      "import": "./src/project-secrets.ts"
     }
   },
   "bin": {

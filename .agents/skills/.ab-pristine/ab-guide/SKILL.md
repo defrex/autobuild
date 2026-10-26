@@ -436,7 +436,7 @@ and `[roles.*].runtime`. BuildStore uses the remote HTTP protocol, not this
 manifest, and TelemetrySource has no registration map.
 
 For the complete author workflow—from choosing one of the four open ports,
-through the strict versioned manifest and environment-only secrets, to the
+through the strict versioned manifest and secrets supplied through the environment, to the
 unchanged shared contract suite and optional npm publication—read
 [`references/plugin-authoring.md`](references/plugin-authoring.md).
 
@@ -1292,7 +1292,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   setup prompt for the user to run in a coding agent.
 - The setup agent inspects the repository, configures real commands and verify
   steps, independently chooses pipeline role runtimes/models, configures the
-  ticket source and environment-only credentials, arranges
+  ticket source and credentials supplied through the environment, arranges
   an acceptance check through a repository-owned agent verify skill in every
   repository. Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite. It completes `bun ab init --validate`, fixing failures
   and reviewing warnings. The human then starts `bun ab dispatch` and opens
@@ -1493,6 +1493,22 @@ repository. It adds the non-secret `[store] url` to `autobuild.toml` when
 absent; review and commit that change yourself. An existing different URL
 must be changed explicitly before connecting. Reconnecting replaces the saved
 credential only after approval and revokes the previous credential.
+
+Connected project members can manage write-only project secrets with
+`ab secrets list [--json]`, `ab secrets set NAME` and `ab secrets remove NAME`.
+Set reads hidden terminal input or redirected stdin; values never appear in
+arguments or responses. These sessionless commands use the saved owner
+credential and recheck current membership. The current setter owns the value,
+which serves every hosted build of that project. Hosted ticks resolve a fresh,
+complete encrypted set and override matching deployment variables for that
+project only; local dispatchers keep using their own environment. For projects
+with saved secrets, failed configuration, decryption or refresh prevents dispatch.
+Projects without secrets continue with an empty set without encryption
+configuration. Every secret write still requires valid encryption configuration.
+List exposes only status, owner, timestamps and a keyed fingerprint. See the
+[write-only protocol](references/remote-store-protocol.md#project-secrets-v1).
+Sandbox forwarding rules remain separate; saving a secret does not grant
+credential forwarding into an operator sandbox.
 
 All worktrees share the main checkout's configuration and the user's saved
 credential. A service manager running as that user uses the same HOME and
