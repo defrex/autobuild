@@ -905,42 +905,12 @@ export async function runRelease(
       `local ${config.baseBranch} is behind origin/${config.baseBranch} by ${behind} commit(s)`,
     )
 
-  const preGateHead = (
-    await git(run, root, ['rev-parse', 'HEAD'], 'could not resolve HEAD')
-  ).stdout.trim()
-  for (const name of ['lint', 'typecheck', 'test'] as const) {
-    output.log(`Running ${name} gate: ${config.commands[name]}`)
-    const result = await run({ command: 'sh', args: ['-c', config.commands[name]], cwd: root })
-    if (result.stdout.length > 0) output.log(result.stdout.trimEnd())
-    if (result.stderr.length > 0) output.warn(result.stderr.trimEnd())
-    const gateStatus = await git(
-      run,
-      root,
-      ['status', '--porcelain'],
-      'could not inspect gate output',
-    )
-    if (gateStatus.stdout.length > 0) {
-      await restoreBeforePush(run, root, preGateHead, tag)
-      throw new Error(
-        `${name} quality gate changed the worktree; its output was restored and the release was aborted`,
-      )
-    }
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `${name} quality gate failed with exit status ${result.exitCode}; no release files were changed`,
-      )
-    }
-  }
-
-  const summary = await generateSummary(run, root, entries, output)
-  const date = today()
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`release date is not YYYY-MM-DD: ${date}`)
-  const changelog = renderReleasedChangelog(pending.content, tag, date, summary)
+  // Every version-bearing release file except the changelog, whose cut needs
+  // the summary. The gates run against these, and the release commits them.
   const manifestCandidates = workspaceManifests.map((entry) => ({
     path: entry.path,
     content: replacePackageVersion(entry.text, version),
   }))
-
   if (!policy.prerelease) {
     for (const path of [
       'templates/hosted-service/package.json',
@@ -966,10 +936,66 @@ export async function runRelease(
         ),
       })
 
-    manifestCandidates.unshift(
-      { path: 'CHANGELOG.md', content: changelog.content },
-      { path: 'README.md', content: replaceReadmeInstall(readmeText, version) },
-    )
+    manifestCandidates.unshift({
+      path: 'README.md',
+      content: replaceReadmeInstall(readmeText, version),
+    })
+  }
+
+  const preGateHead = (
+    await git(run, root, ['rev-parse', 'HEAD'], 'could not resolve HEAD')
+  ).stdout.trim()
+  // Gates run at the target version: version-dependent behavior, such as the
+  // remote store's supported client window, must hold for the version being
+  // released, not the one it replaces. The original files are restored after.
+  const gateFiles = await Promise.all(
+    manifestCandidates.map(async (candidate) => ({
+      ...candidate,
+      original: await readFile(resolve(root, candidate.path), 'utf8'),
+    })),
+  )
+  await Promise.all(gateFiles.map((file) => writeFile(resolve(root, file.path), file.content)))
+  try {
+    for (const name of ['lint', 'typecheck', 'test'] as const) {
+      output.log(`Running ${name} gate at ${version}: ${config.commands[name]}`)
+      const result = await run({ command: 'sh', args: ['-c', config.commands[name]], cwd: root })
+      if (result.stdout.length > 0) output.log(result.stdout.trimEnd())
+      if (result.stderr.length > 0) output.warn(result.stderr.trimEnd())
+      const gateStatus = await git(
+        run,
+        root,
+        ['status', '--porcelain', '--', '.', ...gateFiles.map((file) => `:(exclude)${file.path}`)],
+        'could not inspect gate output',
+      )
+      const changedGateFiles = (
+        await Promise.all(
+          gateFiles.map(
+            async (file) => (await readFile(resolve(root, file.path), 'utf8')) !== file.content,
+          ),
+        )
+      ).some(Boolean)
+      if (gateStatus.stdout.length > 0 || changedGateFiles) {
+        await restoreBeforePush(run, root, preGateHead, tag)
+        throw new Error(
+          `${name} quality gate changed the worktree; its output was restored and the release was aborted`,
+        )
+      }
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `${name} quality gate failed with exit status ${result.exitCode}; no release files were changed`,
+        )
+      }
+    }
+  } finally {
+    await Promise.all(gateFiles.map((file) => writeFile(resolve(root, file.path), file.original)))
+  }
+
+  const summary = await generateSummary(run, root, entries, output)
+  const date = today()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`release date is not YYYY-MM-DD: ${date}`)
+  const changelog = renderReleasedChangelog(pending.content, tag, date, summary)
+  if (!policy.prerelease) {
+    manifestCandidates.unshift({ path: 'CHANGELOG.md', content: changelog.content })
   }
 
   output.log(

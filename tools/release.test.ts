@@ -875,6 +875,30 @@ describe('release orchestration', () => {
     await expectReleaseFailure(fixture.root, /behind origin\/main by 1 commit/)
   })
 
+  test('quality gates run at the target version and the manifests are restored', async () => {
+    const atTarget = `grep -q '"version": "2.1.0"' package.json && grep -q '"version": "2.1.0"' packages/core/package.json`
+    const config = fixtureConfig.replace('test = "true"', `test = ${JSON.stringify(atTarget)}`)
+    const fixture = await createFixture({ config })
+    const testHarness = harness()
+
+    await runRelease(['--minor', '--dry-run'], fixture.root, {
+      run: testHarness.run,
+      output: testHarness.output,
+      today: () => '2026-07-27',
+    })
+
+    expect(testHarness.logs.join('\n')).toContain('Running test gate at 2.1.0')
+    expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+  })
+
+  test('a gate that rewrites a release file or leaves output aborts and restores the tree', async () => {
+    for (const lint of ['echo >> package.json', 'echo > gate-output.txt']) {
+      const config = fixtureConfig.replace('lint = "true"', `lint = ${JSON.stringify(lint)}`)
+      const fixture = await createFixture({ config })
+      await expectReleaseFailure(fixture.root, /lint quality gate changed the worktree/)
+    }
+  })
+
   test('a failing quality gate leaves the tracked tree unchanged', async () => {
     const config = fixtureConfig.replace('typecheck = "true"', 'typecheck = "false"')
     const fixture = await createFixture({ config })

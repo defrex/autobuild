@@ -26,7 +26,10 @@ window, and review the frozen contracts in
 `packages/hosted-store-service/src/compatibility-fixtures/` to add or retire
 fixtures deliberately. The new service's own line uses its current protocol
 automatically. Check every advertised line through `clientIdentityError` for
-the target version; the release command's gates run before the version bump.
+the target version. The release command's gates run with the target version
+already written into the release files, so a version-sensitive test that only
+held at the outgoing version fails the gate instead of breaking main after the
+release.
 
 ## Preconditions
 
@@ -89,7 +92,7 @@ current one, so it can correct a wrong version in `package.json`.
 ### Always unset CLAUDECODE
 
 `bun run release` runs the repository's lint, typecheck, and test gates before
-touching any file, and the test gate fails spuriously when the suite runs with
+committing anything, and the test gate fails spuriously when the suite runs with
 `CLAUDECODE=1` set. Bun's reporter suppresses per-test `(pass)` lines under
 that variable, and `packages/core/src/cli/plugin-authoring-guide.test.ts` asserts on a
 nested `bun test`'s printed test name. Prefix every release command with
@@ -125,7 +128,9 @@ the README and hosted pins, and publishes under `latest`. Both
 
 ## What the command does for a stable release
 
-A real run, in order: runs the three gates; asks Claude non-interactively for
+A real run, in order: runs the three gates with the target version
+temporarily written into every version-bearing release file except the
+changelog, then restores them; asks Claude non-interactively for
 a short release summary; writes every workspace `package.json`,
 `CHANGELOG.md` (cutting `## Unreleased` into `## vX.Y.Z — DATE` and leaving
 Unreleased empty), and the pinned README install command
@@ -150,8 +155,9 @@ start with a dirty lockfile.
 
 ## When something goes wrong
 
-- **A gate fails.** No release files were changed; fix the failure and start
-  over. If a gate *modifies* the worktree, the command restores it and aborts.
+- **A gate fails.** The temporary version bump is restored, so no release files
+  were changed; fix the failure and start over. If a gate *modifies* the
+  worktree or a bumped release file, the command restores it and aborts.
 - **The summary fails.** Optional by design: it warns and continues with every
   changelog bullet intact. Not a reason to stop.
 - **Anything fails before the push.** The command restores the pre-release
