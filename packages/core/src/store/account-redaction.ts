@@ -21,7 +21,7 @@ export class AccountRedactor {
   value<T>(value: T): T {
     if (typeof value === 'string') return this.text(value) as T
     if (value instanceof Uint8Array) {
-      const copy = value.slice()
+      const copy = new Uint8Array(value)
       for (const secret of this.secrets()) {
         const needle = new TextEncoder().encode(secret)
         for (let i = 0; i <= copy.length - needle.length; i++) {
@@ -36,7 +36,7 @@ export class AccountRedactor {
     if (Array.isArray(value)) return value.map((item) => this.value(item)) as T
     if (value !== null && typeof value === 'object')
       return Object.fromEntries(
-        Object.entries(value).map(([key, item]) => [key, this.value(item)]),
+        Object.entries(value).map(([key, item]) => [this.text(key), this.value(item)]),
       ) as T
     return value
   }
