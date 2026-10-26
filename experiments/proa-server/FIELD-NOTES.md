@@ -1067,3 +1067,41 @@ eight answer-failure cases and complete route/action/schema coverage. A ticket
 HTTP helper's remaining protocol-5 literal was replaced with the source protocol
 constant. The unchanged 161-test BuildStore contract and all protocol, ticket
 protocol and real ticket CLI family proofs passed in focused runs.
+
+
+Final validation used frozen code `ef12f1e8`; the following commit only records
+these measurements. Root checks, build checks and typechecking passed. Two full
+unit runs with the normal temporary directory each passed 8,453 tests with 49
+existing skips and zero failures (1,123.06s and 1,121.08s). All 123 experiment
+tooling tests passed after the last repairs. The complete native gate passed all
+61 stages in 1,318.4s: Cargo tests took 320.6s, linked Proa tests 436.6s, and the
+release build 291.4s (0/481 cached artifacts reused). This includes independent
+freshness checks, scalar/lossless replay, real database/S3 interchange, all 161
+BuildStore contract cases, operator/MCP, protocol and ticket/CLI proofs.
+
+The final offline capture build took 188.3s, reusing 479/481 artifacts in each
+linked stage. Capture and browser mutation/consent proofs passed; all 96 PNGs
+were opened against the immutable ANSI reference across both themes and widths.
+Palette, two typefaces, shell/menu, responsive wrapping, refusal drafts and
+confirmation states remain intact, with no visible horizontal overflow. Evidence
+is retained locally under `.ab/proa-frames-4Zu2B6` and
+`.ab/proa-refresh-evidence`; neither is a tracked deliverable.
+
+The measured refresh window was 22:41:02 UTC to 00:18 UTC the next day, about
+97 minutes including verification, queue waits and interrupted-session recovery.
+The first repair commit was at 23:06:40 (25m38s after starting, overlapping corpus
+generation/checks); later seed and conditional-write repairs continued until
+about 23:48. There was no exclusive active-work stopwatch, so these intervals
+must not be read as additive repair time. An earlier cold linked Proa test pass
+took 892.5s; verification dominated elapsed time. Capture waited roughly 22 minutes
+behind the serialized native gate across a shutdown/restart; that wait overlaps
+the gate, rather than adding another 22 minutes to the window.
+
+Operational retries also consumed time: an initial root run exhausted `/tmp`
+inodes. A mistaken long worktree-local TMPDIR retry broke Chromium Unix socket
+paths and fixture module resolution; it was cancelled and both normal-environment
+runs passed. An early capture was correctly stopped when sources changed during
+linking. Shutdown recovery regenerated phase scratch, recovered surviving logs
+and reran the interrupted capture build. These are measurement/harness costs,
+not semantic parity repairs or deployment performance claims. Dependency versions,
+product code, existing exclusions and ANSI reference bytes remain unchanged.
