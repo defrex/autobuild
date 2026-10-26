@@ -44,6 +44,7 @@ export async function connectPersistenceIntegration(
   let now = new Date('2026-09-02T00:00:00.000Z')
   const repo = 'https://github.com/owner/connect-proof'
   const actor = 'operator@example.com'
+  const principal = { email: actor, isSuperUser: () => true }
   try {
     await admin.unsafe(`CREATE DATABASE ${database}`)
     created = true
@@ -52,6 +53,9 @@ export async function connectPersistenceIntegration(
     const typescript = new PostgresConnectionStore(sql, () => now)
     const registry = new PostgresProjectRegistry(sql)
     const credentials = new PostgresCredentialStore(sql, registry)
+    // This experiment's connection authority is project-scoped. Seed a registered
+    // project rather than exercising the product's separate organization assignment flow.
+    await registry.add(repo, actor)
     const startBridge = () => bridge({ ...env, AB_POSTGRES_URL: url.href }, runtime, [executable])
     rust = await startBridge()
     const native = async (op: string, fields: Record<string, unknown>) => {
@@ -77,8 +81,8 @@ export async function connectPersistenceIntegration(
     assert.match(started.code, /^[A-F0-9]{10}$/)
     await rust.close()
     rust = await startBridge()
-    assert.equal((await typescript.lookup(started.code, actor))?.id, started.id)
-    assert.equal((await typescript.decide(started.code, actor, true)).status, 'approved')
+    assert.equal((await typescript.lookup(started.code, actor, principal))?.id, started.id)
+    assert.equal((await typescript.decide(started.code, actor, true, principal)).status, 'approved')
     assert.equal((await native('poll', started)).status, 'approved')
     assert.equal(
       (await credentials.authenticate(`abp_1_${first.credentialId}_${first.secret}`, now))?.repo,
@@ -204,7 +208,7 @@ export async function connectPersistenceIntegration(
     })
     assert.equal(failure.status, 503)
     assert.equal(await registry.has(collision.repo), false)
-    assert.equal((await typescript.lookup(collision.code, actor))?.status, 'pending')
+    assert.equal((await typescript.lookup(collision.code, actor, principal))?.status, 'pending')
     // Native approval racing a TypeScript cancellation always ends denied and
     // cannot leave a usable credential, regardless of lock acquisition order.
     const racedProposal = proposal()
@@ -213,7 +217,7 @@ export async function connectPersistenceIntegration(
       native('decide', { code: raced.code, actor, approve: true }),
       typescript.poll(raced.id, raced.capability, true),
     ])
-    assert.equal((await typescript.lookup(raced.code, actor))?.status, 'denied')
+    assert.equal((await typescript.lookup(raced.code, actor, principal))?.status, 'denied')
     assert.equal(
       await credentials.authenticate(
         `abp_1_${racedProposal.credentialId}_${racedProposal.secret}`,

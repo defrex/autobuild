@@ -85,7 +85,7 @@ export async function connectIntegration(
       GITHUB_CLIENT_ID: 'connect-proof',
       GITHUB_CLIENT_SECRET: randomBytes(32).toString('hex'),
       PROA_SESSION_SECRET: randomBytes(32).toString('hex'),
-      AB_WEB_ALLOWED_EMAILS: actor,
+      AB_WEB_SUPER_USER_EMAILS: actor,
       AB_STORE_SECRET: secret,
       PROA_ENV: 'development',
       PROA_DEV_AUTH: 'true',

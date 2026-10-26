@@ -13,9 +13,6 @@ fn contract() -> &'static Value {
             .expect("configuration grammar")
     })
 }
-pub fn default_wake() -> Value {
-    contract()["defaultWake"].clone()
-}
 #[derive(Default)]
 struct Parsed {
     value: Option<Value>,
@@ -117,7 +114,6 @@ fn parse(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
                         result.aborted = true;
                     }
                 },
-                "clamp-budget" => *v = json!(v.as_f64().unwrap().min(300.0) as i64),
                 "tickets" => {
                     if v.get("readyState").is_none() {
                         v["readyState"] = json!("ready");
@@ -219,9 +215,28 @@ fn parse(schema: &Value, input: Option<&Value>, path: &[Value]) -> Parsed {
                     result.issues.extend(parsed.issues);
                 }
             }
-            let mut v = json!({"steps":steps,"stepConfigs":tables});
+            let grouped =
+                schema["afterReconcile"] == true && array(&steps).iter().any(Value::is_array);
+            let stages: Vec<Value> = array(&steps)
+                .iter()
+                .map(|step| {
+                    if step.is_array() {
+                        step.clone()
+                    } else {
+                        json!([step])
+                    }
+                })
+                .collect();
+            let flat: Vec<Value> = stages
+                .iter()
+                .flat_map(|stage| array(stage).iter().cloned())
+                .collect();
+            let mut v = json!({"steps":flat,"stepConfigs":tables});
             if schema["afterReconcile"] == true {
                 v["afterReconcile"] = json!(after);
+                if grouped {
+                    v["stages"] = json!(stages);
+                }
             }
             result.value = Some(v);
         }
@@ -857,27 +872,6 @@ fn runtime_references(v: &Value) -> BTreeMap<String, BTreeSet<String>> {
     }
     groups
 }
-fn glob_matches(glob: &str, text: &str) -> bool {
-    let g: Vec<char> = glob.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let mut prev = vec![false; t.len() + 1];
-    prev[0] = true;
-    for c in g {
-        let mut next = vec![false; t.len() + 1];
-        if c == '*' {
-            next[0] = prev[0];
-            for i in 1..=t.len() {
-                next[i] = prev[i] || next[i - 1];
-            }
-        } else {
-            for i in 1..=t.len() {
-                next[i] = prev[i - 1] && (c == '?' || c == t[i - 1]);
-            }
-        }
-        prev = next;
-    }
-    prev[t.len()]
-}
 fn root_cross(v: &Value, path: &[Value], issues: &mut Vec<Value>) {
     // proa-perf-ok(scope): These are exact configuration diagnostics, not HTML. Browser rendering escapes them.
     for section in ["verify", "finalize"] {
@@ -943,8 +937,19 @@ fn root_cross(v: &Value, path: &[Value], issues: &mut Vec<Value>) {
             continue;
         }
         let steps = array(&v[section]["steps"]);
+        let mut seen_steps = BTreeSet::new();
         for (i, step) in steps.iter().enumerate() {
             let name = text(step);
+            if section == "verify" && !seen_steps.insert(name) {
+                custom(
+                    issues,
+                    &at(&at(&at(path, section), "steps"), i),
+                    format!(
+                        "duplicate verify step {} across or within stages",
+                        serde_json::to_string(name).unwrap()
+                    ),
+                );
+            }
             if tables.get(name).is_none() {
                 custom(issues,&at(&at(&at(path,section),"steps"),i),format!("{section} step \"{name}\" is listed in {section}.steps but has no [{section}.{name}] table — add one with kind = \"check\" (command = <name in [commands]>) or kind = \"agent\" (skill = <skill name>)"));
             }
@@ -988,30 +993,6 @@ fn root_cross(v: &Value, path: &[Value], issues: &mut Vec<Value>) {
     }
     if source != "linear" && tickets.get("readyAssignee").is_some() {
         custom(issues,&at(&at(path,"tickets"),"readyAssignee"),format!("[tickets].readyAssignee applies only to source = \"linear\" — remove it or select that source (selected source: \"{source}\")"));
-    }
-    if let Some(wake) = v["orchestrator"]["wake"].as_array() {
-        for glob in wake {
-            if !array(&contract()["eventTypes"])
-                .iter()
-                .any(|e| glob_matches(text(glob), text(e)))
-            {
-                custom(issues,&at(&at(path,"orchestrator"),"wake"),format!("--event \"{}\" matches no known event type in the build or repository catalogs — [orchestrator].wake",text(glob)));
-                break;
-            }
-        }
-    }
-    if v["orchestrator"]["enabled"] == true {
-        if v["orchestrator"].get("model").is_none() {
-            custom(issues,&at(&at(path,"orchestrator"),"model"),"[orchestrator].enabled = true requires [orchestrator].model — name the provider-qualified model string the turn runner uses (same vocabulary as [roles], resolved through the deployment gateway credential)");
-        }
-        for (i, name) in array(&v["orchestrator"]["sandbox"]["environmentVariables"])
-            .iter()
-            .enumerate()
-        {
-            if array(&contract()["forbiddenEnvironment"]).contains(name) {
-                custom(issues,&at(&at(&at(&at(path,"orchestrator"),"sandbox"),"environmentVariables"),i),format!("environment variable {name} is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox"));
-            }
-        }
     }
 }
 fn failure(label: &str, message: String) -> OperatorError {

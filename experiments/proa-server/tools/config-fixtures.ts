@@ -5,17 +5,12 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { z } from 'zod'
-import {
-  configSchema,
-  vercelSandboxConfigSchema,
-  defaultOrchestratorWakeGlobs,
-} from '../../../packages/core/src/config/schema'
+import { configSchema, vercelSandboxConfigSchema } from '../../../packages/core/src/config/schema'
 import { referenceMetadata } from '../../../packages/core/src/config/reference-metadata'
 import { EVENT_TYPES } from '../../../packages/core/src/events/payloads'
 import { REPOSITORY_EVENT_TYPES } from '../../../packages/core/src/events/repository'
 import { CORE_PHASES } from '../../../packages/core/src/ontology'
 import { INTERNAL_ROLES } from '../../../packages/core/src/config/roles'
-import { SANDBOX_FORBIDDEN_ENV } from '../../../packages/core/src/ports/workspace/operator-sandbox'
 import { decodeEffectiveConfig } from '../../../packages/core/src/operator/query'
 
 type Def = Record<string, unknown>
@@ -56,8 +51,6 @@ function grammar(schema: z.ZodType, path: string[]): unknown {
     const source = (def(d.out as z.ZodType).transform as (...args: never[]) => unknown).toString()
     if (path.join('.') === 'tickets') result.transform = 'tickets'
     else if (path.join('.') === 'store.url') result.transform = 'service-url'
-    else if (path.join('.') === 'orchestrator.invocationBudgetSeconds')
-      result.transform = 'clamp-budget'
     else throw Error(`Unported config transform at ${path.join('.')}: ${source}`)
     result.source = source
   } else if (type === 'object') {
@@ -204,6 +197,10 @@ export function configurationContract() {
     cases.push({ ...base, tickets: input })
   for (const verify of [
     { steps: ['unit'], unit: { kind: 'check', command: 'test' } },
+    ...[[['unit']], [['unit', 'types'], 'lint'], [[], 'unit'], [['unit'], 'unit']].map((steps) => ({
+      steps,
+      ...Object.fromEntries(steps.flat().map((name) => [name, { kind: 'check', command: 'test' }])),
+    })),
     { steps: ['absent'] },
     { steps: [], unit: { kind: 'check', command: 'missing' } },
     { steps: ['..'], '..': { kind: 'agent', skill: 'verify' } },
@@ -319,7 +316,6 @@ export function configurationContract() {
         'zod-issues.ts',
         'events/globs.ts',
         'ontology.ts',
-        'ports/workspace/operator-sandbox.ts',
         'ports/workspace/provider-capabilities.ts',
       ].map((path) => [
         path,
@@ -331,9 +327,7 @@ export function configurationContract() {
     grammar: grammar(configSchema, []),
     vercel: grammar(vercelSandboxConfigSchema, ['vercel']),
     eventTypes: [...EVENT_TYPES, ...REPOSITORY_EVENT_TYPES],
-    defaultWake: [...defaultOrchestratorWakeGlobs],
     coreRoles: [...CORE_PHASES, ...INTERNAL_ROLES],
-    forbiddenEnvironment: SANDBOX_FORBIDDEN_ENV,
     cases: cases.map((input, index) => {
       const parsed = configSchema.safeParse(input)
       return {

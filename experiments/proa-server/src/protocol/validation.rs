@@ -263,13 +263,18 @@ pub fn validate_schema(schema: &Value, input: &Value) -> Result<Value, String> {
 
 /// Parse one of the closed wire request schemas, preserving Zod's stripping
 /// behavior and exact diagnostics. This is body parsing, not event validation.
-pub fn validate_request(name: &str, input: &Value) -> Result<Value, String> {
+fn request_schemas() -> &'static Value {
     static SCHEMAS: OnceLock<Value> = OnceLock::new();
-    let schemas = SCHEMAS.get_or_init(|| {
+    SCHEMAS.get_or_init(|| {
         serde_json::from_str(include_str!("../../fixtures/protocol-request-schemas.json"))
             .expect("generated request schemas")
-    });
-    let schema = schemas
+    })
+}
+pub fn validate_request_field(name: &str, field: &str, input: &Value) -> Result<Value, String> {
+    validate_schema(&request_schemas()[name]["shape"][field], input)
+}
+pub fn validate_request(name: &str, input: &Value) -> Result<Value, String> {
+    let schema = request_schemas()
         .get(name)
         .ok_or_else(|| format!("unknown request schema \"{name}\""))?;
     let mut issues = Vec::new();
