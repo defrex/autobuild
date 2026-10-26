@@ -1920,15 +1920,16 @@ describe('current contribution range after leaf publication', () => {
     'restacks use proven heads, observed %s',
     (observedHead) => {
       const log = leafRestackLog()
-      const original = { ...reduceBuild(log.slice(0, 10)).implement }
+      const rewrittenIndex = log.findIndex((e) => e.type === 'restack.rewritten')
+      const original = { ...reduceBuild(log.slice(0, rewrittenIndex)).implement }
       expect(original.commits).toEqual({
         base: leafTransaction.oldBase,
         head: leafTransaction.oldHead,
       })
-      const rewrite = log[10]!
+      const rewrite = log[rewrittenIndex]!
       if (rewrite.type !== 'restack.rewritten') throw new Error('fixture')
       if (observedHead !== undefined) rewrite.payload.observedHead = observedHead
-      for (const end of [11, 12]) {
+      for (const end of [rewrittenIndex + 1, rewrittenIndex + 2]) {
         expect(reduceBuild(log.slice(0, end)).implement).toEqual({
           ...original,
           commits: { base: leafTransaction.targetBase, head: 'e'.repeat(40) },

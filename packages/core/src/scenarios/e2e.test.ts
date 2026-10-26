@@ -279,6 +279,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   const final = await h.events(SLUG)
   expect(typesOf(final)).toEqual([
     ...HAPPY_PREFIX,
+    'target.distance',
     'landing.decided',
     'landing.native-enable-started',
     'landing.native-applied',

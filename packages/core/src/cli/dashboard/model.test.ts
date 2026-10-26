@@ -2130,6 +2130,35 @@ describe('durations: accumulation and scope', () => {
     expect(timing?.accumulatedMs).toBe(1000)
   })
 
+  test('distance refreshes preserve blocked phase timing across known and unknown samples', () => {
+    const writes = [
+      ...prelude(),
+      ev('plan.started', { round: 1 }),
+      ev('escalation.raised', {
+        id: 'timing',
+        phase: 'plan',
+        source: 'agent',
+        question: 'Need a decision',
+      }),
+    ]
+    const blocked = project(toLog(writes))
+    expect(blocked.status).toBe('blocked')
+    expect(stepFor(blocked, 'plan')?.timing).toEqual({ accumulatedMs: 1000 })
+    for (const count of [7, 0, null]) {
+      writes.push(
+        ev('target.distance', {
+          branch: 'main',
+          sha: 'a'.repeat(40),
+          head: 'b'.repeat(40),
+          count,
+        }),
+      )
+      const refreshed = project(toLog(writes))
+      expect(refreshed.status).toBe('blocked')
+      expect(stepFor(refreshed, 'plan')?.timing).toEqual(stepFor(blocked, 'plan')?.timing)
+    }
+  })
+
   test('never-run steps carry no timing (AC 6)', () => {
     const build = project(toLog([...prelude(), ev('plan.started', { round: 1 })]))
     // implement has not started — no interval, no time shown.

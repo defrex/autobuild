@@ -1,3 +1,4 @@
+import { distanceSuffix } from './target-distance'
 import type { Config } from '../../config/schema'
 import type { BuildState } from '../../kernel/reducer'
 import type { LeafRestackState } from '../../kernel/leaf-restack-state'
@@ -58,7 +59,7 @@ export function projectIntegrationRow(
 ): IntegrationRow | undefined {
   if (state.kind !== 'node') return undefined
   const destination = state.target
-    ? `${state.target.ticket.id} ${state.target.build}`
+    ? state.target.ticket.id
     : (state.baseBranch ?? 'unknown destination')
   const observation = state.integration?.observation
   const openChildren = [...new Set(observation?.openChildren ?? [])]
@@ -277,9 +278,5 @@ export function nodeParentDistance(state: BuildState): string {
     distance.parent === (node?.observedParent?.sha ?? state.nodeComparison?.parentSha)
       ? distance.count
       : null
-  return count === null
-    ? 'parent distance unknown'
-    : count === 0
-      ? 'parent current'
-      : `parent ${count} commit${count === 1 ? '' : 's'} ahead`
+  return distanceSuffix(count, state.prState)
 }

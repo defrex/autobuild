@@ -2378,7 +2378,9 @@ args = ["--naming-style", "concise"]
         })
         expect(out).toContain(diagnostic)
         expect(out).not.toContain('tick: idle')
-        expect(await fx.store.getEvents(slug)).toEqual(parked)
+        expect(
+          (await fx.store.getEvents(slug)).filter((e) => e.type !== 'target.distance'),
+        ).toEqual(parked.filter((e) => e.type !== 'target.distance'))
       }
 
       const stop = new AbortController()
@@ -2396,7 +2398,9 @@ args = ["--naming-style", "concise"]
       })
       expect(watchOut.filter((line) => line === diagnostic)).toHaveLength(1)
       expect(watchOut).not.toContain('tick: idle')
-      expect(await fx.store.getEvents(slug)).toEqual(parked)
+      expect((await fx.store.getEvents(slug)).filter((e) => e.type !== 'target.distance')).toEqual(
+        parked.filter((e) => e.type !== 'target.distance'),
+      )
       expect(parked.some((event) => event.type === 'escalation.answered')).toBe(false)
       expect(planAttempts).toBe(2)
     } finally {
@@ -4713,6 +4717,7 @@ function controlHistory(events: Awaited<ReturnType<BuildStore['getEvents']>>) {
   return events.filter(
     (event) =>
       ![
+        'target.distance',
         'landing.native-applied',
         'landing.native-enable-started',
         'landing.decided',

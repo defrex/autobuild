@@ -22,6 +22,7 @@ export const buildEventPolicy = {
   'landing.native-enable-started': 'decisive',
   'landing.forge-merged': 'decisive',
   'landing.native-applied': 'decisive',
+  'target.distance': 'advisory',
   'target.moved': 'decisive',
   'restack.prepared': 'decisive',
   'restack.replayed': 'decisive',
