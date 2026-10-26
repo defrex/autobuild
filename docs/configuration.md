@@ -2003,8 +2003,9 @@ failures become failure-tolerant follow-up observations.
 
 ## `[roles]`
 
-An open map from a nonempty role name to three primary agent axes, one
-wall-clock session budget, and an ordered alternate list. All five live fields
+An open map from a nonempty role name to four primary agent axes (runtime,
+model, account, and args), one wall-clock session budget, and an ordered
+alternate list. All six live fields
 inherit independently. The reserved
 `default` entry is required to name a runtime, is the raw base for every other
 role, and is never dispatched itself. Missing it fails eagerly before any

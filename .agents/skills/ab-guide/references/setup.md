@@ -95,7 +95,10 @@ checkout dependencies in every fresh/replacement sandbox and before the
 readiness probe, writes the marker only after success, and reruns every
 preflight before each build runner. A failure names the runtime, selecting
 role/alternate, and field and starts no agent. Runtime provisioning receives
-only the API credentials named by `[workspace.config].environmentVariables`.
+allowlisted legacy API credentials named by
+`[workspace.config].environmentVariables` and automatically supplied placeholders
+for every declared account credential variable. Account variables need no
+allowlist entry; their real credentials remain on the dispatcher host.
 
 Keep package-level and checkout-level bootstrap in an idempotent
 `[commands].setup`. It runs after system provisioning and must remain safe to
