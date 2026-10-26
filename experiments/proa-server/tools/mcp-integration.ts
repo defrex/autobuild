@@ -328,7 +328,7 @@ export async function mcpIntegration() {
       assert.deepEqual((await client.listTools()).tools, corpus.tools)
       for (const observation of corpus.observations) {
         const r = observation.request
-        if (r.seed) await seedMcpControl(server.store)
+        if (r.seed) await seedMcpControl(server.store, r.seed)
         const response = await fetch(`${origin}/mcp`, {
           method: r.method ?? 'POST',
           headers: {
@@ -356,6 +356,8 @@ export async function mcpIntegration() {
             'repository.settings-dispatch',
             'harvest.control-dispatch',
             'builds.control-positive',
+            'builds.control-merge-positive',
+            'builds.control-land-positive',
           ].includes(r.label)
         ) {
           const value = JSON.parse(actual.result.content[0].text)
@@ -363,11 +365,12 @@ export async function mcpIntegration() {
             (observation.body as { result: { content: { text: string }[] } }).result.content[0]!
               .text,
           )
-          const events =
-            r.label === 'builds.control-positive'
-              ? await server.store.getEvents('mcp-control-build')
-              : await server.store.getRepoEvents(operatorRepo)
-          if (r.label === 'builds.control-positive') {
+          const events = r.seed
+            ? await server.store.getEvents(
+                r.seed === 'control' ? 'mcp-control-build' : `mcp-${r.seed}-build`,
+              )
+            : await server.store.getRepoEvents(operatorRepo)
+          if (r.seed) {
             events.forEach((e) => {
               validateEventWrite(e)
             })

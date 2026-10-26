@@ -251,6 +251,8 @@ export async function captureFrames(
   let browser: ReturnType<typeof Bun.spawn> | undefined
   let socket: WebSocket | undefined
   const profile = join(output, 'profile')
+  // Keep Chromium's singleton sockets in an owned, short OS-temp path.
+  const browserTemp = await mkdtemp(join(tmpdir(), 'proa-browser-'))
   const cleanup = () => {
     socket?.close()
     // Chromium's helpers can outlive its main process and recreate the profile.
@@ -278,7 +280,12 @@ export async function captureFrames(
         `--user-data-dir=${profile}`,
         'about:blank',
       ],
-      { stdout: 'ignore', stderr: 'ignore', detached: true },
+      {
+        stdout: 'ignore',
+        stderr: 'ignore',
+        detached: true,
+        env: { ...process.env, TMPDIR: browserTemp, TMP: browserTemp, TEMP: browserTemp },
+      },
     )
     let debugPort = ''
     for (let i = 0; i < 200; i++) {
@@ -1207,11 +1214,22 @@ export async function captureFrames(
     )
     return output
   } finally {
-    cleanup()
-    if (browser) await browser.exited
-    process.removeListener('SIGTERM', cleanup)
-    process.removeListener('SIGINT', cleanup)
-    await rm(profile, { recursive: true, force: true })
+    // Browser.close lets Chromium reap helpers and unlink singleton sockets.
+    // Retain the process-group kill as a bounded fallback for failed startup.
+    const timeout = setTimeout(cleanup, 5000)
+    try {
+      if (socket?.readyState === WebSocket.OPEN)
+        socket.send(JSON.stringify({ id: 0, method: 'Browser.close' }))
+      else cleanup()
+      if (browser) await browser.exited
+    } finally {
+      clearTimeout(timeout)
+      socket?.close()
+      process.removeListener('SIGTERM', cleanup)
+      process.removeListener('SIGINT', cleanup)
+      await rm(profile, { recursive: true, force: true })
+      await rm(browserTemp, { recursive: true, force: true })
+    }
   }
 }
 export function captureSeedForEvidence(seed?: SeedEvidence) {

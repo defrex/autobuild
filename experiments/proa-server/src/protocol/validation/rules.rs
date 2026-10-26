@@ -188,6 +188,11 @@ pub(super) fn apply(
                 custom(issues, path, message(), false);
             }
         }
+        "target_distance" => {
+            if !value["count"].is_null() && value["head"].is_null() {
+                issues.push(json!({"code":"custom","path":path,"message":"Invalid input"}));
+            }
+        }
         "landing_intent" => {
             if value.get("commandSeq").is_none() && value.get("decisionSeq").is_none() {
                 custom(issues, path, message(), false);

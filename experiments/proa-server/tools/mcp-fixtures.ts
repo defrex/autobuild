@@ -119,29 +119,33 @@ function sample(schema: SampleSchema): unknown {
   if (schema.type === 'null') return null
   return 'missing'
 }
-export async function seedMcpControl(store: BuildStore) {
+export async function seedMcpControl(
+  store: BuildStore,
+  seed: 'control' | 'merge' | 'land' = 'control',
+) {
+  const slug = seed === 'control' ? 'mcp-control-build' : `mcp-${seed}-build`
   const corpus = JSON.parse(
     readFileSync(resolve(import.meta.dir, '../fixtures/control-corpus.json'), 'utf8'),
   )
   const fixture = corpus.fixtures.find(
-    (f: { scenario: { id: string } }) => f.scenario.id === 'pause-running',
+    (f: { scenario: { id: string } }) =>
+      f.scenario.id === (seed === 'control' ? 'pause-running' : 'land-ready'),
   )
   const events = JSON.parse(
     JSON.stringify(fixture.seed.events)
       .replaceAll('acme/widgets', mcpRepo)
-      .replaceAll('control-build', 'mcp-control-build'),
+      .replaceAll('control-build', slug),
   ) as Parameters<typeof validateEventWrite>[0][]
   await store.createBuild({
-    slug: 'mcp-control-build',
+    slug,
     repo: mcpRepo,
     created: validateEventWrite(events[0]!) as never,
   })
-  for (const event of events.slice(1))
-    await store.append('mcp-control-build', validateEventWrite(event))
+  for (const event of events.slice(1)) await store.append(slug, validateEventWrite(event))
 }
 export interface McpRequest {
   label: string
-  seed?: 'control'
+  seed?: 'control' | 'merge' | 'land'
   method?: string
   body?: unknown
   rawBody?: string
@@ -221,6 +225,9 @@ export async function generateMcpCorpus() {
       name: 'builds.list',
       arguments: { repo: mcpRepo },
     }),
+    ...['merges.list', 'landings.list'].map((name) =>
+      rpc(`${name}-success`, 'tools/call', { name, arguments: { repo: mcpRepo } }),
+    ),
     rpc('notes.read-success', 'tools/call', {
       name: 'notes.read',
       arguments: { repo: mcpRepo },
@@ -259,9 +266,17 @@ export async function generateMcpCorpus() {
     }),
     seed: 'control',
   })
+  for (const action of ['merge', 'land'] as const)
+    requests.push({
+      ...rpc(`builds.control-${action}-positive`, 'tools/call', {
+        name: 'builds.control',
+        arguments: { repo: mcpRepo, slug: `mcp-${action}-build`, action },
+      }),
+      seed: action,
+    })
   const observations = []
   for (const request of requests) {
-    if (request.seed) await seedMcpControl(store)
+    if (request.seed) await seedMcpControl(store, request.seed)
     const headers = new Headers({
       'content-type': request.contentType ?? 'application/json',
       accept: request.accept ?? 'application/json, text/event-stream',
