@@ -238,11 +238,11 @@ async fn projected_row_diagnostics_tokens_and_bounded_message_preview_reach_html
         settings: json!({}),
         error: None,
         rows: vec![
-            json!({"slug":"blocked","status":"blocked","alsoPaused":true,
+            json!({"slug":"blocked","status":"blocked","alsoPaused":true,"target":"main","targetDistance":"+7",
             "pr":{"url":"https://github.com/acme/web/pull/612","state":"open"},
             "reviewRoundCeilings":{"plan":3,"code":5},"setupError":"Setup command failed",
             "blockers":["Question first line\n\nParagraph preserved\nTHE CONFLICT\nHidden explanation"],"steps":[]}),
-            json!({"slug":"node","status":"running","integrationRow":{"steps":[],"children":{"known":true,"landed":2,"total":5,"building":1,"queued":2}},"steps":[]}),
+            json!({"slug":"node","status":"running","target":"parent-ticket","integrationRow":{"parentDistance":"+3","steps":[],"children":{"known":true,"landed":2,"total":5,"building":1,"queued":2}},"steps":[]}),
         ],
     });
     let html = proa_core::render_to_string(page);
@@ -252,7 +252,10 @@ async fn projected_row_diagnostics_tokens_and_bounded_message_preview_reach_html
         "https://github.com/acme/web/pull/612",
         "(paused)",
         "review round ceiling: plan 3, code 5",
-        "2/5 landed · 1 building · 2 queued",
+        "2/5 merged · 1 building · 2 queued",
+        "target main +7",
+        "target parent-ticket +3",
+        " · merge ",
         "message-alert",
         "Question first line",
         "Paragraph preserved",

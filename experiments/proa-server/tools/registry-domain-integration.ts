@@ -118,6 +118,9 @@ export function registryDomainScenarios() {
       ['repository-status', 'repository.status', {}, 'success'],
       ['harvest-status', 'harvest.status', {}, 'success'],
       ['tree-positive', 'tickets.tree', {}, 'success'],
+      ['merges-consent', 'merges.list', {}, 'success'],
+      ['merges-pinned', 'merges.list', {}, 'success'],
+      ['merges-invalid-pin', 'merges.list', {}, 'applicable-refusal'],
       ['landings-consent', 'landings.list', {}, 'success'],
       ['landings-pinned', 'landings.list', {}, 'success'],
       ['landings-invalid-pin', 'landings.list', {}, 'applicable-refusal'],
@@ -206,7 +209,7 @@ export async function replayNativeRegistryDomains(options: {
     // Separate ticket repos share identical public IDs; repo-qualified values bind explicitly.
     const bound = JSON.parse(JSON.stringify(expected).replaceAll(oracleRepo, nativeRepo))
     assert.deepEqual(actual, bound, `${id} ${tool}`)
-    if (id === 'landings-consent' || id === 'landings-pinned')
+    if (['landings-consent', 'landings-pinned', 'merges-consent', 'merges-pinned'].includes(id))
       assert.equal(actual.body.length, 1, `${id} populated consent queue`)
     const manifest = registryDomainScenarios().find(
       (entry) => entry.id === `registry-domain-${id}`,
@@ -353,6 +356,7 @@ export async function replayNativeRegistryDomains(options: {
       })
     }
     await compare(`landings-${variant}`, 'landings.list', {}, repo)
+    await compare(`merges-${variant}`, 'merges.list', {}, repo)
   }
   return { cases: checked, witnesses }
 }

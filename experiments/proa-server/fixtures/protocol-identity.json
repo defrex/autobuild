@@ -3,17 +3,17 @@
   "generator": "experiments/proa-server/tools/protocol-identity-fixtures.ts",
   "sources": {
     "bun.lock": "fe4407c3d113f11ca8975668f1bd2e5564f46d23e0cb61b9d5add1736f13e04d",
-    "package.json": "7507080992cd3ae4e56cc195150ff0da8a4935255b0bdba6d4c52dd5b4cf4bdd",
+    "package.json": "02abee7860adf08e1562d7d0fb43608d135212408d8356739eaf9fa63ac22aec",
     "packages/core/package.json": "d7c7e0bf807a59b9faf550bef5bf815835d36719ef61673d42069da8350d5c8e",
-    "packages/core/src/events/catalog.ts": "6841ef6f4d72d7df5aba9b7820d397918409a9ebda220d18b66c90feddef942c",
+    "packages/core/src/events/catalog.ts": "c590eea29af59cc12cc06af6f54accc4790fc192e23a843c170284990f9b91c1",
     "packages/core/src/events/compatibility.test.ts": "ce99c771479a2dc964ca31a42998a78173bcea807da8c18b21bd704617d9d04c",
     "packages/core/src/events/compatibility.ts": "4653b4d2ec1ed06a34a1aac93bb399b3c4a363a060cdb4b16f2de4af3b8478af",
     "packages/core/src/events/envelope.ts": "0a1b70b4615b7e7be70c5b91e5ff77699bd04ee7401ea0f810b10c81a1d6ede8",
     "packages/core/src/events/globs.ts": "eee4c16443fe88fa9186eef3223432b54295651181858693875fe615ad85df69",
     "packages/core/src/events/native-session.ts": "12f0b870947f2efbf8b55a2438278c9f6ac2a71178d2145c21fb9a37cd1dd799",
     "packages/core/src/events/payloads.test.ts": "2a4e6702e92ab6aa88cbaa9bad3d81da98176d71023c0639d8ef52de845a1665",
-    "packages/core/src/events/payloads.ts": "da996c04214e6190e199e71759ce1809213fab6bcc513462e906fe901a6f009b",
-    "packages/core/src/events/policy.ts": "0db86511f62ebd407f6510d2cb7ab3dc4d57497c9e3b5b650e2aec37b8c87ca3",
+    "packages/core/src/events/payloads.ts": "c3ac2fa563716beea3834983cf9c1a8415a119e6562f720ac4fa9ac9586fdfeb",
+    "packages/core/src/events/policy.ts": "5f9685b6d0ebec814c86dfb0cde6cb04980a1987d42822031bb343ce7b4ad205",
     "packages/core/src/events/repository.test.ts": "ad9efa8e133cf88e3800fbbbf0d420343c9bd73240b5e7679ada7feb020a8e41",
     "packages/core/src/events/repository.ts": "7e49ef392e8de682f7bc9f98ad52fb57b6b866b4328ab5dbdd9a14bb958e90f0",
     "packages/core/src/events/runtime.ts": "e2dc3990fd323fa0547c4130f665175f2e08eec41dc5b846f8d09354eb3e8f15",
@@ -35,7 +35,7 @@
   "service": {
     "autobuildVersion": "1.0.1",
     "protocolVersion": "6",
-    "catalogIdentity": "bab76dc2cd65a89041193ac595521d12374beae0b9c275656fbc233bce695e58",
+    "catalogIdentity": "1badb6c3d9830b5f9c69a1fd1060fe37760e7f21f9b77df699f22fb973fe3f37",
     "supportedClientRange": {
       "minVersion": "1.0.0",
       "maxVersionExclusive": "1.1.0"

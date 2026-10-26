@@ -192,12 +192,12 @@ async fn execute(
         ("PUT", ["settings", "auto-merge-default"]) => {
             super::request_schema::parse("settingRequestSchema", bytes)?;
             Err(OperatorError::refusal(
-                "Auto-merge default is retired; configure [[landing]] rules in autobuild.toml",
+                "Auto-merge default is retired; configure [[merge]] rules in autobuild.toml",
             )
             .with_code("retired-setting"))
         }
         ("POST", ["settings", "auto-merge-default", "toggle"]) => Err(OperatorError::refusal(
-            "Auto-merge default is retired; configure [[landing]] rules in autobuild.toml",
+            "Auto-merge default is retired; configure [[merge]] rules in autobuild.toml",
         )
         .with_code("retired-setting")),
         ("POST", ["bulk-control"]) => {

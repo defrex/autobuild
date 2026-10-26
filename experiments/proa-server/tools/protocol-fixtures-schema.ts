@@ -48,6 +48,7 @@ export function schemaNode(schema: z.ZodType, path: string): unknown {
     if (fn.includes('value !== "."')) return 'filename_component'
     if (fn.includes('u0000-')) return 'filename_basename'
     if (fn.includes('url.startsWith("https://")')) return 'https_url'
+    if (path === 'target.distance') return 'target_distance'
     if (fn.includes('request.reason !== "presence"')) return 'presence_demand'
     if (fn.includes('value.commandSeq !==')) return 'landing_intent'
     if (fn.includes('new Set(steps).size')) return 'unique_values'
@@ -235,6 +236,11 @@ export function producerPayloadVariants(scope: string, type: string, payload: un
     out.push({ name: `refinement/payload/${name}`, payload: value })
   const patch = (name: string, fields: Record<string, unknown>) =>
     add(name, { ...structuredClone(root), ...fields })
+  if (type === 'target.distance') {
+    patch('unknown', { head: null, count: null })
+    patch('missing-head', { head: null, count: 1 })
+    patch('zero', { count: 0 })
+  }
   const replace = (path: (string | number)[], value: unknown) => {
     const result = structuredClone(root)
     let target: Record<string | number, unknown> = result
