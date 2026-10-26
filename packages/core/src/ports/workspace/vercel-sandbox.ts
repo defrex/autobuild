@@ -1,3 +1,4 @@
+import { accountPolicy, accountGuestEnvironment } from './account-policy'
 import { gitRewrite, parseRemoteHead } from '../forge/git-rewrite'
 import { delegateCredential } from '../../store/remote/credentials'
 import type { ExecutionLaunchAuth } from './build-execution'
@@ -741,6 +742,7 @@ async function preflightBun(sandbox: VercelSandboxHandle, image: string): Promis
 }
 
 export interface VercelReadinessOptions {
+  accounts?: import('../../config/accounts').Accounts
   config: VercelSandboxConfig
   env: Record<string, string | undefined>
   storeRef: string
@@ -838,6 +840,9 @@ export async function validateVercelSandbox(
   if (facade.createFresh === undefined) {
     throw new Error('the configured Vercel SDK facade does not support fresh validation sandboxes')
   }
+  const readinessAccountPolicy = accountPolicy('allow-all', options.accounts ?? {}, options.env)
+  if (readinessAccountPolicy.missing.length)
+    throw new Error(`Missing credentials: ${readinessAccountPolicy.missing.join('; ')}`)
   const sandbox = await facade.createFresh({
     source: {
       type: 'git',
@@ -853,7 +858,7 @@ export async function validateVercelSandbox(
     ...(config.snapshotExpirationSeconds === undefined
       ? {}
       : { snapshotExpiration: config.snapshotExpirationSeconds * 1000 }),
-    networkPolicy: 'allow-all',
+    networkPolicy: readinessAccountPolicy.policy,
     keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
@@ -930,7 +935,11 @@ export async function validateVercelSandbox(
     await bootstrapRuntimes(
       sandbox,
       config,
-      runtimeEnvironment(config, options.env),
+      accountGuestEnvironment(
+        runtimeEnvironment(config, options.env),
+        options.accounts ?? {},
+        options.env,
+      ),
       options.runtimeReferences ?? [],
       true,
       options.signal,
@@ -944,13 +953,15 @@ export async function validateVercelSandbox(
           `PATH=${VERCEL_BUN_BIN_PATH}:$PATH exec ${VERCEL_BUN_EXECUTABLE} ${VERCEL_AUTOBUILD_PATH}/bin/ab-init-probe.ts`,
         ],
         cwd: VERCEL_WORKSPACE_PATH,
-        env: Object.fromEntries([
-          ['AB_STORE', options.storeRef],
-          ['AB_TOKEN', options.storeToken],
-          ...config.environmentVariables
-            .filter((name) => !['AB_TOKEN', 'AB_TICKET_URL', 'AB_TICKET_TOKEN'].includes(name))
-            .map((name) => [name, requireVercelEnvironmentValue(options.env, name)]),
-        ]),
+        env: {
+          ...accountGuestEnvironment(
+            runtimeEnvironment(config, options.env),
+            options.accounts ?? {},
+            options.env,
+          ),
+          AB_STORE: options.storeRef,
+          AB_TOKEN: options.storeToken,
+        },
       }),
     )
     readiness = {
@@ -1122,6 +1133,7 @@ export interface VercelSandboxProviderOptions {
   facade?: VercelSandboxFacade
   exec?: Exec
   packageArchive?: () => Promise<Uint8Array>
+  accounts?: () => import('../../config/accounts').Accounts
   runtimeReferences?: RuntimeReferencesSource
   /** Checkout-less seam: the repository's HTTPS GitHub origin. Default reads
    * `git remote get-url origin` from `repo` on the host. */
@@ -1168,6 +1180,25 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   private readonly facade: VercelSandboxFacade
   private readonly exec: Exec
   private readonly active = new Set<string>()
+  private readonly policyLocks = new Map<string, Promise<void>>()
+
+  private async withPolicyLock<T>(ref: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.policyLocks.get(ref) ?? Promise.resolve()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const queued = previous.then(() => held)
+    this.policyLocks.set(ref, queued)
+    await previous
+    try {
+      return await action()
+    } finally {
+      release()
+      if (this.policyLocks.get(ref) === queued) this.policyLocks.delete(ref)
+    }
+  }
+
   /** A failed stop leaves execution state unknown until a later stop/delete succeeds. */
   private readonly uncertain = new Set<string>()
   private readonly origins = new Map<string, ReturnType<typeof cleanGithubOrigin>>()
@@ -1204,11 +1235,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.observeWaitMs = options.observeWaitMs ?? VERCEL_OBSERVE_WAIT_MS
     this.buildExecution = {
       start: (input, auth) => this.start(input, auth),
-      observe: (identity) => this.observeExecution(identity),
+      observe: (identity) =>
+        this.withPolicyLock(identity.workspaceRef, () => this.observeExecution(identity)),
     }
     this.harvestExecution = {
       start: (input, auth) => this.startHarvestExecution(input, auth),
-      observe: (identity) => this.observeExecution(identity),
+      observe: (identity) =>
+        this.withPolicyLock(identity.workspaceRef, () => this.observeExecution(identity)),
     }
     this.orchestratorSandbox = {
       describe: (input) => this.describeOperatorSandbox(input),
@@ -1233,9 +1266,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
     this.publication = {
       rewrite: (input: Parameters<NonNullable<WorkspacePublication['rewrite']>>[0]) =>
-        this.publish(input),
+        this.withPolicyLock(input.ref, () => this.publish(input)),
       isPublished: (input: { sha: string; branch: string }) => this.isPublished(input),
-      publish: (input: { ref: string; sha: string; branch: string }) => this.publish(input),
+      publish: (input: { ref: string; sha: string; branch: string }) =>
+        this.withPolicyLock(input.ref, () => this.publish(input)),
     }
     // The operator-sandbox publication path reuses the SAME capability: its
     // publish pushes an exact sha from any sandbox ref, including an operator
@@ -1353,7 +1387,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         ...(this.options.config.snapshotExpirationSeconds === undefined
           ? {}
           : { snapshotExpiration: this.options.config.snapshotExpirationSeconds * 1000 }),
-        networkPolicy: uploadPackPolicy(origin, readAuth),
+        networkPolicy: this.billingPolicy(uploadPackPolicy(origin, readAuth)),
         keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
         signal: this.operationSignal(),
       })
@@ -1400,7 +1434,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
+          { ...this.guestEnvironment(), AB_TOKEN: scopedToken },
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1519,6 +1553,21 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.origins.delete(ref)
   }
 
+  private guestEnvironment(): Record<string, string> {
+    return accountGuestEnvironment(
+      runtimeEnvironment(this.options.config, this.options.env),
+      this.options.accounts?.() ?? {},
+      this.options.env,
+    )
+  }
+
+  private billingPolicy(base: NetworkPolicy, ref?: string): NetworkPolicy {
+    if (ref?.startsWith('autobuild-sandbox-')) return base
+    const result = accountPolicy(base, this.options.accounts?.() ?? {}, this.options.env)
+    if (result.missing.length) throw new Error(`Missing credentials: ${result.missing.join('; ')}`)
+    return result.policy
+  }
+
   private async normalNetworkPolicy(ref: string): Promise<{
     origin: ReturnType<typeof cleanGithubOrigin>
     policy: NetworkPolicy
@@ -1527,11 +1576,14 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.origins.set(ref, origin)
     return {
       origin,
-      policy: uploadPackPolicy(
-        origin,
-        this.options.config.gitPasswordEnv === undefined
-          ? undefined
-          : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
+      policy: this.billingPolicy(
+        uploadPackPolicy(
+          origin,
+          this.options.config.gitPasswordEnv === undefined
+            ? undefined
+            : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
+        ),
+        ref,
       ),
     }
   }
@@ -1591,7 +1643,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
+      { ...this.guestEnvironment(), AB_TOKEN: scopedToken },
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
@@ -1604,9 +1656,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         supervision: { kind: 'environment' },
       }),
     }
-    for (const name of this.options.config.environmentVariables)
-      if (!['AB_TOKEN', 'AB_TICKET_URL', 'AB_TICKET_TOKEN'].includes(name))
-        env[name] = requireVercelEnvironmentValue(this.options.env, name)
+    Object.assign(env, this.guestEnvironment())
     const command = (await sandbox.runCommand({
       cmd: 'sh',
       args: [
@@ -1814,7 +1864,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         ...(this.options.config.snapshotExpirationSeconds === undefined
           ? {}
           : { snapshotExpiration: this.options.config.snapshotExpirationSeconds * 1000 }),
-        networkPolicy: uploadPackPolicy(origin, readAuth),
+        networkPolicy: this.billingPolicy(uploadPackPolicy(origin, readAuth)),
         keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
         signal: this.operationSignal(),
       })
@@ -1855,7 +1905,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
+          { ...this.guestEnvironment(), AB_TOKEN: scopedToken },
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1892,7 +1942,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
+      { ...this.guestEnvironment(), AB_TOKEN: scopedToken },
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
@@ -1915,9 +1965,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         : {}),
       [HARVEST_RUNNER_OPTIONS_ENV]: JSON.stringify(envelope),
     }
-    for (const envName of this.options.config.environmentVariables)
-      if (!['AB_TOKEN', 'AB_TICKET_URL', 'AB_TICKET_TOKEN'].includes(envName))
-        env[envName] = requireVercelEnvironmentValue(this.options.env, envName)
+    Object.assign(env, this.guestEnvironment())
     const command = (await sandbox.runCommand({
       cmd: 'sh',
       args: [
@@ -1988,6 +2036,17 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         )
       }
     }
+    const origin = this.origins.get(identity.workspaceRef) ?? cleanGithubOrigin(await this.origin())
+    const base = uploadPackPolicy(
+      origin,
+      this.options.config.gitPasswordEnv === undefined
+        ? undefined
+        : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
+    )
+    const refreshed = accountPolicy(base, this.options.accounts?.() ?? {}, this.options.env)
+    await sandbox.update({ networkPolicy: refreshed.policy }, { signal: this.operationSignal() })
+    if (refreshed.missing.length)
+      throw new Error(`Missing credentials: ${refreshed.missing.join('; ')}`)
     let observation: ExecutionObservation
     try {
       const command = await sandbox.getCommand(identity.commandId, {
@@ -2581,7 +2640,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     if (!token) {
       throw new Error('vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN')
     }
-    const { origin, policy: normal } = await this.normalNetworkPolicy(input.ref)
+    const { origin } = await this.normalNetworkPolicy(input.ref)
     const sandbox =
       this.sessions.get(input.ref) ?? (await this.facade.get(input.ref, this.operationSignal()))
     if (sandbox === null) throw new Error(`unknown sandbox ${input.ref}`)
@@ -2633,7 +2692,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       },
     }
     try {
-      await sandbox.update({ networkPolicy: publicationPolicy }, { signal: this.operationSignal() })
+      await sandbox.update(
+        { networkPolicy: this.billingPolicy(publicationPolicy, input.ref) },
+        { signal: this.operationSignal() },
+      )
       if (input.expected !== undefined) {
         const capability = gitRewrite(async (cmd) => {
           const result = await sandbox.runCommand({
@@ -2685,7 +2747,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       await sandbox.stop({ signal: this.operationSignal() })
     } finally {
       try {
-        await sandbox.update({ networkPolicy: normal }, { signal: this.operationSignal() })
+        await sandbox.update(
+          { networkPolicy: (await this.normalNetworkPolicy(input.ref)).policy },
+          { signal: this.operationSignal() },
+        )
       } finally {
         await sandbox.stop({ signal: this.operationSignal() })
       }

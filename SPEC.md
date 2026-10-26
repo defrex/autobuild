@@ -4151,3 +4151,26 @@ Shared requests are attributed to their first requester; cache hits count zero.
 A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
 
 Default `ab watch` includes this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
+
+
+### Named billing accounts
+
+Deployment-owned `[accounts.<name>]` descriptors contain `kind` and
+`credentialEnv`, plus the closed Kimi `region` (`overseas` by default or `china`).
+Role and alternate `account` axes inherit independently. Claude routes default
+to the sole Claude subscription account; ambiguity, unknown references and
+incompatible runtimes fail configuration. No accounts preserves legacy behavior.
+Only the unmodified Claude Code runtime, the user's own subscription and ordinary
+individual usage are supported. Credentials are provisioned manually; Autobuild
+never signs in or captures setup-token output.
+
+Local sessions resolve host credentials after ambient merging. Remote sessions
+receive account placeholders; exact provider hostname and placeholder header
+matches broker real credentials on the host. Both Kimi endpoint and host derive
+from one closed regional mapping, without cross-region retry. Observation ticks
+refresh the live egress policy from dispatcher environment values. Selected
+account descriptors persist with sessions for continuation; configuration and
+launch artifacts contain no secret values. Credential rejections require renewal
+and bypass alternates; quota and availability retain existing fallback behavior.
+Account secrets are redacted at persistence boundaries, including split streamed
+deltas and prior values retained across rotation.

@@ -59,6 +59,7 @@ export interface WorkspaceProviderPluginFactoryContext<Config = Record<string, u
   /** Host-derived effective runtime routes (the referenced runtimes and their
    * selection provenance). Absent at call sites that reference no runtimes
    * (for example the MCP server), which never construct a workspace. */
+  accounts?: () => import('../config/accounts').Accounts
   runtimeReferences?: RuntimeReferencesSource
   /** Checkout-less seam: the repository's HTTPS origin. When absent the
    * provider falls back to host `git` from `repoRoot` — the same default the

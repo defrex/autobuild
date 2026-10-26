@@ -1,3 +1,4 @@
+import { selectAccount, type SelectedAccount } from './accounts'
 /**
  * Role-key consumability diagnostics (SPEC §9).
  *
@@ -79,6 +80,7 @@ export interface RoleKeyDiagnostics {
 type StepTable = { kind: 'check' } | { kind: 'agent'; skill: string }
 
 export interface RuntimeReferenceGroup {
+  accountTargets?: Array<{ account: SelectedAccount; model?: string; references: string[] }>
   runtime: string
   /** Human-readable routes selecting this runtime, including alternates. */
   references: string[]
@@ -95,7 +97,7 @@ export interface RuntimeReferenceGroup {
  * bootstrap share one source of truth.
  */
 export function effectiveRuntimeReferences(
-  config: Pick<Config, 'roles' | 'verify' | 'finalize'>,
+  config: Pick<Config, 'roles' | 'verify' | 'finalize'> & Partial<Pick<Config, 'accounts'>>,
 ): RuntimeReferenceGroup[] {
   const defaultSpec = config.roles.default ?? {}
   const routes: Array<{ role: string; aliases?: string[]; label: string }> = [
@@ -112,6 +114,10 @@ export function effectiveRuntimeReferences(
     })),
   ]
 
+  const accountTargets = new Map<
+    string,
+    Array<{ account: SelectedAccount; model?: string; references: string[] }>
+  >()
   const grouped = new Map<
     string,
     { references: Set<string>; models: Set<string>; usesRuntimeDefaultModel: boolean }
@@ -123,7 +129,18 @@ export function effectiveRuntimeReferences(
     }
     return defaultSpec
   }
-  const add = (runtime: string | undefined, model: string | undefined, reference: string) => {
+  const add = (
+    runtime: string | undefined,
+    model: string | undefined,
+    reference: string,
+    accountName?: string,
+  ) => {
+    const account = selectAccount(config.accounts ?? {}, runtime, accountName, reference)
+    if (account && runtime) {
+      const targets = accountTargets.get(runtime) ?? []
+      targets.push({ account, ...(model === undefined ? {} : { model }), references: [reference] })
+      accountTargets.set(runtime, targets)
+    }
     if (runtime === undefined || runtime.trim() === '') return
     const group = grouped.get(runtime) ?? {
       references: new Set(),
@@ -140,21 +157,32 @@ export function effectiveRuntimeReferences(
     const spec = declaredSpec(route.role, route.aliases)
     const runtime = spec.runtime ?? defaultSpec.runtime
     const model = spec.model ?? defaultSpec.model
-    add(runtime, model, `${route.label} primary`)
+    add(runtime, model, `${route.label} primary`, spec.account ?? defaultSpec.account)
     const alternates = spec.alternates ?? defaultSpec.alternates ?? []
     alternates.forEach((alternate, index) => {
       add(
         alternate.runtime ?? runtime,
         alternate.model ?? model,
         `${route.label} alternate[${index}]`,
+        alternate.account ?? spec.account ?? defaultSpec.account,
       )
     })
   }
+
+  // Unused accounts still require the actual Claude binary for readiness.
+  for (const [name, descriptor] of Object.entries(config.accounts ?? {}))
+    add(
+      'claude',
+      descriptor.kind === 'kimi-code' ? 'kimi-for-coding' : undefined,
+      `account ${displayName(name)} readiness`,
+      name,
+    )
 
   return [...grouped.entries()]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([runtime, group]) => ({
       runtime,
+      ...(accountTargets.has(runtime) ? { accountTargets: accountTargets.get(runtime)! } : {}),
       references: [...group.references].sort(),
       models: [...group.models].sort(),
       usesRuntimeDefaultModel: group.usesRuntimeDefaultModel,

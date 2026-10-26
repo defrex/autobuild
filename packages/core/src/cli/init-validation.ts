@@ -1,3 +1,4 @@
+import { accountRemedy } from '../config/accounts'
 import { createForge } from '../ports/forge/create'
 import {
   inspectForgeReadiness,
@@ -73,7 +74,7 @@ function effectiveTargets(
 ): Array<{ runtime: string; models: string[] }> {
   // Preserve eager registry/model/argument validation, but probe only routes
   // the pipeline can consume rather than every declared role table.
-  createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds)
+  createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds, config.accounts)
   return effectiveRuntimeReferences(config).map((group) => {
     const defaultModel = runtimes[group.runtime]?.defaultModel
     return {
@@ -124,10 +125,10 @@ export async function runGuestReadinessProbe(opts: {
   // check detail now see `[REDACTED]` there. Providers without a
   // `guestEnvNames`/`configSchema` declaration fall back to the name-heuristic
   // redaction only.
-  const redact = createReadinessRedactor(
-    opts.env,
-    providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
-  )
+  const redact = createReadinessRedactor(opts.env, [
+    ...(providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : []),
+    ...Object.values(config.accounts).map((account) => account.credentialEnv),
+  ])
   try {
     const setup = config.commands.setup
     if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
@@ -221,7 +222,48 @@ export async function runGuestReadinessProbe(opts: {
       : `fix workspace.config.runtimeProvisioning.${runtime}${preflightOnly ? '.preflight' : ''} and expose API credential names in workspace.config.environmentVariables`
 
   try {
+    for (const [name, descriptor] of Object.entries(config.accounts)) {
+      checks.push({
+        name: `credential ${JSON.stringify(name)}`,
+        status: opts.env[descriptor.credentialEnv] ? 'pass' : 'warning',
+        detail: `${descriptor.credentialEnv} is ${opts.env[descriptor.credentialEnv] ? 'present' : 'absent'}${!opts.env[descriptor.credentialEnv] && descriptor.kind === 'claude-subscription' ? '; run claude setup-token for remote use' : ''}`,
+      })
+      const account = { name, descriptor }
+      const completion = runtimes.claude?.oneShot
+      try {
+        if (!completion) throw new Error('Claude runtime has no model probe capability')
+        await completion.complete({
+          prompt: 'Reply only OK.',
+          cwd: opts.repo,
+          env: Object.fromEntries(
+            Object.entries(opts.env).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined,
+            ),
+          ),
+          account,
+          model:
+            descriptor.kind === 'kimi-code' ? 'kimi-for-coding' : runtimes.claude?.defaultModel,
+          signal: AbortSignal.any([
+            AbortSignal.timeout(30_000),
+            ...(opts.signal ? [opts.signal] : []),
+          ]),
+        })
+        checks.push({
+          name: `account ${JSON.stringify(name)}`,
+          status: 'pass',
+          detail: 'minimal Claude Code model request succeeded',
+        })
+      } catch (error) {
+        checks.push({
+          name: `account ${JSON.stringify(name)}`,
+          status: 'fail',
+          detail: `${redact(error)}; ${accountRemedy(account)}`,
+        })
+      }
+    }
     for (const target of effectiveTargets(config, runtimes)) {
+      if (target.runtime === 'claude' && Object.keys(config.accounts).length) continue
+
       if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
       const probe = runtimes[target.runtime]?.initUsable
       if (probe === undefined) {
@@ -432,10 +474,10 @@ export async function validateInitReadiness(opts: {
     builtinCaps?.configSchema !== undefined
       ? builtinCaps.configSchema.parse(config.workspace.config)
       : undefined
-  let redact = createReadinessRedactor(
-    opts.env,
-    providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
-  )
+  let redact = createReadinessRedactor(opts.env, [
+    ...(providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : []),
+    ...Object.values(config.accounts).map((account) => account.credentialEnv),
+  ])
   let caps: WorkspaceProviderCapabilities | undefined
   let assigneeLine: string | undefined
   let forgeChecks: ForgeReadinessCheck[] = readinessChecks(
@@ -480,10 +522,12 @@ export async function validateInitReadiness(opts: {
     if (caps?.configSchema !== undefined)
       providerConfig = caps.configSchema.parse(config.workspace.config)
     if (caps?.guestEnvNames !== undefined)
-      redact = createReadinessRedactor(
-        opts.env,
-        caps.guestEnvNames(providerConfig !== undefined ? providerConfig : config.workspace.config),
-      )
+      redact = createReadinessRedactor(opts.env, [
+        ...caps.guestEnvNames(
+          providerConfig !== undefined ? providerConfig : config.workspace.config,
+        ),
+        ...Object.values(config.accounts).map((account) => account.credentialEnv),
+      ])
     // Registry-aware process-env-only check: a declared name present in the
     // dotenv-augmented `env` but absent from the raw launcher map fails here,
     // so plugin-declared requirements and non-CLI callers are covered too
@@ -635,6 +679,7 @@ export async function validateInitReadiness(opts: {
       exec,
       redact,
       runtimeReferences: effectiveRuntimeReferences(config),
+      accounts: config.accounts,
       stdout: opts.stdout ?? (() => {}),
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       ...(opts.vercelFacade !== undefined ? { facade: opts.vercelFacade } : {}),

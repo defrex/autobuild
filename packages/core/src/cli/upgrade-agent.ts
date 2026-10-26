@@ -87,6 +87,7 @@ export function upgradeConflictPrompt(input: {
 }
 
 interface ResolvedCompletion {
+  account?: import('../config/accounts').SelectedAccount
   oneShot: OneShotCompletion
   model?: string
   args: readonly string[]
@@ -110,7 +111,12 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
         repoRoot: opts.targetRepo,
         env: opts.env,
       })
-      const selected = createRuntimeResolver(runtimes, config.roles).resolve(UPGRADE_ROLE)
+      const selected = createRuntimeResolver(
+        runtimes,
+        config.roles,
+        config.policy.sessionBudgetSeconds,
+        config.accounts,
+      ).resolve(UPGRADE_ROLE)
       const oneShot = runtimes[selected.runtime]?.oneShot
       if (oneShot === undefined) {
         throw new Error(
@@ -122,6 +128,7 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
         oneShot,
         ...(selected.model !== undefined ? { model: selected.model } : {}),
         args: selected.args,
+        account: selected.account,
       }
     })()
     return resolved
@@ -167,6 +174,7 @@ export function createUpgradeAgentResolver(opts: UpgradeAgentResolverOpts): Reso
           signal: controller.signal,
           ...(selected.model !== undefined ? { model: selected.model } : {}),
           args: selected.args,
+          account: selected.account,
         }),
         stopped,
       ])

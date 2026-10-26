@@ -110,7 +110,7 @@ Sandbox preparation order:
 4. `runtimeProvisioning.<runtime>` installs
 5. `commands.setup`
 
-- **Runtimes.** Every primary and alternate runtime needs a pinned install and exact-version preflight, and gets only the credentials named in `environmentVariables`; subscription logins aren't copied.
+- **Runtimes.** Every primary and alternate runtime needs a pinned install and exact-version preflight, and gets only the credentials named in `environmentVariables`, except declared [accounts](configuration-overview.md#accounts), whose credentials remain on the host and are brokered by egress policy using guest placeholders.
 - **Repetition.** New sandboxes repeat provisioning and preflights rerun before each build-runner; keep setup idempotent.
 - **Validation.** `bun ab init --validate` runs named provisioning, setup, runtime and Store checks in a disposable environment, deletes it even on failure, and starts no build or agent.
 - **Lifetime.** `timeoutSeconds` bounds a sandbox; provider operations have their own timeouts. An intact sandbox resumes; an expired or lost one is rebuilt from durable workspace and publication evidence, losing unpublished work that lived only on it.
@@ -126,7 +126,7 @@ export AB_GIT_READ_TOKEN='<read-only repository token>'
 
 - Use a repository-scoped read token, separate from the push identity. For a public clone, remove `gitUsernameEnv` and `gitPasswordEnv`.
 - Autobuild passes these as the authenticated Git source for [Vercel private-repository cloning](https://vercel.com/kb/guide/sandbox-private-github-repositories); don't embed credentials in the origin URL.
-- `environmentVariables` is only for runtime API credentials. Never forward `AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, Vercel tokens or the clone token; Autobuild supplies scoped Store authority, keeps clone secrets out of guest commands, and publishes from the host.
+- `environmentVariables` forwards legacy runtime API credentials; declared account credentials become placeholders even when listed here. Never forward `AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, Vercel tokens or the clone token; Autobuild supplies scoped Store authority, keeps clone secrets out of guest commands, and publishes from the host.
 
 ## Writing your own
 

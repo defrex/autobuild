@@ -2370,3 +2370,55 @@ test('host forge checks propagate root, distinguish warnings/unknown, fail hard 
     expect(JSON.stringify(report)).not.toContain('token-secret')
   }
 })
+
+test('readiness makes one bounded real-adapter completion per account including unused accounts', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'ab-account-readiness-'))
+  roots.push(repo)
+  await writeFile(
+    join(repo, 'autobuild.toml'),
+    `
+[tickets]
+source = "file"
+readyState = "Ready"
+[roles.default]
+runtime = "claude"
+[accounts.personal]
+kind = "claude-subscription"
+credentialEnv = "PERSONAL"
+[accounts.unused]
+kind = "kimi-code"
+credentialEnv = "MEMBERSHIP"
+region = "china"
+`,
+  )
+  const calls: string[] = []
+  const report = await runGuestReadinessProbe({
+    repo,
+    env: {
+      AB_STORE: 'https://store.example',
+      PERSONAL: 'sentinel-personal',
+      MEMBERSHIP: 'sentinel-membership',
+    },
+    runtimes: {
+      claude: {
+        runner,
+        servesModels: ['claude-'],
+        oneShot: {
+          complete: async (input) => {
+            expect(input.signal).toBeDefined()
+            calls.push(input.account!.name)
+            return { text: 'OK' }
+          },
+        },
+      },
+    },
+    openStore: () => readOnlyStore([]),
+  })
+  expect(calls.sort()).toEqual(['personal', 'unused'])
+  expect(
+    report.checks
+      .filter((check) => check.name.startsWith('account '))
+      .every((check) => check.status === 'pass'),
+  ).toBe(true)
+  expect(JSON.stringify(report)).not.toContain('sentinel-')
+})
