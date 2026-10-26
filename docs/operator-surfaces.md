@@ -1,7 +1,7 @@
 ---
 title: "Operator surfaces"
 group: "reference"
-description: "Watch and act through the terminal, web app, CLI, or MCP with your operator agent."
+description: "Watch and act through the terminal, CLI, local stdio MCP, or Operator API with your operator agent."
 label: "Operator surfaces"
 order: 12
 ---
@@ -35,7 +35,7 @@ bun ab build status example-build --json
 - Interactive `dispatch` shows the terminal dashboard.
 - A shell-capable agent follows progress and acts through the CLI, including `bun ab watch` and `bun ab wait`.
 - A standing CLI operator uses `bun ab watch --operator --json` after checking `bun ab repository status --json` for existing presence. It operates the builds the repository's dispatcher dispatches and adopts new ones.
-- Presence is advisory, allows multiple registrations, and is not exposed by MCP or the web app. Termination attempts withdrawal; routine timeout/count re-arms keep the five-minute grace. SIGKILL and failed withdrawal rely on TTL expiry.
+- Presence is advisory, allows multiple registrations, and is not exposed by MCP. Termination attempts withdrawal; routine timeout/count re-arms keep the five-minute grace. SIGKILL and failed withdrawal rely on TTL expiry.
 - Dashboard and API share one lifecycle vocabulary.
 
 A local CLI can use a remote Store:
@@ -53,15 +53,6 @@ readyState = "ready"
 
 `bun ab connect https://builds.example.com` approves the registered project and saves its credential outside the checkout; CI sets `AB_TOKEN` instead. It authorizes the project only, not forge or runtime access. See [Build store](build-store.md).
 
-### Web app
-
-The hosted web app shows registered repositories and their builds.
-
-- **Sign-in** uses the deployment's GitHub authentication and organization membership policy, independent of CLI credentials.
-- **Merge consent:** a merge awaiting consent offers **Merge** and **Hold**. These record durable actions; readiness and merge gates still apply. See [Authorize merge](operating.md#authorize-merge).
-- **Appearance:** open the account menu and choose **System**, **Light** or **Dark** under **Theme**. System is the default and follows the OS preference. Your choice is saved for this browser.
-- **Secrets** (database, blob, signing, OAuth, super-user list) stay on the service, never in TOML or browser bundles.
-
 ### Local stdio MCP
 
 For an agent with an MCP client but no convenient shell, configure the client to launch:
@@ -75,17 +66,9 @@ bun ab mcp
 - **Phase refusal.** Refuses phase-session `AB_*` authority, including malformed tuples: repository-wide tools can't be narrowed to one phase.
 - **Attribution.** Sessionless writes use the local user identity, like the CLI.
 
-### Hosted HTTP MCP
-
-A remote agent connects its MCP client to `https://builds.example.com/mcp` over Streamable HTTP.
-
-- **Authentication:** OAuth with discovery, dynamic registration, PKCE and rotating refresh tokens, authorized through the deployment's sign-in and organization membership. `AB_TOKEN` doesn't substitute.
-- **Every call** rechecks access and repository scope.
-- **Writes** record the authorizing identity and MCP client.
-
 ## Writing your own
 
-There's no operator-surface plugin map. Build a client of the versioned, authenticated Operator API, or connect through MCP.
+There's no operator-surface plugin map. Build a client of the versioned, authenticated Operator API, or launch local stdio MCP.
 
 - One registry defines tools, schemas, annotations and execution, keeping CLI, API and MCP at parity.
 - Follow the API's request, version and authentication requirements; don't scrape dashboard markup.

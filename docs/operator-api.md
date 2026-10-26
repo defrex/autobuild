@@ -1,6 +1,7 @@
 # Operator API v1
 
-The hosted service exposes the polling-oriented operator surface at
+A conforming hosted instance implements this normative polling-oriented operator
+contract at
 `/operator/v1/repos/{repo}`. It is versioned with remote store protocol **6**.
 Every request must send `X-Autobuild-Version`,
 `X-Autobuild-Protocol-Version: 6`, and `Authorization: Bearer …`. Identity is
@@ -14,29 +15,16 @@ every request. Revocation takes effect on the next request without affecting
 other credentials. Unknown, expired or revoked credentials receive `401 auth`;
 removed projects receive `403 auth` with `project not registered`.
 
-The deployment owner runs these commands locally with database access:
-
-```sh
-ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
-ab-hosted-store credentials list https://github.com/acme/app
-ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
-```
-
-Issue prints the secret once; list contains metadata only. Issue optionally
-accepts `--ttl-seconds N` or `--expires-at ISO-8601`. For administrative/non-interactive issuance, set the returned token as
-`AB_TOKEN`. Interactive project onboarding uses `ab connect <service-url>`;
-it saves the credential outside the repository and commits no secret. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
-retired: the service responds that the credential format changed and points
-to `credentials issue`. Supported old protocol shapes still work with a new
-credential; protocol compatibility does not restore retired authentication.
-
-`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
-break-glass credential. It can cross project boundaries. Keep it owner-only:
-never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
+Obtain a project credential with `ab connect <instance-url>` or from the
+instance, and use `AB_TOKEN` on non-interactive clients. Interactive connection
+saves the credential outside the repository. Retired credential formats are
+refused with a credential-format-changed diagnostic; supported old protocol
+shapes still require current credentials. Compatibility does not restore retired
+authentication. Versioned, attributed owner-admin credentials are an explicit
+cross-project exception and must never be supplied to build agents.
 
 Owner-purpose project credentials attribute every write to their recorded creator.
-Dispatcher-purpose credentials are refused. Signed-in owners in the dashboard
-and MCP receive short-lived internal signatures with an explicit version,
+Dispatcher-purpose credentials are refused. Internal operator credentials use short-lived internal signatures with an explicit version,
 selected repository, signed user, expiry and MCP `via`. Only the service holds
 the signing key. These signatures authorize operator routes only and require a
 registered project; replay against another project is refused.
@@ -46,13 +34,12 @@ tool execution. Body repositories and secondary build/session identifiers are
 also checked inside that project. Explicit project mismatches return `403 auth:
 wrong project`; removal returns `403 auth: project not registered`. Encode each
 repository, build, session and artifact kind as a separate URL path segment.
-Registration changes use the database-local `projects list|add|remove` owner
-commands; see [owner workflow](setup.md#connected-projects).
+Registration is instance-owned; project credentials cannot administer it.
 
 ## Operator sessions
 
 Operator sessions are the signed-in user's durable orchestrator
-conversations: a hosted-only third store resource. A session
+conversations: a third store resource. A session
 belongs to the user who created it; other members of the same repository
 can read it and cannot write to it (`403 auth` on non-owner writes). Every
 write is attributed to the token's signed user — never a client-supplied
@@ -148,7 +135,7 @@ The retry object is deliberately bare: adding `text` is a `400 validation`
 rather than silently changing the resolution to guidance. A revision object may
 also carry `ceiling` only to receive the shared `incompatible-answer-options`
 refusal; a ceiling and spec revision cannot be performed together.
-The hosted service has no ticket-provider credentials. For ticket-origin
+The protocol does not supply ticket-provider credentials. For ticket-origin
 revision, a trusted caller fetches the current ticket body and supplies it; the
 build must still have a recorded ticket. Revision conformance, lazy retry,
 artifact metadata, event ordering, and refusal rules are the same as the CLI.
@@ -174,8 +161,7 @@ restart from `plan`.
 ## The registry's protocol face: `POST …/tools/{tool}`
 
 One generic route executes any entry of the agent tool registry (the same
-closed table `ab mcp` serves over stdio and the hosted `/mcp` endpoint serves
-over Streamable HTTP): the body is the tool's validated input — `repo`
+closed table `ab mcp` serves over stdio): the body is the tool's validated input — `repo`
 included and required to equal the URL's repository — and the response is the
 registry result verbatim. The verified operator token supplies the acting
 identity and, when minted with one, the `via` attribution marker; the body
@@ -222,18 +208,16 @@ progress and unattempted builds. Unexpected failures are `500 internal`.
 
 ## Browser gateway
 
-The same deployment serves the web dashboard through `/api/web/repos/{repo}/…`.
+The cookie-authenticated gateway contract uses `/api/web/repos/{repo}/…`.
 That route is not a second public bearer-token API: it requires a current
-Better Auth HTTP-only cookie, rechecks the deployment current organization membership and project registration, rejects cross-origin JSON controls, and delegates only the dashboard,
+Better Auth HTTP-only cookie, rechecks the instance’s current organization membership and project registration, rejects cross-origin JSON controls, and delegates only the dashboard,
 build, settings, and harvest operator suffixes listed above. It replaces caller-supplied authorization/version
 headers with a server-minted token that expires after 30 seconds and carries
 the normalized signed-in email. Consequently every durable control event has
 the browser user's human actor while no token or signing secret reaches client
-code. Responses are private/no-store; a 401 sends the application back to sign
-in. Browser clients poll the visible dashboard every two seconds; the browser
-surface offers no streaming of its own — live transcript streaming remains
-absent here, and the streaming read surface is the CLI's `ab watch`, which
-polls the store's event reads client-side. Delegated bearer tokens remain
+code. Responses are private/no-store; 401 requires reauthentication.
+Polling clients may use a two-second interval. The gateway provides no
+streaming transport; `ab watch` polls store event reads client-side. Delegated bearer tokens remain
 server-side.
 
 The API does not expose phase-session commands, runner startup, a push or
@@ -387,12 +371,12 @@ ignores old holds. Preflight failure suppression above remains separate.
 ## Organization management (browser)
 
 These same-origin cookie-session routes are the management contract. Mutations
-require the exact `BETTER_AUTH_URL` Origin and `application/json`, accept at most
+require the exact configured instance origin as Origin and `application/json`, accept at most
 8192 characters of JSON, and reject unsupported fields. Responses are private,
 no-store. No client-supplied actor or role is trusted. Raw Better Auth
 `/api/auth/organization/*` routes are disabled, including invitations.
 
-### Discovery and bootstrap
+### Discovery and creation
 
 `GET /api/web/orgs` returns
 `{isSuperUser,organizations:[{id,name,slug,ownerEmail,membershipRole}]}`.
@@ -403,14 +387,10 @@ Results sort by slug then ID. Members may inspect and read rosters in their own
 organizations, including member emails. Foreign organizations return 403 before
 resource detail. A multi-org member uses these IDs for explicit connect selection.
 
-To bootstrap, sign in as a super user configured by
-`AB_WEB_SUPER_USER_EMAILS`, then POST `{name,slug}` to `/api/web/orgs`.
+Only super users may POST `{name,slug}` to `/api/web/orgs`.
 The response is 201 `{organization}` in the discovery shape. Names are nonblank
 and at most 100 characters; slugs are unique lowercase kebab strings of at most
-100 characters. Creation grants no membership. The account menu links every
-operator to `/members`, and super users to `/organizations` and `/projects`.
-These separate pages show acknowledged reads, refresh after writes, and confirm
-member removal and project moves inline before writing.
+100 characters. Creation grants no membership.
 
 Super users and the organization’s members can GET `/api/web/orgs/:orgId` for
 `{organization,projects:[repo]}` with active owned projects and the caller’s actual
@@ -447,5 +427,4 @@ the inactive project; re-registration restores that assignment.
 Status codes are 401 for absent, malformed or expired sessions; 403 for admission
 or role refusal; 400 for invalid inputs; 404 for missing resources after role
 checks; 409 for duplicate slugs; and sanitized 503 for store outages. Foreign
-projects return the same unknown-repository result as absent projects. Machine
-credentials and the hosted-store administration CLI keep their existing behavior.
+projects return the same unknown-repository result as absent projects. Machine credentials retain their separate authority.

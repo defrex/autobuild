@@ -110,19 +110,15 @@ pipeline stays the same.
 | Seam       | Decides               | Adapters                                   |
 | ---------- | --------------------- | ------------------------------------------ |
 | tickets    | where work comes from | local files, Linear, hosted, plugin        |
-| dispatcher | what starts builds    | local process, scheduled (hosted)          |
+| dispatcher | what starts builds    | local process                              |
 | workspace  | where a build runs    | git worktree, Vercel Sandbox, plugin       |
 | runtime    | who does the thinking | Claude Code, Codex, Pi, plugin             |
 | forge      | where code merges     | local git, GitHub, plugin                  |
-| store      | where state lives     | SQLite, Postgres, any HTTP store           |
-| operators  | how you watch         | terminal, web UI, MCP                      |
+| store      | where state lives     | SQLite, remote HTTP store                  |
+| operators  | how you watch         | terminal, stdio MCP, Operator API           |
 
 Plugins are trusted Bun modules declared in `autobuild.toml` against the
-versioned `@defrex/autobuild/plugin-sdk`. Teams that want one durable store
-across hosts can deploy the optional
-[hosted service](packages/hosted-store-service/README.md), which adds a
-browser dashboard, a [scheduled dispatcher](docs/hosted-dispatcher.md), an
-[operator API](docs/operator-api.md), and an [MCP server](docs/mcp.md).
+versioned `@defrex/autobuild/plugin-sdk`.
 
 
 ## Built for throughput, not latency
@@ -171,8 +167,6 @@ routine escalations, leaving you only the real product calls.
   configuration, as a worked example of the config surface.
 - [`docs/architecture.md`](docs/architecture.md) — how the design maps to the
   codebase: kernel, ports, processes, and stores.
-- [`packages/postgres-store/README.md`](packages/postgres-store/README.md) —
-  serverless PostgreSQL persistence with S3-compatible or Vercel Blob storage.
 - [`docs/remote-store-protocol.md`](docs/remote-store-protocol.md) — the
   complete HTTP server contract and BuildStore conformance instructions.
 - [`SPEC.md`](SPEC.md) — the source of truth for the design and its
@@ -181,5 +175,3 @@ routine escalations, leaving you only the real product calls.
 ## License
 
 [Apache License 2.0](LICENSE).
-
-Deploy your own store and dashboard with the [hosted service setup](docs/hosted-service.md).

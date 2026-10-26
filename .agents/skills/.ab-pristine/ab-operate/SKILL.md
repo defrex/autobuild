@@ -273,15 +273,13 @@ and concurrency. The service does not load your prompt or operator notes, run
 a durable agent loop, deliver wake messages, or resume you on a timer.
 Read notes and current repository facts explicitly before acting. Tool writes
 use the authenticated binding's operator identity: local MCP uses the local
-operator identity, and hosted MCP uses the authenticated user's authority.
+operator identity; Operator API clients use their authenticated authority.
 Do not assume session-owner delegation or a runner-provided repository scope.
 
 ### Human approvals
 
 Respect a human denial as a firm no. Any approval or suspension flow in your
-external harness belongs to that harness. Hosted session approval answers are
-durable records only; the service does not execute approved calls or resume
-agents. Do not repeat completed work when your harness resumes.
+external harness belongs to that harness. Protocol session approval answers are durable records only. Do not repeat completed work when your harness resumes.
 
 ### The tool surface
 
@@ -433,7 +431,7 @@ for the exceptions above.
   id you act on came from a tool result or the conversation.
 - External harnesses own concurrency and incoming-message handling; the
   service provides no one-turn-at-a-time or queued-message execution guarantee.
-- Where operator notes exist (hosted), they are shared ground truth; keep
+- Where your harness provides shared operator notes, keep
   them current when you learn something durable.
 
 ## Drive the tree through one consent queue

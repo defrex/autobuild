@@ -1,6 +1,7 @@
 # Remote BuildStore protocol
 
-This document is the complete normative HTTP contract for Autobuild's remote
+A conforming hosted instance implements this complete normative HTTP contract
+for Autobuild's remote
 `BuildStore`. Implement this protocol to provide build storage on any database,
 blob store, or service stack; Autobuild does not load in-process `BuildStore`
 plugins. Compatibility means that an Autobuild remote client can use the server
@@ -16,13 +17,12 @@ A service accepts stable and prerelease clients from its own `major.minor`
 release line and the two preceding minor lines in the same major. A major starts a new family:
 X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
 Patch versions are interchangeable in both directions and must never change
-the protocol. Upgrade the service first, then projects independently within
-its window. Supported release lines retain their wire handlers and known
+the protocol. Clients must remain within the instance’s published compatibility window. Supported release lines retain their wire handlers and known
 protocol identities; an unknown protocol is refused independently of version.
 Stable and prerelease service and client identities share their numeric major/minor
 line. Malformed or missing identities, build metadata (`+…`), prefixes and
 whitespace are refused with HTTP 409.
-A newer client is told to upgrade the service; a client below the window is
+A newer client receives an instance-upgrade diagnostic; a client below the window is
 told to upgrade the project's Autobuild. Diagnostics name the service version
 and supported range.
 
@@ -56,8 +56,7 @@ headers, or available backend.
   padded standard base64 (not base64url). A server may impose a documented
   decoded-byte ceiling. It decodes and checks every standalone or bundled
   artifact before any backing mutation; excess content receives `413
-  {"kind":"validation","error":"…"}` naming the byte ceiling. The shipped
-  hosted service ceiling is 1,048,576 decoded bytes (1 MiB).
+  {"kind":"validation","error":"…"}` naming the byte ceiling. An implementation-dependent example ceiling is 1,048,576 decoded bytes (1 MiB).
 - Store-assigned times are ISO-8601 UTC strings in JavaScript
   `Date.toISOString()` form, for example `2026-07-15T12:00:00.000Z`.
 - Event sequence numbers and artifact revisions are integers assigned by the
@@ -340,7 +339,7 @@ one caller can succeed for a given current sequence. A comparison miss returns
 timestamps. An unknown build remains `404 not-found`; malformed or negative
 `expectedSeq` is `400 validation`.
 
-For a present `since` or `rev`, the shipped server applies JavaScript
+For a present `since` or `rev`, the server applies JavaScript
 `Number(rawValue)` and accepts the result only when `Number.isInteger` is true.
 Consequently hexadecimal and exponent forms such as `0x10` and `1e1`,
 whitespace-padded values, and empty or whitespace-only values are accepted;
@@ -466,10 +465,8 @@ elapses, whichever comes first; at the bound it answers `200 []`. Omitting
 digits — deliberately stricter than the lenient `since`/`rev` conversion above:
 empty, whitespace-padded, hexadecimal, signed, and non-integral values are `400
 validation`, not coerced. Values above the server's documented ceiling are
-clamped to it, never rejected; the shipped self-hosted server's ceiling is 30
-seconds (the stream/session wait ceiling) and the shipped hosted service's is
-25 seconds, stated in its README together with the route `maxDuration` the hold
-requires. A held request's authentication, token scope, and version-skew rules
+clamped to it, never rejected; implementation-dependent examples are 30
+seconds (the stream/session wait ceiling) and 25 seconds. A held request's authentication, token scope, and version-skew rules
 are identical to the immediate form: a `401`, `403`, or `409` identity failure
 is answered immediately, never held.
 
@@ -659,8 +656,7 @@ together with the effective `maxBytes`, computed from it as follows. Paths and
 entry counts are bounded, so the worst-case wire overhead is a constant:
 `overhead = 1024 + 1000 × 320 = 321024` bytes, and
 `maxBytes = min(26214400, max(0, floor((maxRequestBytes − overhead) × 3 / 4)))`
-(base64 inflates content by 4/3); `maxEntries` stays 1000. The hosted service
-sets `maxRequestBytes` to 4 MiB, giving an effective per-asset limit of 2904960
+(base64 inflates content by 4/3); `maxEntries` stays 1000. For example, an instance with `maxRequestBytes` of 4 MiB has an effective per-asset limit of 2904960
 bytes (about 2.8 MiB). The formula is a safe lower bound, not the final
 authority:
 
@@ -692,8 +688,7 @@ turn. Historical turn events and streams retain their validation and read
 contracts. External operator harnesses own execution and scheduling.
 
 Operator sessions are a third resource kind: durable orchestrator-conversation
-state keyed by repository and session owner (the human account in `operator`). They are hosted-only — local installs
-interact through the CLI and dashboard and never create one — but the resource
+state keyed by repository and session owner (the human account in `operator`). Local CLI workflows do not create these resources; the resource
 contract is uniform, and a conforming server implements it the same way it
 implements the repository journal. A session record is:
 
@@ -743,10 +738,8 @@ section 6 apply to session-scoped streams unchanged.
 Event reads honor the bounded wait: when no newer event exists, the server may
 hold the request up to the parsed `wait` bound in whole seconds, returning as
 soon as an event is appended and no later than the bound; a `wait` above the
-event-wait ceiling of section 3 — 30 seconds on the shipped self-hosted server,
-25 on the shipped hosted service — is clamped to it. Held session-event reads poll at the hosted
-one-second budget (`EVENT_WAIT_POLL_MS = 1000`), matching the build and
-repository event reads, so append-to-wake is typically under one second. The
+event-wait ceiling of section 3 — for example 30 or 25 seconds depending on the instance — is clamped to it. An implementation may poll at a
+one-second budget (1000 ms) for session, build and repository event reads. The
 clamp and early-return semantics are exactly the
 stream read's, so a poll loop cannot drift between the two.
 
@@ -836,7 +829,7 @@ session-attribution dimension — stream parts have no actor.
 | `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) parsed leniently like the `since` of section 3; `wait` (whole seconds) parsed by the digits-only grammar of section 3's event-wait rules — one or more ASCII digits, anything else `400 validation` per section 9 — and clamped to the 30-second stream ceiling below | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
 | `closeStream` | `POST /builds/{slug}/streams/{id}/close` and `POST /repos/{repo}/streams/{id}/close` | `{"outcome": "completed" \| "aborted"}` | `200` + the closed `StreamRecord` |
 
-Because a stream id is globally unique but names no scope, the shipped server
+Because a stream id is globally unique but names no scope, a conforming server
 and client additionally expose the four addressed operations as top-level
 routes, which resolve the stream's own scope and then authorize against it:
 
@@ -911,28 +904,16 @@ every request. Revocation takes effect on the next request without affecting
 other credentials. Unknown, expired or revoked credentials receive `401 auth`;
 removed projects receive `403 auth` with `project not registered`.
 
-The deployment owner runs these commands locally with database access:
-
-```sh
-ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
-ab-hosted-store credentials list https://github.com/acme/app
-ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
-```
-
-Issue prints the secret once; list contains metadata only. Issue optionally
-accepts `--ttl-seconds N` or `--expires-at ISO-8601`. For administrative/non-interactive issuance, set the returned token as
-`AB_TOKEN`. Interactive project onboarding uses `ab connect <service-url>`;
-it saves the credential outside the repository and commits no secret. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
-retired: the service responds that the credential format changed and points
-to `credentials issue`. Supported old protocol shapes still work with a new
-credential; protocol compatibility does not restore retired authentication.
-
-`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
-break-glass credential. It can cross project boundaries. Keep it owner-only:
-never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
+Obtain a project credential with `ab connect <instance-url>` or from the
+instance, and use `AB_TOKEN` on non-interactive clients. Interactive connection
+saves the credential outside the repository. Retired credential formats are
+refused with a credential-format-changed diagnostic; supported old protocol
+shapes still require current credentials. Compatibility does not restore retired
+authentication. Versioned, attributed owner-admin credentials are an explicit
+cross-project exception and must never be supplied to build agents.
 
 Service-owned signatures use `base64url(JSON scope) + "." +
-base64url(HMAC-SHA256(AB_STORE_SECRET, payloadSegment))`. Signatures are checked
+base64url(HMAC-SHA256(instanceSigningKey, payloadSegment))`. Signatures are checked
 in constant time. Current strict scope shapes are:
 
 ```jsonc
@@ -971,9 +952,8 @@ project; phase CLI scoped handles still constrain build and session access.
 Authenticated raw writes cannot claim a delegated `via`. Owner-project
 credentials also use their recorded creator for operator writes. Dispatcher
 credentials have an immutable server-side purpose: raw store and tickets only,
-never operator controls. The hosted dispatcher issues one per project
-invocation, expiring at its configured TTL, and does not revoke at tick return
-for dispatcher plumbing. Spawned builds receive independent delegated grants. Shared content-addressed blobs
+never operator controls. Dispatcher-purpose credentials may expire at a configured TTL without
+revocation at tick return. Spawned builds receive independent delegated grants. Shared content-addressed blobs
 remain deduplicated; this is resource authorization, not blob partitioning.
 
 
@@ -1108,7 +1088,7 @@ These rules apply identically to build, repository, and session deposits.
 ## 9. Errors and validation
 
 Every non-success response is exactly the JSON error shape from section 2.
-The shipped server maps failures as follows:
+Conforming servers map failures as follows:
 
 | Status | `kind` | Meaning |
 |---:|---|---|
@@ -1193,12 +1173,10 @@ For streams, the backing store must additionally maintain:
   30-second clamp and no wait on closed streams;
 - the bounded wait on the build, repository, and session event reads exactly
   as specified in section 3, with no per-request database poll faster than once
-  per second (the shipped PostgreSQL adapter polls held reads at
-  `EVENT_WAIT_POLL_MS = 1000`, so an append by another connection is observed
-  at the next poll — typically within about one second, worst case one poll
-  interval plus the query round-trip; a hard ≤1 s worst case would need
-  LISTEN/NOTIFY wake-on-append at a dedicated connection per held request on
-  a pooled provider, a cost considered and declined);
+  per second (a 1000 ms polling implementation observes an append by another
+  connection at the next poll, typically within about one second, with a worst
+  case of one poll interval plus the query round-trip; the protocol does not
+  promise a hard ≤1 s worst case);
 - the atomic close — document assembly, artifact deposit, and the closed
   record visible together or not at all, with the stream left open and
   unwritten when the deposit fails;
@@ -1242,8 +1220,7 @@ Four shipped behaviors do not add `BuildStore` routes:
   returns `200 {"ok":true,"autobuildVersion":"1.1.0",
   "protocolVersion":"6", "supportedClientRange":{"minVersion":"1.0.0",
   "maxVersionExclusive":"1.2.0"}}`. It reports HTTP-process availability and identity,
-  not a deeper backing-store transaction or migration check. The example shows
-  the target 1.1 release identity; the checkout still uses its installed package version.
+  not a deeper backing-store transaction or migration check. The example shows the 1.1 release identity.
 
 There is no push/WebSocket subscription protocol, repository listing, artifact
 deletion, or server deployment API. The one repo-scoped batch read is the
@@ -1309,7 +1286,7 @@ and credential id, never the secret. Cancel denies pending work or revokes
 only that request's already approved credential. Polling and authenticated
 browser code lookup have durable limits; 429 includes Retry-After.
 
-The web-enabled origin serves `/connect` and cookie-authenticated JSON
+The instance provides `/connect` and cookie-authenticated JSON
 `POST /connect/v1/browser/lookup` and `/decide`. Decisions read the saved
 proposal, require an allowed live Better Auth session and exact Origin, and
 atomically register the project, install the digest and record the outcome.
@@ -1350,10 +1327,10 @@ assignment exists, otherwise `fixed`. Organizations are eligible `{id,name,membe
 destinations for a new project (all for super users, actual memberships otherwise),
 empty for fixed reconnects or unknown codes. Context uses the same lookup limits,
 expiry, admission and foreign-project masking; it does not assign anything.
-The browser shows a chooser only with multiple destinations, disables approval
-with zero, and sends no destination for fixed reconnects. For one actual
-membership it preserves implicit selection; a super user with a sole eligible
-organization but no membership sends that ID explicitly.
+Clients select a destination only for new projects with eligible organizations;
+zero destinations cannot approve, and fixed reconnects send no destination.
+One actual membership permits implicit selection; a super user with a sole
+eligible organization but no membership sends that ID explicitly.
 
 Browser connection approval accepts optional `organizationId` in the decide JSON.
 A new project defaults to the approver's only actual membership; zero or multiple
@@ -1395,10 +1372,8 @@ re-registers the same ID. Watch withdrawal treats only 404/405 as an unsupported
 route and silently retains TTL expiry; authorization, transport and malformed
 success errors are diagnosed without failing the watch.
 
-This checkout prepares protocol 6 for the next minor line, 1.1. Published
-v1.0.0/v1.0.1 shipped protocol 4; protocol 5 never shipped. The release identity
-table retains `1.0 -> 4`, and a 1.1/protocol-6 service admits those published
-clients. A 1.0 service does not admit 1.1 clients; route fallback never bypasses
-peer admission. Package versions remain unchanged during feature preparation;
-the maintainer's later minor release command owns the version bump. Patches
+Release line 1.1 uses protocol 6. Published v1.0.0/v1.0.1 use protocol 4;
+protocol 5 never shipped. The release identity table retains `1.0 -> 4`, and
+a 1.1/protocol-6 instance admits those published clients. A 1.0 instance does
+not admit 1.1 clients; route fallback never bypasses peer admission. Patches
 within a published release line must keep its protocol identity.
