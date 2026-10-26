@@ -142,6 +142,34 @@ pub fn project(
         out["integrationDetail"] = detail;
     }
 
+    out["target"] = state["target"]["ticket"]["id"]
+        .as_str()
+        .or(state["baseBranch"].as_str())
+        .map(|s| json!(s))
+        .unwrap_or(config["baseBranch"].clone());
+    if state["kind"] != "node" {
+        let sample = &restack["distance"];
+        let count = if sample["branch"] == state["baseBranch"]
+            && sample["sha"] == restack["target"]["sha"]
+        {
+            sample["count"]
+                .as_u64()
+                .filter(|n| *n <= 9_007_199_254_740_991)
+        } else {
+            None
+        };
+        out["targetDistance"] = json!(if state["prState"] == "merged"
+            || state["prState"] == "closed"
+        {
+            String::new()
+        } else {
+            match count {
+                Some(0) => String::new(),
+                Some(n) => format!("+{n}"),
+                None => "+?".into(),
+            }
+        });
+    }
     out["tree"] = super::tree::project(record, state, restack, &pipeline["verify"]["steps"]);
     out["blockers"] = json!(array(&state["openEscalations"])
         .iter()
@@ -265,12 +293,15 @@ pub fn project(
     let cycle_since = restart.max(number(&state["verify"]["cycleSince"]));
     let active = &state["currentPhase"];
     let at = |phase: &str| number(&active["seq"]) > restart && active["phase"] == phase;
+    let activity_at = restack
+        .get("activityAt")
+        .unwrap_or(&state["lastEvent"]["ts"]);
     let frozen = if state["status"] == "running" {
         None
     } else if state["status"] == "paused" && facts["pausedAt"].is_string() {
         epoch(&facts["pausedAt"])
     } else {
-        epoch(&state["lastEvent"]["ts"])
+        epoch(activity_at)
     };
     let cycle: Vec<_> = array(&state["verify"]["results"])
         .iter()
@@ -406,7 +437,7 @@ pub fn project(
     let mut merge = step("merge", false, merge_current, false);
     merge["qualifier"] = json!("waiting");
     if merge_current {
-        let last = epoch(&state["lastEvent"]["ts"]).unwrap_or(0);
+        let last = epoch(activity_at).unwrap_or(0);
         merge["timing"] = if let Some(now) = frozen {
             json!({"accumulatedMs":(now-last).max(0)})
         } else {
@@ -415,11 +446,11 @@ pub fn project(
         if !landing::authorized(&state["landing"]) {
             let slug = record["slug"].as_str().unwrap_or_default();
             merge["reason"] = json!(if state["landing"]["command"]["kind"] == "hold" {
-                format!("Landing held — use ab land {slug} when ready to release the hold")
+                format!("Merge held — use ab merge {slug} when ready to release the hold")
             } else if state["landing"]["decision"]["mode"] == "consent" {
-                format!("Landing awaits consent — use ab land {slug}; use ab hold {slug} to withdraw consent")
+                format!("Merge awaits consent — use ab merge {slug}; use ab hold {slug} to withdraw consent")
             } else {
-                "Landing policy decision pending".into()
+                "Merge policy decision pending".into()
             });
         }
     }
@@ -453,7 +484,7 @@ pub fn project(
         } else if !landing::authorized(&state["landing"]) {
             "integration awaits explicit per-build consent".into()
         } else {
-            "integration awaits guarded landing".into()
+            "integration awaits guarded merge".into()
         });
         steps = vec![
             step("spec", !state["specRev"].is_null(), false, false),

@@ -1,7 +1,7 @@
 {
   "format": 1,
   "clock": "2026-09-02T00:00:00.000Z",
-  "sourceHash": "9ba3286d2872e985c4249ff4912c29f3d3087a9cfa25e0c53da73735b8091035",
+  "sourceHash": "b44460a80a908b97f73e580bec41d19db6bb7459b828688a196ae2d32586fd82",
   "fixtures": [
     {
       "scenario": {
@@ -26610,7 +26610,7 @@
       "status": 409,
       "body": {
         "kind": "refusal",
-        "error": "Auto-merge default is retired; configure [[landing]] rules in autobuild.toml",
+        "error": "Auto-merge default is retired; configure [[merge]] rules in autobuild.toml",
         "code": "retired-setting"
       },
       "after": {
@@ -26921,7 +26921,7 @@
       "status": 409,
       "body": {
         "kind": "refusal",
-        "error": "Auto-merge default is retired; configure [[landing]] rules in autobuild.toml",
+        "error": "Auto-merge default is retired; configure [[merge]] rules in autobuild.toml",
         "code": "retired-setting"
       },
       "after": {
@@ -58587,6 +58587,2581 @@
             }
           }
         ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "tool-merge-queued",
+        "seed": "queued",
+        "path": "tools/builds.control",
+        "body": {
+          "action": "merge",
+          "repo": "acme/widgets",
+          "slug": "control-build"
+        },
+        "method": "POST"
+      },
+      "seed": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1"
+          },
+          "status": "queued",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 1,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      },
+      "status": 409,
+      "body": {
+        "kind": "refusal",
+        "error": "build \"control-build\" is not active (status: queued); build controls require running, paused, or blocked",
+        "code": "inactive"
+      },
+      "after": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1"
+          },
+          "status": "queued",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 1,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "tool-merge-running",
+        "seed": "running",
+        "path": "tools/builds.control",
+        "body": {
+          "action": "merge",
+          "repo": "acme/widgets",
+          "slug": "control-build"
+        },
+        "method": "POST"
+      },
+      "seed": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1"
+          },
+          "status": "running",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 2,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      },
+      "status": 500,
+      "body": {
+        "kind": "internal",
+        "error": "operator tool is unavailable"
+      },
+      "after": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1"
+          },
+          "status": "running",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 2,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "tool-merge-pausing",
+        "seed": "pausing",
+        "path": "tools/builds.control",
+        "body": {
+          "action": "merge",
+          "repo": "acme/widgets",
+          "slug": "control-build"
+        },
+        "method": "POST"
+      },
+      "seed": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "earlier-operator"
+            },
+            "type": "build.pause-requested",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "build.pause-requested": "3"
+          },
+          "status": "running",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "earlier-operator"
+            },
+            "type": "build.pause-requested",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 3,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [
+            {
+              "command": "pause",
+              "seq": 3,
+              "actor": {
+                "kind": "human",
+                "user": "earlier-operator"
+              }
+            }
+          ],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      },
+      "status": 500,
+      "body": {
+        "kind": "internal",
+        "error": "operator tool is unavailable"
+      },
+      "after": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "earlier-operator"
+            },
+            "type": "build.pause-requested",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "build.pause-requested": "3"
+          },
+          "status": "running",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "earlier-operator"
+            },
+            "type": "build.pause-requested",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 3,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [
+            {
+              "command": "pause",
+              "seq": 3,
+              "actor": {
+                "kind": "human",
+                "user": "earlier-operator"
+              }
+            }
+          ],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "tool-merge-paused",
+        "seed": "paused",
+        "path": "tools/builds.control",
+        "body": {
+          "action": "merge",
+          "repo": "acme/widgets",
+          "slug": "control-build"
+        },
+        "method": "POST"
+      },
+      "seed": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "earlier-operator"
+            },
+            "type": "build.pause-requested",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 4,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "build.paused",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "build.pause-requested": "3",
+            "build.paused": "4"
+          },
+          "status": "paused",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 4,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "build.paused",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 4,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      },
+      "status": 500,
+      "body": {
+        "kind": "internal",
+        "error": "operator tool is unavailable"
+      },
+      "after": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "earlier-operator"
+            },
+            "type": "build.pause-requested",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 4,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "build.paused",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "build.pause-requested": "3",
+            "build.paused": "4"
+          },
+          "status": "paused",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 4,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "build.paused",
+            "payload": {},
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 4,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "tool-merge-blocked",
+        "seed": "blocked",
+        "path": "tools/builds.control",
+        "body": {
+          "action": "merge",
+          "repo": "acme/widgets",
+          "slug": "control-build"
+        },
+        "method": "POST"
+      },
+      "seed": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "agent",
+              "role": "implement",
+              "session": "session-test"
+            },
+            "type": "escalation.raised",
+            "payload": {
+              "id": "esc-control",
+              "phase": "implement",
+              "round": 1,
+              "source": "agent",
+              "question": "What next?"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "escalation.raised": "3"
+          },
+          "status": "blocked",
+          "round": 0,
+          "openEscalations": [
+            {
+              "id": "esc-control",
+              "phase": "implement",
+              "round": 1,
+              "source": "agent",
+              "session": "session-test",
+              "question": "What next?",
+              "seq": 3
+            }
+          ],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "agent",
+              "role": "implement",
+              "session": "session-test"
+            },
+            "type": "escalation.raised",
+            "payload": {
+              "id": "esc-control",
+              "phase": "implement",
+              "round": 1,
+              "source": "agent",
+              "question": "What next?"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 3,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      },
+      "status": 500,
+      "body": {
+        "kind": "internal",
+        "error": "operator tool is unavailable"
+      },
+      "after": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "agent",
+              "role": "implement",
+              "session": "session-test"
+            },
+            "type": "escalation.raised",
+            "payload": {
+              "id": "esc-control",
+              "phase": "implement",
+              "round": 1,
+              "source": "agent",
+              "question": "What next?"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "escalation.raised": "3"
+          },
+          "status": "blocked",
+          "round": 0,
+          "openEscalations": [
+            {
+              "id": "esc-control",
+              "phase": "implement",
+              "round": 1,
+              "source": "agent",
+              "session": "session-test",
+              "question": "What next?",
+              "seq": 3
+            }
+          ],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "agent",
+              "role": "implement",
+              "session": "session-test"
+            },
+            "type": "escalation.raised",
+            "payload": {
+              "id": "esc-control",
+              "phase": "implement",
+              "round": 1,
+              "source": "agent",
+              "question": "What next?"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 3,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "tool-merge-done",
+        "seed": "done",
+        "path": "tools/builds.control",
+        "body": {
+          "action": "merge",
+          "repo": "acme/widgets",
+          "slug": "control-build"
+        },
+        "method": "POST"
+      },
+      "seed": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.completed",
+            "payload": {
+              "outcome": "merged"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "build.completed": "3"
+          },
+          "status": "done",
+          "outcome": "merged",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.completed",
+            "payload": {
+              "outcome": "merged"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 3,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      },
+      "status": 409,
+      "body": {
+        "kind": "refusal",
+        "error": "build \"control-build\" is not active (status: done); build controls require running, paused, or blocked",
+        "code": "inactive"
+      },
+      "after": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.completed",
+            "payload": {
+              "outcome": "merged"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "build.completed": "3"
+          },
+          "status": "done",
+          "outcome": "merged",
+          "round": 0,
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "landing": {},
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 0,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.completed",
+            "payload": {
+              "outcome": "merged"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 3,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      }
+    },
+    {
+      "scenario": {
+        "id": "tool-merge-ready",
+        "seed": "landing",
+        "path": "tools/builds.control",
+        "body": {
+          "action": "merge",
+          "repo": "acme/widgets",
+          "slug": "control-build"
+        },
+        "method": "POST"
+      },
+      "seed": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "finalize.completed",
+            "payload": {
+              "pr": {
+                "number": 1,
+                "url": "https://forge/1",
+                "headSha": "head"
+              }
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 4,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "landing.decided",
+            "payload": {
+              "candidate": {
+                "head": "head",
+                "parent": "base",
+                "cycle": "1"
+              },
+              "from": "leaf",
+              "into": {
+                "kind": "root"
+              },
+              "labels": [],
+              "mode": "consent",
+              "rule": {
+                "default": true
+              }
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "finalize.completed": "3",
+            "landing.decided": "{\"candidate\":{\"cycle\":\"1\",\"head\":\"head\",\"parent\":\"base\"},\"from\":\"leaf\",\"into\":{\"kind\":\"root\"},\"labels\":[],\"mode\":\"consent\",\"rule\":{\"default\":true}}"
+          },
+          "status": "running",
+          "phase": "finalize",
+          "round": 0,
+          "lastCompletedPhase": {
+            "phase": "finalize",
+            "seq": 3
+          },
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "pr": {
+            "number": 1,
+            "url": "https://forge/1",
+            "headSha": "head"
+          },
+          "prState": "open",
+          "landing": {
+            "decision": {
+              "candidate": {
+                "head": "head",
+                "parent": "base",
+                "cycle": "1"
+              },
+              "from": "leaf",
+              "into": {
+                "kind": "root"
+              },
+              "labels": [],
+              "mode": "consent",
+              "rule": {
+                "default": true
+              },
+              "seq": 4
+            }
+          },
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 3,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 4,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "landing.decided",
+            "payload": {
+              "candidate": {
+                "head": "head",
+                "parent": "base",
+                "cycle": "1"
+              },
+              "from": "leaf",
+              "into": {
+                "kind": "root"
+              },
+              "labels": [],
+              "mode": "consent",
+              "rule": {
+                "default": true
+              }
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 4,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
+      },
+      "status": 200,
+      "body": {
+        "kind": "command",
+        "slug": "control-build",
+        "command": "land",
+        "event": {
+          "build": "control-build",
+          "seq": 5,
+          "ts": "2026-09-02T00:00:00.000Z",
+          "actor": {
+            "kind": "human",
+            "user": "operator@example.com"
+          },
+          "type": "build.land-requested",
+          "payload": {
+            "decisionSeq": 4
+          },
+          "compatibility": {
+            "writerVersion": "1.0.1",
+            "classification": "decisive"
+          }
+        }
+      },
+      "after": {
+        "record": {
+          "slug": "control-build",
+          "repo": "acme/widgets",
+          "createdAt": "2026-09-02T00:00:00.000Z",
+          "updatedAt": "2026-09-02T00:00:00.000Z"
+        },
+        "events": [
+          {
+            "build": "control-build",
+            "seq": 1,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "build.created",
+            "payload": {
+              "ticket": {
+                "source": "linear",
+                "id": "TICK-1",
+                "url": "https://linear.app/acme/issue/TICK-1",
+                "title": "Add rate limiting to auth"
+              },
+              "repo": "acme/widgets",
+              "baseBranch": "main"
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 2,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "runner.attached",
+            "payload": {
+              "instance": "test-runner",
+              "host": "test-host",
+              "resumedFromSeq": 0
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 3,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "kernel"
+            },
+            "type": "finalize.completed",
+            "payload": {
+              "pr": {
+                "number": 1,
+                "url": "https://forge/1",
+                "headSha": "head"
+              }
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 4,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "dispatcher"
+            },
+            "type": "landing.decided",
+            "payload": {
+              "candidate": {
+                "head": "head",
+                "parent": "base",
+                "cycle": "1"
+              },
+              "from": "leaf",
+              "into": {
+                "kind": "root"
+              },
+              "labels": [],
+              "mode": "consent",
+              "rule": {
+                "default": true
+              }
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          {
+            "build": "control-build",
+            "seq": 5,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "operator@example.com"
+            },
+            "type": "build.land-requested",
+            "payload": {
+              "decisionSeq": 4
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          }
+        ],
+        "state": {
+          "baseBranch": "main",
+          "pollingActivity": {
+            "build.created": "1",
+            "finalize.completed": "3",
+            "landing.decided": "{\"candidate\":{\"cycle\":\"1\",\"head\":\"head\",\"parent\":\"base\"},\"from\":\"leaf\",\"into\":{\"kind\":\"root\"},\"labels\":[],\"mode\":\"consent\",\"rule\":{\"default\":true}}",
+            "build.land-requested": "5"
+          },
+          "status": "running",
+          "phase": "finalize",
+          "round": 0,
+          "lastCompletedPhase": {
+            "phase": "finalize",
+            "seq": 3
+          },
+          "openEscalations": [],
+          "answeredEscalations": [],
+          "reviewRoundCeilings": {},
+          "pr": {
+            "number": 1,
+            "url": "https://forge/1",
+            "headSha": "head"
+          },
+          "prState": "open",
+          "landing": {
+            "decision": {
+              "candidate": {
+                "head": "head",
+                "parent": "base",
+                "cycle": "1"
+              },
+              "from": "leaf",
+              "into": {
+                "kind": "root"
+              },
+              "labels": [],
+              "mode": "consent",
+              "rule": {
+                "default": true
+              },
+              "seq": 4
+            },
+            "command": {
+              "kind": "land",
+              "seq": 5,
+              "decisionSeq": 4
+            }
+          },
+          "autoMerge": {
+            "requested": false
+          },
+          "finalizeCompletedSeq": 3,
+          "finalizeSteps": [],
+          "lastEvent": {
+            "build": "control-build",
+            "seq": 5,
+            "ts": "2026-09-02T00:00:00.000Z",
+            "actor": {
+              "kind": "human",
+              "user": "operator@example.com"
+            },
+            "type": "build.land-requested",
+            "payload": {
+              "decisionSeq": 4
+            },
+            "compatibility": {
+              "writerVersion": "1.0.1",
+              "classification": "decisive"
+            }
+          },
+          "lastSeq": 5,
+          "compatibility": {
+            "unknownFacts": 0,
+            "decisiveFacts": 0,
+            "lastSeq": 0,
+            "decisiveBoundary": 0,
+            "types": [],
+            "writerVersions": [],
+            "legacyVersionUnavailable": false,
+            "decisiveTypes": [],
+            "decisiveWriterVersions": [],
+            "decisiveLegacyVersionUnavailable": false
+          },
+          "compatibilityDeferredBoundary": 0,
+          "pinnedAssets": [],
+          "restartSince": 0,
+          "plan": {
+            "round": 0,
+            "approved": false
+          },
+          "implement": {
+            "round": 0
+          },
+          "codeReviewApproved": false,
+          "reviewFindings": {
+            "planReview": [],
+            "codeReview": []
+          },
+          "verifyStage": {
+            "cycle": 0,
+            "concurrent": false,
+            "executionSeq": 0,
+            "members": {},
+            "owners": {},
+            "outcomes": {},
+            "cancellations": {},
+            "failures": [],
+            "implementations": {},
+            "superseded": []
+          },
+          "verify": {
+            "maxAttemptSeen": 0,
+            "results": [],
+            "cycleSince": 0
+          },
+          "reconcileAttempts": 0,
+          "observations": [],
+          "setupFailures": [],
+          "dispatchFailures": [],
+          "executions": [],
+          "infrastructureFailures": [],
+          "cleanupAttempts": [],
+          "pendingCommands": [],
+          "sessions": {
+            "totals": {},
+            "suspended": [],
+            "open": [],
+            "nativeHandles": {}
+          },
+          "failures": {}
+        },
+        "repository": []
       }
     }
   ]

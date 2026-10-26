@@ -49,7 +49,8 @@ function grammar(schema: z.ZodType, path: string[]): unknown {
   } else if (type === 'pipe') {
     result.input = grammar(d.in as z.ZodType, path)
     const source = (def(d.out as z.ZodType).transform as (...args: never[]) => unknown).toString()
-    if (path.join('.') === 'tickets') result.transform = 'tickets'
+    if (path.length === 0) result.transform = 'merge-alias'
+    else if (path.join('.') === 'tickets') result.transform = 'tickets'
     else if (path.join('.') === 'store.url') result.transform = 'service-url'
     else throw Error(`Unported config transform at ${path.join('.')}: ${source}`)
     result.source = source
@@ -179,7 +180,7 @@ function schemaProbes() {
 export function configurationContract() {
   const base = { tickets: { source: 'file', readyState: 'ready' } }
   const cases: unknown[] = [undefined, null, true, 1, '', [], {}, base, { ...base, unknown: true }]
-  for (const key of Object.keys((configSchema as z.ZodObject).shape))
+  for (const key of Object.keys((def(configSchema).in as z.ZodObject).shape))
     for (const input of [null, true, 0, -1, 1.5, 1e16, '', ' ', [], {}])
       cases.push({ ...base, [key]: input })
   for (const input of [
@@ -229,6 +230,12 @@ export function configurationContract() {
     },
     { plugins: ['a', 'a'] },
     { landing: [{ mode: 'auto', into: ' ', label: ' ' }] },
+    ...[[], [{ mode: 'auto' }], [{ mode: 'consent', into: 'main' }]].flatMap((rules) => [
+      { merge: rules },
+      { landing: rules },
+      { merge: rules, landing: [] },
+      { merge: [], landing: rules },
+    ]),
     { store: { url: 'https://example.com/a///' } },
     { store: { url: ' HTTPS://example.com' } },
     { store: { url: 'http://localhost:8080///' } },

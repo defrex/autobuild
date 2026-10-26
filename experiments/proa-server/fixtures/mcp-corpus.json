@@ -1,13 +1,38 @@
 {
   "format": 1,
   "manifest": {
-    "sourceClosureSha256": "fb0ca0babf1bd6f925b815f321034a608fc6d9313cab94c4c5bcb1710e5ebed3",
-    "generatorSha256": "4665a823d7ad404c9b8ef0a1b9dc04d447ac39e549d560e0fe22cbc43d5fe188"
+    "sourceClosureSha256": "fcbfa7cac789736bc1ecc28e5eefb829b2e8e15b4a387e6c481c1a79615a201c",
+    "generatorSha256": "6a10c75f3eb24b5a8cbaf2f22a9e7c71bbab7d8958609707efe5ad14e90a5ab4"
   },
   "tools": [
     {
+      "name": "merges.list",
+      "description": "List ready merges awaiting consent or held, with frozen effective targets and verification evidence.\n\nReturns: JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+          }
+        },
+        "required": ["repo"],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
       "name": "landings.list",
-      "description": "List ready landings awaiting consent or held, with frozen effective targets and verification evidence.\n\nReturns: JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.",
+      "description": "Deprecated alias for merges.list. List ready merges awaiting consent or held, with frozen effective targets and verification evidence.\n\nReturns: JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -232,7 +257,7 @@
     },
     {
       "name": "builds.control",
-      "description": "Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or land — or the destructive abort and discard. Land requires a ready candidate; hold withdraws landing consent.\n\nReturns: Either {kind: \"command\", slug, command, event} for an accepted control, or {kind: \"answer-required\", slug, escalationIds} when a resume needs its open escalations answered first.",
+      "description": "Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate; hold withdraws merge consent.\n\nReturns: Either {kind: \"command\", slug, command, event} for an accepted control, or {kind: \"answer-required\", slug, escalationIds} when a resume needs its open escalations answered first.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -249,8 +274,17 @@
           },
           "action": {
             "type": "string",
-            "enum": ["pause", "cancel-pause", "resume", "land", "hold", "abort", "discard"],
-            "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"land\" for landing consent or \"hold\" to withdraw consent — or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
+            "enum": [
+              "pause",
+              "cancel-pause",
+              "resume",
+              "merge",
+              "land",
+              "hold",
+              "abort",
+              "discard"
+            ],
+            "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"merge\" (deprecated alias \"land\") for merge consent or \"hold\" to withdraw consent — or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
           }
         },
         "required": ["repo", "slug", "action"],
@@ -342,7 +376,7 @@
     },
     {
       "name": "repository.bulk_control",
-      "description": "Pause or resume the whole repository: hold queued builds, set intake, and request per-build pause/resume in one walk.\n\nReturns: {direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code \"bulk-partial\" and a progress object naming what landed.",
+      "description": "Pause or resume the whole repository: hold queued builds, set intake, and request per-build pause/resume in one walk.\n\nReturns: {direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code \"bulk-partial\" and a progress object naming what merged.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -1441,6 +1475,19 @@
     }
   },
   "validationSchemas": {
+    "merges.list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+        }
+      },
+      "required": ["repo"],
+      "additionalProperties": false
+    },
     "landings.list": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -1598,8 +1645,8 @@
         },
         "action": {
           "type": "string",
-          "enum": ["pause", "cancel-pause", "resume", "land", "hold", "abort", "discard"],
-          "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"land\" for landing consent or \"hold\" to withdraw consent — or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
+          "enum": ["pause", "cancel-pause", "resume", "merge", "land", "hold", "abort", "discard"],
+          "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"merge\" (deprecated alias \"land\") for merge consent or \"hold\" to withdraw consent — or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
         }
       },
       "required": ["repo", "slug", "action"],
@@ -2570,8 +2617,33 @@
         "result": {
           "tools": [
             {
+              "name": "merges.list",
+              "description": "List ready merges awaiting consent or held, with frozen effective targets and verification evidence.\n\nReturns: JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.",
+              "inputSchema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Repository identity as the store keys it: the checkout’s normalized origin URL (e.g. \"https://github.com/acme/widgets\")."
+                  }
+                },
+                "required": ["repo"],
+                "additionalProperties": false
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true
+              },
+              "execution": {
+                "taskSupport": "forbidden"
+              }
+            },
+            {
               "name": "landings.list",
-              "description": "List ready landings awaiting consent or held, with frozen effective targets and verification evidence.\n\nReturns: JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.",
+              "description": "Deprecated alias for merges.list. List ready merges awaiting consent or held, with frozen effective targets and verification evidence.\n\nReturns: JSON array ordered by slug: kind, target, branch, candidate, reason, verification and node completeness.",
               "inputSchema": {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
@@ -2796,7 +2868,7 @@
             },
             {
               "name": "builds.control",
-              "description": "Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or land — or the destructive abort and discard. Land requires a ready candidate; hold withdraws landing consent.\n\nReturns: Either {kind: \"command\", slug, command, event} for an accepted control, or {kind: \"answer-required\", slug, escalationIds} when a resume needs its open escalations answered first.",
+              "description": "Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate; hold withdraws merge consent.\n\nReturns: Either {kind: \"command\", slug, command, event} for an accepted control, or {kind: \"answer-required\", slug, escalationIds} when a resume needs its open escalations answered first.",
               "inputSchema": {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
@@ -2813,8 +2885,17 @@
                   },
                   "action": {
                     "type": "string",
-                    "enum": ["pause", "cancel-pause", "resume", "land", "hold", "abort", "discard"],
-                    "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"land\" for landing consent or \"hold\" to withdraw consent — or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
+                    "enum": [
+                      "pause",
+                      "cancel-pause",
+                      "resume",
+                      "merge",
+                      "land",
+                      "hold",
+                      "abort",
+                      "discard"
+                    ],
+                    "description": "Control to request: \"pause\" (or \"cancel-pause\" to revoke a pending pause), \"resume\" a paused build, \"merge\" (deprecated alias \"land\") for merge consent or \"hold\" to withdraw consent — or the destructive \"abort\" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and \"discard\" (dequeue a queued build)."
                   }
                 },
                 "required": ["repo", "slug", "action"],
@@ -2906,7 +2987,7 @@
             },
             {
               "name": "repository.bulk_control",
-              "description": "Pause or resume the whole repository: hold queued builds, set intake, and request per-build pause/resume in one walk.\n\nReturns: {direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code \"bulk-partial\" and a progress object naming what landed.",
+              "description": "Pause or resume the whole repository: hold queued builds, set intake, and request per-build pause/resume in one walk.\n\nReturns: {direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code \"bulk-partial\" and a progress object naming what merged.",
               "inputSchema": {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
@@ -4118,6 +4199,70 @@
     },
     {
       "request": {
+        "label": "merges.list-success",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "merges.list",
+            "arguments": {
+              "repo": "https://github.com/acme/widgets"
+            }
+          }
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "[]"
+            }
+          ]
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "request": {
+        "label": "landings.list-success",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "landings.list",
+            "arguments": {
+              "repo": "https://github.com/acme/widgets"
+            }
+          }
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "[]"
+            }
+          ]
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "request": {
         "label": "notes.read-success",
         "body": {
           "jsonrpc": "2.0",
@@ -4176,6 +4321,37 @@
               "text": "{\"revision\":0,\"blobRef\":\"2b4de8e7971012f6ddbaa2615e386e74d7accf61405d7dc033225e465aa44299\",\"createdAt\":\"2026-09-02T00:00:00.000Z\"}"
             }
           ]
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "request": {
+        "label": "merges.list-schema-refusal",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "merges.list",
+            "arguments": {}
+          }
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "MCP error -32602: Input validation error: Invalid arguments for tool merges.list: Invalid input: expected string, received undefined at repo"
+            }
+          ],
+          "isError": true
         },
         "jsonrpc": "2.0",
         "id": 1
@@ -4420,7 +4596,7 @@
           "content": [
             {
               "type": "text",
-              "text": "MCP error -32602: Input validation error: Invalid arguments for tool builds.control: Invalid input: expected string, received undefined at repo\nInvalid input: expected string, received undefined at slug\nInvalid option: expected one of \"pause\"|\"cancel-pause\"|\"resume\"|\"land\"|\"hold\"|\"abort\"|\"discard\" at action"
+              "text": "MCP error -32602: Input validation error: Invalid arguments for tool builds.control: Invalid input: expected string, received undefined at repo\nInvalid input: expected string, received undefined at slug\nInvalid option: expected one of \"pause\"|\"cancel-pause\"|\"resume\"|\"merge\"|\"land\"|\"hold\"|\"abort\"|\"discard\" at action"
             }
           ],
           "isError": true
@@ -5165,6 +5341,71 @@
             {
               "type": "text",
               "text": "MCP error -32602: Input validation error: Invalid arguments for tool sandbox.publish: Invalid input: expected string, received undefined at repo\nInvalid input: expected string, received undefined at title"
+            }
+          ],
+          "isError": true
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "request": {
+        "label": "merges.list-dispatch",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "merges.list",
+            "arguments": {
+              "repo": "https://github.com/acme/widgets"
+            }
+          }
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "[]"
+            }
+          ]
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "request": {
+        "label": "merges.list-unserved",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "merges.list",
+            "arguments": {
+              "repo": "https://github.com/unknown/repo"
+            }
+          }
+        }
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"kind\":\"validation\",\"error\":\"repository \\\"https://github.com/unknown/repo\\\" is not served by this deployment; call repositories.list for the served identities\"}"
             }
           ],
           "isError": true
@@ -7378,6 +7619,76 @@
             {
               "type": "text",
               "text": "{\"kind\":\"command\",\"slug\":\"mcp-control-build\",\"command\":\"pause\",\"event\":{\"build\":\"mcp-control-build\",\"seq\":3,\"ts\":\"2026-09-02T00:00:00.000Z\",\"actor\":{\"kind\":\"human\",\"user\":\"operator@example.com\",\"via\":{\"kind\":\"mcp\",\"client\":\"offline-mcp-client\"}},\"type\":\"build.pause-requested\",\"payload\":{},\"compatibility\":{\"writerVersion\":\"1.0.1\",\"classification\":\"decisive\"}}}"
+            }
+          ]
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "request": {
+        "label": "builds.control-merge-positive",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "builds.control",
+            "arguments": {
+              "repo": "https://github.com/acme/widgets",
+              "slug": "mcp-merge-build",
+              "action": "merge"
+            }
+          }
+        },
+        "seed": "merge"
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"kind\":\"command\",\"slug\":\"mcp-merge-build\",\"command\":\"land\",\"event\":{\"build\":\"mcp-merge-build\",\"seq\":5,\"ts\":\"2026-09-02T00:00:00.000Z\",\"actor\":{\"kind\":\"human\",\"user\":\"operator@example.com\",\"via\":{\"kind\":\"mcp\",\"client\":\"offline-mcp-client\"}},\"type\":\"build.land-requested\",\"payload\":{\"decisionSeq\":4},\"compatibility\":{\"writerVersion\":\"1.0.1\",\"classification\":\"decisive\"}}}"
+            }
+          ]
+        },
+        "jsonrpc": "2.0",
+        "id": 1
+      }
+    },
+    {
+      "request": {
+        "label": "builds.control-land-positive",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "builds.control",
+            "arguments": {
+              "repo": "https://github.com/acme/widgets",
+              "slug": "mcp-land-build",
+              "action": "land"
+            }
+          }
+        },
+        "seed": "land"
+      },
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"kind\":\"command\",\"slug\":\"mcp-land-build\",\"command\":\"land\",\"event\":{\"build\":\"mcp-land-build\",\"seq\":5,\"ts\":\"2026-09-02T00:00:00.000Z\",\"actor\":{\"kind\":\"human\",\"user\":\"operator@example.com\",\"via\":{\"kind\":\"mcp\",\"client\":\"offline-mcp-client\"}},\"type\":\"build.land-requested\",\"payload\":{\"decisionSeq\":4},\"compatibility\":{\"writerVersion\":\"1.0.1\",\"classification\":\"decisive\"}}}"
             }
           ]
         },

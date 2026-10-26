@@ -763,7 +763,7 @@
         "checks": [
           {
             "check": "landing_intent",
-            "message": "landing intent requires decisionSeq or legacy commandSeq"
+            "message": "merge intent requires decisionSeq or legacy commandSeq"
           }
         ],
         "shape": {
@@ -4467,6 +4467,51 @@
             ]
           },
           "baseSha": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] }
+        },
+        "strict": true
+      },
+      "target.distance": {
+        "type": "object",
+        "checks": [{ "check": "target_distance" }],
+        "shape": {
+          "branch": { "type": "string", "checks": [{ "check": "min_length", "minimum": 1 }] },
+          "sha": {
+            "type": "string",
+            "checks": [
+              {
+                "check": "string_format",
+                "format": "regex",
+                "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                "flags": "",
+                "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+              }
+            ]
+          },
+          "head": {
+            "type": "nullable",
+            "inner": {
+              "type": "string",
+              "checks": [
+                {
+                  "check": "string_format",
+                  "format": "regex",
+                  "source": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "flags": "",
+                  "pattern": "/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/"
+                }
+              ]
+            }
+          },
+          "count": {
+            "type": "nullable",
+            "inner": {
+              "type": "number",
+              "checks": [
+                { "check": "number_format", "format": "safeint" },
+                { "check": "greater_than", "value": 0, "inclusive": true }
+              ]
+            }
+          }
         },
         "strict": true
       },

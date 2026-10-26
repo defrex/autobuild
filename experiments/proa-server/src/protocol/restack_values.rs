@@ -33,6 +33,9 @@ pub fn reduce_leaf(events: &[Value]) -> Value {
 }
 pub fn advance_leaf(state: &mut Value, event: &Value) {
     let payload = &event["payload"];
+    if event["type"] != "target.distance" {
+        state["activityAt"] = event["ts"].clone();
+    }
     match event["type"].as_str().unwrap_or("") {
         "workspace.provisioned" => {
             if state.get("initialBase").is_none() {
@@ -42,8 +45,21 @@ pub fn advance_leaf(state: &mut Value, event: &Value) {
             }
         }
         "finalize.completed" => state["finalizedAt"] = event["seq"].clone(),
-        "node.parent-accepted" => remove(state, &["target"]),
+        "node.parent-accepted" => remove(state, &["target", "distance"]),
+        "target.distance" => state["distance"] = payload.clone(),
+        "pr.opened" => {
+            if state["distance"].get("head") != payload["pr"].get("headSha") {
+                remove(state, &["distance"]);
+            }
+        }
+        "implement.completed" => {
+            if state["distance"].get("head") != payload["commits"].get("head") {
+                remove(state, &["distance"]);
+            }
+        }
+        "restack.rewritten" | "reconcile.rewritten" => remove(state, &["distance"]),
         "target.moved" => {
+            remove(state, &["distance"]);
             let mut target = json!({"seq":event["seq"]});
             for (key, value) in payload.as_object().into_iter().flatten() {
                 target[key] = value.clone();
@@ -51,6 +67,12 @@ pub fn advance_leaf(state: &mut Value, event: &Value) {
             state["target"] = target;
         }
         "finalize.step-completed" => {
+            if payload["ok"] == true
+                && payload.get("headSha").is_some()
+                && state["distance"].get("head") != payload.get("headSha")
+            {
+                remove(state, &["distance"]);
+            }
             if payload["ok"] == true && payload.get("headSha").is_some() {
                 state["postStepAt"] = event["seq"].clone();
             }
@@ -80,6 +102,9 @@ pub fn advance_leaf(state: &mut Value, event: &Value) {
             }
         }
         "restack.completed" => {
+            if state["distance"].get("head") != payload.get("headSha") {
+                remove(state, &["distance"]);
+            }
             state["completedAt"] = event["seq"].clone();
             state["completed"] = payload.clone();
             let cycle = payload["cycle"].to_string();

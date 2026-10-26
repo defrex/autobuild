@@ -61,6 +61,8 @@ export async function registryContract() {
     ['unknown.tool', { repo: operatorRepo }],
     ['sandbox.exec', { repo: operatorRepo }],
     ['builds.list', { repo: operatorRepo }],
+    ['merges.list', { repo: operatorRepo }],
+    ['landings.list', { repo: operatorRepo }],
     ['builds.events', { repo: operatorRepo, slug: 'missing', cursor: 0 }],
     ['builds.artifact', { repo: operatorRepo, slug: 'missing', kind: 'spec' }],
     ['builds.control', { repo: operatorRepo, slug: 'missing', action: 'pause' }],
