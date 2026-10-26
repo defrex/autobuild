@@ -1,16 +1,15 @@
 {
   "format": 1,
   "source": {
-    "config/schema.ts": "4c715ae9a80f41e5e60b3d1ba3baaf5c639e609237b84a8add15543d3ed16824",
+    "config/schema.ts": "ffa839733541abbee21326a776f5eb08a80ac111f87b7073a992d9f8b61fa759",
     "config/landing.ts": "3448156ab099cca9282f819cc0f2926243193549c7c6d73b7b7a178a9c519fc2",
     "config/roles.ts": "e126da778a1102eae56f9afa71a6a3549559edb5bb5df2dacacaf71f9498bc76",
-    "config/reference-metadata.ts": "8e017ee1448fed5b7e99e14a38efc5c3d785f49e630057c7019c24dce4dfe1a3",
+    "config/reference-metadata.ts": "b597b3d526329e0990fac6673d93374e4b88f12865991f5f3352875910025a89",
     "connection.ts": "ebebdad022f49a5492ad38dc7baa8051a5a737b51f3aa04846aebd084d815a75",
     "open-map.ts": "6c90f6bea515812fea3d5d280a7fa5051b9874f9a5cfe2805e1a1e773c1601a0",
     "zod-issues.ts": "09a5dbe89db0631b0b916a4006b2c662e165e49cfb05026c061711b667cf6646",
-    "events/globs.ts": "46d946374d6e1f6f135f449c90b4807236019e98afe801b3fcbea48c761eba49",
-    "ontology.ts": "b19ab68493f92c35264b964ca078a4c6265f423e6b9dc7d837a03e0fe6a8aae8",
-    "ports/workspace/operator-sandbox.ts": "eca1cab94e88d36d4ec020547501425d2de16352f8aa6abc5c4ed213c5188033",
+    "events/globs.ts": "eee4c16443fe88fa9186eef3223432b54295651181858693875fe615ad85df69",
+    "ontology.ts": "7899bffbfe5f047bd45d3887d024958f2e1129ccf6d42c669a0eab4e15e60777",
     "ports/workspace/provider-capabilities.ts": "47578ab79dc91b8f3c61f91d26f103f977eae081cc522efc866af90414ea3729"
   },
   "grammar": {
@@ -282,11 +281,35 @@
           "inner": {
             "type": "array",
             "element": {
-              "type": "string",
-              "checks": [
+              "type": "union",
+              "options": [
                 {
-                  "op": "min_length",
-                  "minimum": 1
+                  "type": "string",
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "minimum": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "array",
+                  "element": {
+                    "type": "string",
+                    "checks": [
+                      {
+                        "op": "min_length",
+                        "minimum": 1
+                      }
+                    ]
+                  },
+                  "checks": [
+                    {
+                      "op": "min_length",
+                      "error": "verify stage must not be empty",
+                      "minimum": 1
+                    }
+                  ]
                 }
               ]
             }
@@ -311,6 +334,12 @@
                       "minimum": 1
                     }
                   ]
+                },
+                "failFast": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "boolean"
+                  }
                 },
                 "afterReconcile": {
                   "type": "optional",
@@ -363,6 +392,12 @@
                       "minimum": 1
                     }
                   ]
+                },
+                "failFast": {
+                  "type": "optional",
+                  "inner": {
+                    "type": "boolean"
+                  }
                 },
                 "afterReconcile": {
                   "type": "optional",
@@ -954,81 +989,6 @@
                 "strict": true
               },
               "default": {}
-            },
-            "model": {
-              "type": "optional",
-              "inner": {
-                "type": "string",
-                "checks": [
-                  {
-                    "op": "min_length",
-                    "minimum": 1
-                  }
-                ]
-              }
-            },
-            "invocationBudgetSeconds": {
-              "type": "pipe",
-              "input": {
-                "type": "default",
-                "inner": {
-                  "type": "number",
-                  "checks": [
-                    {
-                      "op": "number_format",
-                      "format": "safeint"
-                    },
-                    {
-                      "op": "greater_than",
-                      "value": 0,
-                      "inclusive": false
-                    }
-                  ]
-                },
-                "default": 240
-              },
-              "transform": "clamp-budget",
-              "source": "(value) => Math.min(value, ORCHESTRATOR_ROUTE_LIMIT_SECONDS)"
-            },
-            "approvals": {
-              "type": "default",
-              "inner": {
-                "type": "array",
-                "element": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "string_format",
-                      "error": "approval entries look like \"tool\" or \"tool:qualifier\"",
-                      "format": "regex",
-                      "pattern": "^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$",
-                      "patternDisplay": "/^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/"
-                    }
-                  ]
-                }
-              },
-              "default": [
-                "builds.control:abort",
-                "builds.control:discard",
-                "builds.answer:revise-spec",
-                "sandbox.publish",
-                "tickets.move:ready"
-              ]
-            },
-            "wake": {
-              "type": "optional",
-              "inner": {
-                "type": "array",
-                "element": {
-                  "type": "string",
-                  "checks": [
-                    {
-                      "op": "min_length",
-                      "minimum": 1
-                    }
-                  ]
-                }
-              }
             }
           },
           "strict": true
@@ -1538,6 +1498,8 @@
     "pr-summary.result",
     "pr-summary.settled",
     "finalize.step-started",
+    "publication.retry-scheduled",
+    "publication.retry-exhausted",
     "publication.requested",
     "publication.lost",
     "abort.remote-branch-deleted",
@@ -1583,9 +1545,13 @@
     "implement.completed",
     "code-review.started",
     "code-review.verdict",
+    "verify.config-captured",
+    "verify.config-superseded",
     "verify.started",
     "verify.reconcile-policy-captured",
     "verify.completed",
+    "verify.cancelled",
+    "verify.stage-failed",
     "finalize.started",
     "finalize.completed",
     "finalize.step-completed",
@@ -1695,32 +1661,6 @@
     "dispatcher.pause-set",
     "dispatcher.auto-merge-default-set"
   ],
-  "defaultWake": [
-    "escalation.raised",
-    "integration.verification-failed",
-    "phase.deferral-escalated",
-    "phase.failed",
-    "infrastructure.failed",
-    "runner.setup-failed",
-    "dispatch.failed",
-    "publication.lost",
-    "finalize.completed",
-    "pr.conflicted",
-    "pr.merged",
-    "pr.closed",
-    "build.completed",
-    "build.aborted",
-    "harvest.escalated",
-    "harvest.failed",
-    "dispatcher.forge-degraded",
-    "dispatcher.forge-recovered",
-    "dispatcher.ticket-source-degraded",
-    "dispatcher.ticket-source-recovered",
-    "dispatcher.tick-failed",
-    "dispatcher.config-rejected",
-    "dispatcher.forge-readiness-failed",
-    "dispatcher.harvest-runner-failed"
-  ],
   "coreRoles": [
     "plan",
     "plan-review",
@@ -1732,19 +1672,5 @@
     "upgrade",
     "harvest",
     "harvest-review"
-  ],
-  "forbiddenEnvironment": [
-    "AB_STORE",
-    "AB_TOKEN",
-    "AB_TICKET_TOKEN",
-    "AB_TICKET_URL",
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-    "LINEAR_API_KEY",
-    "VERCEL_OIDC_TOKEN",
-    "VERCEL_TOKEN",
-    "VERCEL_TEAM_ID",
-    "VERCEL_PROJECT_ID",
-    "AI_GATEWAY_API_KEY"
   ]
 }

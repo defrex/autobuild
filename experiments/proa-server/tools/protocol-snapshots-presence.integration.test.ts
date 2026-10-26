@@ -355,6 +355,37 @@ export async function proveProtocolSnapshotsPresence(executable: string) {
           })
           comparisons++
         }
+        // DELETE decodes each path segment and removes exactly one repository/id row.
+        const removalRepo = 'presence/delete repo'
+        const removalId = 'watch/id % snow 雪'
+        for (const repo of [removalRepo, `${removalRepo}-neighbor`]) {
+          for (const id of [removalId, `${removalId}-neighbor`])
+            await first.store.upsertOperatorPresence(repo, { ...identity, id })
+        }
+        for (const id of [` ${removalId} `, removalId, 'missing']) {
+          const path = `/repos/${encodeURIComponent(removalRepo)}/operator-presence/${encodeURIComponent(id)}`
+          const rust = await first.server.fetch(`${first.server.url}${path}`, {
+            method: 'DELETE',
+            headers,
+          })
+          const expected = await oracle.fetch(
+            new Request(`http://oracle${path}`, { method: 'DELETE', headers }),
+          )
+          assert.deepEqual(
+            { status: rust.status, body: await rust.json() },
+            { status: expected.status, body: await expected.json() },
+          )
+          assert.equal(rust.status, 200)
+          assert.deepEqual(
+            (await ts.listOperatorPresence(removalRepo)).map((row) => row.id),
+            [`${removalId}-neighbor`],
+          )
+          assert.equal((await ts.listOperatorPresence(`${removalRepo}-neighbor`)).length, 2)
+          comparisons++
+        }
+        checks.push(
+          'idempotent presence withdrawal decodes IDs and preserves neighboring identities and repositories',
+        )
         const requests: { method: string; path: string; body?: string }[] = [
           { method: 'GET', path: `/builds/${scope.slug}/snapshots/cache` },
           { method: 'GET', path: `/builds/${scope.slug}/snapshots/cache?version=bad` },
@@ -499,6 +530,34 @@ export async function proveProtocolSnapshotsPresence(executable: string) {
           ),
           { status: 403, body: { kind: 'auth', error: 'wrong project' } },
         )
+        await ts.upsertOperatorPresence(other, { ...identity, id: 'foreign' })
+        assert.deepEqual(
+          await authRequest(
+            `/repos/${encodeURIComponent(other)}/operator-presence/foreign`,
+            'DELETE',
+          ),
+          { status: 403, body: { kind: 'auth', error: 'wrong project' } },
+        )
+        assert.equal((await ts.listOperatorPresence(other)).length, 1)
+        const removalPath = `/repos/${encodeURIComponent(own)}/operator-presence/authenticated`
+        const noIdentity = await authenticated.fetch(`${authenticated.url}${removalPath}`, {
+          method: 'DELETE',
+        })
+        assert.equal(noIdentity.status, 409, 'identity refusal precedes missing authentication')
+        assert.equal((await ts.listOperatorPresence(own)).length, 1)
+        for (const credential of ['', 'Bearer invalid']) {
+          const response = await authenticated.fetch(`${authenticated.url}${removalPath}`, {
+            method: 'DELETE',
+            headers: { ...headers, authorization: credential },
+          })
+          assert.equal(response.status, 401)
+          assert.equal((await ts.listOperatorPresence(own)).length, 1)
+        }
+        assert.deepEqual(await authRequest(removalPath, 'DELETE'), {
+          status: 200,
+          body: { ok: true },
+        })
+        assert.deepEqual(await ts.listOperatorPresence(own), [])
         checks.push(
           'project-authenticated snapshot/presence access and foreign/missing authority gates precede malformed names/bodies',
         )

@@ -422,7 +422,8 @@ export async function proveProtocolDelegationAuthority(executable: string) {
           await sql`SELECT * FROM operator_presence WHERE repo=${repo} ORDER BY id`
         let presenceAccesses = 0
         const listPresence = store.listOperatorPresence.bind(store),
-          upsertPresence = store.upsertOperatorPresence.bind(store)
+          upsertPresence = store.upsertOperatorPresence.bind(store),
+          removePresence = store.removeOperatorPresence.bind(store)
         store.listOperatorPresence = async () => {
           presenceAccesses++
           throw new Error('delegated presence lookup reached')
@@ -430,6 +431,10 @@ export async function proveProtocolDelegationAuthority(executable: string) {
         store.upsertOperatorPresence = async () => {
           presenceAccesses++
           throw new Error('delegated presence mutation reached')
+        }
+        store.removeOperatorPresence = async () => {
+          presenceAccesses++
+          throw new Error('delegated presence removal reached')
         }
         try {
           for (const kind of [
@@ -453,6 +458,7 @@ export async function proveProtocolDelegationAuthority(executable: string) {
             }
             for (const [method, raw] of [
               ['GET', ''],
+              ['DELETE', ''],
               ['POST', '{'],
               [
                 'POST',
@@ -464,7 +470,7 @@ export async function proveProtocolDelegationAuthority(executable: string) {
                 }),
               ],
             ] as const) {
-              const path = `/repos/${encodeURIComponent(repo)}/operator-presence`
+              const path = `/repos/${encodeURIComponent(repo)}/operator-presence${method === 'DELETE' ? '/private-operator' : ''}`
               const init = {
                 method,
                 headers: {
@@ -478,29 +484,13 @@ export async function proveProtocolDelegationAuthority(executable: string) {
               const actual: Response = await server.fetch(`${server.url}${path}`, init),
                 expected = await oracle.fetch(new Request(`http://oracle${path}`, init))
               const expectedWire = { status: expected.status, body: await expected.json() }
-              if (method === 'GET')
-                assert.deepEqual(expectedWire, {
-                  status: 403,
-                  body: {
-                    kind: 'auth',
-                    error: 'operator presence requires repository operator authority',
-                  },
-                })
-              else if (kind.startsWith('build'))
-                assert.deepEqual(expectedWire, {
-                  status: 403,
-                  body: { kind: 'auth', error: 'write outside delegated resource' },
-                })
-              else if (raw !== '{')
-                assert.deepEqual(expectedWire, {
-                  status: 403,
-                  body: { kind: 'auth', error: 'write outside delegated harvest run' },
-                })
-              else {
-                assert.equal(expectedWire.status, 500)
-                assert.equal(expectedWire.body.kind, 'internal')
-                assert.match(expectedWire.body.error, /^JSON Parse error:/)
-              }
+              assert.deepEqual(expectedWire, {
+                status: 403,
+                body: {
+                  kind: 'auth',
+                  error: 'operator presence requires repository operator authority',
+                },
+              })
               assert.deepEqual(
                 { status: actual.status, body: await actual.json() },
                 expectedWire,
@@ -519,6 +509,7 @@ export async function proveProtocolDelegationAuthority(executable: string) {
         } finally {
           store.listOperatorPresence = listPresence
           store.upsertOperatorPresence = upsertPresence
+          store.removeOperatorPresence = removePresence
         }
         const emptyRepo = 'https://github.com/acme/registered-no-journal'
         await projects.add(emptyRepo, 'proof')

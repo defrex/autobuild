@@ -39,7 +39,7 @@ impl DashboardFacts {
                 "plan-review.started" | "plan-review.verdict" => Some("plan-review".to_owned()),
                 "implement.started" | "implement.completed" => Some("implement".to_owned()),
                 "code-review.started" | "code-review.verdict" => Some("code-review".to_owned()),
-                "verify.started" | "verify.completed" => Some(format!(
+                "verify.started" | "verify.completed" | "verify.cancelled" => Some(format!(
                     "verify:{}",
                     event["payload"]["step"].as_str().unwrap_or_default()
                 )),

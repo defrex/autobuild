@@ -435,7 +435,7 @@ phase issuance/authorization. Its sanitized evidence is
 Persisted reducers now retain original UTF16 code units through permissive payload
 projection, compound readers, reducer dictionaries and lifecycle facts. They do
 not route stored facts through strict producer validation or a scalar fallback.
-The independent source oracles cover 4,103 persisted payloads, 25,112 replay cases
+The independent source oracles cover 4,195 persisted payloads, 25,814 replay cases
 across all 42 names, and 1,342 inner-JSON parsing cases. Generate/check them with
 `protocol-persisted-unicode-fixtures.ts`, `protocol-persisted-reducer-fixtures.ts`
 and `protocol-read-json-fixtures.ts` (each supports `--generate`); freshness is
@@ -519,3 +519,11 @@ TypeScript event-parser/reducer and ticket readback. Credential files are remove
 in `finally`; redacted reports live under `.ab/implement/mcp-agent-proof/`. Deposit
 those reports through the phase CLI; never attach the private config or raw logs.
 Routine verification never launches this model proof.
+
+Oracle refreshes must generate the base corpus first (it replaces `fixtures/`),
+then the subsidiary families. Generate `control-fixtures.ts --write` before
+`mcp-fixtures.ts --write`: the MCP positive-control seed reads that corpus.
+The current presence proof includes idempotent `DELETE` withdrawal, per-segment
+ID decoding/normalization, scoped deletion, and mutation-free credential refusals.
+HTTP session proofs require inert creation even with malformed or retired hosted
+runner configuration; only explicit session wake mutations write wake facts.

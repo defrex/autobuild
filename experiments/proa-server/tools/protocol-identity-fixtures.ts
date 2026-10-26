@@ -133,7 +133,7 @@ export function protocolIdentityFixtures() {
     }),
     identities: rangeServices.flatMap((serviceVersion) =>
       identityClients.flatMap((client) =>
-        [null, '3', '4', '5', '05'].map((protocol) => {
+        [...new Set([null, '3', '4', '5', '05', REMOTE_STORE_PROTOCOL_VERSION])].map((protocol) => {
           const error =
             clientIdentityError(client, protocol, serviceVersion, REMOTE_STORE_PROTOCOL_VERSION) ??
             null
