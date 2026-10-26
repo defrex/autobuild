@@ -830,6 +830,9 @@ test('selected account owns auth settings on start and continue and credential r
     workspacePath: '/workspace',
     account,
     env: {
+      AB_ACCOUNT_PLACEHOLDERS: '0',
+      AB_BUILD_RUNNER_OPTIONS: '',
+      AB_HARVEST_RUNNER_OPTIONS: '',
       PERSONAL: 'sentinel-account-token',
       ANTHROPIC_API_KEY: 'competing-key',
       ANTHROPIC_BASE_URL: 'https://api.kimi.ai/coding/',

@@ -125,3 +125,20 @@ test('configuration rejects ambiguous defaults and names incompatible role refer
     'role "implement"',
   )
 })
+
+test.each(['AB_BUILD_RUNNER_OPTIONS', 'AB_HARVEST_RUNNER_OPTIONS'])(
+  'first account added after a remote launch uses placeholders (%s)',
+  (launchVariable) => {
+    const account = selectAccount(accounts, 'claude', 'overseas', 'test')!
+    const ambient = {
+      [launchVariable]: JSON.stringify({ supervision: { kind: 'environment' } }),
+      KIMI_KEY: 'sentinel-previously-forwarded',
+      CUSTOM_ALIAS: 'sentinel-previously-forwarded',
+    }
+    const selected = accountEnvironment(ambient, account)
+    expect(selected.ANTHROPIC_API_KEY).toBe('autobuild-account-6f76657273656173')
+    expect(selected.KIMI_KEY).toBe('autobuild-account-6f76657273656173')
+    expect(JSON.stringify(selected)).not.toContain('sentinel-previously-forwarded')
+    expect(ambient.KIMI_KEY).toBe('sentinel-previously-forwarded')
+  },
+)

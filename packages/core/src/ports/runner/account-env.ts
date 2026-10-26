@@ -23,6 +23,21 @@ const ROUTING_KEYS = [
   'CLAUDE_CODE_USE_FOUNDRY',
 ] as const
 
+/** Existing environment-owned launch metadata also covers a runner that
+ * started before its first account was declared by a live configuration reload. */
+function usesPlaceholders(env: Readonly<Record<string, string>>): boolean {
+  if (env.AB_ACCOUNT_PLACEHOLDERS === '1') return true
+  return [env.AB_BUILD_RUNNER_OPTIONS, env.AB_HARVEST_RUNNER_OPTIONS].some((raw) => {
+    if (!raw) return false
+    try {
+      const launch = JSON.parse(raw) as { supervision?: { kind?: unknown } } | null
+      return launch?.supervision?.kind === 'environment'
+    } catch {
+      return false
+    }
+  })
+}
+
 /** Apply after ambient merging. Inputs and process.env remain untouched. */
 export function accountEnvironment(
   ambient: Readonly<Record<string, string>>,
@@ -31,11 +46,15 @@ export function accountEnvironment(
 ): Record<string, string> {
   if (account === undefined) return { ...ambient }
   const env = { ...ambient }
-  const credential =
-    env.AB_ACCOUNT_PLACEHOLDERS === '1'
-      ? accountPlaceholder(account.name)
-      : env[account.descriptor.credentialEnv]
+  const remote = usesPlaceholders(env)
+  const originalCredential = env[account.descriptor.credentialEnv]
+  const credential = remote ? accountPlaceholder(account.name) : originalCredential
+  if (remote && originalCredential)
+    for (const [key, value] of Object.entries(env))
+      if (value.includes(originalCredential)) delete env[key]
   for (const key of ROUTING_KEYS) delete env[key]
+  if (remote && !ROUTING_KEYS.some((key) => key === account.descriptor.credentialEnv))
+    env[account.descriptor.credentialEnv] = credential!
   if (account.descriptor.kind === 'kimi-code') {
     if (!credential) throw new Error(`Missing credential: ${accountRemedy(account)}`)
     const selectedModel = model ?? 'kimi-for-coding'
