@@ -120,7 +120,7 @@ At phone width the row identity stacks, content loses its desktop indent, and st
 
 ## Elevation & Depth
 
-There are no shadows, gradients or translucent layers. Ground, inset well and red wash convey function, not elevation. The account menu uses an opaque ground and thin ink outline. Loading uses static neutral placeholders with a hidden polite announcement, never fabricated zero facts. No decorative state animation is part of the system.
+There are no shadows, gradients or translucent layers. Ground, inset well and red wash convey function, not elevation. The account and project menus use an opaque ground and a thin slack-gray outline. Loading uses static neutral placeholders with a hidden polite announcement, never fabricated zero facts. No decorative state animation is part of the system.
 
 ## Shapes
 
@@ -140,7 +140,7 @@ Fields use mono values, well background, 1.5px rule outlines and 4px 10px paddin
 
 ### Masthead and account menu
 
-A ruled masthead pairs the project identity with an account trigger. The menu is an opaque, square, ink-outlined list with account actions and the System / Light / Dark theme choices. It has no shadow. Operator controls wrap under the masthead; machine counters and times retain mono.
+A ruled masthead pairs the project identity, which is the project picker when more than one project is reachable, with an account trigger. Both menus are opaque, square lists outlined in slack gray; the account menu carries account actions and the System / Light / Dark theme choices. It has no shadow. Operator controls wrap under the masthead; machine counters and times retain mono.
 
 ### Build rows, progress and detail
 

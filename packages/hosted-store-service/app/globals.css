@@ -285,7 +285,7 @@ textarea {
   z-index: 2;
   min-width: 280px;
   background: var(--ground);
-  border: 1.5px solid var(--ink);
+  border: 1.5px solid var(--slack);
   padding: 10px 0;
 }
 .menu-item {
