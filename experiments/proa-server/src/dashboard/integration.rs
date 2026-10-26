@@ -114,11 +114,10 @@ pub fn project(
     pipeline: &Value,
 ) -> (Value, Value) {
     let destination = if !s["target"].is_null() {
-        format!(
-            "{} {}",
-            s["target"]["ticket"]["id"].as_str().unwrap_or_default(),
-            s["target"]["build"].as_str().unwrap_or_default()
-        )
+        s["target"]["ticket"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
     } else {
         s["baseBranch"]
             .as_str()
