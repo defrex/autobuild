@@ -17,7 +17,7 @@ Your operator agent keeps work moving through `ab` or MCP. Under your instructio
 ## Choose a harness
 
 - **A local coding agent** at the repository root with the installed `ab-operate` skill, using the CLI or `bun ab mcp` (operator tools over stdio).
-- **A remote agent** with no checkout, on the authenticated hosted `/mcp` endpoint. See [Operator surfaces](operator-surfaces.md).
+- **An API client** using the authenticated Operator API contract.
 
 We recommend the same model as your reviewer roles, since the agent interprets findings and escalation answers.
 
@@ -125,7 +125,6 @@ Every surface reads the same durable state; [Operator surfaces](operator-surface
 | Surface | Progress, escalations, pause/resume | Merge consent and hold |
 |---|---|---|
 | Terminal dashboard (`bun ab dispatch`) | Yes | Keys `l` (merge) and `o` (hold) |
-| Hosted web app | Yes, plus sessions and transcripts | Merge/Hold on a merge awaiting consent |
 | CLI and MCP operator tools | Yes | Yes |
 
 ## An example session

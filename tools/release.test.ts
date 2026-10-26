@@ -1225,7 +1225,6 @@ describe('prerelease publishing', () => {
       'README.md',
       'templates/hosted-service/package.json',
       'packages/hosted-store-service/deployment/package.json',
-      'docs/hosted-service.md',
     ]
     const before = await Promise.all(preserved.map((p) => readFile(join(fixture.root, p), 'utf8')))
     for (const version of ['3.0.0-beta.0', '3.0.0-beta.2', '3.0.0-rc.2', '3.0.0']) {

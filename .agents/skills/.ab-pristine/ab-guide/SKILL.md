@@ -304,7 +304,7 @@ The distinctions that change an administrator's answer:
   Current, distinct previous, held and live-process runtimes survive pruning.
   Cached Bun entries disable auto-install and explicitly pin a neutral compiler
   config. Third-party files remain as installed. `--plain`/non-TTY run directly
-  within the generation; `--once`, origin/hosted and hot development paths bypass
+  within the generation; `--once`, origin-mode and hot development paths bypass
   the launcher. `--once` remains one tick plus drain.
 - **Live configuration** has two explicit contexts. A running dispatcher owns
   the last valid snapshot from the **main checkout**; dispatch, setup, and each
@@ -539,7 +539,7 @@ available providers. A handle's `path` is absolute in its execution environment,
 reachability.
 
 `provider = "vercel-sandbox"` runs the complete build in a persistent Vercel VM
-and requires an HTTPS hosted Store/scoped token, GitHub HTTPS origin, GitHub
+and requires a remote store that speaks the remote BuildStore protocol over HTTPS and a scoped token, GitHub HTTPS origin, GitHub
 forge, a dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`, and either
 `VERCEL_OIDC_TOKEN` or the `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/
 `VERCEL_PROJECT_ID` tuple. These credentials are validated before claims:
@@ -1257,7 +1257,7 @@ Exact changed targets can include downgrades. Missing or inconsistent declared-p
 metadata never falls back to installed mode. Self-hosting source launches follow
 the authoritative base commit using packaged-content and production-lock equality,
 without modifying operator or build worktrees. Equal-content advances still record
-the latest resolved target SHA. Compatible generations overlap through the durable draining handoff described above. `--once`, origin/hosted and direct hot
+the latest resolved target SHA. Compatible generations overlap through the durable draining handoff described above. `--once`, origin-mode and direct hot
 presentation modes bypass automatic adoption. Operator stop wins over cutover.
 Repository status exposes per-run resolved target, upgrade target, failure and handoff facts, both
 generations, takeover, outstanding draining builds and deadline;
@@ -1482,8 +1482,7 @@ From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
 The CLI prints a verification URL and short code and attempts to open a browser.
 Sign in as an allowed owner, check the full repository identity and code, and
 approve or deny. Another device can open the printed URL, or visit `/connect`
-and enter the code. Approval requires the web-enabled service origin; a
-standalone machine-only listener cannot present browser consent. Requests
+and enter the code. Approval uses the instance’s browser consent endpoint. Requests
 expire after ten minutes. Denial and timeout leave local configuration unchanged.
 
 On approval the service registers the project and issues a project credential.
@@ -1607,7 +1606,7 @@ assets are not moved and are not a fallback. Each has a kind and a name.
 - `ab ticket attach <id> <kind> <path> [--name <name>] [--json]` stores `<path>`
   (default name: its basename). Attaching the same kind and name again makes a
   new revision; earlier ones stay retrievable. Over the store's size limit
-  (25 MiB by default, lower on a hosted deployment) it is refused. Attach and
+  (25 MiB by default, lower when the instance advertises a request ceiling) it is refused. Attach and
   remove leave a note on the ticket naming the asset.
 - `ab ticket show <id>` lists the current assets; with `--json` the ticket
   gains an `assets` array.
@@ -1695,7 +1694,7 @@ restack state and conflicting files remain in detail, along with every child's
 ticket id, title and live phase (or queued/merged), open-first counts, verification
 steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
-The operator web app uses the same facts as text, without a graphical bar.
+
 
 On a TTY, `ab dispatch` renders one fixed interactive frame anchored at the
 terminal's first row. Its header remains on that top row as frame height changes
