@@ -4151,3 +4151,25 @@ Shared requests are attributed to their first requester; cache hits count zero.
 A failed node verification cycle records `integration.verification-failed` with its prepared cycle id, failed steps, exact head and parent, and guidance to file a repair child targeting the node. The kernel reports durable failed receipts; dispatcher housekeeping recovers missing reports for the current cycle using a per-cycle CAS guard. Superseded cycles are never backfilled with repair instructions: recovery requires the latest prepared cycle to match the node’s observed head and parent. This fact is decisive evidence and bookkeeping, and does not change verification or leaf routing.
 
 Default `ab watch` includes this event. Watch cursors deliver each failed cycle once and baseline failures when first armed; reconcile build status after arming. `ab wait --for attention` also detects a current failed node cycle before the report is written. Historical facts remain queryable after repair without retaining current attention. Explicit event globs and existing stored wake choices are preserved.
+
+
+### Project secrets
+
+Project secrets are product-managed write-only project environment values,
+separate from machine credentials and BuildStore artifacts. A connected member's
+saved owner credential can list metadata, set/replace and remove; every operation
+revalidates project membership. Build, dispatcher, delegated, internal and admin
+credentials cannot manage them. The current setter is the owner; values serve all
+builds of the project. Values and refresh/access state are authenticated-encrypted
+under a deployment-held key; audit records contain only actor, time and operation.
+No public surface returns material. Authority and process-control names are reserved.
+
+Every hosted tick resolves a coherent complete set, overlays project values onto
+its own deployment environment, and records revision-fenced supply timestamps at
+kernel handoff. Encryption keys are excluded from child environments. A failed
+resolution skips that project, without partial delivery. Local dispatch behavior
+is unchanged. Refresh kinds serialize external rotation with a committed CAS
+attempt, persist replacement state before delivery, and fail expired attempts
+without takeover. A failed credential requires explicit replacement. The public
+CLI writes static values; provider sign-in kinds and a web settings screen are
+separate work. See the project-secrets section of the remote-store protocol.

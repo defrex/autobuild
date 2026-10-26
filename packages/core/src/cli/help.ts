@@ -72,6 +72,13 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     ]),
   },
   {
+    name: 'secrets',
+    summary: 'Manage write-only secrets for a connected project',
+    audience: 'human',
+    detail:
+      'Usage: ab secrets list [--json] | ab secrets set NAME | ab secrets remove NAME. Uses the saved owner credential from ab connect. Set reads hidden terminal input or redirected stdin; values are never returned. List reports owner, set time, fingerprint, status and last supply time. Runs outside sessions.',
+  },
+  {
     name: 'connect',
     audience: 'human',
     summary: 'Connect this project to a hosted service with browser approval.',

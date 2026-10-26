@@ -1668,3 +1668,22 @@ Dashboard destination distance is projected from durable `target.distance`
 are `+N`, empty when current, and `+?` when unknown, suppressed after merge or
 close. Terminal headers reserve space for the destination before the slug;
 web views keep their own layout and share the wording.
+
+
+## Project-secret boundary
+
+`packages/core/src/project-secrets.ts` owns the write-only DTO and reserved-name
+rules. `packages/postgres-store/src/project-secrets.ts` stores authenticated encrypted
+payloads outside the BuildStore namespace, with metadata, mutation audit, a deployment
+key verifier and generation/revision fences. Short transactions implement refresh
+claim/completion CAS; provider HTTP occurs after the claim commits, with no backend
+session affinity. An expired pending rotation fails without token reuse.
+
+`packages/hosted-store-service/src/project-secrets.ts` authenticates owner-purpose
+credentials and fresh membership before reading write bodies. It returns metadata
+or acknowledgments and fixed safe errors. `ab secrets` uses saved connection
+credentials directly and hidden input. The hosted dispatcher internally resolves
+the complete set per tick, validates the handoff under the mutation lock, overlays
+a fresh project environment, strips the encryption key, and redacts supplied
+values in output/errors. Effective-config artifacts serialize declarative config,
+not the process environment. No operator/MCP/raw-store accessor resolves plaintext.

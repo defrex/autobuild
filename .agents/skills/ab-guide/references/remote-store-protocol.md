@@ -1377,3 +1377,63 @@ protocol 5 never shipped. The release identity table retains `1.0 -> 4`, and
 a 1.1/protocol-6 instance admits those published clients. A 1.0 instance does
 not admit 1.1 clients; route fallback never bypasses peer admission. Patches
 within a published release line must keep its protocol identity.
+
+
+## Project secrets (v1)
+
+Project secrets are separate from BuildStore artifacts and machine credentials.
+They are write-only: no CLI, store method, operator tool, MCP tool or web route
+returns a value, ciphertext, access token or refresh state. The only plaintext
+consumer is the hosted dispatcher's internal resolver. Local dispatchers use
+their own environment.
+
+All routes require the standard client/version headers and bearer authorization,
+return JSON with `Cache-Control: no-store`, and require a saved `project-owner`
+credential issued through `ab connect`. The project must match the credential,
+remain registered, and its creator must still have project membership. Dispatcher,
+build, delegated, internal and administrative credentials are refused.
+
+| Route | Input | Response |
+| --- | --- | --- |
+| `GET /secrets/v1/list?repo=<encoded repository identity>` | Project identity | `{version: 1, secrets: [...]}` |
+| `POST /secrets/v1/set` | `{version: 1, repo, name, value}` | `{version: 1, ok: true}` |
+| `POST /secrets/v1/remove` | `{version: 1, repo, name}` | `{version: 1, ok: true}` |
+
+Writes accept only the listed fields. Values are nonempty strings, at most
+64 KiB in UTF-8, without NUL. Names are case-sensitive environment identifiers
+`[A-Z_][A-Z0-9_]*`, at most 128 characters. Dispatcher authority and process-control
+names are reserved: store, forge, Vercel, cron, database, object-storage, loader,
+proxy and runtime-control variables cannot be overridden. This includes `AB_*`,
+`GITHUB_*`, `GH_*`, `VERCEL_*`, `CRON_*`, `DATABASE_*`, `POSTGRES_*`, `PG*`,
+`AWS_*`, `BLOB_*`, `PATH`, `HOME`, `NODE_*` and `BUN_*`.
+Subscription names such as `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and
+`KIMI_API_KEY` are accepted.
+
+Each metadata entry contains `name`, `kind`, `owner` (the member who set the
+current value), `setAt` (ISO timestamp), `fingerprint` (16 hexadecimal characters,
+keyed and non-reversible), `status` (`ready`, `refreshing`, `failed`), `failureCode`
+(null, `refresh-failed` or `refresh-expired`) and `lastSuppliedAt` (ISO timestamp
+or null). Set/replace resets delivery and failure metadata. Every set/remove
+records actor and time without material. Supply means the environment was handed
+to a kernel, not that a build completed.
+
+On each hosted tick the complete current project set overrides the deployment
+environment for that project only. Replacement/removal applies on the next tick.
+Resolution and handoff validate the complete generation/revision set; a stale
+handoff dispatches nothing. Encryption configuration errors, decryption failures,
+and refresh failures fail the affected project closed without a partial set;
+other projects can continue. Metadata remains available for diagnosis.
+
+Refreshing kinds are internal provider integrations, not arbitrary endpoint URLs
+or CLI write formats. Before delivery the resolver requires at least ten minutes
+of remaining access validity (five-minute tick interval plus scheduling allowance),
+honors provider earliest-refresh times, and commits rotated encrypted state before
+supplying the new token. A durable attempt permits only one refresh caller across
+overlapping ticks. An abandoned attempt expires to failed without reusing the
+possibly consumed refresh token; explicit replacement is required. Errors use
+fixed safe codes and never reflect provider responses or submitted values.
+
+Use `ab secrets list [--json]`, `ab secrets set NAME` or `ab secrets remove NAME`
+from a connected checkout outside build/harvest sessions. Set reads hidden terminal
+input or redirected stdin. There is no value argument and values are never printed.
+The commands use the saved owner credential, even if an ambient build token exists.
