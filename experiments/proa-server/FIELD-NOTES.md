@@ -1105,3 +1105,15 @@ linking. Shutdown recovery regenerated phase scratch, recovered surviving logs
 and reran the interrupted capture build. These are measurement/harness costs,
 not semantic parity repairs or deployment performance claims. Dependency versions,
 product code, existing exclusions and ANSI reference bytes remain unchanged.
+
+Post-restack unit recheck (2026-10-26 00:40–00:59 UTC): verification of
+`bf80b3f1` returned one failure in the unrelated website Markdown-copy browser
+probe, with no assertion diagnostic in the deposited report. On that unchanged
+head the isolated probe passed in 10.56s, and the complete root unit suite passed
+8,453 tests with 49 skips and zero failures in 1,022.94s; the same browser probe
+passed in 10.58s within that run. Root lint, package/build checks and typechecking
+also passed. No cause is established and no implementation or oracle change was
+made for this feedback round. Observation `obs_9f8a0a37` records the recurrence
+investigation outside this experiment's scope. This adds approximately 19 minutes
+of recheck time after the original refresh window; prior native/capture evidence
+remains for the unchanged experiment code.
