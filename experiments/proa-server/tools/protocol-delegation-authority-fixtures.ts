@@ -121,9 +121,7 @@ for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-ph
         body: await response.json(),
       })
     }
-// Presence is a separate operator boundary for every delegated kind, before
-// lookup or mutation. POST keeps the source's generic mutation gate (and
-// harvest malformed-JSON precedence); only GET reaches its presence refusal.
+// Presence refuses every delegated kind before body parsing or store access.
 for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-phase'] as const) {
   const store = new MemoryBuildStore()
   let accesses = 0
@@ -134,6 +132,10 @@ for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-ph
   store.upsertOperatorPresence = async () => {
     accesses++
     throw new Error('presence mutation reached')
+  }
+  store.removeOperatorPresence = async () => {
+    accesses++
+    throw new Error('presence removal reached')
   }
   const delegation = {
     kind,
@@ -153,6 +155,7 @@ for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-ph
   })
   for (const [method, raw] of [
     ['GET', ''],
+    ['DELETE', ''],
     ['POST', '{'],
     [
       'POST',
@@ -164,7 +167,7 @@ for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-ph
       }),
     ],
   ] as const) {
-    const path = `/repos/${encodeURIComponent(repo)}/operator-presence`
+    const path = `/repos/${encodeURIComponent(repo)}/operator-presence${method === 'DELETE' ? '/operator' : ''}`
     const response = await server.fetch(
       new Request(`http://store${path}`, {
         method,
@@ -178,23 +181,11 @@ for (const kind of ['build-runner', 'build-phase', 'harvest-runner', 'harvest-ph
       }),
     )
     const body = await response.json()
-    if (method === 'GET') {
-      assert.equal(response.status, 403)
-      assert.deepEqual(body, {
-        kind: 'auth',
-        error: 'operator presence requires repository operator authority',
-      })
-    } else if (kind.startsWith('build')) {
-      assert.equal(response.status, 403)
-      assert.deepEqual(body, { kind: 'auth', error: 'write outside delegated resource' })
-    } else if (raw !== '{') {
-      assert.equal(response.status, 403)
-      assert.deepEqual(body, { kind: 'auth', error: 'write outside delegated harvest run' })
-    } else {
-      assert.equal(response.status, 500)
-      assert.equal(body.kind, 'internal')
-      assert.match(body.error, /^JSON Parse error:/)
-    }
+    assert.equal(response.status, 403)
+    assert.deepEqual(body, {
+      kind: 'auth',
+      error: 'operator presence requires repository operator authority',
+    })
     assert.equal(accesses, 0, 'delegated presence must not touch the store')
     cases.push({ kind, delegation, path, method, raw, status: response.status, body })
   }

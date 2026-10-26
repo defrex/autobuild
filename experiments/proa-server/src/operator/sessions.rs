@@ -174,63 +174,15 @@ fn storage_error(_: impl std::fmt::Display) -> OperatorError {
 }
 
 impl SessionService<'_> {
-    /// Session creation inherits the enabled repository's wake set. This writes
-    /// durable session facts only; no hosted turn runner is started here.
-    pub async fn create_configured(
+    /// HTTP sessions are inert facts and never inherit hosted-runner settings.
+    pub async fn create_http(
         &self,
         repo: &str,
         user: &str,
         title: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Value, OperatorError> {
-        use crate::data::{error::DataError, postgres::Scope};
-        let meta = match self
-            .reader
-            .postgres()
-            .artifact(repo, Scope::Repository, "dispatcher-effective-config", None)
-            .await
-        {
-            Ok(meta) => meta,
-            Err(DataError::MissingScope { .. }) => None,
-            Err(_) => return Err(OperatorError::internal()),
-        };
-        let mut inherited = None;
-        if let Some(meta) = meta {
-            let bytes = self
-                .reader
-                .artifact(
-                    repo,
-                    Scope::Repository,
-                    "dispatcher-effective-config",
-                    meta["revision"].as_i64(),
-                )
-                .await
-                .map_err(storage_error)?
-                .ok_or_else(OperatorError::internal)?;
-            let config = super::config_schema::decode(&bytes, "dispatcher-effective-config")
-                .map_err(|_| OperatorError::internal())?;
-            if config["orchestrator"]["enabled"] == true {
-                let globs = if let Some(wake) = config["orchestrator"].get("wake") {
-                    wake.clone()
-                } else {
-                    super::config_schema::default_wake()
-                };
-                inherited = Some(
-                    globs
-                        .as_array()
-                        .ok_or_else(OperatorError::internal)?
-                        .iter()
-                        .map(|g| {
-                            g.as_str()
-                                .map(str::to_owned)
-                                .ok_or_else(OperatorError::internal)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
-            }
-        }
-        self.create(repo, user, title, inherited.as_deref(), now)
-            .await
+        self.create(repo, user, title, None, now).await
     }
 
     pub async fn list(&self, repo: &str) -> Result<Vec<Value>, OperatorError> {

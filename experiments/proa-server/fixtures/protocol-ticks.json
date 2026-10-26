@@ -1,9 +1,9 @@
 {
   "sources": {
     "packages/core/src/store/repo-tick.ts": "e3f914a574db714364364b01f8be12ee3ce94803e449ea85438709912a9dfe03",
-    "packages/core/src/events/repository.ts": "2c83a11aababe189a2d132bf634ddbcea38890ddd010806841a7bab853beb86f",
+    "packages/core/src/events/repository.ts": "7e49ef392e8de682f7bc9f98ad52fb57b6b866b4328ab5dbdd9a14bb958e90f0",
     "packages/core/src/ports/forge-telemetry.ts": "f1124819196d45310b296d5bd1f6829bc0846dd1b81e6ac3143bb2f3395f94e1",
-    "packages/core/src/processes/dispatcher.ts": "e28050c2489b1fafaca7a4e2cab91b779f546840b00dd01cedc49a6103269378",
+    "packages/core/src/processes/dispatcher.ts": "78904340121ae76b76834a1dde24c8e5c4c368dfabd34d2a1021a88aeffc6cc3",
     "experiments/proa-server/tools/protocol-tick-fixtures.ts": "76453665687c69b0839e39764b8da192f88c2dee178f9e19debfb89091d56094"
   },
   "cases": [
@@ -39,8 +39,7 @@
           "harvestEscalated": 0,
           "harvestFailed": 0,
           "sandboxIdleStops": 0,
-          "sandboxSettleFailures": 0,
-          "orchestratorSandboxFailures": 0
+          "sandboxSettleFailures": 0
         }
       },
       "events": [],
@@ -78,8 +77,7 @@
           "harvestEscalated": 0,
           "harvestFailed": 0,
           "sandboxIdleStops": 0,
-          "sandboxSettleFailures": 0,
-          "orchestratorSandboxFailures": 0
+          "sandboxSettleFailures": 0
         }
       },
       "events": [
@@ -121,8 +119,7 @@
               "harvestEscalated": 0,
               "harvestFailed": 0,
               "sandboxIdleStops": 0,
-              "sandboxSettleFailures": 0,
-              "orchestratorSandboxFailures": 0
+              "sandboxSettleFailures": 0
             },
             "janitorDiagnostics": [],
             "ticketDiagnostics": [],
@@ -166,7 +163,6 @@
                 "provisioning": 0,
                 "sandboxIdleStops": 0,
                 "sandboxSettleFailures": 0,
-                "orchestratorSandboxFailures": 0,
                 "harvestStarted": 0,
                 "harvestResumed": 0,
                 "harvestCompleted": 0,
@@ -331,8 +327,7 @@
               "harvestEscalated": 0,
               "harvestFailed": 0,
               "sandboxIdleStops": 0,
-              "sandboxSettleFailures": 0,
-              "orchestratorSandboxFailures": 0
+              "sandboxSettleFailures": 0
             },
             "janitorDiagnostics": [],
             "ticketDiagnostics": [],
@@ -410,8 +405,7 @@
           "harvestEscalated": 0,
           "harvestFailed": 0,
           "sandboxIdleStops": 0,
-          "sandboxSettleFailures": 0,
-          "orchestratorSandboxFailures": 0
+          "sandboxSettleFailures": 0
         }
       },
       "events": [
@@ -453,8 +447,7 @@
               "harvestEscalated": 0,
               "harvestFailed": 0,
               "sandboxIdleStops": 0,
-              "sandboxSettleFailures": 0,
-              "orchestratorSandboxFailures": 0
+              "sandboxSettleFailures": 0
             },
             "janitorDiagnostics": [],
             "ticketDiagnostics": [],
@@ -705,7 +698,6 @@
           "harvestFailed": 0,
           "sandboxIdleStops": 0,
           "sandboxSettleFailures": 0,
-          "orchestratorSandboxFailures": 0,
           "extra": 1
         }
       },
@@ -749,8 +741,7 @@
           "harvestEscalated": 0,
           "harvestFailed": 0,
           "sandboxIdleStops": 0,
-          "sandboxSettleFailures": 0,
-          "orchestratorSandboxFailures": 0
+          "sandboxSettleFailures": 0
         }
       },
       "events": [],
@@ -861,7 +852,6 @@
           "harvestFailed": 0,
           "sandboxIdleStops": 0,
           "sandboxSettleFailures": 0,
-          "orchestratorSandboxFailures": 0,
           "forgeRequests": {
             "total": 1,
             "restPrimary": 1,
@@ -913,7 +903,6 @@
               "harvestFailed": 0,
               "sandboxIdleStops": 0,
               "sandboxSettleFailures": 0,
-              "orchestratorSandboxFailures": 0,
               "forgeRequests": {
                 "total": 1,
                 "restPrimary": 1,
@@ -975,7 +964,6 @@
                 "provisioning": 0,
                 "sandboxIdleStops": 0,
                 "sandboxSettleFailures": 0,
-                "orchestratorSandboxFailures": 0,
                 "harvestStarted": 0,
                 "harvestResumed": 0,
                 "harvestCompleted": 0,

@@ -35,6 +35,7 @@ export interface AnswerFailureOptions {
   spawnServer(overrides: Record<string, string>): Promise<NativeServer>
 }
 type Case =
+  | 'cancelled-verifier'
   | 'second-answer-prefix'
   | 'spec-publication-prefix'
   | 'upload-failure'
@@ -62,7 +63,13 @@ function request(repo: string, slug: string, body: unknown, address: string) {
     },
   )
 }
-async function seed(store: BuildStore, repo: string, slug: string, node = false) {
+async function seed(
+  store: BuildStore,
+  repo: string,
+  slug: string,
+  node = false,
+  cancelled = false,
+) {
   const input: NewBuildInput = {
     slug,
     repo,
@@ -97,6 +104,41 @@ async function seed(store: BuildStore, repo: string, slug: string, node = false)
     type: 'runner.attached',
     payload: { instance: 'test', host: 'test', resumedFromSeq: 0 },
   })
+  if (cancelled) {
+    await store.append(slug, {
+      actor: { kind: 'kernel' },
+      type: 'verify.started',
+      payload: { step: 'unit', attempt: 1 },
+    })
+    await store.append(slug, {
+      actor: { kind: 'kernel' },
+      type: 'session.started',
+      payload: {
+        session: 'cancelled-verifier',
+        role: 'verify:unit',
+        runner: 'test',
+        phase: 'verify:unit',
+        round: 1,
+      },
+    })
+    await store.append(slug, {
+      actor: { kind: 'agent', role: 'verify:unit', session: 'cancelled-verifier' },
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc-cancelled',
+        phase: 'verify:unit',
+        round: 1,
+        source: 'agent',
+        question: 'Stale question',
+      },
+    })
+    await store.append(slug, {
+      actor: { kind: 'kernel' },
+      type: 'verify.cancelled',
+      payload: { step: 'unit', attempt: 1, cause: { step: 'types' } },
+    })
+    return input
+  }
   for (const id of ['esc-first', 'esc-second'])
     await store.append(slug, {
       actor: { kind: 'agent', role: 'implement', session: 'phase' },
@@ -124,24 +166,31 @@ async function snapshot(store: BuildStore, slug: string) {
 }
 async function oracle(kind: Case, repo: string, slug: string) {
   const store = new MemoryBuildStore({ clock })
-  await seed(store, repo, slug, kind.startsWith('node-'))
+  await seed(store, repo, slug, kind.startsWith('node-'), kind === 'cancelled-verifier')
   if (kind === 'node-writer-fence')
     await store.claimNodeWriter(slug, 'competing-node-writer', 60000)
   if (kind === 'node-runner-fence') await store.claimLease(slug, 'competing-runner', 60000)
   const originalAppend = store.append.bind(store),
+    originalConditional = store.appendIfCurrent.bind(store),
     originalPut = store.putArtifact.bind(store)
   if (kind === 'second-answer-prefix' || kind === 'spec-publication-prefix') {
-    store.append = (async (target, write) => {
+    const check = (write: { type: string; payload: unknown }) => {
       if (
         (kind === 'second-answer-prefix' &&
           write.type === 'escalation.answered' &&
-          'id' in write.payload &&
-          write.payload.id === 'esc-second') ||
+          (write.payload as { id?: string }).id === 'esc-second') ||
         (kind === 'spec-publication-prefix' && write.type === 'spec.revised')
       )
         throw new Error('injected publication failure')
+    }
+    store.append = (async (target, write) => {
+      check(write)
       return originalAppend(target, write)
     }) as typeof store.append
+    store.appendIfCurrent = (async (target, expectedSeq, write) => {
+      check(write)
+      return originalConditional(target, expectedSeq, write)
+    }) as typeof store.appendIfCurrent
   }
   if (kind === 'upload-failure')
     store.putArtifact = async () => {
@@ -154,7 +203,7 @@ async function oracle(kind: Case, repo: string, slug: string) {
     }
   const api = createOperatorServer({ store, projects: testProjects([repo]), secret, clock })
   const body =
-    kind === 'second-answer-prefix'
+    kind === 'second-answer-prefix' || kind === 'cancelled-verifier'
       ? { resolution: 'guidance', text: 'Continue the selected work' }
       : { resolution: 'revise-spec', origin: 'body', body: spec }
   const response = await api.fetch(request(repo, slug, body, 'http://oracle.invalid'))
@@ -163,7 +212,11 @@ async function oracle(kind: Case, repo: string, slug: string) {
     body: (await response.json()) as unknown,
     after: await snapshot(store, slug),
   }
+  if (kind === 'second-answer-prefix' || kind === 'spec-publication-prefix')
+    assert.equal(first.status, 500, `${kind}: publication fault must be exercised`)
+  if (kind === 'cancelled-verifier') assert.equal(first.status, 409)
   store.append = originalAppend
+  store.appendIfCurrent = originalConditional
   store.putArtifact = originalPut
   let retry: typeof first | undefined
   const retryBody =
@@ -213,6 +266,7 @@ async function deadline<T>(work: Promise<T>, label: string, milliseconds = 15000
   }
 }
 export const answerFailureCaseIds: Case[] = [
+  'cancelled-verifier',
   'second-answer-prefix',
   'spec-publication-prefix',
   'upload-failure',
@@ -227,7 +281,7 @@ export async function replayAnswerFailures(options: AnswerFailureOptions) {
       slug = `answer-failure-${kind}`
     const expected = await oracle(kind, repo, slug)
     await options.sql`INSERT INTO project_journal(seq,repo,action,actor,ts) VALUES(nextval('project_journal_seq'),${repo},'added','fixture',${operatorClock})`
-    await seed(options.store, repo, slug, kind.startsWith('node-'))
+    await seed(options.store, repo, slug, kind.startsWith('node-'), kind === 'cancelled-verifier')
     if (kind === 'node-writer-fence')
       await options.store.claimNodeWriter(slug, 'competing-node-writer', 60000)
     if (kind === 'node-runner-fence')

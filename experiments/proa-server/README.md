@@ -95,7 +95,7 @@ Set these together for GitHub sign-in:
 - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`: GitHub OAuth App credentials.
   Register `<PROA_AUTH_URL>/auth/github/callback` as the callback.
 - `PROA_SESSION_SECRET`: at least 32 high-entropy characters.
-- `AB_WEB_ALLOWED_EMAILS`: comma-separated emails, trimmed and case-insensitive.
+- `AB_WEB_SUPER_USER_EMAILS`: comma-separated emails, trimmed and case-insensitive.
 
 Non-loopback binding requires complete GitHub configuration and an HTTPS origin.
 Terminate TLS at a trusted reverse proxy; this executable's listener speaks HTTP.

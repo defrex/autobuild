@@ -448,7 +448,7 @@ fn dashboard_facts(events: &[J]) -> J {
             "plan-review.started" | "plan-review.verdict" => Some(S::from("plan-review")),
             "implement.started" | "implement.completed" => Some(S::from("implement")),
             "code-review.started" | "code-review.verdict" => Some(S::from("code-review")),
-            "verify.started" | "verify.completed" => Some(S::from_units(
+            "verify.started" | "verify.completed" | "verify.cancelled" => Some(S::from_units(
                 "verify:"
                     .encode_utf16()
                     .chain(p["step"].as_string().unwrap().units().iter().copied())

@@ -1,5 +1,4 @@
-/** Session configuration inheritance uses the configured TypeScript service as
- * oracle. No turn/model runner is started; creation writes session facts only. */
+/** HTTP session creation ignores current, malformed and legacy runner config. */
 import type { SQL } from 'bun'
 import { strict as assert } from 'node:assert'
 import { MemoryBuildStore } from '../../../packages/core/src/store/memory'
@@ -43,22 +42,22 @@ export async function replaySessionConfiguration(options: {
     if (id !== 'absent') {
       const config = configSchema.parse({
         tickets: { source: 'hosted', teamKey: 'ENG', readyState: 'ready' },
+      })
+      const legacy = {
         orchestrator: {
           enabled: id !== 'disabled',
-          ...(id !== 'disabled' ? { model: 'fixture/model' } : {}),
-          ...(id === 'enabled-empty'
-            ? { wake: [] }
-            : id === 'enabled-custom'
-              ? { wake: ['escalation.raised', 'build.completed'] }
-              : {}),
+          model: 'fixture/model',
+          wake: id === 'enabled-empty' ? [] : ['escalation.raised', 'build.completed'],
         },
-      })
+      }
       const content =
         id === 'invalid-json'
           ? '{'
           : id === 'invalid-config'
             ? '{}'
-            : effectiveBuildConfigContent(config)
+            : id === 'disabled'
+              ? effectiveBuildConfigContent(config)
+              : JSON.stringify({ ...JSON.parse(effectiveBuildConfigContent(config)), ...legacy })
       for (const store of [oracle, options.store])
         await store.putRepoArtifact(repo, { kind: 'dispatcher-effective-config', content })
     }
@@ -67,14 +66,6 @@ export async function replaySessionConfiguration(options: {
       projects: testProjects([repo]),
       secret,
       clock,
-      orchestrator: {
-        scheduleBackground: () => {
-          throw new Error('Session creation must not schedule a turn')
-        },
-        createRunner: async () => {
-          throw new Error('Session creation must not start a turn runner')
-        },
-      },
     })
     const headers = {
       authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { repo, user: 'operator@example.com' }, exp: clock().getTime() + 60000 })}`,
@@ -86,6 +77,7 @@ export async function replaySessionConfiguration(options: {
     const init = { method: 'POST', headers, body: JSON.stringify({ title: 'Configured session' }) }
     const expected = await server.fetch(new Request(`http://oracle.invalid${path}`, init))
     const actual = await fetch(`${options.address}${path}`, init)
+    assert.equal(expected.status, 201, `${id}: config must not affect inert session creation`)
     assert.equal(actual.status, expected.status, `${id}: status`)
     const expectedBody = (await expected.json()) as { id?: string },
       actualBody = (await actual.json()) as { id?: string }
@@ -102,6 +94,10 @@ export async function replaySessionConfiguration(options: {
         events = await oracle.getSessionEvents(expectedBody.id)
       nativeEvents.forEach(validateSessionEventWrite)
       assert.deepEqual(
+        nativeEvents.map((event) => event.type),
+        ['session.created'],
+      )
+      assert.deepEqual(
         bindOperatorIds(
           { record: nativeRecords[0], events: nativeEvents, state: reduceSession(nativeEvents) },
           [actualBody.id],
@@ -109,7 +105,7 @@ export async function replaySessionConfiguration(options: {
         bindOperatorIds({ record: oracleRecords[0], events, state: reduceSession(events) }, [
           expectedBody.id,
         ]),
-        `${id}: exact durable owner/wake prefix`,
+        `${id}: exact inert durable owner prefix`,
       )
     }
     checked.push(id)

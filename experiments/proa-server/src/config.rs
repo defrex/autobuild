@@ -37,7 +37,7 @@ pub fn emails(value: &str) -> anyhow::Result<Vec<String>> {
                         .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
                     && !s.chars().any(|c| c.is_whitespace() || c.is_control())
             }),
-        "AB_WEB_ALLOWED_EMAILS must contain email addresses"
+        "AB_WEB_SUPER_USER_EMAILS must contain email addresses"
     );
     Ok(values)
 }
@@ -78,7 +78,7 @@ impl Config {
         let client_id = get("GITHUB_CLIENT_ID");
         let client_secret = get("GITHUB_CLIENT_SECRET");
         let secret = get("PROA_SESSION_SECRET");
-        let allowed = get("AB_WEB_ALLOWED_EMAILS");
+        let allowed = get("AB_WEB_SUPER_USER_EMAILS");
         let dev_enabled = get("PROA_DEV_AUTH");
         anyhow::ensure!(
             dev_enabled
@@ -193,7 +193,7 @@ mod tests {
         for pair in [
             ("GITHUB_CLIENT_ID", "id"),
             ("PROA_SESSION_SECRET", "short"),
-            ("AB_WEB_ALLOWED_EMAILS", "bad"),
+            ("AB_WEB_SUPER_USER_EMAILS", "bad"),
             ("PROA_DEV_AUTH", "true"),
             ("PROA_AUTH_URL", "https://evil.test/path"),
             ("PORT", "0"),
@@ -213,7 +213,7 @@ mod tests {
             ("GITHUB_CLIENT_ID", "id"),
             ("GITHUB_CLIENT_SECRET", "secret"),
             ("PROA_SESSION_SECRET", "01234567890123456789012345678901"),
-            ("AB_WEB_ALLOWED_EMAILS", "operator@example.com"),
+            ("AB_WEB_SUPER_USER_EMAILS", "operator@example.com"),
         ];
         let production = parse(&base).unwrap();
         assert!(production.auth.secure);
