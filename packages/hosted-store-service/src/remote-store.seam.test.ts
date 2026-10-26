@@ -12,6 +12,7 @@ import {
   EventValidationError,
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
+  RELEASE_LINE_PROTOCOLS,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
@@ -1421,6 +1422,12 @@ test.each([...new Set([AUTOBUILD_VERSION, '1.0.0-beta.0', '1.0.0'])])(
   'audit capability survives completion and clears on settlement for %s',
   async (version) => {
     const { verifyAuditCapability } = await import('./testing/audit-capability')
-    await verifyAuditCapability(version, REMOTE_STORE_PROTOCOL_VERSION, true)
+    // Released clients send their own line's protocol identity, not the current one.
+    const line = (v: string) => v.split('.').slice(0, 2).join('.')
+    const protocol =
+      line(version) === line(AUTOBUILD_VERSION)
+        ? REMOTE_STORE_PROTOCOL_VERSION
+        : RELEASE_LINE_PROTOCOLS[line(version)]!
+    await verifyAuditCapability(version, protocol, true)
   },
 )

@@ -20,6 +20,7 @@ import {
   AUTOBUILD_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
+  RELEASE_LINE_PROTOCOLS,
 } from '@defrex/autobuild/remote-store'
 import { createStoreServer } from './remote-store-server'
 import { createHostedStoreService } from './service'
@@ -86,7 +87,11 @@ test('released strict parsers accept three-field build/repository answers throug
       const response = await service.fetch(
         new Request(`https://test${path}/reducer-values`, {
           method: 'POST',
-          headers: { ...headers, [AUTOBUILD_VERSION_HEADER]: '1.0.0-beta.0' },
+          headers: {
+            ...headers,
+            [AUTOBUILD_VERSION_HEADER]: '1.0.0-beta.0',
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: RELEASE_LINE_PROTOCOLS['1.0']!,
+          },
           body: JSON.stringify({ reducer }),
         }),
       )
