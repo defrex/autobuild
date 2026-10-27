@@ -29,6 +29,7 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
   verify: 'hot',
   finalize: 'hot',
   roles: 'hot',
+  accounts: 'hot',
   policy: 'hot',
   orchestrator: 'restart',
   tickets: {
@@ -184,7 +185,12 @@ export class LiveConfig {
     this.acceptedContent = startupContent
     this.snapshot = {
       config: startup,
-      resolver: createRuntimeResolver(runtimes, startup.roles, startup.policy.sessionBudgetSeconds),
+      resolver: createRuntimeResolver(
+        runtimes,
+        startup.roles,
+        startup.policy.sessionBudgetSeconds,
+        startup.accounts,
+      ),
       revision: 0,
     }
   }
@@ -248,6 +254,7 @@ export class LiveConfig {
         this.runtimes,
         config.roles,
         config.policy.sessionBudgetSeconds,
+        config.accounts,
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

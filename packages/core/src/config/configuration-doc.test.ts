@@ -390,6 +390,7 @@ function openMapEnumeration(summary: string): string[] {
 
 /** Owning prose sections remain explicit; accepted fields come from the schema walker. */
 const TABLE_HEADINGS: Record<string, string> = {
+  accounts: '`[accounts]`',
   upgrade: '`[upgrade]`',
   merge: '`[[merge]]`',
   landing: '`[[merge]]`',
@@ -685,6 +686,7 @@ describe('Pi install-pin scan — synthetic fixtures', () => {
 describe('configuration strictness summaries', () => {
   test('enumerate the same complete open-map surface and its workspace exception', () => {
     const expectedSurfaces = [
+      '[accounts]',
       '[commands]',
       '[roles]',
       '[workspace.config]',
@@ -890,13 +892,19 @@ describe('docs/configuration.md — executable examples', () => {
       const source = hasTicketsTable(block.source)
         ? block.source
         : `${block.source}\n\n${MINIMAL_TICKETS}`
-      const roles = parseConfig(source, `docs/configuration.md#${block.name ?? 'fragment'}`).roles
+      const config = parseConfig(source, `docs/configuration.md#${block.name ?? 'fragment'}`)
+      const roles = config.roles
       if (Object.keys(roles).length === 0) continue
       checked += 1
       // A fragment need not carry [roles.default]; supply the documented
       // product default so the merge has a base, exactly as a real file would.
       expect(() =>
-        createRuntimeResolver(registry, { default: { runtime: 'claude' }, ...roles }),
+        createRuntimeResolver(
+          registry,
+          { default: { runtime: 'claude' }, ...roles },
+          config.policy.sessionBudgetSeconds,
+          config.accounts,
+        ),
       ).not.toThrow()
     }
     expect(checked).toBeGreaterThan(1)

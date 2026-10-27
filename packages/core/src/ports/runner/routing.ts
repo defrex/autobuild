@@ -1,3 +1,4 @@
+import { selectAccount, type Accounts, type SelectedAccount } from '../../config/accounts'
 /**
  * Eager runtime/model/args role resolution (SPEC §9, §16.1). Primary
  * fields and the ordered alternate list inherit independently from the
@@ -10,6 +11,7 @@ import { serves, type RuntimeRegistration, type RuntimeRegistry } from './runtim
 
 /** A resolved runtime/model pair plus the adapter to run it (§9). */
 export interface ResolvedRuntime {
+  account?: SelectedAccount
   runner: AgentRunner
   /** The registry key == the frozen `session.started.runner` value. */
   runtime: string
@@ -30,6 +32,7 @@ export interface ResolvedRole extends ResolvedRuntime {
 }
 
 export interface RuntimeAxes {
+  account?: string
   runtime?: string
   model?: string
   args?: readonly string[]
@@ -74,6 +77,7 @@ function mergeAxes(spec: RuntimeAxes, base: RuntimeAxes): RuntimeAxes {
   return {
     ...(runtime !== undefined ? { runtime } : {}),
     ...(model !== undefined ? { model } : {}),
+    account: spec.account ?? base.account,
     args: spec.args ?? base.args ?? [],
   }
 }
@@ -85,6 +89,7 @@ function resolveAxes(
   registry: RuntimeRegistry,
   label: string,
   problems: string[],
+  accounts: Accounts,
 ): ResolvedRuntime | undefined {
   const runtime = axes.runtime
   if (runtime === undefined || runtime.trim().length === 0) {
@@ -105,8 +110,21 @@ function resolveAxes(
   }
   const reg = registry[runtime]!
 
-  const model = axes.model ?? reg.defaultModel
-  const modelValid = model === undefined || serves(reg, model)
+  let account: SelectedAccount | undefined
+  try {
+    account = selectAccount(accounts, runtime, axes.account, label)
+  } catch (error) {
+    problems.push((error as Error).message)
+    return undefined
+  }
+  const kimi = account?.descriptor.kind === 'kimi-code'
+  const model = axes.model ?? (kimi ? 'kimi-for-coding' : reg.defaultModel)
+  const modelValid = kimi
+    ? model !== undefined &&
+      /^(kimi-for-coding(?:-highspeed)?|k3(?:-256k)?|k3\.1-pro(?:-highspeed)?)(?:\[1m\])?$/.test(
+        model,
+      )
+    : model === undefined || serves(reg, model)
   if (!modelValid) {
     problems.push(
       `${label} resolves runtime "${runtime}" with model "${model}", but ` +
@@ -115,7 +133,10 @@ function resolveAxes(
   }
 
   const args = axes.args ?? []
-  const ownedArgs = new Set(reg.ownedArgs ?? [])
+  const ownedArgs = new Set([
+    ...(reg.ownedArgs ?? []),
+    ...(account ? ['--settings', '--setting-sources', '--bare'] : []),
+  ])
   for (const arg of args) {
     if (arg === reg.promptBoundary) {
       problems.push(
@@ -146,6 +167,7 @@ function resolveAxes(
   if (!modelValid) return undefined
 
   return {
+    ...(account === undefined ? {} : { account }),
     runner: reg.runner,
     runtime,
     ...(model !== undefined ? { model } : {}),
@@ -161,9 +183,10 @@ function resolveRole(
   registry: RuntimeRegistry,
   label: string,
   problems: string[],
+  accounts: Accounts,
 ): ResolvedRole | undefined {
   const primaryAxes = mergeAxes(spec, defaultSpec)
-  const primary = resolveAxes(primaryAxes, registry, label, problems)
+  const primary = resolveAxes(primaryAxes, registry, label, problems, accounts)
   const alternateSpecs = spec.alternates ?? defaultSpec.alternates ?? []
   const alternates: ResolvedRuntime[] = []
   alternateSpecs.forEach((alternate, index) => {
@@ -172,6 +195,7 @@ function resolveRole(
       registry,
       `${label}.alternates[${index}]`,
       problems,
+      accounts,
     )
     if (resolved !== undefined) alternates.push(resolved)
   })
@@ -192,6 +216,7 @@ export function createRuntimeResolver(
   registry: RuntimeRegistry,
   roles: Record<string, RuntimeSpec>,
   policySessionBudgetSeconds = 3600,
+  accounts: Accounts = {},
 ): RuntimeResolver {
   const problems: string[] = []
   const defaultSpec = roles.default ?? {}
@@ -202,6 +227,7 @@ export function createRuntimeResolver(
     registry,
     '[roles.default]',
     problems,
+    accounts,
   )
 
   const resolvedRoles: Record<string, ResolvedRole> = Object.create(null)
@@ -214,6 +240,7 @@ export function createRuntimeResolver(
       registry,
       `[roles.${role}]`,
       problems,
+      accounts,
     )
     if (resolved !== undefined) resolvedRoles[role] = resolved
   }

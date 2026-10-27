@@ -4176,3 +4176,25 @@ attempt, persist replacement state before delivery, and fail expired attempts
 without takeover. A failed credential requires explicit replacement. The public
 CLI writes static values; provider sign-in kinds and a web settings screen are
 separate work. See the project-secrets section of the remote-store protocol.
+
+### Named billing accounts
+
+Deployment-owned `[accounts.<name>]` descriptors contain `kind` and
+`credentialEnv`, plus the closed Kimi `region` (`overseas` by default or `china`).
+Role and alternate `account` axes inherit independently. Claude routes default
+to the sole Claude subscription account; ambiguity, unknown references and
+incompatible runtimes fail configuration. No accounts preserves legacy behavior.
+Only the unmodified Claude Code runtime, the user's own subscription and ordinary
+individual usage are supported. Credentials are provisioned manually; Autobuild
+never signs in or captures setup-token output.
+
+Local sessions resolve host credentials after ambient merging. Remote sessions
+receive account placeholders; exact provider hostname and placeholder header
+matches broker real credentials on the host. Both Kimi endpoint and host derive
+from one closed regional mapping, without cross-region retry. Observation ticks
+refresh the live egress policy from dispatcher environment values. Selected
+account descriptors persist with sessions for continuation; configuration and
+launch artifacts contain no secret values. Credential rejections require renewal
+and bypass alternates; quota and availability retain existing fallback behavior.
+Account secrets are redacted at persistence boundaries, including split streamed
+deltas and prior values retained across rotation.
