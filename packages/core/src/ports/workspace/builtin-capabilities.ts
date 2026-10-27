@@ -77,6 +77,7 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
         storeToken: opts.storeToken!,
         repo: resolve(opts.repoRoot),
         runtimeReferences: opts.runtimeReferences ?? [],
+        accounts: opts.accounts,
         setupCommand: opts.sandboxSetupCommand,
         sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
         ...(opts.origin !== undefined ? { origin: opts.origin } : {}),

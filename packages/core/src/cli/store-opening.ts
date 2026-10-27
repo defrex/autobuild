@@ -1,3 +1,4 @@
+import { AccountRedactor, redactAccountStore } from '../store/account-redaction'
 import { untilDeadline } from './watch-lifetime'
 /**
  * Production BuildStore composition for CLI commands.
@@ -35,10 +36,19 @@ function optionalToken(value: string | undefined): string | undefined {
  * and does not import the HTTP adapter. */
 export const openProductionStore: StoreOpener = (ref, token) => {
   const forwardedToken = optionalToken(token)
-  return resolveStore(ref, {
+  const store = resolveStore(ref, {
     remoteFactory: (url, remoteToken) => new RemoteBuildStore({ url, token: remoteToken }),
     ...(forwardedToken !== undefined ? { token: forwardedToken } : {}),
   })
+  const raw = process.env.AB_ACCOUNT_CREDENTIAL_ENVS
+  if (!raw) return store
+  const names: unknown = JSON.parse(raw)
+  if (!Array.isArray(names) || !names.every((name) => typeof name === 'string'))
+    throw new Error('Invalid account credential variable inventory')
+  return redactAccountStore(
+    store,
+    new AccountRedactor(() => names.map((name) => process.env[name])),
+  )
 }
 
 /** Apply validated ambient authority to a selected Store handle. Remote

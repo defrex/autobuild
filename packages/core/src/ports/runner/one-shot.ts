@@ -1,3 +1,4 @@
+import type { SelectedAccount } from '../../config/accounts'
 /**
  * A narrow, tool-free, non-phase judgment capability. Unlike AgentRunner,
  * one-shot completions have no resumable session, skill invocation,
@@ -6,6 +7,7 @@
  */
 
 export interface OneShotCompletionInput {
+  account?: SelectedAccount
   prompt: string
   /** Working directory used for project context and runtime resolution. */
   cwd: string
