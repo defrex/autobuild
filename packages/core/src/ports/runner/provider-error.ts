@@ -36,6 +36,8 @@ const EXHAUSTION_TEXT_PATTERNS = [
 ] as const
 
 const CREDENTIAL_TEXT_PATTERNS = [
+  /\b(?:invalid|expired|revoked)\s+(?:oauth\s+access|bearer)\s+token\b/i,
+  /\bfailed to authenticate\b/i,
   /\b(?:authentication|authorization)[_ -](?:failed|required|error|invalid)\b/i,
   /\bunauthori[sz]ed\b/i,
   /\bforbidden\b/i,

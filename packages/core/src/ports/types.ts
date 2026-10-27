@@ -1,3 +1,4 @@
+import type { SelectedAccount } from '../config/accounts'
 export type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { BuildStore } from '../store/types'
@@ -733,6 +734,7 @@ export interface Transcript {
 }
 
 export interface AgentStartOpts {
+  account?: SelectedAccount
   /** Await before further native output/prompt processing. Rejections are
    * infrastructure failures and must propagate to the caller. */
   onNativeSession?: NativeSessionObserver

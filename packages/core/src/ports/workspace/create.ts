@@ -25,6 +25,7 @@ export interface CreateWorkspaceProviderOptions {
   storeRef?: string
   storeToken?: string
   /** Host-derived effective routes; consumed only by the built-in sandbox. */
+  accounts?: () => import('../../config/accounts').Accounts
   runtimeReferences?: RuntimeReferencesSource
   /** Checkout-less seams for the built-in sandbox: the repository's HTTPS
    * origin, and a remote branch-head reader returning `undefined` for an
@@ -148,6 +149,7 @@ export async function createWorkspaceProvider(
             ) => delegateCredential(opts.storeRef!, opts.storeToken, target),
           }
         : {}),
+      ...(opts.accounts !== undefined ? { accounts: opts.accounts } : {}),
       ...(opts.runtimeReferences !== undefined
         ? { runtimeReferences: opts.runtimeReferences }
         : {}),

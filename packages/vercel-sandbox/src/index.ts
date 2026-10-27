@@ -28,7 +28,7 @@ import {
 
 // Typed against the extended workspace-provider factory context (AUT-560):
 // when the host invokes a workspace-provider factory it passes the
-// host-derived seams (`storeRef`, `delegateCredential`, `runtimeReferences`,
+// host-derived seams (`storeRef`, `delegateCredential`, `runtimeReferences`, `accounts`,
 // `origin`, `remoteBranchHead`) beside the shared `{ config, env, repoRoot }`.
 // The guard below stays until AUT-505 moves the implementation into this
 // package; the moved-in factory will consume exactly those seams.
