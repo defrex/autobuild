@@ -119,3 +119,155 @@ describe('provider request mapping', () => {
     })
   })
 })
+
+describe('physical blob maintenance', () => {
+  test('Vercel deletes the exact pathname with the configured authentication', async () => {
+    const calls: unknown[][] = []
+    const blobs = new VercelBlobStore({
+      access: 'private',
+      prefix: '//project//',
+      oidcToken: 'oidc',
+      storeId: 'store',
+      del: (async (...args: unknown[]) => {
+        calls.push(args)
+      }) as never,
+    })
+    await blobs.delete('abc')
+    await blobs.delete('abc')
+    expect(calls).toEqual([
+      ['project/abc', { oidcToken: 'oidc', storeId: 'store' }],
+      ['project/abc', { oidcToken: 'oidc', storeId: 'store' }],
+    ])
+  })
+
+  test('Vercel propagates deletion failure', async () => {
+    const blobs = new VercelBlobStore({
+      access: 'private',
+      token: 'token',
+      del: (async () => {
+        throw new Error('denied')
+      }) as never,
+    })
+    await expect(blobs.delete('abc')).rejects.toThrow('denied')
+  })
+
+  test('S3 removes all exact-key versions and markers across pages', async () => {
+    const { DeleteObjectCommand, ListObjectVersionsCommand } = await import('@aws-sdk/client-s3')
+    const calls: unknown[] = []
+    let page = 0
+    const blobs = new S3BlobStore({
+      bucket: 'bucket',
+      prefix: '//prefix//',
+      client: {
+        send: async (command: unknown) => {
+          if (command instanceof DeleteObjectCommand) {
+            calls.push(command.input)
+            return {}
+          }
+          if (!(command instanceof ListObjectVersionsCommand)) throw new Error('unexpected')
+          calls.push(command.input)
+          return page++ === 0
+            ? {
+                Versions: [
+                  { Key: 'prefix/abc', VersionId: 'v1' },
+                  { Key: 'prefix/abcd', VersionId: 'other' },
+                ],
+                DeleteMarkers: [{ Key: 'prefix/abc', VersionId: 'marker' }],
+                IsTruncated: true,
+                NextKeyMarker: 'prefix/abc',
+                NextVersionIdMarker: 'marker',
+              }
+            : { Versions: [{ Key: 'prefix/abc', VersionId: 'null' }], IsTruncated: false }
+        },
+      } as never,
+    })
+    await blobs.delete('abc')
+    expect(calls).toEqual([
+      { Bucket: 'bucket', Key: 'prefix/abc' },
+      { Bucket: 'bucket', Prefix: 'prefix/abc', KeyMarker: undefined, VersionIdMarker: undefined },
+      { Bucket: 'bucket', Key: 'prefix/abc', VersionId: 'v1' },
+      { Bucket: 'bucket', Key: 'prefix/abc', VersionId: 'marker' },
+      {
+        Bucket: 'bucket',
+        Prefix: 'prefix/abc',
+        KeyMarker: 'prefix/abc',
+        VersionIdMarker: 'marker',
+      },
+      { Bucket: 'bucket', Key: 'prefix/abc', VersionId: 'null' },
+    ])
+  })
+
+  test('S3 missing objects are idempotent and permission failures propagate', async () => {
+    const { ListObjectVersionsCommand } = await import('@aws-sdk/client-s3')
+    let denied = false
+    const blobs = new S3BlobStore({
+      bucket: 'bucket',
+      client: {
+        send: async (command: unknown) => {
+          if (denied) throw new Error('AccessDenied')
+          return command instanceof ListObjectVersionsCommand ? { IsTruncated: false } : {}
+        },
+      } as never,
+    })
+    await blobs.delete('absent')
+    await blobs.delete('absent')
+    denied = true
+    await expect(blobs.delete('absent')).rejects.toThrow('AccessDenied')
+  })
+})
+
+test('Vercel batches exact prefixed keys with authentication and propagates failures', async () => {
+  const calls: unknown[][] = []
+  let fail = false
+  const blobs = new VercelBlobStore({
+    access: 'private',
+    prefix: '/project/',
+    token: 'token',
+    del: (async (...args: unknown[]) => {
+      calls.push(args)
+      if (fail) throw new Error('denied')
+    }) as never,
+  })
+  await blobs.deleteMany(['a', 'b'])
+  await blobs.deleteMany([])
+  expect(calls).toEqual([[['project/a', 'project/b'], { token: 'token' }]])
+  fail = true
+  await expect(blobs.deleteMany(['a'])).rejects.toThrow('denied')
+})
+
+test('S3 batches exact keys and versions, excludes prefix neighbors and rejects per-object errors', async () => {
+  const { DeleteObjectsCommand, ListObjectVersionsCommand } = await import('@aws-sdk/client-s3')
+  const batches: unknown[] = []
+  let fail = false
+  const blobs = new S3BlobStore({
+    bucket: 'bucket',
+    prefix: 'prefix',
+    client: {
+      send: async (command: unknown) => {
+        if (command instanceof DeleteObjectsCommand) {
+          batches.push(command.input)
+          return fail ? { Errors: [{ Key: 'prefix/a', Code: 'AccessDenied' }] } : {}
+        }
+        if (command instanceof ListObjectVersionsCommand)
+          return {
+            Versions: [
+              { Key: command.input.Prefix, VersionId: 'v1' },
+              { Key: `${command.input.Prefix}-neighbor`, VersionId: 'other' },
+            ],
+          }
+        throw new Error('unexpected command')
+      },
+    } as never,
+  })
+  await blobs.deleteMany(['a', 'b'])
+  expect(batches).toEqual([
+    {
+      Bucket: 'bucket',
+      Delete: { Objects: [{ Key: 'prefix/a' }, { Key: 'prefix/b' }], Quiet: true },
+    },
+    { Bucket: 'bucket', Delete: { Objects: [{ Key: 'prefix/a', VersionId: 'v1' }], Quiet: true } },
+    { Bucket: 'bucket', Delete: { Objects: [{ Key: 'prefix/b', VersionId: 'v1' }], Quiet: true } },
+  ])
+  fail = true
+  await expect(blobs.deleteMany(['a'])).rejects.toThrow('S3 physical batch deletion failed')
+})

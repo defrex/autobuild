@@ -302,7 +302,7 @@ describe('hosted store service', () => {
     expect(await backing.getRepo(repo)).toBeNull()
   })
 
-  test('GET /repos/{repo}/state-events classifies as a store route and reaches the repo gate', async () => {
+  test('GET /repos/{repo}/state-events reaches hosted registration before the repo gate', async () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
@@ -317,19 +317,18 @@ describe('hosted store service', () => {
       },
     })
     // The bounded repository-journal read (AUT-489) is classified in
-    // `storeResourceRoutes`, so it reaches the store server's repository
-    // gate — an unknown repo answers the store server's own 404 (which
-    // opened persistence), never the generic unclassified 404.
+    // `storeResourceRoutes`, so an unregistered repository reaches the
+    // hosted authority fence instead of an unclassified 404.
     const response = await service.fetch(
       new Request('http://hosted.test/repos/acme%2Fnever-seen/state-events', {
         headers: machineHeaders,
       }),
     )
     expect(opens).toBe(1)
-    expect(response.status).toBe(404)
+    expect(response.status).toBe(403)
     expect(await response.json()).toEqual({
-      error: 'unknown repo "acme/never-seen"',
-      kind: 'not-found',
+      error: 'project not registered',
+      kind: 'auth',
     })
   })
 
@@ -339,7 +338,7 @@ describe('hosted store service', () => {
     const service = createHostedStoreService({
       openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
-      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo', 'acme/never']),
       env,
       clock,
       openStore: async () => {

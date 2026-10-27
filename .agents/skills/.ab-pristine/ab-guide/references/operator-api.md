@@ -428,3 +428,59 @@ Status codes are 401 for absent, malformed or expired sessions; 403 for admissio
 or role refusal; 400 for invalid inputs; 404 for missing resources after role
 checks; 409 for duplicate slugs; and sanitized 503 for store outages. Foreign
 projects return the same unknown-repository result as absent projects. Machine credentials retain their separate authority.
+
+
+### Permanent project deletion
+
+Super users and the owner of a project's organization can delete it from the
+Projects page. Owners see only projects in organizations they own; Move and
+Assign remain super-user operations. The inline confirmation names the project,
+shows current build, hosted ticket, secret and subscription-account counts, and
+requires a second, destructive action. Local files and configuration are unaffected.
+
+Authenticated human sessions can use `GET /api/web/projects/deletion?repo=<encoded repository>`
+for the authorized preview. It returns `repo`, an opaque `token`, `builds`,
+`tickets`, `secrets`, and `subscriptionAccounts`. Send that token unchanged in
+`If-Match` to `DELETE /api/web/projects/deletion`, with exactly `{repo}` as JSON.
+The write requires the configured same origin. Missing tokens return 428;
+a token for another live generation returns 412 without changing anything.
+A token for an already-deleted generation is an idempotent no-op, including after
+reconnection, for the initiating actor or a super user. Success returns
+`{deleted:true}` only after cleanup completes. Unauthorized callers receive no counts.
+
+Deletion cuts off access before purging builds, events, sessions, streams,
+artifacts, hosted tickets and assets, secrets, subscription accounts, credentials,
+connections, presence and organization assignment. Blobs another project references
+or reserves survive. The only retained project record contains the repository,
+initiating actor, deletion time and one opaque generation id. Provider failure
+leaves access refused and durable cleanup pending. The Projects page lists
+unfinished deletions with a **Finish deletion…** action, including after reloading,
+opening another tab or restarting the service. Reopen its inline confirmation to
+retry cleanup; Cancel only closes the confirmation and does not undo the cutoff.
+`GET /api/web/projects/deletions` returns `{projects: string[]}` for pending
+cleanup authorized to the current owner or super user, including unassigned
+projects for super users. Members and outsiders receive no pending project names.
+This management-only list does not restore projects to builds selectors or normal
+organization discovery. Cleanup commits progress in batches of at most 32 blobs,
+using provider batch deletion where supported; a failed batch remains retryable. Registration is blocked until cleanup
+finishes. Legacy untraceable orphan blobs with no ownership record or retained
+project reference are excluded from deletion.
+
+Old credentials return `401` as unknown or revoked, including repository-free
+connection status calls; routes that otherwise establish the repository return
+`403 project not registered`. No credential tombstones are retained. Browser
+approval of a fresh `ab connect` registers an empty project; proposing a connection
+alone does not register it. Old credentials and grants remain invalid. Hosted
+ticket numbering starts again at 1.
+
+`ab disconnect` only revokes the saved credential and retains project data.
+The admin `projects remove` command only unregisters access and retains data;
+it is a separate operation from permanent web project deletion.
+
+
+S3 cleanup requires `s3:DeleteObject`, `s3:ListBucketVersions` and
+`s3:DeleteObjectVersion` for the configured bucket and exact prefixed content
+keys. It removes stored versions and delete markers as well as current objects;
+permission or retention failures leave deletion pending. Vercel Blob cleanup uses
+the same store identity, token and prefixed pathname as uploads. Missing objects
+are successful cleanup; provider errors never count as completed deletion.
