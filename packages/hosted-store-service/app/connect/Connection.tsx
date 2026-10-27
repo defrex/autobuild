@@ -1,12 +1,14 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createConnectionLookup, normalizedCode } from './connection-flow'
 import type { ConnectionOutcome } from '@defrex/autobuild/connection'
 
 export interface ApprovalView extends ConnectionOutcome {
   code: string
 }
 export interface ApprovalAssignment {
+  assignedOrganization: { id: string; name: string } | null
   assignment: 'new' | 'fixed'
   organizations: { id: string; name: string; membershipRole: 'owner' | 'member' | null }[]
 }
@@ -15,23 +17,28 @@ export function approvalOrganization(
   selected?: string,
 ): string | undefined {
   if (context?.assignment !== 'new') return undefined
-  if (context.organizations.length === 1)
-    return context.organizations[0]!.membershipRole === null
-      ? context.organizations[0]!.id
-      : undefined
+  if (context.organizations.length === 1) return context.organizations[0]!.id
   return context.organizations.find((org) => org.id === selected)?.id
 }
 export function approvalBlocked(context?: ApprovalAssignment, selected?: string): boolean {
-  return (
-    context?.assignment === 'new' &&
-    (context.organizations.length === 0 ||
-      (context.organizations.length > 1 && !approvalOrganization(context, selected)))
-  )
+  if (!context) return true
+  if (context.assignment === 'fixed') return !context.assignedOrganization
+  return !approvalOrganization(context, selected)
+}
+export function approvalDecision(
+  code: string,
+  approve: boolean,
+  context?: ApprovalAssignment,
+  selected?: string,
+) {
+  const organizationId = approve ? approvalOrganization(context, selected) : undefined
+  return { code, approve, ...(organizationId ? { organizationId } : {}) }
 }
 export function ConnectionView({
   code,
   connection,
   pending = false,
+  checking = false,
   error,
   context,
   selectedOrganization,
@@ -45,6 +52,7 @@ export function ConnectionView({
   selectedOrganization?: string
   onOrganization?: (id: string) => void
   connection?: ApprovalView
+  checking?: boolean
   pending?: boolean
   error?: string
   onCode?: (value: string) => void
@@ -61,7 +69,9 @@ export function ConnectionView({
       <div className="signin-centre">
         <section className="card" aria-labelledby="connect-title">
           <h2 id="connect-title">Connect project</h2>
-          {connection ? (
+          {checking ? (
+            <p role="status">Checking connection code...</p>
+          ) : connection ? (
             <>
               <p className="connection-code">
                 <span className="sr-only">Connection code: </span>
@@ -80,7 +90,7 @@ export function ConnectionView({
                     Approve only if you started this connection and the repository and code match
                     your CLI.
                   </p>
-                  {context?.assignment === 'new' && context.organizations.length > 1 && (
+                  {context?.assignment === 'new' && context.organizations.length > 0 && (
                     <fieldset className="connection-organizations">
                       <legend>Add it to an organization</legend>
                       <p className="slack">
@@ -92,7 +102,7 @@ export function ConnectionView({
                             type="radio"
                             name="organization"
                             value={org.id}
-                            checked={selectedOrganization === org.id}
+                            checked={approvalOrganization(context, selectedOrganization) === org.id}
                             disabled={pending}
                             onChange={() => onOrganization?.(org.id)}
                           />
@@ -100,6 +110,11 @@ export function ConnectionView({
                         </label>
                       ))}
                     </fieldset>
+                  )}
+                  {context?.assignment === 'fixed' && context.assignedOrganization && (
+                    <p>
+                      Organization: <strong>{context.assignedOrganization.name}</strong>
+                    </p>
                   )}
                   {context?.assignment === 'new' && !context.organizations.length && (
                     <p className="warn">
@@ -176,24 +191,61 @@ export function Connection({ initialCode = '' }: { initialCode?: string }) {
   const [context, setContext] = useState<ApprovalAssignment>()
   const [selectedOrganization, setSelectedOrganization] = useState<string>()
   const [pending, setPending] = useState(false)
+  const [checking, setChecking] = useState(() => !!normalizedCode(initialCode))
   const [error, setError] = useState<string>()
   const busy = useRef(false)
-  async function send(action: 'lookup' | 'decide', approve?: boolean) {
+  const [lookupFlow] = useState(() =>
+    createConnectionLookup({
+      request: (...args) => fetch(...args),
+      navigate: (path) => window.location.assign(path),
+      checking: (value) => {
+        setChecking(value)
+        if (value) {
+          setError(undefined)
+          setConnection(undefined)
+          setContext(undefined)
+          setSelectedOrganization(undefined)
+        }
+      },
+      resolved: (body) => {
+        setConnection(body.connection)
+        setContext(
+          body.assignment
+            ? {
+                assignment: body.assignment,
+                organizations: body.organizations ?? [],
+                assignedOrganization: body.assignedOrganization ?? null,
+              }
+            : undefined,
+        )
+        setSelectedOrganization(undefined)
+      },
+      failed: setError,
+    }),
+  )
+  useEffect(() => {
+    setCode(initialCode)
+    if (normalizedCode(initialCode)) void lookupFlow.lookup(initialCode)
+    else {
+      lookupFlow.invalidate()
+      setChecking(false)
+      setConnection(undefined)
+      setContext(undefined)
+      setSelectedOrganization(undefined)
+    }
+  }, [initialCode, lookupFlow])
+  async function send(approve: boolean) {
     if (busy.current || (approve && approvalBlocked(context, selectedOrganization))) return
     busy.current = true
     setPending(true)
     setError(undefined)
     try {
-      const response = await fetch(`/connect/v1/browser/${action}`, {
+      const response = await fetch('/connect/v1/browser/decide', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          code: connection?.code ?? code,
-          ...(approve === undefined ? {} : { approve }),
-          ...(approve && approvalOrganization(context, selectedOrganization)
-            ? { organizationId: approvalOrganization(context, selectedOrganization) }
-            : {}),
-        }),
+        body: JSON.stringify(
+          approvalDecision(connection?.code ?? code, approve, context, selectedOrganization),
+        ),
       })
       if (response.status === 401) {
         window.location.assign(
@@ -209,14 +261,6 @@ export function Connection({ initialCode = '' }: { initialCode?: string }) {
         throw new Error(body.error || 'Could not confirm the connection. Try again.')
       if (!body.connection) throw new Error('Unknown connection code. Check the code in your CLI.')
       setConnection(body.connection)
-      if (action === 'lookup') {
-        setContext(
-          body.assignment
-            ? { assignment: body.assignment, organizations: body.organizations ?? [] }
-            : undefined,
-        )
-        setSelectedOrganization(undefined)
-      }
     } catch (failure) {
       setError(
         failure instanceof Error ? failure.message : 'Connection service unavailable. Try again.',
@@ -231,18 +275,21 @@ export function Connection({ initialCode = '' }: { initialCode?: string }) {
       code={code}
       connection={connection}
       pending={pending}
+      checking={checking}
       error={error}
       context={context}
       selectedOrganization={selectedOrganization}
       onOrganization={setSelectedOrganization}
       onCode={(value) => {
+        lookupFlow.invalidate()
+        setChecking(false)
         setCode(value)
         setContext(undefined)
         setSelectedOrganization(undefined)
         setConnection(undefined)
       }}
-      onLookup={() => void send('lookup')}
-      onDecision={(approve) => void send('decide', approve)}
+      onLookup={() => void lookupFlow.lookup(code)}
+      onDecision={(approve) => void send(approve)}
     />
   )
 }
