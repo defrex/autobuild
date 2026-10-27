@@ -16,6 +16,7 @@ export interface ProjectSecretMetadata {
   status: 'ready' | 'refreshing' | 'failed'
   failureCode: string | null
   lastSuppliedAt: string | null
+  warnings?: Array<'refresh-window-too-short'>
 }
 export interface SecretSetRequest {
   version: 1
@@ -89,7 +90,7 @@ export function decodeSecretMetadata(raw: unknown): ProjectSecretMetadata {
     typeof r.name !== 'string' ||
     typeof r.kind !== 'string' ||
     typeof r.owner !== 'string' ||
-    Object.keys(r).length !== 8 ||
+    Object.keys(r).length !== (r.warnings === undefined ? 8 : 9) ||
     Object.keys(r).some(
       (key) =>
         ![
@@ -101,8 +102,11 @@ export function decodeSecretMetadata(raw: unknown): ProjectSecretMetadata {
           'status',
           'failureCode',
           'lastSuppliedAt',
+          'warnings',
         ].includes(key),
     ) ||
+    (r.warnings !== undefined &&
+      (!Array.isArray(r.warnings) || r.warnings.some((v) => v !== 'refresh-window-too-short'))) ||
     typeof r.setAt !== 'string' ||
     typeof r.fingerprint !== 'string' ||
     !(r.lastSuppliedAt === null || typeof r.lastSuppliedAt === 'string') ||
@@ -123,5 +127,6 @@ export function decodeSecretMetadata(raw: unknown): ProjectSecretMetadata {
     status: r.status,
     failureCode: r.failureCode,
     lastSuppliedAt: r.lastSuppliedAt,
+    ...(r.warnings === undefined ? {} : { warnings: [...r.warnings] }),
   }
 }

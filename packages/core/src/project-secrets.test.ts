@@ -38,3 +38,27 @@ test('values are bounded nonempty strings without NUL', () => {
     expect(() => validateSecretValue(value)).toThrow('invalid-secret')
   expect(() => validateSecretValue('x'.repeat(65536))).not.toThrow()
 })
+
+test('refresh-window warnings are allowlisted metadata and never accept secret-bearing fields', async () => {
+  const { decodeSecretMetadata } = await import('./project-secrets')
+  const raw = {
+    name: 'PLAN_ACCESS',
+    kind: 'fake',
+    owner: 'owner',
+    setAt: new Date().toISOString(),
+    fingerprint: 'a'.repeat(16),
+    status: 'ready' as const,
+    failureCode: null,
+    lastSuppliedAt: null,
+  }
+  expect(decodeSecretMetadata(raw)).toEqual(raw)
+  expect(decodeSecretMetadata({ ...raw, warnings: ['refresh-window-too-short'] }).warnings).toEqual(
+    ['refresh-window-too-short'],
+  )
+  expect(() => decodeSecretMetadata({ ...raw, warnings: ['sentinel-token'] })).toThrow(
+    'secret-unavailable',
+  )
+  expect(() => decodeSecretMetadata({ ...raw, accessToken: 'sentinel-token' })).toThrow(
+    'secret-unavailable',
+  )
+})

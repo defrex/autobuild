@@ -4173,7 +4173,13 @@ mutations still require a valid key. Adding a secret invalidates an earlier empt
 snapshot before handoff. Local dispatch behavior
 is unchanged. Refresh kinds serialize external rotation with a committed CAS
 attempt, persist replacement state before delivery, and fail expired attempts
-without takeover. A failed credential requires explicit replacement. The public
+without takeover. A failed credential requires explicit replacement. Valid
+credentials before their earliest refresh time remain usable, even inside a
+requested future validity horizon. The first eligible five-minute hosted tick
+refreshes and persists rotation before supply; expiration or refresh failure
+prevents supply. A refresh window shorter than five minutes plus a one-minute
+margin emits typed advisory metadata, never invalidates a valid credential and
+never causes revocation. The public
 CLI writes static values; provider sign-in kinds and a web settings screen are
 separate work. See the project-secrets section of the remote-store protocol.
 

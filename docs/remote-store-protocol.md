@@ -1413,8 +1413,12 @@ Each metadata entry contains `name`, `kind`, `owner` (the member who set the
 current value), `setAt` (ISO timestamp), `fingerprint` (16 hexadecimal characters,
 keyed and non-reversible), `status` (`ready`, `refreshing`, `failed`), `failureCode`
 (null, `refresh-failed` or `refresh-expired`) and `lastSuppliedAt` (ISO timestamp
-or null). Set/replace resets delivery and failure metadata. Every set/remove
-records actor and time without material. Supply means the environment was handed
+or null). A refreshing secret may also include typed `warnings`, currently
+`["refresh-window-too-short"]` when its permitted refresh window is shorter than
+the five-minute tick interval plus a one-minute safety margin. This is advisory;
+missing warnings do not establish a sufficient window when encrypted state is
+unavailable for diagnosis. Set/replace resets delivery and failure metadata.
+Every set/remove records actor and time without material. Supply means the environment was handed
 to a kernel, not that a build completed.
 
 On each hosted tick the complete current project set overrides the deployment
@@ -1429,11 +1433,14 @@ on an empty project. An empty snapshot becomes stale if a secret is added before
 handoff. Metadata remains available for diagnosis.
 
 Refreshing kinds are internal provider integrations, not arbitrary endpoint URLs
-or CLI write formats. Before delivery the resolver requires at least ten minutes
-of remaining access validity (five-minute tick interval plus scheduling allowance),
-honors provider earliest-refresh times, and commits rotated encrypted state before
-supplying the new token. A durable attempt permits only one refresh caller across
-overlapping ticks. An abandoned attempt expires to failed without reusing the
+or CLI write formats. The five-minute hosted cadence is unchanged. A token that
+is valid now but not yet refreshable is supplied unchanged; a caller’s future
+validity horizon cannot reject it. The first tick at or after the provider’s
+earliest-refresh time rotates the credential and commits encrypted replacement
+state before supply. Providers omitting that time use a five-minute pre-expiry
+refresh margin. Expired credentials or refresh failures prevent supply. A valid
+credential is never revoked merely because its refresh window is short. A durable
+attempt permits only one refresh caller across overlapping ticks. An abandoned attempt expires to failed without reusing the
 possibly consumed refresh token; explicit replacement is required. Errors use
 fixed safe codes and never reflect provider responses or submitted values.
 

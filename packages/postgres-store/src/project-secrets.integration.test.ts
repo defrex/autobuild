@@ -183,7 +183,7 @@ live(
         await b.markSupplied(results[0]!)
         await b.resolveForTick(repo, now + 600000, now + 10000)
         expect(calls).toBe(1)
-        now += 3000001
+        now += 3300001
         // A different endpoint contract sees the durably rotated refresh token.
         kinds.set('fake', {
           validateState: kind.validateState,
@@ -432,7 +432,7 @@ live('unknown claim/completion commit outcomes never repeat external rotation', 
 )
 
 live(
-  'validity horizon, earliest-refresh constraint, malformed refresh and timeout fail closed',
+  'valid tokens before the refresh window are supplied; due refresh, malformed refresh and timeout are handled safely',
   () =>
     fixture(async (sql, _url, projects) => {
       let now = Date.now(),
@@ -468,22 +468,13 @@ live(
         },
         'member',
       )
-      await expect(store.resolveForTick(repo, now, now + 1000)).rejects.toThrow(
-        'secret-unavailable',
+      expect((await store.resolveForTick(repo, now + 600000, now + 1000)).env.KIMI_API_KEY).toBe(
+        'old',
       )
       expect(calls).toBe(0)
-      await store.setPayload(
-        repo,
-        'KIMI_API_KEY',
-        'fake',
-        { accessToken: 'old', expiresAt: now + 600001, state: 'original' },
-        'member',
-      )
-      expect((await store.resolveForTick(repo, now, now + 1000)).env.KIMI_API_KEY).toBe('old')
-      expect(calls).toBe(0)
-      now += 2
-      await expect(store.resolveForTick(repo, now, now + 1000)).rejects.toThrow(
-        'secret-unavailable',
+      now += 10000
+      expect((await store.resolveForTick(repo, now + 600000, now + 1000)).env.KIMI_API_KEY).toBe(
+        'fresh',
       )
       expect(calls).toBe(1)
       kinds.set('fake', {
@@ -496,7 +487,7 @@ live(
         repo,
         'KIMI_API_KEY',
         'fake',
-        { accessToken: 'old', expiresAt: now, state: 'original' },
+        { accessToken: 'old', expiresAt: now + 1000, state: 'original' },
         'member',
       )
       await expect(store.resolveForTick(repo, now, now + 1000)).rejects.toThrow(
@@ -512,7 +503,7 @@ live(
         repo,
         'KIMI_API_KEY',
         'fake',
-        { accessToken: 'old', expiresAt: now, state: 'original' },
+        { accessToken: 'old', expiresAt: now + 1000, state: 'original' },
         'member',
       )
       await expect(store.resolveForTick(repo, now, now + 50)).rejects.toThrow('secret-unavailable')
@@ -605,4 +596,145 @@ live('empty snapshots need no key, while writes and nonempty resolution still fa
     await expect(unconfigured.markSupplied(snapshot)).rejects.toThrow('stale-secrets')
     expect((await writer.list(emptyRepo))[0]!.lastSuppliedAt).toBeNull()
   }),
+)
+
+live(
+  'minute 50 supplies a token expiring at 60; minute 55 refreshes and warns without failing',
+  () =>
+    fixture(async (sql, _url, projects) => {
+      const origin = Date.now()
+      let now = origin + 50 * 60000,
+        calls = 0
+      const store = new PostgresProjectSecrets(
+        sql,
+        projects,
+        () => key,
+        new Map([
+          [
+            'fake',
+            {
+              validateState: (s: unknown) => typeof s === 'string',
+              async refresh() {
+                calls++
+                return {
+                  accessToken: 'rotated-access',
+                  state: 'rotated-refresh',
+                  expiresAt: now + 60 * 60000,
+                  earliestRefreshAt: now + 55 * 60000,
+                }
+              },
+            },
+          ],
+        ]),
+        () => now,
+      )
+      await store.setPayload(
+        repo,
+        'PLAN_ACCESS',
+        'fake',
+        {
+          accessToken: 'old-access',
+          state: 'old-refresh',
+          expiresAt: origin + 60 * 60000,
+          earliestRefreshAt: origin + 55 * 60000,
+        },
+        'member',
+      )
+      const before = await store.resolveForTick(repo, now + 600000, now + 1000)
+      expect(before.env.PLAN_ACCESS).toBe('old-access')
+      await store.markSupplied(before)
+      expect(calls).toBe(0)
+      expect((await store.list(repo))[0]!.warnings).toEqual(['refresh-window-too-short'])
+      now = origin + 55 * 60000
+      const after = await store.resolveForTick(repo, now + 600000, now + 1000)
+      expect(after.env.PLAN_ACCESS).toBe('rotated-access')
+      await store.markSupplied(after)
+      expect(calls).toBe(1)
+      expect((await store.list(repo))[0]!.status).toBe('ready')
+    }),
+)
+
+live('expired complete sets fail before refresh HTTP without revoking valid peers', () =>
+  fixture(async (sql, _url, projects) => {
+    const now = Date.now()
+    let calls = 0
+    const store = new PostgresProjectSecrets(
+      sql,
+      projects,
+      () => key,
+      new Map([
+        [
+          'fake',
+          {
+            validateState: (s: unknown) => typeof s === 'string',
+            async refresh() {
+              calls++
+              throw new Error('must not run')
+            },
+          },
+        ],
+      ]),
+      () => now,
+    )
+    await store.setPayload(
+      repo,
+      'A_VALID',
+      'fake',
+      { accessToken: 'valid', state: 'refresh-valid', expiresAt: now + 30000 },
+      'member',
+    )
+    await store.setPayload(
+      repo,
+      'Z_EXPIRED',
+      'fake',
+      { accessToken: 'expired', state: 'refresh-expired', expiresAt: now },
+      'member',
+    )
+    await expect(store.resolveForTick(repo, now, now + 1000)).rejects.toThrow('secret-unavailable')
+    expect(calls).toBe(0)
+    expect((await store.list(repo)).every((entry) => entry.status === 'ready')).toBe(true)
+  }),
+)
+
+live(
+  'a successful short-lived replacement is supplied once per resolution without a rotation loop',
+  () =>
+    fixture(async (sql, _url, projects) => {
+      const now = Date.now()
+      let calls = 0
+      const store = new PostgresProjectSecrets(
+        sql,
+        projects,
+        () => key,
+        new Map([
+          [
+            'fake',
+            {
+              validateState: (s: unknown) => typeof s === 'string',
+              async refresh() {
+                calls++
+                return {
+                  accessToken: 'short-lived',
+                  state: 'rotated',
+                  expiresAt: now + 30000,
+                  earliestRefreshAt: now,
+                }
+              },
+            },
+          ],
+        ]),
+        () => now,
+      )
+      await store.setPayload(
+        repo,
+        'PLAN_ACCESS',
+        'fake',
+        { accessToken: 'old', state: 'refresh-old', expiresAt: now + 1000 },
+        'member',
+      )
+      const snapshot = await store.resolveForTick(repo, now + 600000, now + 1000)
+      expect(snapshot.env.PLAN_ACCESS).toBe('short-lived')
+      expect(calls).toBe(1)
+      await store.markSupplied(snapshot)
+    }),
 )

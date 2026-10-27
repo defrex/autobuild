@@ -98,11 +98,30 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
   }
   async list(raw: string): Promise<ProjectSecretMetadata[]> {
     const repo = await this.registered(raw)
-    return (
-      await this
-        .sql`SELECT name,kind,owner,set_at,fingerprint,status,failure_code,last_supplied_at FROM project_secrets WHERE repo=${repo} ORDER BY name`
-    ).map(metadata)
+    try {
+      const { rows, payloads } = await this.read(repo)
+      return rows.map((row, i) => {
+        const payload = payloads[i]!
+        return {
+          ...metadata(row),
+          ...('expiresAt' in payload &&
+          payload.earliestRefreshAt !== undefined &&
+          payload.expiresAt - payload.earliestRefreshAt < 360_000
+            ? { warnings: ['refresh-window-too-short' as const] }
+            : {}),
+        }
+      })
+    } catch (error) {
+      // Diagnosis remains possible with an unavailable key or malformed provider
+      // state. Omitted warnings do not assert that a refresh window is sufficient.
+      if (!(error instanceof ProjectSecretError)) throw error
+      return (
+        await this
+          .sql`SELECT name,kind,owner,set_at,fingerprint,status,failure_code,last_supplied_at FROM project_secrets WHERE repo=${repo} ORDER BY name`
+      ).map(metadata)
+    }
   }
+
   async set(repo: string, name: string, value: string, actor: string): Promise<void> {
     validateSecretValue(value)
     return this.setPayload(repo, name, 'static', { value }, actor)
@@ -179,12 +198,13 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
   }
   async resolveForTick(
     raw: string,
-    minimumValidUntil: number,
+    _minimumValidUntil: number,
     deadline: number,
   ): Promise<SecretSnapshot> {
     const repo = await this.registered(raw)
-    // Five-minute cron cadence plus five minutes of scheduling allowance.
-    const horizon = Math.max(minimumValidUntil, this.now() + 600_000)
+    // Provider refresh windows determine eligibility; a future validity horizon
+    // must never reject a credential that is valid now but cannot yet rotate.
+    const refreshed = new Set<string>()
     while (this.now() < deadline) {
       const { rows, payloads } = await this.read(repo)
       // Reject an unusable complete set before consuming any provider's state.
@@ -198,16 +218,8 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
         await this.fail(expired, 'refresh-expired')
         throw new ProjectSecretError('secret-unavailable')
       }
-      for (let i = 0; i < rows.length; i++) {
-        const payload = payloads[i]!
-        if (
-          rows[i]!.status === 'ready' &&
-          'expiresAt' in payload &&
-          payload.expiresAt <= horizon &&
-          (payload.earliestRefreshAt ?? 0) > this.now()
-        )
-          throw new ProjectSecretError('secret-unavailable')
-      }
+      if (payloads.some((payload) => 'expiresAt' in payload && payload.expiresAt <= this.now()))
+        throw new ProjectSecretError('secret-unavailable')
       let retry = false
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i]!,
@@ -221,7 +233,11 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
           retry = true
           continue
         }
-        if (r.kind === 'static' || ('expiresAt' in p && p.expiresAt > horizon)) continue
+        if (r.kind === 'static' || refreshed.has(JSON.stringify([r.name, r.generation]))) continue
+        if ('expiresAt' in p && p.expiresAt <= this.now())
+          throw new ProjectSecretError('secret-unavailable')
+        if ('expiresAt' in p && (p.earliestRefreshAt ?? p.expiresAt - 300_000) > this.now())
+          continue
         if (!('state' in p) || (p.earliestRefreshAt ?? 0) > this.now())
           throw new ProjectSecretError('secret-unavailable')
         const attempt = randomUUID(),
@@ -252,7 +268,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
               timeout,
             ]).finally(() => clearTimeout(timer))
             this.validatePayload(r.kind, result)
-            if (result.expiresAt <= horizon || this.now() >= until)
+            if (result.expiresAt <= this.now() || this.now() >= until)
               throw new ProjectSecretError('secret-unavailable')
             // Commit rotated material before returning to resolution. Never repeat HTTP.
             await this.sql.begin(async (tx) => {
@@ -261,6 +277,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
               await tx`UPDATE project_secrets SET payload=${cipher.encrypt(context(repo, r.name, r.kind), result)},status='ready',revision=revision+1,attempt_id=NULL,attempt_deadline=NULL,failure_code=NULL
                 WHERE repo=${repo} AND name=${r.name} AND generation=${claim.generation} AND revision=${claim.revision} AND status='refreshing' AND attempt_id=${attempt} AND attempt_deadline>${new Date(this.now()).toISOString()}`
             })
+            refreshed.add(JSON.stringify([r.name, r.generation]))
           } catch {
             // A completion may have committed despite a lost acknowledgement.
             // Reread durable state before classifying failure; never repeat HTTP.
@@ -271,6 +288,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
               durable.generation !== claim.generation ||
               (durable.status === 'ready' && BigInt(durable.revision) > BigInt(claim.revision))
             ) {
+              refreshed.add(JSON.stringify([r.name, r.generation]))
               retry = true
               continue
             }
@@ -286,7 +304,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
       }
       const snapshot: SecretSnapshot = {
         repo,
-        minimumValidUntil: horizon,
+        minimumValidUntil: this.now(),
         env: {},
         versions: rows.map((r) => ({
           name: r.name,
