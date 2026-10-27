@@ -156,12 +156,15 @@ maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5     # queued observations that trigger a harvest on back-pressure
 
-# Ticket source and lifecycle states. Tickets are local files in the default
-# tracker, .autobuild/tickets/ (untracked, on the maintainer's machine). This
-# repository moved off Linear on 2026-10-21 because the dispatcher kept
-# exhausting Linear's hourly request budget; ids (AUT-n) were kept.
+# Ticket source and lifecycle states. Tickets live in the hosted service at
+# app.autobuild.run, so this repository dogfoods it (since 2026-10-27). Before
+# that they were local files: this repository moved off Linear on 2026-10-21
+# because the dispatcher kept exhausting Linear's hourly request budget. AUT-n
+# ids were kept through both moves.
 [tickets]
-source = "file"
+source = "hosted"
+url = "https://app.autobuild.run"
+teamKey = "AUT"
 readyState = "ready"            # sole ready gate
 readyLabels = []                # additional label gate ([] = none)
 createState = "ready"           # new tickets are filed straight to ready, as before the move
@@ -169,3 +172,6 @@ triageState = "triage"          # bounced, aborted, and closed-unmerged tickets 
 proposalState = "triage"        # harvest proposals wait for a human to groom them to ready.
                                 # Auto-dispatching them (proposalState = readyState) ran away:
                                 # each proposal build's observations filed more proposals.
+
+[store]
+url = "https://app.autobuild.run"
