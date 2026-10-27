@@ -1,3 +1,4 @@
+import { abAccountsLogin } from './accounts'
 import { abSecrets } from './secrets'
 import { currentTicketRef } from '../kernel/ticket-migrations'
 import { upgradeFollowup } from './upgrade-followup'
@@ -108,6 +109,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'connect',
   'disconnect',
   'secrets',
+  'accounts',
   'upgrade',
   'update',
   'ticket',
@@ -490,6 +492,29 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
+    case 'accounts': {
+      const usage = 'usage: ab accounts login NAME [--local|--project]'
+      const parsed = parseArgs(rest, { local: 'boolean', project: 'boolean' }, usage)
+      if (
+        parsed.positionals.length !== 2 ||
+        parsed.positionals[0] !== 'login' ||
+        (parsed.flags.get('local') && parsed.flags.get('project'))
+      )
+        throw new Error(usage)
+      await abAccountsLogin(parsed.positionals[1]!, {
+        cwd: deps.workspacePath,
+        env: deps.processEnv ?? process.env,
+        exec: deps.exec ?? spawnExec,
+        print: stdout,
+        ...(deps.signal ? { signal: deps.signal } : {}),
+        ...(parsed.flags.get('local')
+          ? { destination: 'local' as const }
+          : parsed.flags.get('project')
+            ? { destination: 'project' as const }
+            : {}),
+      })
+      return 0
+    }
     case 'secrets': {
       const parsed = parseArgs(
         rest,

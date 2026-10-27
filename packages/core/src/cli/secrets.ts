@@ -152,7 +152,7 @@ export async function abSecrets(
           : secrets
               .map(
                 (s) =>
-                  `${s.name}\t${s.status}\t${s.owner}\t${s.setAt}\t${s.fingerprint}\t${s.lastSuppliedAt ?? 'never supplied'}`,
+                  `${s.name}\t${s.status}\t${s.owner}\t${s.setAt}\t${s.fingerprint}\t${s.lastSuppliedAt ?? 'never supplied'}${s.warnings?.length ? `\t${s.warnings.join(', ')}` : ''}`,
               )
               .join('\n') || 'No project secrets.',
       )

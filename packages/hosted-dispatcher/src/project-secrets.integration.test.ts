@@ -56,7 +56,7 @@ live(
       dispatched.length = 0
       summary = await dispatcher.tick()
       expect(summary.repositories.map((r) => r.outcome)).toEqual(['ticked', 'failed'])
-      expect(dispatched).toEqual([empty])
+      expect(dispatched).toEqual([empty, affected])
       expect(summary.repositories[1]!.error).toBe('Project secrets: key-unavailable')
       expect(JSON.stringify([summary, logs])).not.toContain('sentinel-secret')
     } finally {

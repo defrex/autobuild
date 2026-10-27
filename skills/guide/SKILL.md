@@ -571,7 +571,7 @@ commands; runtime names remain open for plugins. Install/preflight runs before
 the marker in every fresh/replacement/readiness sandbox, and preflight reruns
 before every child. Failures name the runtime, role/alternate, and field and
 start no agent. Keep runtime installation out of `commands.setup`. Pi over
-`vercel-ai-gateway/...` uses `AI_GATEWAY_API_KEY`; never copy Pi state or OAuth refresh tokens. Claude Code can select named [accounts](references/accounts.md): subscription tokens or region-bound Kimi Code keys stay on the dispatcher, with placeholders in the guest and exact-host/header egress transforms. Use the unmodified runtime, your own subscription and ordinary individual usage. Provision credentials manually; Autobuild never invokes `claude setup-token`. The clone identity is upload-pack-only and
+`vercel-ai-gateway/...` uses `AI_GATEWAY_API_KEY`; never copy Pi state or Pi OAuth refresh tokens. Claude Code can select named [accounts](references/accounts.md): subscription tokens or region-bound Kimi Code keys stay on the dispatcher, with placeholders in the guest and exact-host/header egress transforms. Use the unmodified runtime, your own subscription and ordinary individual usage. Provision Claude/Kimi credentials manually; Autobuild never invokes `claude setup-token`. Codex can explicitly select a ChatGPT Plus/Pro account authorized with `bun ab accounts login NAME [--local|--project]`; exactly one dispatcher or hosted refreshing secret owns its renewal. The clone identity is upload-pack-only and
 scrubbed from Git config before an agent starts. Agents cannot push. Remote phase terminals deposit a durable
 publication request and park; that successful `ab done` is the one terminal and
 must not be repeated. After VM stop and lease release, the local kernel
@@ -922,14 +922,16 @@ step as failed and file an observation while the green build continues.
 
 ### `[accounts]`
 
-An open map of account name to a strict, nonsecret descriptor. Both account kinds
-use the unmodified Claude Code runtime and the user's own subscription for ordinary
-individual usage. Provision credentials manually on the dispatcher host. Full
+An open map of account name to a strict, nonsecret descriptor. Claude and Kimi
+accounts use Claude Code; ChatGPT subscriptions require explicit Codex selection.
+Provision Claude/Kimi credentials manually; authorize ChatGPT with
+`bun ab accounts login NAME [--local|--project]`. Exactly one local dispatcher
+or hosted refreshing secret owns renewal; guests only hold placeholders. Full
 examples, remedies and regional routing are in [billing accounts](references/accounts.md).
 
 | Field | Meaning |
 |---|---|
-| `kind` | `claude-subscription` for a setup-token credential, or `kimi-code` for a membership API key. |
+| `kind` | `claude-subscription` for a setup token, `kimi-code` for a membership key, or `chatgpt-subscription` for a Plus/Pro plan through OpenAI sign-in. |
 | `credentialEnv` | Portable dispatcher environment variable identifier, excluding reserved `AB_` control names. |
 | `region` | Kimi only: `overseas` (default) or `china`; endpoint and egress host are selected together. |
 
@@ -944,7 +946,7 @@ Named `[accounts]` are deployment-owned nonsecret descriptors, adopted atomicall
 with `[roles]`. The `account` axis inherits independently on primary and alternate
 routes. A Claude route defaults to the sole Claude subscription account, and
 ambiguity or incompatible runtimes fail validation. See [billing accounts](references/accounts.md)
-for manual provisioning, Kimi regions, placeholders, renewal and rotation timing.
+for provisioning, ChatGPT sign-in destinations, Kimi regions, placeholders, single-owner renewal and metadata-only hosted readiness.
 
 **`claude`** (local Claude Code CLI), **`codex`** (local Codex CLI; unqualified
 `gpt-*` ids), and **`pi`** (local Pi CLI 0.84.3 or newer; provider-qualified ids
