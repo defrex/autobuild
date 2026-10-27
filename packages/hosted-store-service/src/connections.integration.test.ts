@@ -79,7 +79,12 @@ live(
       const unknownDecision = await response('decide', missing, { approve: true })
       expect(unknownLookup).toEqual({
         status: 200,
-        body: { connection: null, assignment: 'fixed', organizations: [] },
+        body: {
+          connection: null,
+          assignment: 'fixed',
+          organizations: [],
+          assignedOrganization: null,
+        },
       })
       expect(unknownDecision).toEqual({ status: 404, body: { error: 'unknown connection' } })
 
@@ -185,28 +190,28 @@ live(
         ).toEqual(history)
         email = root.email
         expect((await response('lookup', proposal.code)).body.connection.status).toBe('pending')
-        // Even a super user must use management to assign retained history.
+        // An authorized reconnect assigns retained history atomically.
+        expect((await response('decide', proposal.code, { approve: true })).status).toBe(400)
+        expect(await credentials.list(repo)).toEqual([])
+        expect(await sql`SELECT * FROM project_organizations WHERE repo = ${repo}`).toHaveLength(0)
         expect(
-          (await response('decide', proposal.code, { approve: true, organizationId: orgB.id }))
-            .status,
-        ).toBe(400)
-        expect(
-          (await response('decide', proposal.code, { approve: true })).body.connection.status,
+          (await response('decide', proposal.code, { approve: true, organizationId: orgB.id })).body
+            .connection.status,
         ).toBe('approved')
         expect(await projects.has(repo)).toBe(true)
-        expect(await sql`SELECT * FROM project_organizations WHERE repo = ${repo}`).toHaveLength(0)
+        expect(await sql`SELECT * FROM project_organizations WHERE repo = ${repo}`).toHaveLength(1)
         expect(await organizations.canAccess(root, repo)).toBe(true)
-        expect(await organizations.canAccess(legacyMember, repo)).toBe(false)
+        expect(await organizations.canAccess(legacyMember, repo)).toBe(true)
         expect(
           (
             await sql`SELECT seq, action, actor FROM project_journal WHERE repo = ${repo} ORDER BY seq`
           ).slice(0, history.length),
         ).toEqual(history)
         email = legacyMember.email
-        expect(await response('lookup', proposal.code)).toEqual(unknownLookup)
-        expect(await response('decide', proposal.code, { approve: true })).toEqual(unknownDecision)
-        await organizations.assign(root, orgB.id, repo)
-        expect(await organizations.canAccess(legacyMember, repo)).toBe(true)
+        expect((await response('lookup', proposal.code)).body.assignment).toBe('fixed')
+        expect(
+          (await response('decide', proposal.code, { approve: true })).body.connection.status,
+        ).toBe('approved')
       }
     } finally {
       await sql.close()

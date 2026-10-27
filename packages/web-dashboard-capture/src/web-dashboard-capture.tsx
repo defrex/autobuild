@@ -104,8 +104,25 @@ const SCENARIOS: readonly WebFrameSpec[] = [
             : name.startsWith('projects')
               ? 'Projects'
               : 'Connect project',
+        ...(name.startsWith('connect-')
+          ? [
+              '123456789A',
+              'https://github.com/acme/mobile',
+              'Approve project',
+              'Deny',
+              name === 'connect-zero'
+                ? 'No organization is available'
+                : name === 'connect-multiple'
+                  ? 'Northwind Labs'
+                  : 'Acme Product',
+            ]
+          : []),
       ],
-      forbids: ['connected by', 'Oct 22'],
+      forbids: [
+        'connected by',
+        'Oct 22',
+        ...(name.startsWith('connect-') ? ['Review project'] : []),
+      ],
     })),
   ),
   ...['wide', 'narrow'].map((size) => ({
@@ -260,21 +277,24 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     requires: ['skipped by post-reconcile policy'],
   },
   ...['wide', 'narrow'].flatMap((size) =>
-    ['code', 'approval', 'error', 'approved', 'denied', 'expired'].map((state) => ({
+    ['code', 'checking', 'approval', 'error', 'approved', 'denied', 'expired'].map((state) => ({
       id: `connect-${state}-${size}`,
       width: size === 'wide' ? 1440 : 390,
       height: 900,
       requires: [
         'Autobuild operator',
         'Connect project',
-        ...(state === 'approval'
-          ? ['https://github.com/example/project', 'Approve project', 'Deny']
-          : state === 'code'
-            ? ['Connection code', 'Review project']
-            : state === 'error'
-              ? ['Unknown connection code']
-              : [`Connection ${state}`]),
+        ...(state === 'checking'
+          ? ['Checking connection code']
+          : state === 'approval'
+            ? ['https://github.com/example/project', 'Approve project', 'Deny']
+            : state === 'code'
+              ? ['Connection code', 'Review project']
+              : state === 'error'
+                ? ['Unknown connection code']
+                : [`Connection ${state}`]),
       ],
+      forbids: state === 'checking' || state === 'approval' ? ['Review project'] : [],
     })),
   ),
   {
@@ -901,6 +921,9 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     }
     case 'builds-longrepo-narrow':
       return shell(builds(models.mixed), { model: models.mixed, repo: LONG_FIXTURE_REPO })
+    case 'connect-checking-wide':
+    case 'connect-checking-narrow':
+      return await ConnectionPage({ searchParams: Promise.resolve({ code: '123456789a' }) })
     case 'connect-code-wide':
     case 'connect-code-narrow':
       return await ConnectionPage({ searchParams: Promise.resolve({}) })
@@ -918,6 +941,11 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       return (
         <ConnectionView
           code="123456789A"
+          context={{
+            assignment: 'fixed',
+            organizations: [],
+            assignedOrganization: { id: 'example', name: 'Example organization' },
+          }}
           error={
             state === 'error' ? 'Unknown connection code. Check the code in your CLI.' : undefined
           }
