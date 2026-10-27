@@ -1,5 +1,8 @@
 import { renderPrSummary } from './pr-summary'
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import type { EventType } from '../events/payloads'
@@ -191,6 +194,45 @@ describe('settlePendingPublication', () => {
       commits: { base: BASE, head: SHA },
       artifact: { kind: 'implement-notes', rev: 0 },
     })
+  })
+
+  test('a checkoutless dispatcher completes without touching host git in its scratch root', async () => {
+    const h = await seed()
+    const scratch = await mkdtemp(join(tmpdir(), 'ab-settlement-scratch-'))
+    try {
+      const artifact = await h.store.putArtifact(SLUG, {
+        kind: 'implement-notes',
+        content: 'implemented remotely\n',
+      })
+      await h.store.append(SLUG, {
+        actor: agentActor('implement', 'session-1'),
+        type: 'publication.requested',
+        payload: {
+          operation: 'implement',
+          branch: BRANCH,
+          sha: SHA,
+          round: 1,
+          base: BASE,
+          artifact: { kind: artifact.kind, rev: artifact.revision },
+        },
+      })
+      const deps: PublicationSettlementDeps = {
+        ...h.deps,
+        workspacePath: scratch,
+        checkoutless: true,
+        exec: async () => {
+          throw new Error('Executable not found in $PATH: "git"')
+        },
+      }
+
+      await settlePendingPublication(deps, SLUG)
+
+      expect(h.published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
+      const types = (await h.store.getEvents(SLUG)).map((event) => event.type)
+      expect(types).toContain('implement.completed')
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
   })
 
   test('leaves a published effect retryable across the event-append crash gap', async () => {

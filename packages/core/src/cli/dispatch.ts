@@ -526,8 +526,12 @@ async function defaultWire(
         remoteBranchHead: async (branch: string): Promise<string | undefined> => {
           const remoteBranchSha = forge.remoteBranchSha
           if (remoteBranchSha === undefined) return undefined
+          // The provider pushes through the guest, bypassing the forge's read
+          // invalidation, so each head read takes a fresh scope: a post-push
+          // readback must never replay the tick's pre-push answer.
+          const read = () => remoteBranchSha.call(forge, branch)
           try {
-            return await remoteBranchSha.call(forge, branch)
+            return await (forge.withReadScope ? forge.withReadScope(read) : read())
           } catch (error) {
             if (error instanceof GitHubApiError && error.status === 404) return undefined
             throw error
@@ -3141,6 +3145,7 @@ class DispatchLoop {
         publication: this.wiring.workspaces.publication,
         forge: this.wiring.forge,
         workspacePath: this.opts.targetRepo,
+        checkoutless: this.opts.repository !== undefined,
         exec: this.opts.exec,
         ids: this.wiring.ids,
         runId: this.runId,

@@ -18,6 +18,9 @@ export interface PublicationSettlementDeps {
   publication?: WorkspacePublication
   forge: Forge
   workspacePath: string
+  /** Origin-mode dispatchers have no checkout, and possibly no host git:
+   * their `workspacePath` is a scratch root, never a ref cache to confirm. */
+  checkoutless?: boolean
   exec: Exec
   ids: IdSource
   runId: string
@@ -34,7 +37,7 @@ async function confirmDispatcherCache(
   branch: string,
   sha: string,
 ) {
-  if (!deps.forge.confirmPublication) return
+  if (deps.checkoutless || !deps.forge.confirmPublication) return
   try {
     if (!(await stat(deps.workspacePath)).isDirectory()) return
   } catch (error) {
