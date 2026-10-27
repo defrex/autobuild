@@ -7,10 +7,59 @@
 baseBranch = "main"
 capacity = 5             # concurrent builds
 
-# Builds run locally: each build gets a Git worktree under .autobuild/worktrees
-# (the default `git-worktree` provider, so no [workspace] table) and its agents
-# run on the maintainer's local Claude Code and Codex CLIs, which bill against
-# their subscriptions rather than an API key.
+# Builds run remotely, dogfooding the hosted service since 2026-10-27. The
+# kernel is the hosted dispatcher (Vercel Cron on the same Vercel project as
+# app.autobuild.run). Each build executes in a disposable Vercel Sandbox, where
+# Claude Code and Codex bill against the maintainer's personal subscriptions
+# through the [accounts] below. The guest holds only placeholders; the host
+# egress policy injects the real credentials from write-only project secrets.
+[workspace]
+provider = "vercel-sandbox"
+
+[workspace.config]
+image = "vercel/sandbox/universal:latest"
+vcpus = 4
+# One execution spans every phase up to a park point, and a single agent turn may
+# use the full policy session budget, so the guest lifetime must cover several
+# turns. At 2700 s implement sessions were cut off mid-turn (2026-09-10).
+timeoutSeconds = 14400
+operationTimeoutMs = 30000
+# The universal image is Ubuntu, where the apt `chromium` package is a snap
+# stub that installs no browser; Google's own .deb provides a real binary.
+provisioning = [
+  { name = "system-install", command = """export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
+apt-get install -y -qq /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji fontconfig""" },
+  { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/google-chrome-stable BUN_BIN=/opt/autobuild-runtime/node_modules/.bin/bun ./scripts/browser-smoke.sh" },
+  { name = "postgres", command = "./scripts/postgres-live.sh install" },
+  # Finalize steps (and any in-guest git usage) need an attributable identity.
+  # System scope applies to every user, including unprivileged agent sessions,
+  # and survives a workspace re-clone (which wipes .git/config).
+  { name = "git-identity", command = "git config --system user.name 'autobuild[bot]' && git config --system user.email 'autobuild[bot]@users.noreply.github.com'" },
+]
+
+# Every primary and alternate runtime needs a pinned install and an exact
+# version preflight. Keep these on the versions the maintainer runs locally.
+[workspace.config.runtimeProvisioning.claude]
+install = "npm install --global @anthropic-ai/claude-code@2.1.311"
+preflight = "test \"$(claude --version)\" = \"2.1.311 (Claude Code)\""
+
+[workspace.config.runtimeProvisioning.codex]
+install = "npm install --global @openai/codex@0.164.0"
+preflight = "test \"$(codex --version)\" = \"codex-cli 0.164.0\""
+
+# Personal subscriptions. Values are write-only project secrets on
+# app.autobuild.run: CLAUDE_CODE_OAUTH_TOKEN via `ab secrets set` (from
+# `claude setup-token`), and the ChatGPT slot via
+# `ab accounts login chatgpt --project`, which the hosted secret refreshes.
+[accounts.claude]
+kind = "claude-subscription"
+credentialEnv = "CLAUDE_CODE_OAUTH_TOKEN"
+
+[accounts.chatgpt]
+kind = "chatgpt-subscription"
+credentialEnv = "CHATGPT_ACCESS_TOKEN"
 
 # Named commands the kernel may run. `setup` runs after workspace provision and
 # after a sandbox rehydrate; the rest are referenced by name from check steps.
@@ -20,7 +69,8 @@ lint = "bun run check"
 typecheck = "bun run typecheck"
 test = "bun run test"
 build = "bun run check:build"
-# Integration tests need a real PostgreSQL; local builds use the host's own.
+# Integration tests need a real PostgreSQL; the sandbox's `postgres`
+# provisioning step installs it, and a local run uses the host's own.
 test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun run test:integration"
 
 # The configured universe and stage order of verification. Members of a stage
@@ -120,31 +170,38 @@ skill = "finalize-changelog"
 # independently, and a declared args list replaces rather than unions.
 # Producers run on GPT and reviewers on Claude Opus, so a reviewer never
 # shares the implementer's blind spots. Each role falls back to the other
-# provider's model when its own is overloaded or out of quota.
+# provider's model when its own is overloaded or out of quota. Every route
+# names its billing account explicitly: Codex on the ChatGPT subscription,
+# Claude Code on the Claude subscription.
 [roles.default]
 runtime = "codex"
 model = "gpt-6.1-sol"
-alternates = [{ runtime = "claude", model = "claude-opus-5-5" }]
+account = "chatgpt"
+alternates = [{ runtime = "claude", model = "claude-opus-5-5", account = "claude" }]
 
 [roles.plan]
 runtime = "codex"
 model = "gpt-6.1-sol"
-alternates = [{ runtime = "claude", model = "claude-opus-5-5" }]
+account = "chatgpt"
+alternates = [{ runtime = "claude", model = "claude-opus-5-5", account = "claude" }]
 
 [roles.implement]
 runtime = "codex"
 model = "gpt-6.1-sol"
-alternates = [{ runtime = "claude", model = "claude-opus-5-5" }]
+account = "chatgpt"
+alternates = [{ runtime = "claude", model = "claude-opus-5-5", account = "claude" }]
 
 [roles.plan-review]
 runtime = "claude"
 model = "claude-opus-5-5"
-alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
+account = "claude"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol", account = "chatgpt" }]
 
 [roles.code-review]
 runtime = "claude"
 model = "claude-opus-5-5"
-alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
+account = "claude"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol", account = "chatgpt" }]
 
 [policy]
 stallRounds = 3          # a finding surviving N review rounds escalates

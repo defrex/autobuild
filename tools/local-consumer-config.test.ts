@@ -9,17 +9,44 @@ import { evaluateVerifyApplicability } from '../packages/core/src/kernel/verify-
 
 const REPO_ROOT = join(import.meta.dir, '..')
 
-const PRODUCER = { runtime: 'codex', model: 'gpt-6.1-sol' }
-const REVIEWER = { runtime: 'claude', model: 'claude-opus-5-5' }
+const PRODUCER = { runtime: 'codex', model: 'gpt-6.1-sol', account: 'chatgpt' }
+const REVIEWER = { runtime: 'claude', model: 'claude-opus-5-5', account: 'claude' }
 
-test('repository builds in local worktrees on the local Claude Code and Codex CLIs', async () => {
+test('repository builds in Vercel Sandbox on subscription-billed Claude Code and Codex', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
 
-  expect(config.workspace).toEqual({ provider: 'git-worktree', config: {} })
+  expect(config.workspace.provider).toBe('vercel-sandbox')
+  const sandbox = config.workspace.config as {
+    provisioning: { name: string }[]
+    runtimeProvisioning: Record<string, { install: string; preflight: string }>
+    environmentVariables?: string[]
+  }
+  expect(sandbox.provisioning.map((step) => step.name)).toEqual([
+    'system-install',
+    'browser-smoke',
+    'postgres',
+    'git-identity',
+  ])
+  // Each runtime is pinned, and its preflight checks that exact version.
+  for (const [runtime, pin] of [
+    ['claude', '@anthropic-ai/claude-code@'],
+    ['codex', '@openai/codex@'],
+  ] as const) {
+    const provisioning = sandbox.runtimeProvisioning[runtime]!
+    const version = provisioning.install.split(pin)[1]
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(provisioning.preflight).toContain(version)
+  }
+  // Accounts carry the credentials; nothing is forwarded into the guest.
+  expect(sandbox.environmentVariables ?? []).toEqual([])
+  expect(config.accounts).toEqual({
+    claude: { kind: 'claude-subscription', credentialEnv: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    chatgpt: { kind: 'chatgpt-subscription', credentialEnv: 'CHATGPT_ACCESS_TOKEN' },
+  })
 
   // Producers run on Codex and reviewers on Claude, each falling back to the
-  // other provider. Every route stays on a subscription-billed local CLI:
-  // no Pi, no gateway-qualified model id.
+  // other provider. Every route bills a named subscription account: no Pi,
+  // no gateway-qualified model id.
   const expected: Record<string, typeof PRODUCER> = {
     default: PRODUCER,
     plan: PRODUCER,
@@ -40,7 +67,7 @@ test('repository builds in local worktrees on the local Claude Code and Codex CL
   await access(join(REPO_ROOT, 'scripts/postgres-live.sh'), constants.X_OK)
 })
 
-test('local rollout preserves this repository pipeline and file ticket tracker', async () => {
+test('remote rollout preserves this repository pipeline on the hosted ticket tracker', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
 
   expect(config.commands).toMatchObject({
@@ -103,13 +130,15 @@ test('local rollout preserves this repository pipeline and file ticket tracker',
     skill: 'finalize-changelog',
   })
   expect(config.tickets).toMatchObject({
-    source: 'file',
+    source: 'hosted',
+    url: 'https://app.autobuild.run',
+    teamKey: 'AUT',
     readyState: 'ready',
     createState: 'ready',
     triageState: 'triage',
     proposalState: 'triage',
   })
-  expect(config.tickets.teamKey).toBeUndefined()
+  expect(config.store).toEqual({ url: 'https://app.autobuild.run' })
 })
 
 test('the ui-website step covers site source, design references and evidence tooling', async () => {
