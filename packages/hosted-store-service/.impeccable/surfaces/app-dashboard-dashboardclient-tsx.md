@@ -13,7 +13,7 @@ Audience and job: anyone who builds (engineers, product managers, designers), gl
 
 Content: live operator API data only. Loading shows a diagnostic, never zeros. Vocabulary is binding and matches SPEC.md and the terminal dashboard; a newcomer meeting a pipeline term is told what it means.
 
-Constraints: keep the Builds API client, view-model, parity projection, event vocabulary, and control names. Light and dark grounds are both first-class, following the system preference with an override in the account menu. Colors as tokens; every state color passes contrast on both grounds. Organization pages are separate single-column pages reached from the account menu, never panelled into Builds. Destructive steps confirm inline, never in a modal. Page numbers and the app's title remain undecided.
+Constraints: keep the Builds API client, view-model, parity projection, event vocabulary, and control names. Light and dark grounds are both first-class, following the system preference with an override in the account menu. Colors as tokens; every state color passes contrast on both grounds. Organization pages are separate single-column pages reached from the account menu, never panelled into Builds. Destructive steps confirm inline, never in a modal. Projects supports permanent deletion for super users and organization owners, with counts and a warning about data and credential loss; Move and Assign remain super-user operations. Page numbers and the app's title remain undecided.
 
 Memorable moment: a calm page where the only color is state, so a red word is found from across the room.
 

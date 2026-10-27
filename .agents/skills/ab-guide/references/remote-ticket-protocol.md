@@ -41,7 +41,12 @@ the random secret, plus project, creator, creation time, last use, expiry and
 revocation metadata. It checks credential status and project registration on
 every request. Revocation takes effect on the next request without affecting
 other credentials. Unknown, expired or revoked credentials receive `401 auth`;
-removed projects receive `403 auth` with `project not registered`.
+removed projects receive `403 auth` with `project not registered` when the
+repository is established independently. Permanent project deletion removes
+credentials, so old credentials receive `401` unknown or revoked credential,
+including on `/connect/v1/status`, and remain invalid after reconnection.
+See [permanent project deletion](operator-api.md#permanent-project-deletion)
+for purge, retry and generation-bound confirmation semantics.
 
 Obtain a project credential with `ab connect <instance-url>` or from the
 instance, and use `AB_TOKEN` on non-interactive clients. Interactive connection
@@ -155,7 +160,7 @@ lines, or trailing whitespace.
 New hosted tickets use `<teamKey>-<n>`, for example `ENG-1`. The effective
 project configuration supplies the literal prefix; the request's `teamKey`
 does not choose it. Numbers start at 1 in each project, increase atomically
-across concurrent creates, and are never reused after deletion. Projects sharing
+across concurrent creates, and are never reused after individual ticket deletion. Permanent project deletion removes the counter; an approved reconnection starts at 1. Projects sharing
 a team key have independent counters. Changing `teamKey` affects only future
 ids and continues the same numbering; existing ids retain their captured prefix.
 
