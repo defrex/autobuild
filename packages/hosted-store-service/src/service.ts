@@ -4,7 +4,10 @@ import {
   type ProjectSecretsManagement,
 } from '@defrex/autobuild-postgres-store/project-secrets'
 import { accessForEnv } from './web/access'
-import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
+import {
+  withRepositoryReads,
+  withHostedProjectContext,
+} from '@defrex/autobuild-postgres-store/request-context'
 import {
   PostgresTicketGrantStore,
   type TicketGrantStore,
@@ -681,6 +684,10 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
               }
         const storeServer = createStoreServer({
           store,
+          requireRegistered: async (repo) => {
+            if (!(await projects.has(repo)))
+              throw new MachineAuthError(403, 'project not registered')
+          },
           secret: config.secret,
           auth: machineAuth(),
           maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
@@ -848,48 +855,50 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     projects,
     machineAuth,
     fetch(req: Request): Promise<Response> {
-      return withRepositoryReads(async () => {
-        const url = new URL(req.url)
-        if (url.pathname.startsWith('/secrets/v1/')) return secretHandler(req)
-        if (url.pathname.startsWith('/connect/v1/')) return connectionHandler(req)
-        if (req.method === 'GET' && url.pathname === '/health') {
-          return Response.json({
-            ok: true,
-            autobuildVersion: AUTOBUILD_VERSION,
-            protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
-            supportedClientRange: supportedClientRange(),
-          })
-        }
+      return withHostedProjectContext(() =>
+        withRepositoryReads(async () => {
+          const url = new URL(req.url)
+          if (url.pathname.startsWith('/secrets/v1/')) return secretHandler(req)
+          if (url.pathname.startsWith('/connect/v1/')) return connectionHandler(req)
+          if (req.method === 'GET' && url.pathname === '/health') {
+            return Response.json({
+              ok: true,
+              autobuildVersion: AUTOBUILD_VERSION,
+              protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+              supportedClientRange: supportedClientRange(),
+            })
+          }
 
-        const backend = hostedBackend(req, url.pathname)
-        if (backend === undefined) return notFound(req, url.pathname)
+          const backend = hostedBackend(req, url.pathname)
+          if (backend === undefined) return notFound(req, url.pathname)
 
-        const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
-        const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
-        const mismatch = clientIdentityError(clientAutobuild, clientProtocol)
-        if (mismatch !== undefined) {
-          return Response.json(
-            {
-              error: mismatch,
-              kind: 'conflict',
-            },
-            { status: 409 },
-          )
-        }
+          const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
+          const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
+          const mismatch = clientIdentityError(clientAutobuild, clientProtocol)
+          if (mismatch !== undefined) {
+            return Response.json(
+              {
+                error: mismatch,
+                kind: 'conflict',
+              },
+              { status: 409 },
+            )
+          }
 
-        try {
-          const response =
-            backend === 'tickets'
-              ? await (await openTicketHandler())(req)
-              : await (await openStoreHandler())(req)
-          return response.status >= 500 && requestsWithInternalFailures.has(req)
-            ? internalError()
-            : response
-        } catch (error) {
-          await report(error, req, backend)
-          return internalError()
-        }
-      })
+          try {
+            const response =
+              backend === 'tickets'
+                ? await (await openTicketHandler())(req)
+                : await (await openStoreHandler())(req)
+            return response.status >= 500 && requestsWithInternalFailures.has(req)
+              ? internalError()
+              : response
+          } catch (error) {
+            await report(error, req, backend)
+            return internalError()
+          }
+        }),
+      )
     },
   }
 }

@@ -1,3 +1,5 @@
+import { PROJECT_LIFECYCLE_LOCK, captureProject, admitHostedRequest } from './project-lifecycle'
+import { rememberProjectGeneration } from './request-context'
 import { SQL } from 'bun'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import {
@@ -101,45 +103,57 @@ export class PostgresCredentialStore implements CredentialStore {
       throw new Error('credential expiry must be in the future')
     const id = randomBytes(16).toString('hex')
     const secret = randomBytes(32).toString('hex')
-    const credential = await insertPreparedCredential(this.sql, {
-      id,
-      digest: hash(secret).toString('hex'),
-      repo,
-      user: by,
-      now,
-      ...options,
+    const credential = await this.sql.begin(async (transaction) => {
+      const tx = transaction as SQL
+      await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
+      await admitHostedRequest(tx)
+      await captureProject(tx, repo)
+      return insertPreparedCredential(tx, {
+        id,
+        digest: hash(secret).toString('hex'),
+        repo,
+        user: by,
+        now,
+        ...options,
+      })
     })
     return { token: `abp_1_${id}_${secret}`, credential }
   }
 
   async authenticate(token: string, now: Date): Promise<CredentialMetadata | null> {
-    const parts = /^abp_1_([a-f0-9]{32})_([a-f0-9]{64})$/.exec(token)
-    if (!parts) return null
-    const [row] = await this.sql`SELECT c.*, (SELECT action FROM project_journal
+    return this.sql.begin(async (transaction) => {
+      const tx = transaction as SQL
+      await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
+      const parts = /^abp_1_([a-f0-9]{32})_([a-f0-9]{64})$/.exec(token)
+      if (!parts) return null
+      const [row] = await tx`SELECT c.*, (SELECT action FROM project_journal
       WHERE repo = c.repo ORDER BY seq DESC LIMIT 1) AS project_action
       FROM project_credentials c WHERE id = ${parts[1]!}`
-    if (
-      !row ||
-      !timingSafeEqual(hash(parts[2]!), Buffer.from(row.digest, 'hex')) ||
-      row.revoked_at ||
-      (row.expires_at && new Date(row.expires_at) <= now)
-    )
-      return null
-    if (row.project_action !== 'added') throw new ProjectNotRegisteredError()
-    const cutoff = new Date(now.getTime() - LAST_USE_INTERVAL_MS).toISOString()
-    if (
-      row.last_used_at &&
-      new Date(row.last_used_at).getTime() > now.getTime() - LAST_USE_INTERVAL_MS
-    )
-      return metadata(row)
-    // Competing writers recheck the cutoff after waiting for the row lock.
-    // An in-flight authentication may finish after revocation.
-    const [used] = await this.sql`UPDATE project_credentials SET last_used_at = ${now.toISOString()}
+      if (
+        !row ||
+        !timingSafeEqual(hash(parts[2]!), Buffer.from(row.digest, 'hex')) ||
+        row.revoked_at ||
+        (row.expires_at && new Date(row.expires_at) <= now)
+      )
+        return null
+      if (row.project_action !== 'added') throw new ProjectNotRegisteredError()
+      const admission = await captureProject(tx, row.repo)
+      rememberProjectGeneration(admission.repo, admission.generation)
+      const cutoff = new Date(now.getTime() - LAST_USE_INTERVAL_MS).toISOString()
+      if (
+        row.last_used_at &&
+        new Date(row.last_used_at).getTime() > now.getTime() - LAST_USE_INTERVAL_MS
+      )
+        return metadata(row)
+      // Competing writers recheck the cutoff after waiting for the row lock.
+      // An in-flight authentication may finish after revocation.
+      const [used] = await tx`UPDATE project_credentials SET last_used_at = ${now.toISOString()}
       WHERE id = ${row.id} AND revoked_at IS NULL
         AND (expires_at IS NULL OR expires_at > ${now.toISOString()})
         AND (last_used_at IS NULL OR last_used_at <= ${cutoff})
       RETURNING *`
-    return metadata(used ?? row)
+      return metadata(used ?? row)
+    }) as Promise<CredentialMetadata | null>
   }
   async list(raw: string): Promise<CredentialMetadata[]> {
     const rows = await this

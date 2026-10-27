@@ -1,3 +1,4 @@
+import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
 import { CATALOG_IDENTITY_HEADER } from '@defrex/autobuild/remote-store'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -99,6 +100,7 @@ import {
 } from '@defrex/autobuild/remote-store'
 
 export interface StoreServerOptions {
+  requireRegistered?: (repo: string) => Promise<void>
   store: BuildStore
   /** Test seam for release-line compatibility before the release-owned version bump. */
   identity?: { autobuildVersion: string; protocolVersion: string }
@@ -451,7 +453,18 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   ): Promise<MachinePrincipal | null> {
     const value = await principal(req)
     if (!value) return null
-    if (value.kind === 'admin') return value
+    if (value.kind === 'admin') {
+      const repo =
+        kind === 'repo'
+          ? id
+          : kind === 'build'
+            ? (await store.getBuild(id))?.repo
+            : kind === 'session'
+              ? (await store.getSession(id))?.repo
+              : undefined
+      if (repo) await opts.requireRegistered?.(repo)
+      return value
+    }
     if (kind === 'admin') {
       if (value.kind === 'delegated' && req.method !== 'GET')
         throw new MachineAuthError(403, 'delegated credential cannot administer repositories')
@@ -639,6 +652,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       throw new MachineAuthError(403, 'delegated credential cannot create builds')
     if (req.method === 'POST') {
       const body = await readBody(req, newBuildBodySchema)
+      await opts.requireRegistered?.(body.repo)
       if (owner && owner.kind !== 'admin') {
         requireProject(owner, body.repo)
         for (let attempt = 0; attempt < 10; attempt++) {
@@ -683,6 +697,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return fail(404, 'not-found', `no route: ${req.method} /repos`)
     }
     const body = await readBody(req, ensureRepoBodySchema)
+    await opts.requireRegistered?.(body.repo)
     const owner = await principal(req)
     if (owner) requireProject(owner, body.repo)
     return json(200, await store.ensureRepo(body.repo))
@@ -1493,7 +1508,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   }
 
   function errorResponse(error: unknown): Response {
-    if (error instanceof MachineAuthError) return fail(error.status, 'auth', error.message)
+    if (error instanceof MachineAuthError || error instanceof AccessError)
+      return fail(error.status, 'auth', error.message)
     if (error instanceof RequestError) {
       return fail(error.status, error.kind, error.message)
     }

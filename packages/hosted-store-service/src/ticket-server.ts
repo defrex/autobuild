@@ -1,3 +1,4 @@
+import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { z } from 'zod'
 import type { TicketGrantStore } from '@defrex/autobuild-postgres-store/ticket-grants'
 import { normalizeProjectRepository } from '@defrex/autobuild-postgres-store/projects'
@@ -430,7 +431,8 @@ export function createTicketServer(options: TicketServerOptions): {
         if (error instanceof TicketRevisionUnsupported)
           return failure(409, 'conflict', error.message)
         if (error instanceof OperatorQueryError) return failure(409, 'conflict', error.message)
-        if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
+        if (error instanceof MachineAuthError || error instanceof AccessError)
+          return failure(error.status, 'auth', error.message)
         if (error instanceof TicketRequestError) {
           return failure(error.status, error.kind, error.message)
         }

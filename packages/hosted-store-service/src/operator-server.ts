@@ -1,3 +1,4 @@
+import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '@defrex/autobuild/hosted-tickets'
 import {
@@ -681,7 +682,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         try {
           return await route(req)
         } catch (error) {
-          if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
+          if (error instanceof MachineAuthError || error instanceof AccessError)
+            return failure(error.status, 'auth', error.message)
           if (error instanceof HttpError) return failure(error.status, error.kind, error.message)
           if (error instanceof RouteRefusalError)
             return failure(

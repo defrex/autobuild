@@ -10,10 +10,21 @@ for (const scenario of ACCESS_SCENARIOS)
       expect(html).not.toContain('>Remove<')
       expect(html).not.toContain('Add member')
     }
-    if (scenario === 'members-confirm' || scenario === 'projects-confirm') {
+    if (
+      scenario === 'members-confirm' ||
+      scenario === 'projects-confirm' ||
+      scenario.startsWith('projects-delete') ||
+      scenario === 'projects-cleanup-confirm'
+    ) {
       expect(html).toContain('<dialog class="confirm-dialog" open=""')
       expect(html).toContain('Cancel')
       expect(html).not.toContain('access-confirm')
+    }
+    if (scenario === 'projects-cleanup-owner') {
+      expect(html).toContain('Finish deletion…')
+      expect(html).not.toContain('northwind/ledger')
+      expect(html).not.toContain('waiting for an organization')
+      expect(html).not.toContain('Move…')
     }
     if (scenario === 'orgs-empty') expect(html).toContain('No organizations yet.')
     if (scenario === 'connect-multiple') expect(html).toContain('type="radio"')

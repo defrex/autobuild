@@ -167,11 +167,11 @@ Every destructive second step (abort, removing a member, moving a project) opens
 Members, Organizations and Projects extend the Flowing Document rule with a
 left-aligned reading measure below the shared account masthead. Ruled roster
 rows show identity, role and explicit JOINED/PENDING state; pending amber stays
-on ground. Forms use square well fields: email values are mono, while organization names and selectors retain sans. Selectors use intrinsic width, bounded by the available width, so desktop destination controls and their actions stay inline and phone controls can wrap. Members use a 78ch reading measure; Organizations and Projects extend to 100ch. Removal and move decisions open the
+on ground. Forms use square well fields: email values are mono, while organization names and selectors retain sans. Selectors use intrinsic width, bounded by the available width, so desktop destination controls and their actions stay inline and phone controls can wrap. Members use a 78ch reading measure; Organizations and Projects extend to 100ch. Removal, move and project deletion decisions open the
 confirmation dialog, naming the grant being revoked. Phone layouts stack
 identities and wrap full emails and repositories. Headings use the existing 1.6em sans scale. No page numbers are introduced.
 The shared account menu links Builds and Members for every operator, with
-Organizations and Projects in a separate “Super user” group for acknowledged super users. Theme follows navigation; “Sign out” is the final action.
+Projects also linked for organization owners, and Organizations and Projects in a separate “Super user” group for acknowledged super users. Theme follows navigation; “Sign out” is the final action.
 
 ## Do's and Don'ts
 

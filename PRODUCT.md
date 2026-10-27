@@ -37,7 +37,7 @@ Roles on a deployment of the web service:
   environment. Creates organizations, manages any organization's members, and
   reaches every project.
 - **Organization owner:** at most one per organization. Manages that
-  organization's members.
+  organization's members and can permanently delete its hosted projects.
 - **Member:** reaches every project the organization owns.
 
 Ticket authoring and editing are not browser jobs. They happen in conversation
@@ -149,7 +149,7 @@ Constraints future work must preserve:
 
 - The dashboard shows acknowledged durable state. Settings and controls are
   never optimistically rendered.
-- Destructive intent is a second step. Abort, member removal and project moves
+- Destructive intent is a second step. Abort, member removal, project moves and project deletion
   confirm in a modal dialog before writing; a first interaction never writes
   destructive intent. Discard applies only to queued
   builds and returns the ticket to Ready; abort returns work to Triage. The

@@ -1,3 +1,5 @@
+import { PROJECT_BLOB_LOCK, reserveProjectBlobs } from './project-lifecycle'
+import { hostedProjectContext } from './request-context'
 import {
   operatorIdentitySchema,
   operatorPresenceSchema,
@@ -153,6 +155,7 @@ export { EVENT_WAIT_POLL_MS }
 // mechanics.
 
 interface PreparedArtifact {
+  bytes?: Uint8Array
   kind: string
   blobRef: string
   metadata: Record<string, unknown>
@@ -406,12 +409,49 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  private async prepare(artifact: ArtifactInput): Promise<PreparedArtifact> {
+  private async prepare(artifact: ArtifactInput, repo: string): Promise<PreparedArtifact> {
     if (!artifact.kind) throw new Error('artifact kind is required')
     const bytes = toBytes(artifact.content)
     const blobRef = contentHash(bytes)
-    await this.blobs.put(blobRef, bytes)
-    return { kind: artifact.kind, blobRef, metadata: structuredClone(artifact.metadata ?? {}) }
+    await this.reserveBlobs(repo, [blobRef])
+    return {
+      bytes,
+      kind: artifact.kind,
+      blobRef,
+      metadata: structuredClone(artifact.metadata ?? {}),
+    }
+  }
+
+  private async reserveBlobs(repo: string, refs: readonly string[]): Promise<void> {
+    const context = hostedProjectContext()
+    if (context) {
+      const generation = context.get(repo)
+      if (!generation) throw new Error('project not registered')
+      await reserveProjectBlobs(this.sql, { repo, generation }, refs)
+    } else {
+      await this.sql.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_BLOB_LOCK})`
+        for (const ref of new Set(refs))
+          await tx`INSERT INTO project_blob_ownership (repo,blob_ref) VALUES (${repo},${ref}) ON CONFLICT DO NOTHING`
+      })
+    }
+  }
+
+  private async artifactRepo(kind: 'build' | 'session', id: string): Promise<string> {
+    return this.run(async (q) => {
+      const rows =
+        kind === 'build'
+          ? await q`SELECT repo FROM builds WHERE slug = ${id}`
+          : await q`SELECT repo FROM sessions WHERE id = ${id}`
+      if (!rows[0]) throw new Error(`unknown ${kind} "${id}"`)
+      return String(rows[0].repo)
+    })
+  }
+
+  private async uploadPrepared(q: Exec, artifact: PreparedArtifact): Promise<void> {
+    if (!artifact.bytes) return
+    await q`SELECT pg_advisory_xact_lock_shared(${PROJECT_BLOB_LOCK})`
+    await this.blobs.put(artifact.blobRef, artifact.bytes)
   }
 
   private async depositBuildLocked(
@@ -421,6 +461,7 @@ export class PostgresBuildStore implements BuildStore {
     lockedKinds: Map<string, number>,
     opts: { prune?: boolean } = { prune: true },
   ): Promise<ArtifactMeta> {
+    await this.uploadPrepared(q, artifact)
     let revision = lockedKinds.get(artifact.kind)
     if (revision === undefined) {
       const tails: Row[] = await q`SELECT COALESCE(MAX(revision), -1) AS revision
@@ -484,7 +525,8 @@ export class PostgresBuildStore implements BuildStore {
     makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
     const prepared: PreparedArtifact[] = []
-    for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
+    for (const artifact of artifacts)
+      prepared.push(await this.prepare(artifact, await this.artifactRepo('build', slug)))
     return this.tx(async (q) => {
       await this.lockBuild(q, slug)
       // Ordering invariant (AUT-322): the batch event is validated BEFORE
@@ -519,7 +561,8 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
     validateExpectedSeq(expectedSeq)
     const prepared: PreparedArtifact[] = []
-    for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
+    for (const artifact of artifacts)
+      prepared.push(await this.prepare(artifact, await this.artifactRepo('build', slug)))
     return this.tx(async (q) => {
       await this.lockBuild(q, slug)
       const tails: Row[] =
@@ -583,7 +626,7 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
-    const prepared = await this.prepare(artifact)
+    const prepared = await this.prepare(artifact, await this.artifactRepo('build', slug))
     return this.tx(async (q) => {
       await this.lockBuild(q, slug)
       return this.depositBuildLocked(q, slug, prepared, new Map())
@@ -946,6 +989,7 @@ export class PostgresBuildStore implements BuildStore {
     artifact: PreparedArtifact,
     revisions: Map<string, number>,
   ): Promise<SessionArtifactMeta> {
+    await this.uploadPrepared(q, artifact)
     let revision = revisions.get(artifact.kind)
     if (revision === undefined) {
       const tails: Row[] =
@@ -973,7 +1017,8 @@ export class PostgresBuildStore implements BuildStore {
     makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
   ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
     const prepared: PreparedArtifact[] = []
-    for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
+    for (const artifact of artifacts)
+      prepared.push(await this.prepare(artifact, await this.artifactRepo('session', id)))
     // Same shape as `appendWithArtifacts`: deposits land unpruned inside one
     // locked transaction, the batch event is validated before any commit of
     // the caller-visible state, and an invalid event throws, rolling back
@@ -997,7 +1042,7 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async putSessionArtifact(id: string, artifact: ArtifactInput): Promise<SessionArtifactMeta> {
-    const prepared = await this.prepare(artifact)
+    const prepared = await this.prepare(artifact, await this.artifactRepo('session', id))
     return this.tx(async (q) => {
       await this.lockSession(q, id)
       return this.depositSessionLocked(q, id, prepared, new Map())
@@ -1154,6 +1199,7 @@ export class PostgresBuildStore implements BuildStore {
     revisions: Map<string, number>,
     opts: { prune?: boolean } = { prune: true },
   ): Promise<RepositoryArtifactMeta> {
+    await this.uploadPrepared(q, artifact)
     let revision = revisions.get(artifact.kind)
     if (revision === undefined) {
       const tails: Row[] =
@@ -1181,7 +1227,7 @@ export class PostgresBuildStore implements BuildStore {
     makeEvent: (deposited: RepositoryArtifactMeta[]) => RepositoryEventWrite<T>,
   ): Promise<{ event: RepositoryEventEnvelope<T>; artifacts: RepositoryArtifactMeta[] }> {
     const prepared: PreparedArtifact[] = []
-    for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
+    for (const artifact of artifacts) prepared.push(await this.prepare(artifact, repo))
     return this.tx(async (q) => {
       await this.lockRepo(q, repo)
       // Ordering invariant (AUT-322): same shape as `appendWithArtifacts` —
@@ -1510,7 +1556,7 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
-    const prepared = await this.prepare(artifact)
+    const prepared = await this.prepare(artifact, repo)
     return this.tx(async (q) => {
       await this.lockRepo(q, repo)
       return this.depositRepoLocked(q, repo, prepared, new Map())
@@ -1612,9 +1658,16 @@ export class PostgresBuildStore implements BuildStore {
     asset: TicketAssetInput,
   ): Promise<TicketAssetMeta> {
     const size = validateTicketAssetInput(asset)
-    const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
-    const manifest = JSON.stringify(entries)
+    await this.reserveBlobs(
+      repo,
+      asset.entries
+        .filter((entry) => entry.type === 'file')
+        .map((entry) => contentHash(entry.content)),
+    )
     return this.tx(async (q) => {
+      await q`SELECT pg_advisory_xact_lock_shared(${PROJECT_BLOB_LOCK})`
+      const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
+      const manifest = JSON.stringify(entries)
       const key = await this.ticketStorageKey(q, repo, ticketId)
       // Serialize revision assignment per (repo, ticket, kind, name).
       await q`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([repo, key, asset.kind, asset.name])}, 0))`
@@ -1865,84 +1918,48 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
-    // Prepare phase — lock-free read of record and chunks (one coherent read
-    // on a pinned connection, retried together), assembly, and the blob write
-    // all happen before the transaction (D6 shape: content-addressed orphan
-    // blobs are harmless; a deposit failure leaves the stream open and
-    // unwritten).
-    const { row, chunkRows } = await this.run(async (q) => {
-      const rows: Row[] = await q`SELECT * FROM streams WHERE id = ${streamId}`
-      const row = rows[0]
-      if (!row) throw new Error(`unknown stream "${streamId}"`)
-      const chunkRows: Row[] = await q`SELECT * FROM stream_chunks
-        WHERE stream = ${streamId} ORDER BY seq`
-      return { row, chunkRows }
-    })
-    if (String(row.status) === 'closed') return this.streamRecord(row)
-    const { document, droppedPartCount } = await assembleUIMessageDocument(
-      chunkRows.flatMap((chunk) => json<StreamPart[]>(chunk.parts)),
-    )
-    const scope = this.streamScopeOf(row)
-    const input = streamArtifactInput(
-      String(row.id),
-      scope,
-      String(row.label),
-      outcome,
-      document,
-      chunkRows.length,
-      droppedPartCount,
-    )
-    const blobRef = contentHash(toBytes(input.content))
-    await this.blobs.put(blobRef, toBytes(input.content))
-    // Commit phase — one locked transaction: the artifact deposit and the
-    // close land together. A close that raced us through the prepare phase
-    // wins; ours re-reads and returns its record.
-    return this.tx(async (q) => {
-      const fresh = await this.lockStream(q, streamId)
-      if (String(fresh.status) === 'closed') return this.streamRecord(fresh)
-      // Commit-time verification (AUT-348): the prepare-phase chunk snapshot
-      // can go stale — an append from another connection may commit after the
-      // snapshot and before this transaction takes the row lock. Re-read the
-      // chunk rows under the lock; on a mismatch re-assemble and re-put the
-      // blob so every acknowledged append is included in the finalized
-      // artifact. An append that commits before the lock is taken lands here;
-      // one that waits on the lock fails the closed check above instead.
-      const lockedChunks: Row[] = await q`SELECT * FROM stream_chunks
-        WHERE stream = ${streamId} ORDER BY seq`
-      let closeInput = input
-      let closeRef = blobRef
-      if (lockedChunks.length !== chunkRows.length) {
-        const reassembled = await assembleUIMessageDocument(
-          lockedChunks.flatMap((chunk) => json<StreamPart[]>(chunk.parts)),
-        )
-        closeInput = streamArtifactInput(
-          String(row.id),
-          scope,
-          String(row.label),
-          outcome,
-          reassembled.document,
-          lockedChunks.length,
-          reassembled.droppedPartCount,
-        )
-        closeRef = contentHash(toBytes(closeInput.content))
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const { row, chunkRows } = await this.run(async (q) => {
+        const [row] = await q`SELECT * FROM streams WHERE id = ${streamId}`
+        if (!row) throw new Error(`unknown stream "${streamId}"`)
+        const chunkRows =
+          await q`SELECT * FROM stream_chunks WHERE stream = ${streamId} ORDER BY seq`
+        return { row, chunkRows }
+      })
+      if (String(row.status) === 'closed') return this.streamRecord(row)
+      const scope = this.streamScopeOf(row)
+      const assembled = await assembleUIMessageDocument(
+        chunkRows.flatMap((chunk) => json<StreamPart[]>(chunk.parts)),
+      )
+      const closeInput = streamArtifactInput(
+        String(row.id),
+        scope,
+        String(row.label),
+        outcome,
+        assembled.document,
+        chunkRows.length,
+        assembled.droppedPartCount,
+      )
+      const closeRef = contentHash(toBytes(closeInput.content))
+      const repo =
+        scope.kind === 'repo'
+          ? scope.repo
+          : scope.kind === 'build'
+            ? await this.artifactRepo('build', scope.build)
+            : await this.artifactRepo('session', scope.session)
+      await this.reserveBlobs(repo, [closeRef])
+      const result = await this.tx(async (q) => {
+        await q`SELECT pg_advisory_xact_lock_shared(${PROJECT_BLOB_LOCK})`
         await this.blobs.put(closeRef, toBytes(closeInput.content))
-      }
-      const meta =
-        scope.kind === 'build'
-          ? await this.depositBuildLocked(
-              q,
-              scope.build,
-              {
-                kind: closeInput.kind,
-                blobRef: closeRef,
-                metadata: structuredClone(closeInput.metadata),
-              },
-              new Map(),
-            )
-          : scope.kind === 'repo'
-            ? await this.depositRepoLocked(
+        const fresh = await this.lockStream(q, streamId)
+        if (String(fresh.status) === 'closed') return this.streamRecord(fresh)
+        const [count] = await q`SELECT count(*) AS n FROM stream_chunks WHERE stream = ${streamId}`
+        if (Number(count?.n) !== chunkRows.length) return null
+        const meta =
+          scope.kind === 'build'
+            ? await this.depositBuildLocked(
                 q,
-                scope.repo,
+                scope.build,
                 {
                   kind: closeInput.kind,
                   blobRef: closeRef,
@@ -1950,23 +1967,37 @@ export class PostgresBuildStore implements BuildStore {
                 },
                 new Map(),
               )
-            : await this.depositSessionLocked(
-                q,
-                scope.session,
-                {
-                  kind: closeInput.kind,
-                  blobRef: closeRef,
-                  metadata: structuredClone(closeInput.metadata),
-                },
-                new Map(),
-              )
-      await q`UPDATE streams
+            : scope.kind === 'repo'
+              ? await this.depositRepoLocked(
+                  q,
+                  scope.repo,
+                  {
+                    kind: closeInput.kind,
+                    blobRef: closeRef,
+                    metadata: structuredClone(closeInput.metadata),
+                  },
+                  new Map(),
+                )
+              : await this.depositSessionLocked(
+                  q,
+                  scope.session,
+                  {
+                    kind: closeInput.kind,
+                    blobRef: closeRef,
+                    metadata: structuredClone(closeInput.metadata),
+                  },
+                  new Map(),
+                )
+        await q`UPDATE streams
         SET status = 'closed', outcome = ${outcome}, closed_at = ${meta.createdAt},
           artifact_kind = ${meta.kind}, artifact_revision = ${meta.revision},
           artifact_blob_ref = ${meta.blobRef}
         WHERE id = ${streamId}`
-      return this.streamRecord(await this.lockStream(q, streamId))
-    })
+        return this.streamRecord(await this.lockStream(q, streamId))
+      })
+      if (result) return result
+    }
+    throw new Error('stream changed repeatedly during finalization; retry close')
   }
 
   async getStream(streamId: string): Promise<StreamRecord | null> {
