@@ -988,7 +988,8 @@ projects. Members can inspect their own organization’s active projects and ros
 including emails and persisted identity names/joined status. Owners can manage
 their own members but cannot remove themselves.
 Creation does not make the super user a member. Legacy projects remain unassigned
-and visible only to super users until assigned. Admission and repository authority
+and visible only to super users until management assignment or an authorized
+reconnect approval assigns them. Admission and repository authority
 are checked from current state on every browser request and MCP tool callback.
 Removed members lose access immediately without re-login. Machine project,
 delegated, internal and admin credentials retain their existing boundaries.
@@ -1728,6 +1729,16 @@ only that credential, retaining project data. Store precedence is `--store`,
 nonblank `AB_STORE`, `[store] url`, then local state. `AB_TOKEN` overrides saved
 credentials. Configured services without credentials fail closed. Connection
 commands require a network origin and are unavailable in phase sessions.
+
+A valid browser code link opens approval directly, returning there after sign-in
+when needed; missing or malformed codes retain entry. Approval always shows the
+organization. Assigned projects show a read-only name and cannot move during
+approval. Every unassigned approval requires an explicit eligible organization
+ID, including fresh, legacy and removed projects, even for super users. A sole
+choice is visibly selected; multiple choices require selection; no choices block
+approval. Assignment, registration, credential and approval commit atomically
+after current access checks. Retained unassigned history remains super-user-only
+until assignment. Denial requires no organization and changes no assignment.
 
 
 ## 9. AgentRunner

@@ -311,10 +311,16 @@ apart from the identity change, `ab dispatch` behaves as it did.
 
 From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
 The CLI prints a verification URL and short code and attempts to open a browser.
-Sign in as an allowed owner, check the full repository identity and code, and
-approve or deny. Another device can open the printed URL, or visit `/connect`
-and enter the code. Approval uses the instance’s browser consent endpoint. Requests
-expire after ten minutes. Denial and timeout leave local configuration unchanged.
+The code link opens approval directly; if sign-in is needed, it returns there.
+Check the full repository identity and code, and approve or deny. For an
+unassigned project, choose an eligible organization; a sole option is visibly
+selected. Approval requires that destination even for previously registered
+unassigned projects. Assigned projects show their organization as read-only;
+moving them uses project management. With no eligible organization, approval is
+unavailable until a super user creates one. Another device can open the printed
+URL, or visit `/connect` and enter the code. Approval uses the instance’s browser
+consent endpoint. Requests expire after ten minutes. Denial requires no
+organization choice; denial and timeout leave local configuration unchanged.
 
 On approval the service registers the project and issues a project credential.
 The CLI keeps it in `$XDG_CONFIG_HOME/autobuild/credentials` (or
