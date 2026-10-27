@@ -1264,3 +1264,87 @@ a.rowhead {
     padding-left: 0;
   }
 }
+
+/* Settings extends the Flowing Document and square well fields. */
+.settings-page {
+  max-width: 100ch;
+  padding-block: 1.5em;
+}
+.settings-page h2 {
+  font-size: 1.6em;
+}
+.settings-page p {
+  max-width: 72ch;
+}
+.secret-rows {
+  list-style: none;
+  padding: 0;
+}
+.secret-rows > li {
+  border-top: 1px solid var(--rule);
+  padding-block: 1.25em;
+  overflow-wrap: anywhere;
+}
+.secret-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em 1.25em;
+  align-items: baseline;
+}
+.secret-heading strong,
+.secret-facts dd {
+  font-family: var(--mono);
+}
+.secret-facts {
+  margin-block: 1em;
+}
+.secret-facts > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25em 1em;
+}
+.secret-facts dt {
+  width: 12ch;
+  color: var(--slack);
+}
+.secret-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.secret-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75em;
+  margin-block: 1em;
+}
+.secret-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
+  max-width: 100%;
+}
+.secret-form input {
+  width: 28ch;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.secret-form .alert {
+  flex-basis: 100%;
+}
+@media (max-width: 600px) {
+  .secret-form label {
+    width: 100%;
+  }
+  .secret-form input {
+    width: 100%;
+  }
+  .secret-facts > div {
+    display: block;
+    margin-block: 0.5em;
+  }
+}
+
+.settings-page h3 {
+  margin-block: 1.5em 0.75em;
+}

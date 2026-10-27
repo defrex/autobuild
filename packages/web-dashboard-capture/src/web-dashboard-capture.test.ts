@@ -312,7 +312,7 @@ test('signed-in frames lead with the view tabs and Builds ticket ids remain plai
     const nav = tabLine(html)
     expect(nav, spec.id).toBeDefined()
     expect(nav, spec.id).toContain('<nav class="tabs" aria-label="Views">')
-    for (const tab of ['Triage', 'Queue', 'Active', 'Done'])
+    for (const tab of ['Triage', 'Queue', 'Active', 'Done', 'Settings'])
       expect(evidenceText(nav!), spec.id).toContain(tab)
     expect(nav, spec.id).toMatch(/aria-current="page"[^>]*>Active/)
     // A falsy count in a render condition must never leak into the page as text.

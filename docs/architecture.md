@@ -1676,12 +1676,20 @@ web views keep their own layout and share the wording.
 
 ## Project-secret boundary
 
-`packages/core/src/project-secrets.ts` owns the write-only DTO and reserved-name
-rules. `packages/postgres-store/src/project-secrets.ts` stores authenticated encrypted
+`packages/core/src/project-secrets.ts` owns the write-only DTO; browser-safe reserved-name
+rules and the shared public explanation live in `packages/core/src/secret-name.ts`. `packages/postgres-store/src/project-secrets.ts` stores authenticated encrypted
 payloads outside the BuildStore namespace, with metadata, mutation audit, a deployment
 key verifier and generation/revision fences. Short transactions implement refresh
 claim/completion CAS; provider HTTP occurs after the claim commits, with no backend
 session affinity. An expired pending rotation fails without token reuse.
+
+The separate `packages/hosted-store-service/src/web/project-secrets.ts` handler
+uses fresh cookie-session organization membership or super-user authority for
+Settings metadata and static writes. Its durable effective-config projection
+returns only account names, kinds, credential slots and readiness. Browser writes
+use the same transaction and project lock through `setStaticOnly`, refusing an
+existing refreshing kind atomically. The Settings client fences stale polls and
+keeps write acknowledgments separate from failed metadata rereads.
 
 `packages/hosted-store-service/src/project-secrets.ts` authenticates owner-purpose
 credentials and fresh membership before reading write bodies. It returns metadata
