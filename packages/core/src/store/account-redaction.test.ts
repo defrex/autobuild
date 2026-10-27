@@ -65,3 +65,53 @@ test('redacting a byte artifact does not mutate the source buffer', async () => 
     secret,
   )
 })
+
+import { sensitiveAccountValues } from '../accounts/sensitive'
+import { accountRedactor } from './account-redaction'
+test('host token registry excludes old/new access, rotating refresh, ID tokens and capabilities from actual persistence and logs', async () => {
+  const tokens = [
+    'sentinel-access-before',
+    'sentinel-access-after',
+    'sentinel-refresh-before',
+    'sentinel-refresh-after',
+    'sentinel-retained-id',
+    'sentinel-local-capability',
+  ]
+  const raw = new MemoryBuildStore()
+  await raw.createBuild({ slug: 'chatgpt-redaction', repo: 'repo' })
+  const redactor = accountRedactor(() => ({}), {})
+  const store = redactAccountStore(raw, redactor)
+  for (const token of tokens) sensitiveAccountValues.add(token)
+  const diagnostic = JSON.stringify({ error: { description: tokens.join(' ') } })
+  await store.appendWithArtifacts(
+    'chatgpt-redaction',
+    [{ kind: 'transcript', content: diagnostic }],
+    () => ({
+      actor: KERNEL,
+      type: 'phase.failed',
+      payload: { phase: 'implement', error: diagnostic, attempt: 1, willRetry: false },
+    }),
+  )
+  const sink = createSessionStreamSink({
+    store,
+    scope: { kind: 'build', build: 'chatgpt-redaction' },
+    flushMs: 100000,
+  })
+  const stream = await sink.open('test')
+  sink.append([
+    { type: 'text-start', id: 't' },
+    { type: 'text-delta', id: 't', delta: tokens[0]!.slice(0, 8) },
+  ])
+  await sink.flush()
+  sink.append([
+    { type: 'text-delta', id: 't', delta: tokens[0]!.slice(8) },
+    { type: 'text-end', id: 't' },
+  ])
+  await sink.close('completed')
+  const evidence =
+    JSON.stringify(await raw.getEvents('chatgpt-redaction')) +
+    new TextDecoder().decode((await raw.getArtifact('chatgpt-redaction', 'transcript'))!.content) +
+    JSON.stringify(await raw.readStream(stream)) +
+    redactor.text(diagnostic)
+  for (const token of tokens) expect(evidence).not.toContain(token)
+})

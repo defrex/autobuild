@@ -10823,3 +10823,55 @@ test('deferred work distance comparisons preserve the known sample without diagn
   expect(comparisons).toBe(4)
   expect(await h.store.getEvents(slug)).toEqual(before)
 })
+
+test('observation-only ticks repair active account policies without claims, resumes or launches', async () => {
+  const { accountPolicy } = await import('../ports/workspace/account-policy')
+  const accounts = {
+    claude: { kind: 'claude-subscription', credentialEnv: 'CLAUDE_ACCESS' },
+    plan: { kind: 'chatgpt-subscription', credentialEnv: 'PLAN_ACCESS' },
+  } as const
+  let observed = 0
+  let policy: unknown
+  const provider: WorkspaceProvider = {
+    name: 'remote-test',
+    buildExecution: {
+      async start() {
+        throw new Error('must not launch')
+      },
+      async observe() {
+        observed++
+        const result = accountPolicy('allow-all', accounts, { CLAUDE_ACCESS: 'ready-claude' })
+        policy = result.policy
+        return { state: 'running', attention: result.missing.join('; ') }
+      },
+    },
+    async provision() {
+      throw new Error('must not provision')
+    },
+    async release() {},
+  }
+  const h = harness({ workspaceProvider: provider, tickets: [readyTicket('new-ticket')] })
+  const slug = await seedBuild(h, { slug: 'active', workspace: false })
+  await seedBuild(h, { slug: 'waiting', workspace: false })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: {
+      provider: 'remote-test',
+      workspaceRef: 'sandbox',
+      instance: 'foreign',
+      commandId: 'cmd',
+    },
+  })
+  const report = await h.dispatcher.tick({
+    observationOnly: true,
+    resumeCurrent: true,
+    acceptNewWork: true,
+  })
+  expect(observed).toBe(1)
+  expect(JSON.stringify(policy)).toContain('ready-claude')
+  expect(JSON.stringify(policy)).not.toContain('api.openai.com')
+  expect(h.launches).toEqual([])
+  expect(report.dispatched).toBe(0)
+  expect((await h.store.listBuilds()).map((b) => b.slug).sort()).toEqual(['active', 'waiting'])
+})

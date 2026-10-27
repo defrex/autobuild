@@ -5,6 +5,7 @@ import { isSessionlessInvocation, runCli } from './main'
 const COMMANDS = [
   'help',
   'init',
+  'accounts',
   'secrets',
   'connect',
   'disconnect',
@@ -149,6 +150,7 @@ describe('layered CLI help catalog', () => {
   test('detailed pages retain nested forms, flags, and behavioral notes from flat help', () => {
     const expected: Record<(typeof COMMANDS)[number], string[]> = {
       merges: ['ab merges', '--json', '--store', 'ab merge', 'ab hold'],
+      accounts: ['accounts login NAME', '--local', '--project', 'tokens are never printed'],
       secrets: ['secrets set NAME', 'stdin', 'owner credential'],
       connect: ['ab connect [--tickets] [url]', 'approval', 'credential'],
       disconnect: ['ab disconnect', 'Revokes', 'locally'],
