@@ -1,3 +1,5 @@
+import { LocalCredentials } from '../accounts/local-credentials'
+import { LocalAccountOwner, renewLocalAccounts } from '../accounts/local-owner'
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import { capturedBuildConfig } from '../processes/verify-cycle-config'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
@@ -298,6 +300,9 @@ interface ResumePrompt {
 /** The real adapters the loop drives — resolved by `wire` (default: the
  * production ports; tests inject fakes). */
 export interface DispatchWiring {
+  renewAccounts?: (authority: { repo: string; run: string }) => Promise<void>
+  releaseAccounts?: () => Promise<void>
+
   credentialIssuer?: typeof delegateCredential
   store: BuildStore
   tickets: TicketSource
@@ -540,7 +545,46 @@ async function defaultWire(
     plugins,
   )
   const { runtimes } = createProductionRuntimes()
+  if (opts.env.AB_PROJECT_SECRETS_FAILED === '1')
+    for (const a of Object.values(config.accounts)) delete opts.env[a.credentialEnv]
   let accounts = config.accounts
+  const credentials = new LocalCredentials(join(state.checkout, '.autobuild'))
+  const owner = new LocalAccountOwner(credentials)
+  const claimed = new Set<string>()
+  let renewal: Promise<void> | undefined
+  let accountTimer: ReturnType<typeof setInterval> | undefined
+  const renewAccounts = async (authority: { repo: string; run: string }) => {
+    if (opts.repository || !Object.values(accounts).some((a) => a.kind === 'chatgpt-subscription'))
+      return
+    if (!accountTimer) {
+      accountTimer = setInterval(() => {
+        void (async () => {
+          const held = await opened.store.getRepo(authority.repo)
+          if (
+            held?.lease?.holder !== authority.run ||
+            Date.parse(held.lease.expiresAt) <= Date.now()
+          ) {
+            await releaseAccounts()
+            return
+          }
+          await renewAccounts(authority)
+        })().catch(() => {})
+      }, 15000)
+      accountTimer.unref()
+    }
+    if (renewal) return renewal
+    renewal = renewLocalAccounts(owner, accounts, opts.env, claimed).finally(() => {
+      renewal = undefined
+    })
+    return renewal
+  }
+  const releaseAccounts = async () => {
+    if (accountTimer) clearInterval(accountTimer)
+    accountTimer = undefined
+    await renewal
+    for (const name of claimed) owner.release(name)
+    claimed.clear()
+  }
   opened.store = redactAccountStore(
     opened.store,
     accountRedactor(() => accounts, opts.env),
@@ -581,6 +625,8 @@ async function defaultWire(
 
   return {
     store: opened.store,
+    renewAccounts,
+    releaseAccounts,
     tickets,
     forge,
     workspaces: workspaceRuntime.provider,
@@ -1218,6 +1264,7 @@ class DispatchLoop {
         settings.intake || (!this.dashboard && this.opts.kernelRunId === undefined)
           ? undefined
           : await this.dispatcher.observeReady({ viewRefreshed: true })
+      await this.wiring.renewAccounts?.({ repo: this.repoIdentity, run: this.runId })
       const report = await this.dispatcher.tick({
         resumeCurrent,
         viewRefreshed: true,
@@ -4196,6 +4243,7 @@ class DispatchLoop {
       cacheId: request.cacheId,
       target: request.target,
     }
+    await this.wiring.releaseAccounts?.()
     let acceptanceError: unknown
     try {
       await this.repoView.appendRepo(this.repoIdentity, {
@@ -5162,6 +5210,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     // view; leave the reduced state behind so the next cold process reads
     // only what is newer than it.
 
+    await wiring.releaseAccounts?.()
     if (resolvedOpts.wire === undefined) await wiring.store.close()
   }
 }

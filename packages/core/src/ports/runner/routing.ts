@@ -135,7 +135,11 @@ function resolveAxes(
   const args = axes.args ?? []
   const ownedArgs = new Set([
     ...(reg.ownedArgs ?? []),
-    ...(account ? ['--settings', '--setting-sources', '--bare'] : []),
+    ...(account?.descriptor.kind === 'chatgpt-subscription'
+      ? ['-c', '--config', '--profile', '-p', '--enable', '--disable']
+      : account
+        ? ['--settings', '--setting-sources', '--bare']
+        : []),
   ])
   for (const arg of args) {
     if (arg === reg.promptBoundary) {

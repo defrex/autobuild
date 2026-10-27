@@ -1,3 +1,4 @@
+import { sensitiveAccountValues } from '../../accounts/sensitive'
 import type { NetworkPolicy, NetworkPolicyRule } from '@vercel/sandbox'
 import {
   accountPlaceholder,
@@ -26,8 +27,13 @@ export function accountPolicy(
       missing.push(accountRemedy({ name, descriptor }))
       continue
     }
-    const claude = descriptor.kind === 'claude-subscription'
-    const host = claude ? 'api.anthropic.com' : kimiEndpoint(descriptor.region).host
+    const claude = descriptor.kind !== 'kimi-code'
+    const host =
+      descriptor.kind === 'chatgpt-subscription'
+        ? 'api.openai.com'
+        : descriptor.kind === 'kimi-code'
+          ? kimiEndpoint(descriptor.region).host
+          : 'api.anthropic.com'
     const key = claude ? 'authorization' : 'x-api-key'
     const prefix = claude ? 'Bearer ' : ''
     allow[host] = [
@@ -52,9 +58,12 @@ export function accountGuestEnvironment(
 ): Record<string, string> {
   const env = { ...forwarded }
   if (Object.keys(accounts).length) env.AB_ACCOUNT_PLACEHOLDERS = '1'
-  const secrets = Object.values(accounts)
-    .map((a) => host[a.credentialEnv])
-    .filter((v): v is string => !!v)
+  const secrets = [
+    ...sensitiveAccountValues,
+    ...Object.values(accounts)
+      .map((a) => host[a.credentialEnv])
+      .filter((v): v is string => !!v),
+  ]
   for (const [key, value] of Object.entries(env))
     if (secrets.some((secret) => value.includes(secret))) delete env[key]
   for (const [name, account] of Object.entries(accounts))

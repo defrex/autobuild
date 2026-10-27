@@ -1,5 +1,6 @@
 import {
   ProjectSecretError,
+  chatgptStateSchema,
   validateSecretName,
   validateSecretValue,
 } from '@defrex/autobuild/project-secrets'
@@ -30,12 +31,19 @@ export function projectSecretsHandler(options: {
         throw new MachineAuthError(403, 'project membership required')
       const url = new URL(request.url)
       const operation = url.pathname.slice('/secrets/v1/'.length)
+      if (operation === 'chatgpt-host' && request.method === 'GET') {
+        if (url.searchParams.get('repo') !== principal.repo)
+          throw new MachineAuthError(403, 'wrong project')
+        const store = await options.store()
+        if (!store.chatgptHost) return json({ error: 'provider unavailable' }, 503)
+        return json({ version: 1, hostId: await store.chatgptHost(principal.repo) })
+      }
       if (operation === 'list' && request.method === 'GET') {
         if (url.searchParams.get('repo') !== principal.repo)
           throw new MachineAuthError(403, 'wrong project')
         return json({ version: 1, secrets: await (await options.store()).list(principal.repo) })
       }
-      if (!['set', 'remove'].includes(operation) || request.method !== 'POST')
+      if (!['set', 'remove', 'chatgpt'].includes(operation) || request.method !== 'POST')
         return json({ error: 'unknown secrets route' }, 404)
       const reader = request.body?.getReader()
       if (!reader) return json({ error: 'invalid secret request' }, 400)
@@ -62,7 +70,11 @@ export function projectSecretsHandler(options: {
         return json({ error: 'invalid secret request' }, 400)
       }
       const fields =
-        operation === 'set' ? ['version', 'repo', 'name', 'value'] : ['version', 'repo', 'name']
+        operation === 'chatgpt'
+          ? ['version', 'repo', 'name', 'state']
+          : operation === 'set'
+            ? ['version', 'repo', 'name', 'value']
+            : ['version', 'repo', 'name']
       if (
         !body ||
         typeof body !== 'object' ||
@@ -75,7 +87,12 @@ export function projectSecretsHandler(options: {
       if (body.repo !== principal.repo) throw new MachineAuthError(403, 'wrong project')
       validateSecretName(body.name)
       const store = await options.store()
-      if (operation === 'set') {
+      if (operation === 'chatgpt') {
+        const state = chatgptStateSchema.safeParse(body.state)
+        if (!state.success || !store.setChatGPT)
+          return json({ error: 'invalid ChatGPT registration' }, 400)
+        await store.setChatGPT(principal.repo, body.name, state.data, principal.user)
+      } else if (operation === 'set') {
         validateSecretValue(body.value)
         await store.set(principal.repo, body.name, body.value, principal.user)
       } else await store.remove(principal.repo, body.name, principal.user)

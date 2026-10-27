@@ -11,6 +11,7 @@ test('CLI inventory covers the help catalog exactly once in the specified groups
   const humanCommands = commands(human!)
   const agentCommands = commands(agent!)
   expect(humanCommands.sort()).toEqual([
+    'accounts',
     'connect',
     'disconnect',
     'dispatch',

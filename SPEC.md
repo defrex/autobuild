@@ -4173,9 +4173,17 @@ mutations still require a valid key. Adding a secret invalidates an earlier empt
 snapshot before handoff. Local dispatch behavior
 is unchanged. Refresh kinds serialize external rotation with a committed CAS
 attempt, persist replacement state before delivery, and fail expired attempts
-without takeover. A failed credential requires explicit replacement. The public
-CLI writes static values; provider sign-in kinds and a web settings screen are
-separate work. See the project-secrets section of the remote-store protocol.
+without takeover. A failed credential requires explicit replacement. Valid
+credentials before their earliest refresh time remain usable, even inside a
+requested future validity horizon. The first eligible five-minute hosted tick
+refreshes and persists rotation before supply, including expired access state
+after downtime when the refresh credential remains ready. Providers without an
+earliest refresh time use a ten-minute pre-expiry margin. Failed or uncertain
+refresh attempts prevent supply. A refresh window shorter than five minutes plus a one-minute
+margin emits typed advisory metadata, never invalidates a valid credential and
+never causes revocation. The public
+CLI writes static values or typed ChatGPT registrations; a web settings screen
+is separate work. See the project-secrets section of the remote-store protocol.
 
 ### Named billing accounts
 
@@ -4184,9 +4192,16 @@ Deployment-owned `[accounts.<name>]` descriptors contain `kind` and
 Role and alternate `account` axes inherit independently. Claude routes default
 to the sole Claude subscription account; ambiguity, unknown references and
 incompatible runtimes fail configuration. No accounts preserves legacy behavior.
-Only the unmodified Claude Code runtime, the user's own subscription and ordinary
-individual usage are supported. Credentials are provisioned manually; Autobuild
-never signs in or captures setup-token output.
+Claude and Kimi accounts require the unmodified Claude Code runtime; ChatGPT
+subscription accounts require explicit Codex selection. Use the user's own plan
+for ordinary individual usage. Claude and Kimi credentials are provisioned
+manually. ChatGPT credentials are authorized with `ab accounts login NAME
+[--local|--project]`. The local dispatcher or hosted refreshing project secret
+is the sole refresh owner; no sandbox refreshes. Local Codex uses a protected
+loopback inference transport and isolated CODEX_HOME, preserving the shell HOME
+and leaving ambient login untouched.
+Hosted validation uses write-only metadata and states that the first hosted
+build is the live check; local validation makes a minimal runtime request.
 
 Local sessions resolve host credentials after ambient merging. Remote sessions
 receive account placeholders; exact provider hostname and placeholder header

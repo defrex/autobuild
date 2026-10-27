@@ -10,6 +10,10 @@ const accountCredentialEnvSchema = z
   )
 export const accountSchema = z.discriminatedUnion('kind', [
   z.strictObject({
+    kind: z.literal('chatgpt-subscription'),
+    credentialEnv: accountCredentialEnvSchema,
+  }),
+  z.strictObject({
     kind: z.literal('claude-subscription'),
     credentialEnv: accountCredentialEnvSchema,
   }),
@@ -26,9 +30,9 @@ documentSchema(accountCredentialEnvSchema, {
 })
 for (const branch of accountSchema.options)
   documentFields(branch, {
-    kind: 'Claude subscription or Kimi Code membership using the unmodified Claude runtime.',
+    kind: 'Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).',
     credentialEnv:
-      'Dispatcher-host environment variable holding the credential; never the credential itself.',
+      'Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.',
     ...(branch.shape.kind.value === 'kimi-code'
       ? {
           region:
@@ -40,6 +44,7 @@ for (const branch of accountSchema.options)
 /** Nonsecret billing descriptors. Credential values are resolved only at execution boundaries. */
 export type Account =
   | { kind: 'claude-subscription'; credentialEnv: string }
+  | { kind: 'chatgpt-subscription'; credentialEnv: string }
   | { kind: 'kimi-code'; credentialEnv: string; region: 'overseas' | 'china' }
 export type Accounts = Readonly<Record<string, Account>>
 export const selectedAccountSchema = z.strictObject({
@@ -71,17 +76,22 @@ export function selectAccount(
   if (name === undefined) return undefined
   if (!Object.hasOwn(accounts, name))
     throw new Error(`${label}: unknown account ${JSON.stringify(name)}`)
-  if (runtime !== 'claude')
-    throw new Error(`${label}: account ${JSON.stringify(name)} requires runtime "claude"`)
+  const requiredRuntime = accounts[name]!.kind === 'chatgpt-subscription' ? 'codex' : 'claude'
+  if (runtime !== requiredRuntime)
+    throw new Error(
+      `${label}: account ${JSON.stringify(name)} requires runtime "${requiredRuntime}"`,
+    )
   return { name, descriptor: accounts[name]! }
 }
 
 export function accountRemedy(account: SelectedAccount): string {
   return (
     `account ${JSON.stringify(account.name)} (${account.descriptor.credentialEnv}): ` +
-    (account.descriptor.kind === 'claude-subscription'
-      ? 'renew with claude setup-token and set the dispatcher credential variable'
-      : 'replace the Kimi Code membership key in the dispatcher credential variable')
+    (account.descriptor.kind === 'chatgpt-subscription'
+      ? `sign in again with ab accounts login ${JSON.stringify(account.name)} (--local for the local dispatcher or --project for the connected project)`
+      : account.descriptor.kind === 'claude-subscription'
+        ? 'renew with claude setup-token and set the dispatcher credential variable'
+        : 'replace the Kimi Code membership key in the dispatcher credential variable')
   )
 }
 

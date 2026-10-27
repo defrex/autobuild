@@ -10,12 +10,14 @@ export interface ProviderErrorHints {
 }
 
 const EXHAUSTION_CODE_PATTERNS = [
+  /^subscription_sharing_usage_(?:limit_exceeded|unavailable)$/,
   /(?:^|[_-])(?:billing|payment|quota|credit|balance|budget)(?:[_-]|$)/,
   /^(?:insufficient|out_of)_(?:quota|credits?|balance|funds)$/,
   /^usage_(?:limit|quota)(?:_|$)/,
 ] as const
 
 const CREDENTIAL_CODE_PATTERNS = [
+  /^(?:invalid_grant|refresh_token_invalidated|subscription_sharing_user_not_eligible)$/,
   /^(?:auth|authentication|authorization)(?:_|-)/,
   /^(?:unauthorized|forbidden)$/,
   /^(?:invalid|expired|missing|revoked)_(?:api_)?(?:key|token|credential)s?$/,
@@ -24,6 +26,7 @@ const CREDENTIAL_CODE_PATTERNS = [
 ] as const
 
 const EXHAUSTION_TEXT_PATTERNS = [
+  /subscription_sharing_usage_(?:limit_exceeded|unavailable)/i,
   /(?:^|[^a-z0-9])(?:quota(?:[_ -](?:exceeded|exhausted|depleted|refreshes?))?|(?:insufficient|exhausted|depleted)[_ -]quota)(?:$|[^a-z0-9])/i,
   /\busage[_ -]?(?:limit|quota)\b/i,
   /\b(?:billing|spending|monthly)\s+(?:limit|cap|cycle)\b/i,

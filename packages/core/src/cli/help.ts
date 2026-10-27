@@ -72,6 +72,15 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     ]),
   },
   {
+    name: 'accounts',
+    summary: 'Sign in with ChatGPT for a Codex billing account',
+    audience: 'human',
+    detail: page([
+      'Usage: ab accounts login NAME [--local|--project]',
+      'Runs outside sessions. Local stores protected repository credentials for the dispatcher. Project transfers credentials to the connected refreshing secret and retains none locally. The browser completes OpenAI authorization; tokens are never printed.',
+    ]),
+  },
+  {
     name: 'secrets',
     summary: 'Manage write-only secrets for a connected project',
     audience: 'human',
