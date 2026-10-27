@@ -33,7 +33,7 @@ test('repository builds in Vercel Sandbox on subscription-billed Claude Code and
     ['codex', '@openai/codex@'],
   ] as const) {
     const provisioning = sandbox.runtimeProvisioning[runtime]!
-    const version = provisioning.install.split(pin)[1]
+    const version = provisioning.install.split(pin)[1] ?? ''
     expect(version).toMatch(/^\d+\.\d+\.\d+$/)
     expect(provisioning.preflight).toContain(version)
   }
