@@ -1,3 +1,4 @@
+import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import {
   guardNativeHandle,
   nativeSessionHandleSchema,
@@ -208,6 +209,15 @@ export class HarvestRunner {
   private producer: ProducerSession | undefined
 
   constructor(private readonly deps: HarvestRunnerDeps) {
+    const redactor = accountRedactor(
+      () => (deps.getConfig?.() ?? deps.config).accounts,
+      () => ({
+        ...process.env,
+        ...deps.sessionEnv,
+      }),
+    )
+    deps.store = redactAccountStore(deps.store, redactor)
+
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 60_000
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.maxSessionAttempts = deps.opts?.maxSessionAttempts ?? 2
@@ -219,7 +229,12 @@ export class HarvestRunner {
       throw new Error('maxRecoveryAttempts must be a positive integer')
     }
     // Preserve eager validation for static callers and startup failures.
-    createRuntimeResolver(deps.runtimes, deps.config.roles, deps.config.policy.sessionBudgetSeconds)
+    createRuntimeResolver(
+      deps.runtimes,
+      deps.config.roles,
+      deps.config.policy.sessionBudgetSeconds,
+      deps.config.accounts,
+    )
   }
 
   private currentConfig(): Config {
@@ -232,6 +247,7 @@ export class HarvestRunner {
       this.deps.runtimes,
       config.roles,
       config.policy.sessionBudgetSeconds,
+      config.accounts,
     )
   }
 
@@ -673,13 +689,29 @@ export class HarvestRunner {
             JSON.stringify(t.args) === JSON.stringify(prior.args ?? []),
         )
       : undefined
-    const targets = selected ? [selected, ...candidates.filter((t) => t !== selected)] : candidates
+    const frozen =
+      prior && this.deps.runtimes[prior.runner]
+        ? {
+            target: {
+              ...primary,
+              ...this.deps.runtimes[prior.runner],
+              runner: this.deps.runtimes[prior.runner]!.runner,
+              runtime: prior.runner,
+              model: prior.model,
+              args: prior.args ?? [],
+              account: prior.account,
+            },
+            index: selected?.index ?? 0,
+          }
+        : undefined
+    const targets = frozen ? [frozen, ...candidates.filter((t) => t !== selected)] : candidates
     const attempts: HarvestProviderAttempt[] = []
     let substitution: HarvestProviderAttempt | undefined
     const primaryRoute = JSON.stringify({
       runtime: primary.runtime,
       model: primary.model,
       args: primary.args,
+      account: primary.account,
     })
     let primaryLive = spec.producer ? this.producer : undefined
     if (
@@ -715,6 +747,7 @@ export class HarvestRunner {
         session,
         role: spec.role,
         runner: target.runtime,
+        ...(target.account === undefined ? {} : { account: target.account }),
         ...(target.model !== undefined ? { model: target.model } : {}),
         phase: `harvest:${spec.step}`,
         round: spec.round,
@@ -730,6 +763,7 @@ export class HarvestRunner {
           ...(continuation ? { continuation } : {}),
           role: spec.role,
           runner: target.runtime,
+          ...(target.account === undefined ? {} : { account: target.account }),
           ...(target.model !== undefined ? { model: target.model } : {}),
           args: [...target.args],
           step: spec.step,
@@ -805,6 +839,7 @@ export class HarvestRunner {
           skill: spec.skill,
           invocation: spec.run,
           workspacePath,
+          ...(target.account === undefined ? {} : { account: target.account }),
           ...(target.model !== undefined ? { model: target.model } : {}),
           args: target.args,
           env: await this.sessionEnv(spec.run, spec.step, spec.round, session),
@@ -1062,6 +1097,7 @@ export class HarvestRunner {
         index,
         session,
         runner: target.runtime,
+        ...(target.account === undefined ? {} : { account: target.account }),
         ...(target.model !== undefined ? { model: target.model } : {}),
         error: failure.message,
         ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
@@ -1658,6 +1694,9 @@ export class HarvestRunner {
           )
         : undefined
     return {
+      AB_ACCOUNT_CREDENTIAL_ENVS: JSON.stringify(
+        Object.values(this.currentConfig().accounts).map((account) => account.credentialEnv),
+      ),
       AB_STORE: 'local',
       ...this.deps.sessionEnv,
       ...(ticketGrant ? { AB_TICKET_TOKEN: ticketGrant.token } : {}),

@@ -802,3 +802,55 @@ describe('ClaudeAgentRunner continued-turn stream forwarding (SPEC §9)', () => 
     expect(cli.calls[1]?.args).not.toContain('--include-partial-messages')
   })
 })
+
+test('selected account owns auth settings on start and continue and credential rejection names renewal', async () => {
+  const calls: ClaudeCliInvocation[] = []
+  const runner = new ClaudeAgentRunner({
+    runCli: async (invocation) => {
+      calls.push(invocation)
+      return {
+        stdout: JSON.stringify({
+          type: 'result',
+          is_error: true,
+          result: 'OAuth access token is invalid',
+          api_error_status: 401,
+        }),
+        stderr: '',
+        exitCode: 1,
+      }
+    },
+  })
+  const account = {
+    name: 'personal',
+    descriptor: { kind: 'claude-subscription' as const, credentialEnv: 'PERSONAL' },
+  }
+  const started = await runner.start({
+    skill: 'ab-implement',
+    invocation: 'b',
+    workspacePath: '/workspace',
+    account,
+    env: {
+      AB_ACCOUNT_PLACEHOLDERS: '0',
+      AB_BUILD_RUNNER_OPTIONS: '',
+      AB_HARVEST_RUNNER_OPTIONS: '',
+      PERSONAL: 'sentinel-account-token',
+      ANTHROPIC_API_KEY: 'competing-key',
+      ANTHROPIC_BASE_URL: 'https://api.kimi.ai/coding/',
+    },
+  })
+  expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sentinel-account-token')
+  expect(calls[0]!.env.ANTHROPIC_API_KEY).toBeUndefined()
+  expect(calls[0]!.env.ANTHROPIC_BASE_URL).toBeUndefined()
+  const settingsIndex = calls[0]!.args.indexOf('--settings')
+  expect(JSON.parse(calls[0]!.args[settingsIndex + 1]!).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(
+    'sentinel-account-token',
+  )
+  expect(started.result.kind).toBe('failed')
+  if (started.result.kind === 'failed') {
+    expect(started.result.failure.cause).toBe('credentials')
+    expect(started.result.failure.message).toContain('personal')
+    expect(started.result.failure.message).toContain('claude setup-token')
+  }
+  await runner.continue(started.session, 'retry', { env: { PERSONAL: 'rotated-sentinel' } })
+  expect(calls[1]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('rotated-sentinel')
+})
