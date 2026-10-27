@@ -1240,9 +1240,13 @@ Service requests reread durable state; detached executions need neither renewal
 secrets nor their original dispatcher. Local stores retain their existing path.
 Project onboarding uses `cli/connect.ts`, user-level `cli/project-credentials.ts`,
 the shared `connection.ts` wire types, and Postgres `connections.ts`. Approval
-commits registry membership, a credential digest, and the outcome atomically.
+commits registry membership, organization assignment, a credential digest, and
+the outcome atomically. Assignment classification is independent of registry
+history; every unassigned approval requires an explicit eligible organization.
 The web connection routes authenticate the existing Better Auth session and
-reuse the sign-in/consent layout; CLI polling uses a separate private capability.
+reuse the sign-in/consent layout. Valid code links look up approval immediately,
+including on return from sign-in; the view shows selected destinations or the
+read-only assigned organization. CLI polling uses a separate private capability.
 
 ## Revision-checked ticket writes
 

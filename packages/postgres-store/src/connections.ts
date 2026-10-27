@@ -23,6 +23,7 @@ export interface ConnectionRecord extends ConnectionOutcome {
 }
 export interface ApprovalContext {
   connection: ConnectionRecord | null
+  assignedOrganization: { id: string; name: string } | null
   assignment: 'new' | 'fixed'
   organizations: { id: string; name: string; membershipRole: 'owner' | 'member' | null }[]
 }
@@ -147,24 +148,33 @@ export class PostgresConnectionStore implements ConnectionStore {
   ): Promise<ApprovalContext> {
     if (principal.email !== actor) throw new ConnectionError(403, 'browser principal required')
     const connection = await this.lookup(code, actor, principal)
-    if (!connection) return { connection: null, assignment: 'fixed', organizations: [] }
-    const rows = await this.sql`SELECT 1 FROM project_journal WHERE repo = ${connection.repo}
-      UNION ALL SELECT 1 FROM project_organizations WHERE repo = ${connection.repo} LIMIT 1`
-    const assignment = rows.length ? 'fixed' : 'new'
+    if (!connection)
+      return {
+        connection: null,
+        assignment: 'fixed',
+        organizations: [],
+        assignedOrganization: null,
+      }
+    const [assigned] = await this.sql`SELECT o.id, o.name FROM project_organizations p
+      JOIN organization o ON o.id = p.organization_id WHERE p.repo = ${connection.repo}`
+    const assignedOrganization = assigned
+      ? { id: String(assigned.id), name: String(assigned.name) }
+      : null
+    const assignment = assignedOrganization ? 'fixed' : 'new'
     const organizations =
       assignment === 'new'
         ? (await new PostgresOrganizationStore(this.sql).organizations(principal)).map(
             ({ id, name, membershipRole }) => ({ id, name, membershipRole }),
           )
         : []
-    return { connection, assignment, organizations }
+    return { connection, assignment, organizations, assignedOrganization }
   }
   private async checkConnection(sql: SQL, repo: string, principal: HumanActor) {
     const access = new PostgresOrganizationStore(sql)
     if (!principal.isSuperUser() && !(await access.admitted(principal.email)))
       throw new ConnectionError(403, 'this identity is not allowed')
     // Registry removal does not release retained history: assigned projects
-    // keep their org grant; existing unassigned projects stay super-user-only.
+    // keep their org grant; existing unassigned projects stay super-user-only until assigned.
     const [assignment] = await sql`SELECT p.organization_id, e.email FROM project_organizations p
       LEFT JOIN organization_emails e ON e.organization_id = p.organization_id AND e.email = ${principal.email}
       WHERE p.repo = ${repo}`
@@ -201,20 +211,16 @@ export class PostgresConnectionStore implements ConnectionStore {
         const [assignment] =
           await tx`SELECT organization_id FROM project_organizations WHERE repo = ${row.repo}`
         let target = assignment?.organization_id as string | undefined
-        if (previous || assignment) {
+        if (assignment) {
           if (organizationId !== undefined && organizationId !== target)
             throw new ConnectionError(400, 'project moves require organization management')
         } else {
+          if (organizationId === undefined)
+            throw new ConnectionError(400, 'organization is required')
           const organizations = await access.organizations(principal)
-          if (organizationId === undefined) {
-            const memberships = organizations.filter((org) => org.membershipRole !== null)
-            if (memberships.length !== 1) throw new ConnectionError(400, 'organization is required')
-            target = memberships[0]!.id
-          } else {
-            if (!organizations.some((org) => org.id === organizationId))
-              throw new ConnectionError(403, 'organization access required')
-            target = organizationId
-          }
+          if (!organizations.some((org) => org.id === organizationId))
+            throw new ConnectionError(403, 'organization access required')
+          target = organizationId
           await tx`INSERT INTO project_organizations (repo, organization_id) VALUES (${row.repo}, ${target!})`
         }
         if (previous?.action !== 'added')
