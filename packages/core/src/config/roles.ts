@@ -184,10 +184,10 @@ export function effectiveRuntimeReferences(
     })
   }
 
-  // Unused accounts still require the actual Claude binary for readiness.
+  // Unused accounts still require their actual runtime for readiness.
   for (const [name, descriptor] of Object.entries(config.accounts ?? {}))
     add(
-      'claude',
+      descriptor.kind === 'chatgpt-subscription' ? 'codex' : 'claude',
       descriptor.kind === 'kimi-code' ? 'kimi-for-coding' : undefined,
       `account ${displayName(name)} readiness`,
       name,

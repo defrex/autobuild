@@ -1111,7 +1111,7 @@ documentFields(configRootSchema, {
   finalize:
     'Ordered post-PR steps. Failures are recorded without blocking the PR. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.',
   accounts:
-    'Named Claude subscription or Kimi Code billing accounts. Descriptors contain credential variable names only.',
+    'Named Claude subscription, Kimi Code, or ChatGPT subscription billing accounts. Descriptors contain credential variable names only.',
   roles: 'Named agent roles. The reserved default role provides inherited runtime axes.',
   policy: 'Lifecycle budgets, retries, convergence and harvest limits.',
   orchestrator:
@@ -1158,6 +1158,20 @@ const normalizedConfigSchema = configRootSchema.transform((input, ctx) => {
 })
 
 export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => {
+  for (const [name, account] of Object.entries(config.accounts)) {
+    if (account.kind !== 'chatgpt-subscription') continue
+    if (
+      Object.entries(config.accounts).some(
+        ([other, a]) => other !== name && a.credentialEnv === account.credentialEnv,
+      )
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['accounts', name],
+        message: 'ChatGPT accounts require distinct credentialEnv slots',
+      })
+  }
+
   const accountVariables = new Set(
     Object.values(config.accounts).map((account) => account.credentialEnv),
   )
