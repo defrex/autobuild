@@ -70,6 +70,7 @@ if (!testUrl) {
     // The service caches its registry pool; give this per-test service an
     // explicitly owned registry so contract cleanup releases that pool too.
     const projects = await openPostgresProjectRegistryFromEnv({ AB_POSTGRES_URL: database.url })
+    const registrySql = new SQL(database.url)
     const service = createHostedStoreService({
       env: {
         AB_STORE_SECRET: secret,
@@ -84,7 +85,29 @@ if (!testUrl) {
       openStore: async () => backing,
       openProjectRegistry: async () => projects,
     })
-    const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: service.fetch })
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: async (request) => {
+        // Generic adapter fixtures use arbitrary repository identities. Seed
+        // hosted admission directly, without changing the contract's names.
+        const path = new URL(request.url).pathname
+        let repo = /^\/repos\/([^/]+)/.exec(path)?.[1]
+        if (repo) repo = decodeURIComponent(repo)
+        if (request.method === 'POST' && ['/builds', '/repos'].includes(path)) {
+          const body = (await request.clone().json()) as { repo?: string }
+          repo = body.repo
+        }
+        if (repo) {
+          const [exists] = await registrySql`SELECT 1 FROM project_generations WHERE repo=${repo}`
+          if (!exists) {
+            await registrySql`INSERT INTO project_generations (repo,generation) VALUES (${repo},${crypto.randomUUID()}) ON CONFLICT DO NOTHING`
+            await registrySql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),${repo},'added','fixture',now())`
+          }
+        }
+        return service.fetch(request)
+      },
+    })
     const token = mintToken(secret, {
       version: 1,
       ownerAdmin: { user: 'owner:fixture' },
@@ -100,6 +123,7 @@ if (!testUrl) {
         await server.stop(true)
         await backing.close()
         await projects.close()
+        await registrySql.close()
         await database.cleanup()
       },
     }
@@ -133,6 +157,9 @@ if (!testUrl) {
         token: mintToken(secret, { version: 1, ownerAdmin: { user: 'owner:fixture' }, exp }),
       })
       try {
+        const registry = await openPostgresProjectRegistryFromEnv({ AB_POSTGRES_URL: database.url })
+        await registry.add(sampleBuildInput('via-live').repo, 'fixture')
+        await registry.close()
         await admin.createBuild(sampleBuildInput('via-live'))
         const via: Via = { kind: 'session', id: 'os_delegate' }
 
@@ -467,6 +494,8 @@ test.skipIf(!testUrl)(
         },
         get(target, key) {
           if (key === 'reserve') return async () => track(await target.reserve())
+          if (key === 'begin')
+            return (work: (tx: SQL) => unknown) => target.begin((tx) => work(track(tx as SQL)))
           const value = Reflect.get(target, key, target)
           return typeof value === 'function' ? value.bind(target) : value
         },
@@ -1147,6 +1176,13 @@ if (testUrl)
       service.fetch(new Request(input, init))) as typeof fetch
     const fresh = async () => new RemoteBuildStore({ url, token, fetchFn })
     try {
+      const fixtureSql = new SQL(database.url)
+      try {
+        await fixtureSql`INSERT INTO project_generations (repo,generation) VALUES ('/reduced-read-budget',${crypto.randomUUID()}),('https://github.com/budget/cold-once',${crypto.randomUUID()})`
+        await fixtureSql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),'/reduced-read-budget','added','fixture',now()),(nextval('project_journal_seq'),'https://github.com/budget/cold-once','added','fixture',now())`
+      } finally {
+        await fixtureSql.close()
+      }
       await reducedReadBudget({ store: await fresh(), costs, fresh })
     } finally {
       await backing.close()
@@ -1383,7 +1419,14 @@ if (testUrl)
       const authenticate = async (updates: number) => {
         statements.length = 0
         await auth.authenticate(request)
-        expect(statements.filter((s) => /^SELECT/i.test(s))).toHaveLength(1)
+        expect(
+          statements.filter(
+            (s) =>
+              /^SELECT/i.test(s) &&
+              !s.includes('pg_advisory_xact_lock') &&
+              !s.includes('SELECT g.generation'),
+          ),
+        ).toHaveLength(1)
         expect(statements.filter((s) => /^UPDATE/i.test(s))).toHaveLength(updates)
         expect(hasCalls).toBe(0)
       }
@@ -1436,6 +1479,113 @@ if (testUrl)
       await sql?.close()
       await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
       await admin.close()
+    }
+  },
+)
+
+;(testUrl ? test : test.skip)(
+  'permanent deletion refuses old credentials across routes and approved reconnection starts empty',
+  async () => {
+    const { PostgresProjectDeletion } = await import(
+      '@defrex/autobuild-postgres-store/project-deletion'
+    )
+    const { PostgresCredentialStore } = await import('@defrex/autobuild-postgres-store/credentials')
+    const { PostgresConnectionStore } = await import('@defrex/autobuild-postgres-store/connections')
+    const { PostgresOrganizationStore } = await import(
+      '@defrex/autobuild-postgres-store/organizations'
+    )
+    const { PostgresTicketDatabase } = await import('@defrex/autobuild-postgres-store')
+    const database = await isolatedDatabase(),
+      sql = new SQL(database.url)
+    const blobs = new MemoryBlobStore(),
+      backing = await openPostgresBuildStore(database.url, blobs)
+    const registry = new PostgresProjectRegistry(sql),
+      credentials = new PostgresCredentialStore(sql, registry)
+    const connections = new PostgresConnectionStore(sql),
+      orgs = new PostgresOrganizationStore(sql)
+    const actor = { email: 'owner@example.com', isSuperUser: () => true },
+      repo = 'https://github.com/acme/delete-live'
+    const org = await orgs.create(actor, 'Acme', 'acme')
+    await registry.add(repo, actor.email)
+    await orgs.assign(actor, org.id, repo)
+    const old = await credentials.issue(repo, actor.email)
+    const stale = await connections.start({
+      repo,
+      credentialId: 'c'.repeat(32),
+      digest: 'd'.repeat(64),
+    })
+    const tickets = new PostgresTicketDatabase(sql).source({
+      repo,
+      teamKey: 'AUT',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    })
+    const previousTicket = await tickets.create({ title: 'Before deletion', body: 'body' })
+    await backing.createBuild(sampleBuildInput('deleted-build', { repo }))
+    const service = createHostedStoreService({
+      env: {
+        AB_STORE_SECRET: 'secret',
+        AB_POSTGRES_URL: database.url,
+        AB_BLOB_BACKEND: 's3',
+        AB_S3_BUCKET: 'injected',
+        AB_S3_REGION: 'us-east-1',
+        AB_S3_ACCESS_KEY_ID: 'injected',
+        AB_S3_SECRET_ACCESS_KEY: 'injected',
+      },
+      openStore: async () => backing,
+      openProjectRegistry: async () => registry,
+      openCredentials: async () => credentials,
+    })
+    const request = (path: string, token: string) =>
+      service.fetch(
+        new Request(`http://test${path}`, {
+          ...(path.startsWith('/tickets/')
+            ? { method: 'POST', body: JSON.stringify({ repo }) }
+            : {}),
+          headers: {
+            authorization: `Bearer ${token}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: String(REMOTE_STORE_PROTOCOL_VERSION),
+          },
+        }),
+      )
+    try {
+      const deletion = new PostgresProjectDeletion(sql, { delete: async () => {} })
+      await deletion.delete(actor, repo, (await deletion.preview(actor, repo)).token)
+      for (const path of [
+        '/connect/v1/status',
+        `/repos/${encodeURIComponent(repo)}`,
+        '/tickets/states',
+        `/secrets/v1/list?repo=${encodeURIComponent(repo)}`,
+        `/operator/v1/repos/${encodeURIComponent(repo)}/status`,
+      ])
+        expect((await request(path, old.token)).status, path).toBe(401)
+      const internal = mintToken('secret', {
+        version: 1,
+        internalOperator: { repo, user: actor.email },
+        exp: Date.now() + 60000,
+      })
+      const refused = await request(`/repos/${encodeURIComponent(repo)}`, internal)
+      expect(refused.status).toBe(403)
+      expect(await refused.text()).toContain('project not registered')
+      await expect(
+        connections.decide(stale.code, actor.email, true, actor, org.id),
+      ).rejects.toThrow()
+      const fresh = await connections.start({
+        repo,
+        credentialId: 'e'.repeat(32),
+        digest: 'f'.repeat(64),
+      })
+      expect(await registry.has(repo)).toBe(false)
+      await connections.decide(fresh.code, actor.email, true, actor, org.id)
+      expect(await registry.has(repo)).toBe(true)
+      expect(await backing.listBuildsForRepo(repo)).toEqual([])
+      expect(await tickets.get(previousTicket.ref.id)).toBeNull()
+      expect((await tickets.create({ title: 'Fresh ticket', body: 'body' })).ref.id).toBe('AUT-1')
+      expect((await request('/connect/v1/status', old.token)).status).toBe(401)
+    } finally {
+      await backing.close()
+      await sql.close()
+      await database.cleanup()
     }
   },
 )

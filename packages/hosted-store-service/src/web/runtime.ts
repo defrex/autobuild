@@ -1,3 +1,4 @@
+import { openPostgresProjectDeletionFromEnv } from '@defrex/autobuild-postgres-store/project-deletion'
 import { humanAccess } from './access'
 import { createOrganizationHandler } from './organizations'
 import { openPostgresConnectionStoreFromEnv } from '@defrex/autobuild-postgres-store/connections'
@@ -17,6 +18,7 @@ export function hostedService() {
   return service
 }
 
+let deletion: ReturnType<typeof openPostgresProjectDeletionFromEnv> | undefined
 let gateway: ReturnType<typeof createWebGateway> | undefined
 export function webGateway() {
   gateway ??= createWebGateway({
@@ -27,12 +29,17 @@ export function webGateway() {
   })
   const management = createOrganizationHandler({
     access: humanAccess,
+    deletion: () =>
+      (deletion ??= openPostgresProjectDeletionFromEnv(process.env).catch((error) => {
+        deletion = undefined
+        throw error
+      })),
     getSession: (headers) => webAuth().api.getSession({ headers }),
   })
   return {
     fetch: (request: Request) => {
       const path = new URL(request.url).pathname
-      return /^\/api\/web\/(orgs(?:\/|$)|projects\/unassigned(?:\/|$))/.test(path)
+      return /^\/api\/web\/(orgs(?:\/|$)|projects\/(?:unassigned|deletions?)(?:\/|$))/.test(path)
         ? management(request)
         : gateway!.fetch(request)
     },

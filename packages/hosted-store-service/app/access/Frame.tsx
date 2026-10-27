@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { AccountMenu } from './AccountMenu'
 export interface FrameProps {
   identity: string
+  isOwner?: boolean
   isSuperUser: boolean
   pending?: boolean
   error?: string
@@ -11,6 +12,7 @@ export interface FrameProps {
 }
 export function AccessFrame({
   identity,
+  isOwner,
   isSuperUser,
   pending,
   error,
@@ -28,7 +30,12 @@ export function AccessFrame({
         </a>
         <span className="spacer" />
         {isSuperUser && <span className="slack">super user</span>}
-        <AccountMenu identity={identity} isSuperUser={isSuperUser} menuOpen={menuOpen} />
+        <AccountMenu
+          identity={identity}
+          isOwner={isOwner}
+          isSuperUser={isSuperUser}
+          menuOpen={menuOpen}
+        />
       </header>
       <section className={`access-page access-${title.toLowerCase()}`}>
         <div className="access-heading">

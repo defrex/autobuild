@@ -22,6 +22,10 @@ const USAGE = `Usage:
   ab-hosted-store projects list
   ab-hosted-store projects add REPOSITORY --user IDENTITY
   ab-hosted-store projects remove REPOSITORY --user IDENTITY
+
+projects remove unregisters access only; all project data is retained.
+Delete a project from the web Projects page to permanently remove its hosted data.
+
   ab-hosted-store mint admin (--ttl-seconds N | --expires-at ISO-8601)`
 
 type Env = Record<string, string | undefined>
