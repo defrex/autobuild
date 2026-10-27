@@ -34,6 +34,10 @@ const HAPPY_STEPS: DashboardBuild['steps'] = [
   { label: 'merge', state: 'pending', qualifier: 'waiting' },
 ]
 
+/** The shell line under the masthead: view tabs, then the repository controls. */
+const tabLine = (html: string) =>
+  html.match(/<div class="line navline">[\s\S]*?<\/fieldset><\/div>/)?.[0]
+
 /** Small stand-ins for the harness scenarios, carrying the same evidence. */
 function models(): WebFixtureModels {
   const base = {
@@ -280,7 +284,7 @@ test('singleton capture frames omit the project picker', async () => {
 
   for (const spec of singletonFrames) {
     const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    const nav = tabLine(html)
     expect(nav, spec.id).toBeDefined()
     expect(html, spec.id).not.toContain('project-menu')
     expect(nav, spec.id).not.toContain('<select')
@@ -301,15 +305,21 @@ test('multi-repository capture frame opens the masthead project picker', async (
   expect(html).not.toContain('https://github.com')
   expect(html).not.toContain('<select')
 })
-test('signed-in frames are tabless and Builds ticket ids remain plain text', async () => {
+test('signed-in frames lead with the view tabs and Builds ticket ids remain plain text', async () => {
   const fixtures = models()
   for (const spec of WEB_FRAME_SPECS.filter((frame) => frame.id.startsWith('builds-'))) {
     const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    const nav = tabLine(html)
     expect(nav, spec.id).toBeDefined()
-    expect(nav, spec.id).not.toContain('BUILDS')
-    expect(nav, spec.id).not.toContain('TICKETS')
-    expect(nav, spec.id).not.toContain('class="tab"')
+    expect(nav, spec.id).toContain('<nav class="tabs" aria-label="Views">')
+    for (const tab of ['Triage', 'Queue', 'Active', 'Done'])
+      expect(evidenceText(nav!), spec.id).toContain(tab)
+    expect(nav, spec.id).toMatch(/aria-current="page"[^>]*>Active/)
+    // A falsy count in a render condition must never leak into the page as text.
+    expect(html, spec.id).not.toMatch(/<section class="dashboard-surface">0/)
+    expect(nav!.indexOf('class="tabs"'), spec.id).toBeLessThan(
+      nav!.indexOf('aria-label="Operator controls"'),
+    )
   }
 
   const happy = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')
@@ -327,13 +337,13 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     const html = await renderWebFrame(spec!, fixtures, { css: '', fontCss: '' })
     expect(html).toContain('<main class="frame">')
     expect(html).toContain('<header class="masthead">')
-    expect(html).toContain('<nav class="line navline"')
-    const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
+    expect(html).toContain('<div class="line navline">')
+    const nav = tabLine(html)
     expect(nav).toContain('class="loading-controls"')
-    expect(nav?.match(/class="skeleton-control control-item"/g)).toHaveLength(6)
+    expect(nav?.match(/class="sk sk-control"/g)).toHaveLength(4)
     expect(html).not.toContain('role="toolbar"')
     expect(html.match(/aria-live="polite"/g)).toHaveLength(1)
-    const loadingStart = html.indexOf('<div class="loading-state">')
+    const loadingStart = html.indexOf('<div class="loading-state" data-loading="builds">')
     const skeletonStart = html.indexOf('<div class="skeletons"', loadingStart)
     const loadingAnnouncement = html.slice(loadingStart, skeletonStart)
     expect(loadingStart).toBeGreaterThan(-1)
@@ -353,8 +363,7 @@ test('running and paused repositories use terminal-compatible control vocabulary
   const mixedSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
   const happy = await renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
   const mixed = await renderWebFrame(mixedSpec, fixtures, { css: '', fontCss: '' })
-  const controlLandmark = (html: string) =>
-    html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0] ?? ''
+  const controlLandmark = (html: string) => tabLine(html) ?? ''
 
   expect(controlLandmark(happy)).not.toContain('repository RUNNING')
   expect(controlLandmark(happy)).not.toContain('repository PAUSED')
@@ -401,9 +410,12 @@ test('rendered build controls follow previews and direct controls name their tar
   const detailSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
   const detail = await renderWebFrame(detailSpec, fixtures, { css: '', fontCss: '' })
   const toolbar = detail.match(
-    /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+    /<div class="controls actions build-actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
   )?.[0]
   expect(toolbar).toBeDefined()
+  // The primary control leads and abort, ghosted, goes last.
+  expect(toolbar).toMatch(/class="btn primary action"[^>]*aria-label="RESUME/)
+  expect(toolbar).toMatch(/class="btn ghost action"[^>]*aria-label="ABORT/)
   for (const label of ['ABORT', 'RESUME']) {
     expect(toolbar).toContain(`aria-label="${label} ${slug}"`)
   }
@@ -493,19 +505,40 @@ test('pending answer context disables row-local submit and cancel', async () => 
   )
 })
 
-test('post-cancel abort frame replaces answer mode with local confirmation controls', async () => {
+test('abort frame confirms in the dialog over the unchanged build page', async () => {
   const fixtures = models()
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-abort-wide')!
   const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-  const toolbar = html.match(
-    /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
-  )?.[0]
+  const dialog = html.match(/<dialog class="confirm-dialog" open=""[\s\S]*?<\/dialog>/)?.[0]
 
   expect(html).not.toContain('class="answer-step"')
-  expect(html).toContain('abort plan-blocked-dashboard? Enter confirms, Esc cancels')
-  expect(evidenceText(toolbar ?? '')).toBe(' CONFIRM ABORT CANCEL ')
-  expect(toolbar).not.toContain('aria-label="RESUME plan-blocked-dashboard"')
-  expect(toolbar).not.toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
+  expect(dialog).toBeDefined()
+  expect(dialog).toContain('Abort plan-blocked-dashboard?')
+  expect(evidenceText(dialog!)).toContain('Abort build Cancel')
+  expect(dialog).toMatch(/class="btn danger primary"[^>]*>Abort build/)
+  // The page behind keeps its controls in place: confirming never shifts the layout.
+  expect(html).toContain('aria-label="RESUME plan-blocked-dashboard"')
+  expect(html).toContain('aria-label="ABORT plan-blocked-dashboard"')
+})
+
+test('ticket frames list, empty and page states with their moves', async () => {
+  const fixtures = models()
+  const render = (id: string) =>
+    renderWebFrame(WEB_FRAME_SPECS.find((frame) => frame.id === id)!, fixtures, {
+      css: '',
+      fontCss: '',
+    })
+  const triage = await render('tickets-triage-wide')
+  expect(tabLine(triage)).toMatch(/aria-current="page"[^>]*>Triage/)
+  expect(triage).toContain('<ol class="rows ticket-rows" aria-label="Triage tickets">')
+  // Unknown blocker resolution reads as a dependency; known unresolved reads as blocked.
+  expect(triage).toContain('depends on')
+  expect(triage).toMatch(/<span class="warn">blocked by/)
+  const page = await render('ticket-page-wide')
+  expect(page).toMatch(/class="btn primary action"[^>]*aria-label="ENQUEUE CAP-PLAN"/)
+  expect(page).toMatch(/class="btn ghost action"[^>]*aria-label="ICE CAP-PLAN"/)
+  // The body's leading heading repeats the title, so the page drops it.
+  expect(page.match(/Plan blocked dashboard/g)?.length).toBe(1)
 })
 
 test('narrow capture frames never supply a hover preview', async () => {

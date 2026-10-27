@@ -311,6 +311,18 @@ const ticketsListInput = z.strictObject({
     .array(z.string().min(1))
     .optional()
     .describe('Narrow the list to tickets carrying every named label.'),
+  limit: z
+    .number()
+    .int()
+    .min(0)
+    .max(200)
+    .optional()
+    .describe('Return at most this many tickets; `total` still counts every match.'),
+  offset: z.number().int().min(0).optional().describe('Skip this many tickets first.'),
+  order: z
+    .enum(['oldest', 'newest'])
+    .optional()
+    .describe('Oldest first (the source order, the default) or newest first.'),
 })
 
 const ticketsCreateInput = ticketCreateRequestSchema.extend({ repo: repoField })
@@ -783,7 +795,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'tickets.list',
     'List the repository’s ticket grooming queue from the configured ticket source.',
     ticketsListInput,
-    '{states, tickets, diagnostics, criteria, triageState, readyState}: the queue listing, the effective lifecycle names, and the criteria actually applied.',
+    '{states, tickets, diagnostics, criteria, triageState, readyState, doneState, total}: the queue listing (one page when `limit` is set), the effective lifecycle names, the criteria actually applied, and the match count before paging.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketsListInput>
       return listOperatorTickets({
@@ -792,6 +804,15 @@ export const TOOLS: readonly ToolEntry[] = [
         backend: ticketsOf(ctx),
         ...(input.state !== undefined ? { state: input.state } : {}),
         ...(input.labels !== undefined ? { labels: input.labels } : {}),
+        ...(input.limit !== undefined
+          ? {
+              page: {
+                limit: input.limit,
+                ...(input.offset !== undefined ? { offset: input.offset } : {}),
+                ...(input.order !== undefined ? { order: input.order } : {}),
+              },
+            }
+          : {}),
       })
     },
   ),

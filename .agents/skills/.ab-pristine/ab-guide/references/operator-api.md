@@ -78,7 +78,7 @@ raw session-event append. External operator harnesses own agent execution.
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
-| `GET …/tickets?state=S&label=L` | `{states,tickets,diagnostics,criteria,triageState,readyState}`. The two lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. |
+| `GET …/tickets?state=S&label=L&limit=N&offset=K&order=O` | `{states,tickets,diagnostics,criteria,triageState,readyState,doneState,total}`. The three lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. `limit` (0–200) returns one page, after skipping `offset`, in `order` `oldest` (the source order, the default) or `newest`; `total` counts every match before paging. |
 | `GET …/tickets/states` | Full state metadata `{name,tickets,about?}[]`, including empty states (`tickets.states` in MCP). |
 | `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
 
@@ -97,7 +97,7 @@ MCP presence registration is deferred. `ab watch`
 streams build and repository events by polling the same event logs client-side
 (the store protocol's `GET /builds/{slug}/events` and `GET /repos/{repo}/events`
 reads), not as a transport on this API. `triageState`, `readyState`,
-and every entry in `states` are backend state names and must be sent back verbatim
+`doneState`, and every entry in `states` are backend state names and must be sent back verbatim
 when used with the move control.
 
 ## Controls

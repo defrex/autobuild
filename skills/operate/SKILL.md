@@ -303,7 +303,8 @@ that does the job, and say what you are doing before you do it:
   verification-failed nodes accept body/ticket spec revision without an escalation;
   the caller supplies the amended body for ticket origin. The node recollects and
   verifies; leaves require an escalation and restart from plan.
-- `tickets.list`, `tickets.get` — read the ticket queue and one ticket.
+- `tickets.list`, `tickets.get` — read the ticket queue and one ticket. A long
+  queue pages with `limit`, `offset` and `order`; `total` counts every match.
 - `tickets.create` — file a new ticket from a conversation.
 - `tickets.update`, `tickets.block`, `tickets.unblock` — edit fields and
   blocker relations.

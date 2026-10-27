@@ -2,7 +2,7 @@
 
 import { THEMES } from '../theme'
 import { useTheme } from '../ThemeProvider'
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 
 export interface MenuLink {
   label: string
@@ -25,12 +25,15 @@ export interface MenuGroup {
  * to the trigger.
  */
 export function Menu({
+  id,
   label,
   groups,
   actions,
   className,
   initiallyOpen = false,
 }: {
+  /** Page-unique name; the panel's element id derives from it. */
+  id: string
   label: ReactNode
   groups: readonly MenuGroup[]
   actions: readonly MenuAction[]
@@ -41,7 +44,7 @@ export function Menu({
 }) {
   const { theme, choose } = useTheme()
   const { open, setOpen, close, rootRef, triggerRef, listRef, listId, onListKey, onTriggerKey } =
-    useMenuDisclosure(initiallyOpen)
+    useMenuDisclosure(id, initiallyOpen)
 
   return (
     <span ref={rootRef} className={`menu${className ? ` ${className}` : ''}`}>
@@ -124,13 +127,18 @@ export function Menu({
  * The disclosure behavior every drop-down shares: focus moves into the panel
  * on open (to a `data-autofocus` item when one is marked), arrows walk its items, and Escape, Tab, or an outside pointer
  * closes it with focus back on the trigger.
+ *
+ * The panel id comes from the caller's page-unique `id`, not `useId`: Next's
+ * dev runtime can hydrate the page under a different ancestor fork than it
+ * rendered on the server, and a tree-derived id then leaves the trigger's
+ * `aria-controls` pointing at an id the panel never gets.
  */
-export function useMenuDisclosure(initiallyOpen = false) {
+export function useMenuDisclosure(id: string, initiallyOpen = false) {
   const [open, setOpen] = useState(initiallyOpen)
   const rootRef = useRef<HTMLSpanElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const listId = useId()
+  const listId = `${id}-menu`
 
   useEffect(() => {
     if (!open) return

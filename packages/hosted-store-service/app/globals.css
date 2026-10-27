@@ -219,11 +219,48 @@ textarea {
 .navline {
   display: flex;
   flex-wrap: wrap;
+  gap: 0 20px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.93em;
+}
+/* Tabs carry their own padding so the current tab's bar sits on the line's rule. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 24px;
+  align-items: baseline;
+}
+.tab {
+  padding: 10px 0 8px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--slack);
+  font-weight: 600;
+  text-decoration: none;
+}
+.tab:hover {
+  color: var(--ink);
+}
+.tab[aria-current] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.tab .count {
+  margin-left: 0.6ch;
+  font-family: var(--mono);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.controls-line {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px 20px;
   align-items: baseline;
   padding: 10px 0;
-  border-bottom: 1px solid var(--rule);
-  font-size: 0.93em;
 }
 .control-item {
   display: inline-flex;
@@ -242,10 +279,6 @@ textarea {
 }
 .spacer {
   flex: 1;
-}
-.clock {
-  font-family: var(--mono);
-  color: var(--slack);
 }
 .on,
 .ok {
@@ -374,7 +407,6 @@ textarea {
 .tokens,
 .sub,
 .kv,
-.sessions,
 code,
 pre,
 input,
@@ -618,13 +650,8 @@ textarea {
 .signoff:not(.landing) .btn:disabled {
   background: var(--red-wash);
 }
-.sessions li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 20px;
-}
-.transcript pre,
-.detail pre.block {
+.detail pre.block,
+.markdown pre.block {
   padding: 8px 10px;
   background: var(--well);
   white-space: pre-wrap;
@@ -658,29 +685,94 @@ textarea {
 .loading-controls {
   display: contents;
 }
-.skeleton-control,
-.skeleton-row span {
+/* Placeholder lines sit in a text line box so geometry matches the content's rhythm. */
+.sk {
+  --sk: color-mix(in srgb, var(--rule) 70%, var(--well));
   display: block;
-  height: 24px;
-  background: var(--well);
+  height: 0.85em;
+  margin: 0.33em 0;
+  max-width: 100%;
+  background: var(--sk);
 }
-.skeleton-control {
-  width: 9ch;
+.sk-control {
+  display: inline-block;
+  margin: 0;
+  vertical-align: middle;
 }
-.skeleton-row {
+.sk-row {
   display: grid;
-  gap: 8px;
+  grid-template-columns: var(--idcol) minmax(0, 1fr);
+  column-gap: 16px;
   padding: 14px 0 16px;
   border-bottom: 1px solid var(--rule);
 }
-.skeleton-row .skeleton-identity {
-  width: 60%;
+.sk-row > :not(.sk-id) {
+  grid-column: 2;
 }
-.skeleton-row .skeleton-state {
-  width: 12%;
+.sk-titleline {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
 }
-.skeleton-row .skeleton-steps {
-  width: 80%;
+.sk-title {
+  height: 0.95em;
+}
+.sk-steps {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 2ch;
+  margin-top: 6px;
+}
+.sk-excerpt {
+  max-width: var(--measure);
+  margin-top: 4px;
+}
+.sk-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.sk-button {
+  width: 9ch;
+  height: calc(1.5em + 9px);
+  margin: 0;
+}
+.sk-button.ghost {
+  width: 7ch;
+  background: transparent;
+  border: 1.5px solid var(--sk);
+}
+.tab .count.pending {
+  display: inline-block;
+  width: 2ch;
+  height: 0.8em;
+  vertical-align: baseline;
+  background: color-mix(in srgb, var(--rule) 70%, var(--well));
+}
+.sk-sections {
+  display: grid;
+  gap: 18px;
+  margin: 24px 0 0 calc(var(--idcol) + 16px);
+  max-width: var(--measure);
+}
+.sk-heading {
+  height: 1em;
+  margin-bottom: 8px;
+}
+.sk-prose {
+  display: grid;
+  gap: 10px;
+}
+@media (max-width: 719px) {
+  .sk-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sk-row > :not(.sk-id) {
+    grid-column: 1;
+  }
+  .sk-sections {
+    margin-left: 0;
+  }
 }
 input.short {
   width: 24ch;
@@ -712,9 +804,11 @@ input.short {
   .account {
     max-width: 100%;
   }
-  .navline .spacer,
-  .clock {
+  .navline .spacer {
     display: none;
+  }
+  .controls-line {
+    padding-top: 8px;
   }
   .control-item {
     max-width: 100%;
@@ -786,10 +880,6 @@ input.short {
 }
 a.rowhead {
   text-decoration: none;
-}
-.crumbs {
-  margin-top: 20px;
-  font-size: 0.93em;
 }
 .build-page {
   display: grid;
@@ -942,22 +1032,6 @@ a.rowhead {
 .access-action {
   text-align: right;
 }
-.access-confirm {
-  background: var(--red-wash);
-  color: var(--red);
-  padding: 12px;
-  margin: 0 -12px;
-  border-bottom: 1px solid var(--red);
-  overflow-wrap: anywhere;
-}
-.access-confirm p {
-  margin: 0 0 12px;
-}
-.access-confirm .danger {
-  color: var(--ground);
-  background: var(--red);
-  border-color: var(--red);
-}
 .access-owner {
   display: flex;
   gap: 12px;
@@ -1029,4 +1103,164 @@ a.rowhead {
   margin: 0;
   padding: 0;
   min-width: 0;
+}
+
+.build-actions {
+  margin: 14px 0 0 calc(var(--idcol) + 16px);
+  gap: 8px 10px;
+}
+.btn.ghost {
+  border-color: transparent;
+  color: var(--slack);
+}
+.btn.ghost:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+.btn.danger.primary {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--ground);
+}
+.btn.danger.primary:hover:not(:disabled) {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+/* The one modal: confirmations. Square, outlined, on the page ground. */
+.confirm-dialog {
+  width: min(56ch, calc(100vw - 32px));
+  max-width: none;
+  margin: auto;
+  padding: 0;
+  border: 1.5px solid var(--slack);
+  background: var(--ground);
+  color: var(--ink);
+}
+.confirm-dialog select {
+  width: auto;
+  max-width: 100%;
+}
+.confirm-dialog[open]:not(:modal) {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+}
+.confirm-dialog::backdrop {
+  background: color-mix(in srgb, var(--ground) 72%, transparent);
+}
+.confirm-panel {
+  display: grid;
+  gap: 12px;
+  padding: 20px 22px;
+}
+.confirm-panel h2 {
+  font-size: 1.05em;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.confirm-body {
+  color: var(--slack);
+  display: grid;
+  gap: 10px;
+}
+.confirm-actions {
+  margin-top: 6px;
+  gap: 10px;
+}
+.ticket-rows .empty {
+  padding: 14px 0 16px;
+}
+.ticket-meta .label,
+.ticket-meta .ticket-ref {
+  font-family: var(--mono);
+}
+.ticket-excerpt {
+  margin: 4px 0 0 calc(var(--idcol) + 16px);
+  max-width: var(--measure);
+  color: var(--slack);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.ticket-page .status {
+  color: var(--slack);
+}
+.build-ticket,
+.ticket-page .ticket-body,
+.ticket-page .ticket-comments {
+  margin: 24px 0 0 calc(var(--idcol) + 16px);
+  min-width: 0;
+}
+.build-ticket h3,
+.ticket-comments h3 {
+  font-size: 1.05em;
+}
+.build-ticket .ticket-body {
+  margin-top: 4px;
+}
+.markdown {
+  display: grid;
+  gap: 10px;
+  max-width: var(--measure);
+  overflow-wrap: anywhere;
+}
+.markdown > * {
+  margin: 0;
+}
+.markdown > :is(h4, h5, h6) {
+  margin-top: 6px;
+  font-size: 1em;
+  font-weight: 700;
+}
+.markdown ul,
+.markdown ol {
+  display: grid;
+  gap: 4px;
+  padding-left: 2.5ch;
+}
+.markdown ul {
+  list-style: "- ";
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--rule);
+  color: var(--slack);
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+.markdown a {
+  color: var(--blue);
+}
+.ticket-comments .comment + .comment {
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+@media (max-width: 719px) {
+  .build-actions,
+  .ticket-excerpt,
+  .build-ticket,
+  .ticket-page .ticket-body,
+  .ticket-page .ticket-comments {
+    margin-left: 0;
+  }
+}
+.load-more {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  padding: 14px 0 0 calc(var(--idcol) + 16px);
+  font-size: 0.93em;
+}
+@media (max-width: 719px) {
+  .load-more {
+    padding-left: 0;
+  }
 }

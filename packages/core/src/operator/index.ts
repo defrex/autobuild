@@ -17,6 +17,7 @@ export {
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
   ticketMoveRequestSchema,
+  ticketPageSchema,
   ticketUpdateRequestSchema,
 } from './protocol'
 export type {
@@ -83,6 +84,7 @@ export type {
   OperatorTicketBuild,
   OperatorTicketContext,
   OperatorTicketDetail,
+  OperatorTicketPage,
   OperatorTicketQueue,
 } from './tickets'
 export {

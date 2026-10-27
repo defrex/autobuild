@@ -47,6 +47,16 @@ export interface OperatorTicketQueue {
   /** Effective repository lifecycle names; clients must not invent provider states. */
   triageState: string
   readyState: string
+  doneState: string
+  /** Tickets matching the criteria before `page` sliced them. */
+  total: number
+}
+
+/** A window over a listing. `newest` reverses the source's oldest-first order. */
+export interface OperatorTicketPage {
+  limit: number
+  offset?: number
+  order?: 'oldest' | 'newest'
 }
 
 export interface OperatorTicketBuild {
@@ -91,9 +101,11 @@ export async function listOperatorTickets(opts: {
   backend: OperatorTicketBackend
   state?: string
   labels?: string[]
+  page?: OperatorTicketPage
 }): Promise<OperatorTicketQueue> {
   const { context, source } = await openOperatorTickets(opts)
-  const triageState = ticketLifecycle(context.tickets).triage
+  const lifecycle = ticketLifecycle(context.tickets)
+  const triageState = lifecycle.triage
   const readyState = context.tickets.readyState
   // The operator surface is a grooming queue. Unlike the CLI's ticket list,
   // labels narrow the default state instead of replacing its lifecycle gate.
@@ -105,13 +117,17 @@ export async function listOperatorTickets(opts: {
     source.listReady(criteria),
     opts.backend.statesFor(context, source),
   ])
+  const ordered = opts.page?.order === 'newest' ? [...listing.tickets].reverse() : listing.tickets
+  const offset = opts.page?.offset ?? 0
   return {
     states,
-    tickets: listing.tickets,
+    tickets: opts.page ? ordered.slice(offset, offset + opts.page.limit) : ordered,
     diagnostics: listing.diagnostics,
     criteria,
     triageState,
     readyState,
+    doneState: lifecycle.done,
+    total: listing.tickets.length,
   }
 }
 

@@ -1,6 +1,7 @@
 'use client'
 import { Fragment, useEffect, useState } from 'react'
 import { AccessFrame, type FrameProps } from '../access/Frame'
+import { ConfirmDialog } from '../dashboard/ConfirmDialog'
 import type { Organization, Snapshot } from '../access/api'
 export interface MembersProps extends FrameProps {
   organizations: Organization[]
@@ -115,37 +116,6 @@ export function MembersView(props: MembersProps) {
           <div className="access-rows">
             {selected.members.map((member) => (
               <Fragment key={member.email}>
-                {confirmation === member.email && manage && (
-                  <section
-                    className="access-confirm"
-                    aria-label={`Confirm removing ${member.email}`}
-                  >
-                    <p>
-                      Remove {member.name ?? member.email}? They lose {org.name}’s grant to{' '}
-                      {selected.projects.length}{' '}
-                      {selected.projects.length === 1 ? 'project' : 'projects'} on their next
-                      request. Other organization grants and super-user access still apply.
-                    </p>
-                    <div className="access-actions">
-                      <button
-                        type="button"
-                        className="btn danger"
-                        disabled={pending}
-                        onClick={props.onConfirm}
-                      >
-                        Remove {member.name ?? member.email}
-                      </button>
-                      <button
-                        type="button"
-                        className="word"
-                        disabled={pending}
-                        onClick={props.onCancel}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </section>
-                )}
                 <div className="access-row member-row">
                   <div>
                     {member.name && <strong>{member.name} </strong>}
@@ -174,6 +144,26 @@ export function MembersView(props: MembersProps) {
               </Fragment>
             ))}
           </div>
+          {(() => {
+            const member = selected.members.find((m) => m.email === confirmation)
+            const name = member?.name ?? member?.email ?? ''
+            return (
+              <ConfirmDialog
+                open={member !== undefined && manage}
+                title={`Remove ${name}?`}
+                confirmLabel={`Remove ${name}`}
+                pending={pending}
+                onConfirm={() => props.onConfirm?.()}
+                onCancel={() => props.onCancel?.()}
+              >
+                <p>
+                  They lose {org.name}’s grant to {selected.projects.length}{' '}
+                  {selected.projects.length === 1 ? 'project' : 'projects'} on their next request.
+                  Other organization grants and super-user access still apply.
+                </p>
+              </ConfirmDialog>
+            )
+          })()}
           {isSuperUser && !forbidden && (
             <label className="access-owner">
               Owner{' '}

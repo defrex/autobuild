@@ -37,4 +37,7 @@ export type {
   BuildListScope,
   OperatorBuildView,
   OperatorDashboardSnapshot,
+  OperatorTicketDetail,
+  OperatorTicketPage,
+  OperatorTicketQueue,
 } from '@defrex/autobuild/operator'

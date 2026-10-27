@@ -7,13 +7,13 @@ related_targets: ["app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/s
 
 # Operator web app
 
-Scope: the whole operator web app (shell, Builds, sign-in, connect, and the organization pages: Members, Organizations, Projects). Mode: Operate.
+Scope: the whole operator web app (shell and tabs, Active builds, the Triage, Queue and Done ticket lists, build and ticket pages, sign-in, connect, and the organization pages: Members, Organizations, Projects). Mode: Operate.
 
 Audience and job: anyone who builds (engineers, product managers, designers), glancing from a second monitor or a phone, often with teammates in the same organization. On Builds, one question: does anything need me? Signals in priority order: BLOCKED on a human, FAILED or unhealthy, PR READY or MERGED. Then act on one row, answer an escalation, or inspect a trail. The organization pages are visited rarely and read, not glanced: add a person by email, see who is PENDING, know who can reach which projects.
 
 Content: live operator API data only. Loading shows a diagnostic, never zeros. Vocabulary is binding and matches SPEC.md and the terminal dashboard; a newcomer meeting a pipeline term is told what it means.
 
-Constraints: keep the Builds API client, view-model, parity projection, event vocabulary, and control names. Light and dark grounds are both first-class, following the system preference with an override in the account menu. Colors as tokens; every state color passes contrast on both grounds. Organization pages are separate single-column pages reached from the account menu, never panelled into Builds. Destructive steps confirm inline, never in a modal. Page numbers and the app's title remain undecided.
+Constraints: keep the Builds API client, view-model, parity projection, event vocabulary, and control names. Light and dark grounds are both first-class, following the system preference with an override in the account menu. Colors as tokens; every state color passes contrast on both grounds. Organization pages are separate single-column pages reached from the account menu, never panelled into Builds. Destructive steps confirm in the one confirmation dialog, never by a single press. Page numbers and the app's title remain undecided.
 
 Memorable moment: a calm page where the only color is state, so a red word is found from across the room.
 
@@ -25,7 +25,7 @@ OWN-WORLD: Calm ground. Hues only as state: green done or running, amber in prog
 
 STORY: Glance, find the red word, act on one row, leave. Visit Members rarely; leave sure who can see what.
 
-FIRST VIEWPORT: Builds: project selector left, account menu right; control line; ruled rows of blue id, sans ticket title, mono slug, status word right, steps beneath; a blocked row shows its red question over an ANSWER sign-off box.
+FIRST VIEWPORT: Active: project selector left, account menu right; tab line with Triage, Queue, Active, Done left and repository controls right; ruled rows of blue id, sans ticket title, mono slug, status word right, steps beneath; a blocked row shows its red question over an ANSWER sign-off box.
 
 FORM: user-steered hybrid of grounded candidate 5 and pick 1 on the terminal palette; seed key c4eff9b1.
 

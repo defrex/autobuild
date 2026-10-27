@@ -136,47 +136,49 @@ describe('web operator gateway', () => {
     ).toBe(404)
   })
 
-  test('refuses every former browser ticket route without delegation', async () => {
+  test('delegates ticket reads and moves and refuses every other ticket write', async () => {
+    const delegated: string[] = []
     const gateway = createWebGateway({
       access: testAccess(env, testProjects(['https://github.com/owner/repo'])),
       projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
-      delegate: async () => {
-        throw new Error('must not delegate')
+      delegate: async (request) => {
+        const url = new URL(request.url)
+        delegated.push(`${request.method} ${url.pathname}${url.search}`)
+        return Response.json({})
       },
     })
+    const base = 'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo'
     const writes = {
       headers: { origin: 'https://operator.example', 'content-type': 'application/json' },
       body: '{}',
     }
+    for (const path of ['tickets?state=ready&limit=25', 'tickets/AUT-1', 'tickets/states']) {
+      expect((await gateway.fetch(new Request(`${base}/${path}`))).status, path).toBe(200)
+    }
+    expect(
+      (
+        await gateway.fetch(
+          new Request(`${base}/tickets/AUT-1/move`, { method: 'POST', ...writes }),
+        )
+      ).status,
+    ).toBe(200)
+    const operator = '/operator/v1/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo'
+    expect(delegated).toEqual([
+      `GET ${operator}/tickets?state=ready&limit=25`,
+      `GET ${operator}/tickets/AUT-1`,
+      `GET ${operator}/tickets/states`,
+      `POST ${operator}/tickets/AUT-1/move`,
+    ])
+    delegated.length = 0
+
     const requests = [
-      new Request(
-        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets?state=Ready',
-      ),
-      new Request(
-        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets',
-        {
-          method: 'POST',
-          ...writes,
-        },
-      ),
-      new Request(
-        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets/AUT-1',
-      ),
-      new Request(
-        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets/AUT-1',
-        {
-          method: 'PATCH',
-          ...writes,
-        },
-      ),
-      ...['move', 'block', 'unblock'].map(
-        (action) =>
-          new Request(
-            `https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets/AUT-1/${action}`,
-            { method: 'POST', ...writes },
-          ),
+      new Request(`${base}/tickets`, { method: 'POST', ...writes }),
+      new Request(`${base}/tickets/states`, { method: 'POST', ...writes }),
+      new Request(`${base}/tickets/AUT-1`, { method: 'PATCH', ...writes }),
+      ...['block', 'unblock'].map(
+        (action) => new Request(`${base}/tickets/AUT-1/${action}`, { method: 'POST', ...writes }),
       ),
     ]
 
@@ -185,6 +187,7 @@ describe('web operator gateway', () => {
       expect(response.status, `${request.method} ${request.url}`).toBe(404)
       expect(await response.json()).toEqual({ kind: 'not-found', error: 'unknown web route' })
     }
+    expect(delegated).toEqual([])
   })
 
   test('valid write routes still require application/json', async () => {

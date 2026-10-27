@@ -58,8 +58,10 @@ again or edit product code. Parity means shared vocabulary and facts, not pixels
    explanation, full-bleed phone answers and full-width primary controls,
    amber merge consent on ground, no clipping, no fake loading facts, and
    visible focus/pending/disabled/error states. Static captures prove
-   presentation, not hydrated theme interaction. Confirm no surface tab words
-   in the signed-in control line and retain the multi-repository selector.
+   presentation, not hydrated theme interaction. Confirm the signed-in tab line
+   leads with Triage, Queue, Active and Done, marks the current tab, keeps the
+   repository controls at its right, and retains the multi-repository selector.
+   The abort frame shows the confirmation dialog over the build page.
    In wide/narrow and dimmed handoff frames, both runtimes, mode and deadline
    wrap in flow; `(draining)` remains amber even on the unfocused row.
    The verify-stages wide and narrow frames in both grounds must show both

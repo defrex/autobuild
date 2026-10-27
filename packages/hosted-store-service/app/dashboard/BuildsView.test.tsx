@@ -64,7 +64,7 @@ function renderBuildPage(build: DashboardBuild, slug = build.slug): string {
       onSubmitAnswerStep={noop}
       onCancelAnswerStep={noop}
       onAnswer={noop}
-      onTranscript={noop}
+      ticket={{}}
     />,
   )
 }
@@ -217,7 +217,8 @@ test('blocked rows show the question and link to the page that answers it', () =
   )
   expect(page.match(/class="composer"/g)).toHaveLength(1)
   expect(page).toContain('class="btn primary"')
-  expect(page).toContain('href="/?repo=owner%2Frepo"')
+  // The shell's Active tab is the way back; the page carries no breadcrumb.
+  expect(page).not.toContain('class="crumbs"')
 })
 
 test('list titles link to the build page and nothing expands in place', () => {
@@ -229,10 +230,10 @@ test('list titles link to the build page and nothing expands in place', () => {
   expect(html).not.toContain('aria-expanded')
 })
 
-test('a build page for a slug no longer active says so with a way back', () => {
+test('a build page for a slug no longer active says so', () => {
   const html = renderBuildPage(pinnedBuild({}), 'gone')
   expect(html).toContain('gone is not an active build.')
-  expect(html).toContain('href="/?repo=owner%2Frepo"')
+  expect(html).not.toContain('class="crumbs"')
   expect(html).not.toContain('class="detail')
 })
 

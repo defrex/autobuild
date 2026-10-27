@@ -104,6 +104,31 @@ describe('operator ticket HTTP routes', () => {
     ).toEqual([blocker.ticket.ref.id])
   })
 
+  test('pages a listing newest or oldest first and counts every match', async () => {
+    const source = new FakeTicketSource([], { createState: 'Backlog', doneState: 'Done' })
+    const client = await setup(source)
+    for (const title of ['one', 'two', 'three', 'four', 'five'])
+      await client.createTicket(repo, { title, body: 'body' })
+    const titles = (queue: Awaited<ReturnType<typeof client.listTickets>>) =>
+      queue.tickets.map((ticket) => ticket.title)
+
+    const first = await client.listTickets(repo, { page: { limit: 2, order: 'newest' } })
+    expect(titles(first)).toEqual(['five', 'four'])
+    expect(first.total).toBe(5)
+    expect(
+      titles(await client.listTickets(repo, { page: { limit: 2, offset: 4, order: 'newest' } })),
+    ).toEqual(['one'])
+    expect(titles(await client.listTickets(repo, { page: { limit: 2, offset: 1 } }))).toEqual([
+      'two',
+      'three',
+    ])
+    expect((await client.listTickets(repo)).tickets).toHaveLength(5)
+    const invalid = await client
+      .listTickets(repo, { page: { limit: 500 } })
+      .catch((error: unknown) => error)
+    expect(invalid).toBeInstanceOf(OperatorApiError)
+  })
+
   test('maps missing tickets and exact backend refusals', async () => {
     const source = new FakeTicketSource([
       {

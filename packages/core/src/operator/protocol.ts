@@ -79,6 +79,12 @@ export const ticketUpdateRequestSchema = z
       value.target !== undefined,
     'update must name at least one field',
   )
+/** A window over a ticket listing; see `OperatorTicketPage`. */
+export const ticketPageSchema = z.strictObject({
+  limit: z.number().int().min(0).max(200),
+  offset: z.number().int().min(0).optional(),
+  order: z.enum(['oldest', 'newest']).optional(),
+})
 export const ticketMoveRequestSchema = z.strictObject({
   expectedRevision: expectedRevisionSchema,
   state: z.string().min(1),

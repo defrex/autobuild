@@ -13,6 +13,7 @@ export function AccountMenu({
 }) {
   return (
     <Menu
+      id="account"
       className="account"
       initiallyOpen={menuOpen}
       label={<span className="identity">{identity}</span>}

@@ -4,7 +4,6 @@ import { ACCESS_SCENARIOS, accessFixture } from './access-fixtures'
 import { rollbackCapture, ROLLBACK_AT } from '../../../tools/rollback-capture'
 import { handoffCapture } from '../../../tools/handoff-capture'
 import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
-import { nativeSessionCapture } from '../../../tools/native-session-capture'
 import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
 import ConnectionPage from '../../hosted-store-service/app/connect/page'
 /**
@@ -33,10 +32,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type {
-  DashboardModel,
-  TranscriptPresentation,
-} from '@defrex/autobuild/operator-presentation'
+import type { DashboardModel } from '@defrex/autobuild/operator-presentation'
 import { autoMergeConsentReason } from '../../core/src/cli/dashboard/model'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -50,6 +46,14 @@ import {
 } from '../../hosted-store-service/app/dashboard/BuildsView'
 import { LoadingControls } from '../../hosted-store-service/app/dashboard/frame'
 import { OperatorShell } from '../../hosted-store-service/app/dashboard/Shell'
+import {
+  type Ticket,
+  TicketListView,
+  TicketPageView,
+  ticketMoves,
+  ViewTabs,
+} from '../../hosted-store-service/app/dashboard/tickets'
+import type { ViewTab } from '../../hosted-store-service/app/dashboard/project-selection'
 import { SignIn } from '../../hosted-store-service/app/sign-in/SignIn'
 import { Consent } from '../../hosted-store-service/app/oauth/consent/Consent'
 import ConsentPage from '../../hosted-store-service/app/oauth/consent/page'
@@ -61,7 +65,6 @@ const ALTERNATE_FIXTURE_REPO = 'example/alternate'
 const LONG_FIXTURE_REPO = 'example/operator-dashboard-capture-fixture-repository'
 const FIXTURE_IDENTITY = 'operator@example.com'
 /** RENDER_NOW as the header shows it; fixed so the clock never depends on the host zone. */
-const FIXTURE_CLOCK = '12:10:00'
 /** Consent-page fixtures: a registered client and its id, plus the authorization
  * code and scopes the consent flow carries. The capture stubs `lookupClientName`,
  * so no database is needed to render either consent path. */
@@ -187,18 +190,6 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     width: 390,
     height: 3200,
     requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
-  },
-  {
-    id: 'builds-native-sessions-wide',
-    width: 1440,
-    height: 2200,
-    requires: ['suspended', 'resumed'],
-  },
-  {
-    id: 'builds-native-sessions-narrow',
-    width: 390,
-    height: 2600,
-    requires: ['suspended', 'resumed'],
   },
   {
     id: 'builds-forge-readiness-wide',
@@ -399,14 +390,14 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-paused-wide',
     width: 1440,
     height: 1200,
-    requires: ['PAUSED', 'Actions', 'ABORT', 'RESUME'],
+    requires: ['PAUSED', 'ABORT', 'RESUME'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
     id: 'builds-auto-merge-on-wide',
     width: 1440,
     height: 1200,
-    requires: ['Actions', 'ABORT', 'RESUME'],
+    requires: ['ABORT', 'RESUME'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
@@ -427,7 +418,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-selected-narrow',
     width: 390,
     height: 1700,
-    requires: ['BLOCKED', 'Actions', 'ABORT', 'RESUME'],
+    requires: ['BLOCKED', 'ABORT', 'RESUME'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
   },
   {
@@ -440,11 +431,12 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       'The build stopped to ask a person.',
       'Pipeline',
       'Answer escalation',
-      'Sessions',
-      'Transcript',
+      'Ticket',
+      'Acceptance criteria',
       'ABORT',
       'RESUME',
     ],
+    forbids: ['Sessions', '← builds'],
   },
   {
     id: 'builds-mixed-detail-narrow',
@@ -474,8 +466,29 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'builds-mixed-abort-wide',
     width: 1440,
     height: 1200,
-    requires: ['Enter confirms, Esc cancels', 'CONFIRM ABORT', 'CANCEL'],
+    requires: ['The live session stops', 'Abort build', 'Cancel'],
   },
+  ...['wide', 'narrow'].flatMap((size) => [
+    {
+      id: `tickets-triage-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 1400,
+      requires: ['Triage', 'Retry budget for verify steps', 'depends on', 'blocked by', 'proposal'],
+    },
+    {
+      id: `tickets-empty-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 900,
+      requires: ['Nothing ready.'],
+    },
+    {
+      id: `ticket-page-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 1600,
+      requires: ['ENQUEUE', 'ICE', 'Acceptance criteria', 'TRIAGE'],
+      forbids: ['DEQUEUE'],
+    },
+  ]),
   {
     id: 'builds-longrepo-narrow',
     width: 390,
@@ -572,17 +585,6 @@ export interface RenderAssets {
 
 const noop = () => {}
 
-const FIXTURE_TRANSCRIPT: TranscriptPresentation = {
-  kind: 'turns',
-  turns: [
-    {
-      prompt: 'Plan the scripted dashboard scenario.',
-      text: 'Agent: naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦\n\nThe plan needs a decision the spec does not make. Escalating.',
-      usage: { inputTokens: 1842, outputTokens: 311, turns: 2 },
-    },
-  ],
-}
-
 function shell(
   children: ReactNode,
   opts: {
@@ -592,6 +594,7 @@ function shell(
     error?: string
     menuOpen?: boolean
     projectMenuOpen?: boolean
+    tab?: ViewTab
   } = {},
 ) {
   const repo = opts.repo ?? FIXTURE_REPO
@@ -600,12 +603,25 @@ function shell(
       repo={repo}
       repositories={opts.repositories ?? [repo]}
       identity={FIXTURE_IDENTITY}
-      clock={opts.model ? FIXTURE_CLOCK : undefined}
       error={opts.error}
       menuOpen={opts.menuOpen}
       projectMenuOpen={opts.projectMenuOpen}
       onRepo={noop}
       onSignOut={noop}
+      tabs={
+        <ViewTabs
+          repo={repo}
+          current={opts.tab ?? 'active'}
+          page
+          counts={{
+            triage: opts.model ? FIXTURE_TICKETS.length : undefined,
+            queue: opts.model ? 0 : undefined,
+            active: opts.model
+              ? `${opts.model.active.current}/${opts.model.active.limit}`
+              : undefined,
+          }}
+        />
+      }
       controls={
         opts.model ? (
           <DispatcherControls model={opts.model} onSetting={noop} onHarvest={noop} onBulk={noop} />
@@ -635,6 +651,73 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
   )
 }
 
+const FIXTURE_LIFECYCLE = { triage: 'triage', ready: 'ready', done: 'done' }
+
+function fixtureTicket(
+  id: string,
+  title: string,
+  body: string,
+  extra: Partial<Ticket> = {},
+): Ticket {
+  return {
+    ref: { source: 'database', id, title },
+    revision: '1',
+    kind: 'work',
+    title,
+    body,
+    state: 'triage',
+    resolved: false,
+    labels: [],
+    ...extra,
+  }
+}
+
+/** A ticket body with the structure real specs carry: prose, headings, lists, code. */
+const FIXTURE_TICKET = fixtureTicket(
+  'CAP-PLAN',
+  'Plan blocked dashboard',
+  [
+    '# Plan blocked dashboard',
+    '',
+    'Exercise a build that stops in plan and asks a person for an answer, so the dashboard shows the question where it is answered.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- The row shows the red question under the build title.',
+    '- The build page shows the full question and the `answer` form.',
+    '',
+    '```ts',
+    "await ab.escalate('Which behavior should this build use?')",
+    '```',
+  ].join('\n'),
+)
+const FIXTURE_TICKETS: Ticket[] = [
+  fixtureTicket(
+    'CAP-12',
+    'Retry budget for verify steps',
+    'Verify steps retry forever on infrastructure errors. Give them a budget and escalate when it runs out.',
+    { labels: ['autobuild:proposal'], blockedBy: ['CAP-9'] },
+  ),
+  fixtureTicket(
+    'CAP-11',
+    'Document webhook retry behaviour',
+    'Users ask what happens when a webhook delivery fails. Write it down in the forge docs.',
+    { blockedBy: ['CAP-10'], blockersResolved: false },
+  ),
+  FIXTURE_TICKET,
+]
+
+function ticketList(tab: 'triage' | 'queue', tickets: Ticket[]) {
+  return (
+    <TicketListView
+      repo={FIXTURE_REPO}
+      tab={tab}
+      page={{ tickets, total: tickets.length, requested: 25, loadMore: noop }}
+      onOpenTicket={noop}
+    />
+  )
+}
+
 /** A build's own page, as the operator reaches it from its row. */
 function buildPage(model: DashboardModel, slug: string, extra: Partial<BuildPageViewProps> = {}) {
   return (
@@ -652,7 +735,7 @@ function buildPage(model: DashboardModel, slug: string, extra: Partial<BuildPage
       onSubmitAnswerStep={noop}
       onCancelAnswerStep={noop}
       onAnswer={noop}
-      onTranscript={noop}
+      ticket={{ detail: { ticket: FIXTURE_TICKET, blockers: [], build: null } }}
       {...extra}
     />
   )
@@ -888,17 +971,25 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       return shell(buildPage(models.mixed, 'complete-dashboard-evidence'), {
         model: models.mixed,
       })
-    case 'builds-native-sessions-wide':
-    case 'builds-native-sessions-narrow': {
-      const slug = blockedSlug(models.mixed)
-      const model = changedBuildModel(models.mixed, slug, { sessions: nativeSessionCapture() })
-      return shell(buildPage(model, slug), { model })
-    }
     case 'builds-mixed-detail-wide':
     case 'builds-mixed-detail-narrow':
+      return shell(buildPage(models.mixed, blockedSlug(models.mixed)), { model: models.mixed })
+    case 'tickets-triage-wide':
+    case 'tickets-triage-narrow':
+      return shell(ticketList('triage', FIXTURE_TICKETS), { model: models.mixed, tab: 'triage' })
+    case 'tickets-empty-wide':
+    case 'tickets-empty-narrow':
+      return shell(ticketList('queue', []), { model: models.mixed, tab: 'queue' })
+    case 'ticket-page-wide':
+    case 'ticket-page-narrow':
       return shell(
-        buildPage(models.mixed, blockedSlug(models.mixed), { transcript: FIXTURE_TRANSCRIPT }),
-        { model: models.mixed },
+        <TicketPageView
+          repo={FIXTURE_REPO}
+          id={FIXTURE_TICKET.ref.id}
+          detail={{ ticket: FIXTURE_TICKET, blockers: [], build: null }}
+          moves={ticketMoves('triage', FIXTURE_LIFECYCLE, { triage: 2, ready: 0, icebox: 0 })}
+        />,
+        { model: models.mixed, tab: 'triage' },
       )
     case 'builds-mixed-answer-wide':
     case 'builds-mixed-answer-narrow': {
@@ -1257,6 +1348,7 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     '- [ ] Title-first rows retain ticket, slug, status, all facts and steps. Current teal, done green, provisional amber, pending slack; timing is quiet.',
     '- [ ] Escalations show the complete red question, explanation, one answer composer, and full-bleed phone treatment with full-width primary answer.',
     '- [ ] Merge consent is amber on ground with Merge/Hold. No optimistic success or unconfirmed abort.',
+    '- [ ] The tab line leads with Triage, Queue, Active and Done and marks the current tab; abort confirms in the square confirmation dialog with a red primary and ghost Cancel.',
     '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
     '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',
     '',

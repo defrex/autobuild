@@ -11,9 +11,9 @@ for (const scenario of ACCESS_SCENARIOS)
       expect(html).not.toContain('Add member')
     }
     if (scenario === 'members-confirm' || scenario === 'projects-confirm') {
-      expect(html).toContain('access-confirm')
+      expect(html).toContain('<dialog class="confirm-dialog" open=""')
       expect(html).toContain('Cancel')
-      expect(html).not.toContain('dialog')
+      expect(html).not.toContain('access-confirm')
     }
     if (scenario === 'orgs-empty') expect(html).toContain('No organizations yet.')
     if (scenario === 'connect-multiple') expect(html).toContain('type="radio"')

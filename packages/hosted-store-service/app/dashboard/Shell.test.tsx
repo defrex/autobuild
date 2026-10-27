@@ -63,19 +63,31 @@ test('shell turns the masthead project into a picker when there is a choice', ()
   expect(open).toContain('>example/alternate</button>')
 })
 
-test('shell composes page controls and the clock in one named landmark', () => {
-  const html = renderShell(['example/repository', 'example/alternate'])
-  const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
-
-  expect(nav).toBeDefined()
-  expect(html.match(/aria-label="Operator controls"/g)).toHaveLength(1)
-  expect(nav).not.toContain('example/alternate')
-  expect(nav!.indexOf('data-testid="dispatcher-controls"')).toBeLessThan(
-    nav!.indexOf('class="clock"'),
+test('shell leads the line with the view tabs and right-aligns the named controls', () => {
+  const html = renderToStaticMarkup(
+    <OperatorShell
+      repo="example/repository"
+      repositories={['example/repository', 'example/alternate']}
+      identity="operator@example.com"
+      onRepo={noop}
+      onSignOut={noop}
+      tabs={<nav data-testid="view-tabs">Triage Queue Active Done</nav>}
+      controls={<span data-testid="dispatcher-controls">intake ON</span>}
+    >
+      <p>build content</p>
+    </OperatorShell>,
   )
-  expect(nav).toContain('--:--:--')
-  expect(nav).not.toContain('operator@example.com')
-  expect(nav).not.toContain('Sign out')
+  const line = html.match(/<div class="line navline">[\s\S]*?<\/fieldset><\/div>/)?.[0]
+
+  expect(line).toBeDefined()
+  expect(html.match(/aria-label="Operator controls"/g)).toHaveLength(1)
+  expect(line!.indexOf('data-testid="view-tabs"')).toBeLessThan(line!.indexOf('class="spacer"'))
+  expect(line!.indexOf('class="spacer"')).toBeLessThan(
+    line!.indexOf('data-testid="dispatcher-controls"'),
+  )
+  expect(line).not.toContain('example/alternate')
+  expect(line).not.toContain('operator@example.com')
+  expect(html).not.toContain('class="clock"')
 })
 
 test('shell places the account menu in the masthead, closed at rest', () => {
@@ -89,31 +101,6 @@ test('shell places the account menu in the masthead, closed at rest', () => {
   expect(header).toContain('<span class="identity">operator@example.com</span>')
   expect(header).not.toContain('Sign out')
   expect(header).not.toContain('class="clock"')
-})
-
-test('pending renders the clock slack state and rest does not', () => {
-  const render = (pending: boolean): string =>
-    renderToStaticMarkup(
-      <OperatorShell
-        repo="example/repository"
-        repositories={['example/repository']}
-        identity="operator@example.com"
-        pending={pending}
-        onRepo={noop}
-        onSignOut={noop}
-        controls={<span data-testid="dispatcher-controls">queue 0 intake ON</span>}
-      >
-        <p>build content</p>
-      </OperatorShell>,
-    )
-
-  const pendingClock = render(true).match(/<span class="clock"[^>]*>/)?.[0]
-  expect(pendingClock).toBeDefined()
-  expect(pendingClock).toContain('data-pending')
-
-  const restClock = render(false).match(/<span class="clock"[^>]*>/)?.[0]
-  expect(restClock).toBeDefined()
-  expect(restClock).not.toContain('data-pending')
 })
 
 test('account menu presents all theme choices with selected semantics', () => {

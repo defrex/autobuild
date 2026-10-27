@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-24T22:04:42.625398+00:00",
+  "generatedAt": "2026-10-27T18:36:57.531876+00:00",
   "title": "Design System: Autobuild ANSI",
   "extensions": {
     "colorMeta": {
@@ -382,6 +382,14 @@
       "refersTo": "button"
     },
     {
+      "name": "Ghost button",
+      "kind": "button",
+      "description": "A button box without a visible outline, for the destructive or deferring action beside a primary one.",
+      "html": "<button class=\"ds-ghost\">ABORT</button>",
+      "css": ".ds-ghost{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;border:1.5px solid transparent;border-radius:0;padding:3px 12px;font-weight:600;background:transparent;color:var(--slack,#5f6571)}.ds-ghost:hover{color:var(--ink,#1a1d24);text-decoration:underline;text-underline-offset:.25em}.ds-ghost:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}",
+      "refersTo": "button"
+    },
+    {
       "name": "Word action",
       "kind": "button",
       "description": "Text action without a filled container.",
@@ -397,11 +405,11 @@
       "refersTo": "field"
     },
     {
-      "name": "Control navigation",
+      "name": "Tab line",
       "kind": "nav",
-      "description": "Wrapping facts and controls on a structural rule.",
-      "html": "<nav class=\"ds-nav\" aria-label=\"Operator controls\"><span>active <b>2/4</b></span><span>intake <b>on</b></span></nav>",
-      "css": ".ds-nav{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;display:flex;flex-wrap:wrap;gap:4px 20px;padding:10px 0;border-bottom:1px solid var(--rule,#dfe2e8);color:var(--ink,#1a1d24)}.ds-nav b{font-family:var(--mono,\"JetBrains Mono\",monospace)}"
+      "description": "View tabs left with counts, repository controls right, on one structural rule; the current tab carries an ink bar.",
+      "html": "<div class=\"ds-tabline\"><nav aria-label=\"Views\"><a>Triage <b>30</b></a><a aria-current=\"page\">Active <b>5/6</b></a><a>Done</a></nav><span>intake <b>ON</b></span></div>",
+      "css": ".ds-tabline{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:0 20px;border-bottom:1px solid var(--rule,#dfe2e8);color:var(--ink,#1a1d24)}.ds-tabline nav{display:flex;gap:24px}.ds-tabline a{padding:10px 0 8px;margin-bottom:-1px;border-bottom:2px solid transparent;color:var(--slack,#5f6571);font-weight:600}.ds-tabline a[aria-current]{color:var(--ink,#1a1d24);border-bottom-color:var(--ink,#1a1d24)}.ds-tabline b{font-family:var(--mono,\"JetBrains Mono\",monospace);font-weight:400}"
     },
     {
       "name": "Escalation sign-off",
@@ -425,11 +433,11 @@
       "css": ".ds-roster{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;color:var(--ink,#1a1d24);display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.5fr) 6rem;gap:16px;padding:10px 0;border-top:1px solid var(--rule,#dfe2e8);border-bottom:1px solid var(--rule,#dfe2e8);overflow-wrap:anywhere}.ds-roster-machine,.ds-roster-pending{font-family:var(--mono,\"JetBrains Mono\",monospace);font-size:.93em}.ds-roster-pending{color:var(--amber,#b35c00)}@media(max-width:720px){.ds-roster{grid-template-columns:minmax(0,1fr) auto;gap:8px 12px}.ds-roster-machine{grid-column:1/-1}}"
     },
     {
-      "name": "Grant removal confirmation",
+      "name": "Confirmation dialog",
       "kind": "custom",
-      "description": "Inline red-wash decision names the revoked grant and keeps removal and cancellation adjacent.",
-      "html": "<section class=\"ds-grant\"><p>Remove operator@example.com from this organization?</p><button class=\"ds-grant-remove\">Remove member</button> <button class=\"ds-grant-cancel\">Cancel</button></section>",
-      "css": ".ds-grant{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;background:var(--red-wash,#fef2f1);color:var(--red,#d32b33);padding:12px;border-bottom:1px solid var(--red,#d32b33);overflow-wrap:anywhere}.ds-grant p{margin:0 0 12px}.ds-grant button{font:inherit;font-weight:600;border:1.5px solid var(--ink,#1a1d24);border-radius:0;padding:3px 12px;background:transparent;color:var(--ink,#1a1d24)}.ds-grant .ds-grant-remove{color:var(--ground,#fbfbfc);background:var(--red,#d32b33);border-color:var(--red,#d32b33)}.ds-grant button:hover{border-color:var(--teal,#007f8a);color:var(--teal,#007f8a)}.ds-grant .ds-grant-remove:hover{background:var(--teal,#007f8a);color:var(--ground,#fbfbfc)}.ds-grant button:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}"
+      "description": "The one modal: names what a destructive action takes away, red primary confirm then ghost Cancel, over a translucent ground backdrop.",
+      "html": "<div class=\"ds-confirm\"><strong>Remove operator@example.com?</strong><p>They lose this organization\u2019s grant on their next request.</p><button class=\"ds-confirm-go\">Remove</button> <button class=\"ds-confirm-cancel\">Cancel</button></div>",
+      "css": ".ds-confirm{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;max-width:56ch;padding:20px 22px;border:1.5px solid var(--slack,#5f6571);background:var(--ground,#fbfbfc);color:var(--ink,#1a1d24)}.ds-confirm p{margin:12px 0;color:var(--slack,#5f6571)}.ds-confirm button{font:inherit;font-weight:600;border:1.5px solid transparent;border-radius:0;padding:3px 12px;background:transparent;color:var(--slack,#5f6571)}.ds-confirm .ds-confirm-go{color:var(--ground,#fbfbfc);background:var(--red,#d32b33);border-color:var(--red,#d32b33)}.ds-confirm button:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}"
     }
   ],
   "narrative": {
@@ -438,7 +446,7 @@
     "keyCharacteristics": [
       "Two calm grounds with state-specific inks.",
       "Human language in sans; machine values in mono.",
-      "Title-led ruled rows and inline decisions.",
+      "Title-led ruled rows, inline answers and one confirmation dialog.",
       "Square controls and document flow."
     ],
     "rules": [
@@ -469,7 +477,7 @@
       },
       {
         "name": "The Flowing Document Rule",
-        "body": "The browser document owns scrolling. Masthead, controls, build rows and build pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. The account menu is the small anchored overlay exception, full-width on phones.",
+        "body": "The browser document owns scrolling. Masthead, tabs, controls, rows and pages remain in ordinary flow at natural height, without pinned content or nested scrolling panels. Long lists load their next page as the reader nears the end. The account and project menus are the small anchored overlay exceptions, full-width on phones, and the confirmation dialog is the one modal.",
         "section": "layout"
       },
       {
@@ -487,12 +495,12 @@
       "Do choose the palette for the active ground and preserve text contrast of at least 4.5:1.",
       "Do explain what an escalation means and what answering does.",
       "Do keep state words and step marks beside their color.",
-      "Do keep destructive confirmation inline and show acknowledged durable state."
+      "Do confirm destructive actions in the confirmation dialog and show acknowledged durable state."
     ],
     "donts": [
       "Don\u2019t place amber text on the inset well or red wash; use the plain ground.",
       "Don\u2019t add shadows, gradients, pills, icon sets or emoji.",
-      "Don\u2019t replace the build page with a drawer, modal or in-place expansion.",
+      "Don\u2019t replace the build or ticket page with a drawer, modal or in-place expansion; the confirmation dialog is the only modal.",
       "Don\u2019t invent page numbers or decide a new app title; both remain human decisions."
     ]
   }

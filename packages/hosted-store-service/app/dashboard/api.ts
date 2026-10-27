@@ -3,6 +3,10 @@ import type {
   OperatorApiClient,
   OperatorBuildControlRequest,
   OperatorDashboardSnapshot,
+  OperatorTicketDetail,
+  OperatorTicketMoveRequest,
+  OperatorTicketPage,
+  OperatorTicketQueue,
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 
 export class WebOperatorError extends Error {
@@ -44,6 +48,32 @@ export async function webRequest<T>(repo: string, path: string, init?: RequestIn
 
 export const dashboard = (repo: string, signal?: AbortSignal) =>
   webRequest<OperatorDashboardSnapshot>(repo, 'dashboard', { signal })
+/** Without `state`, the queue lists Triage; every listing names the lifecycle states. */
+export const tickets = (
+  repo: string,
+  state: string | undefined,
+  page: OperatorTicketPage,
+  signal?: AbortSignal,
+) => {
+  const query = new URLSearchParams()
+  if (state !== undefined) query.set('state', state)
+  query.set('limit', String(page.limit))
+  if (page.offset !== undefined) query.set('offset', String(page.offset))
+  if (page.order !== undefined) query.set('order', page.order)
+  return webRequest<OperatorTicketQueue>(repo, `tickets?${query}`, { signal })
+}
+/** Every state the source knows, with how many tickets each holds. */
+export const ticketStates = (repo: string, signal?: AbortSignal) =>
+  webRequest<{ name: string; tickets: number; about?: string }[]>(repo, 'tickets/states', {
+    signal,
+  })
+export const ticket = (repo: string, id: string, signal?: AbortSignal) =>
+  webRequest<OperatorTicketDetail>(repo, `tickets/${encodeURIComponent(id)}`, { signal })
+export const moveTicket = (repo: string, id: string, body: OperatorTicketMoveRequest) =>
+  webRequest<OperatorTicketDetail>(repo, `tickets/${encodeURIComponent(id)}/move`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 type BuildControlResult = Awaited<ReturnType<OperatorApiClient['controlBuild']>>
 
 export const buildControl = (repo: string, slug: string, body: OperatorBuildControlRequest) =>

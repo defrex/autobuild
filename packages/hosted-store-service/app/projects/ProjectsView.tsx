@@ -1,5 +1,6 @@
 'use client'
 import { AccessFrame, type FrameProps } from '../access/Frame'
+import { ConfirmDialog } from '../dashboard/ConfirmDialog'
 import type { Snapshot } from '../access/api'
 export function ProjectsView(
   props: FrameProps & {
@@ -74,57 +75,48 @@ export function ProjectsView(
         <>
           <h2>{snapshots.reduce((n, s) => n + s.projects.length, 0)} assigned</h2>
           <div className="access-rows">
-            {snapshots.flatMap(({ organization: org, projects, members }) =>
-              projects.map((repo) =>
-                props.confirmation === repo ? (
-                  <section
-                    className="access-confirm"
-                    key={repo}
-                    aria-label={`Confirm moving ${repo}`}
+            {snapshots.flatMap(({ organization: org, projects }) =>
+              projects.map((repo) => (
+                <div className="access-row project-row" key={repo}>
+                  <span className="project">{repo}</span>
+                  <span>{org.name}</span>
+                  <button
+                    type="button"
+                    className="word slack"
+                    disabled={pending || forbidden || !destination(repo, org.id)}
+                    onClick={() => props.onMove?.(repo)}
                   >
-                    <p>
-                      Move <span className="project">{repo}</span> to{' '}
-                      {destination(repo, org.id)?.name}? {org.name}’s {members.length}{' '}
-                      {members.length === 1 ? 'member loses' : 'members lose'} its organization
-                      grant to this project. Other memberships and super-user access still apply.
-                    </p>
-                    <div className="access-actions">
-                      {select(repo, org.id)}
-                      <button
-                        type="button"
-                        className="btn danger"
-                        disabled={pending || forbidden || !destination(repo, org.id)}
-                        onClick={() => props.onConfirm?.(repo)}
-                      >
-                        Move project
-                      </button>
-                      <button
-                        type="button"
-                        className="word"
-                        disabled={pending}
-                        onClick={props.onCancel}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </section>
-                ) : (
-                  <div className="access-row project-row" key={repo}>
-                    <span className="project">{repo}</span>
-                    <span>{org.name}</span>
-                    <button
-                      type="button"
-                      className="word slack"
-                      disabled={pending || forbidden || !destination(repo, org.id)}
-                      onClick={() => props.onMove?.(repo)}
-                    >
-                      Move…
-                    </button>
-                  </div>
-                ),
-              ),
+                    Move…
+                  </button>
+                </div>
+              )),
             )}
           </div>
+          {(() => {
+            const owner = snapshots.find((snapshot) =>
+              snapshot.projects.includes(props.confirmation ?? ''),
+            )
+            const repo = owner ? props.confirmation! : ''
+            const members = owner?.members.length ?? 0
+            return (
+              <ConfirmDialog
+                open={owner !== undefined}
+                title={`Move ${repo}?`}
+                confirmLabel="Move project"
+                pending={pending}
+                disabled={forbidden || !destination(repo, owner?.organization.id)}
+                onConfirm={() => props.onConfirm?.(repo)}
+                onCancel={() => props.onCancel?.()}
+              >
+                <p>
+                  {owner?.organization.name}’s {members}{' '}
+                  {members === 1 ? 'member loses' : 'members lose'} its organization grant to this
+                  project. Other memberships and super-user access still apply.
+                </p>
+                {owner && select(repo, owner.organization.id)}
+              </ConfirmDialog>
+            )
+          })()}
         </>
       )}
     </AccessFrame>

@@ -9,39 +9,37 @@ export interface OperatorShellProps {
   repositories: readonly string[]
   identity: string
   isSuperUser?: boolean
-  /** The last poll's wall clock, formatted; absent before the first frame. */
-  clock?: string
   /** Initial account-menu disclosure for offline presentation fixtures. */
   menuOpen?: boolean
   /** Initial project-picker disclosure for offline presentation fixtures. */
   projectMenuOpen?: boolean
-  pending?: boolean
   error?: string
   onRepo: (repo: string) => void
   onSignOut: () => void
-  /** Page-specific facts and controls placed in the shared operator landmark. */
+  /** The view tabs, leading the line under the masthead. */
+  tabs?: ReactNode
+  /** Repository settings and controls, right-aligned after the tabs. */
   controls: ReactNode
   children: ReactNode
 }
 
 /**
  * The frame every operator page shares: a one-row masthead carrying the
- * project picker and the account menu; then the control line
- * with the poll clock pinned right. Pure presentation so a fixture can render
- * the same frame the operator sees.
+ * project picker and the account menu; then one line with the view tabs on
+ * the left and the repository controls on the right. Pure presentation so a
+ * fixture can render the same frame the operator sees.
  */
 export function OperatorShell({
   repo,
   repositories,
   identity,
   isSuperUser,
-  clock,
   menuOpen,
   projectMenuOpen,
-  pending,
   error,
   onRepo,
   onSignOut,
+  tabs,
   controls,
   children,
 }: OperatorShellProps) {
@@ -64,14 +62,13 @@ export function OperatorShell({
           onSignOut={onSignOut}
         />
       </header>
-      <nav className="line navline" aria-label="Operator controls">
-        {controls}
+      <div className="line navline">
+        {tabs}
         <span className="spacer" />
-        <span className="clock" data-pending={pending ? '' : undefined}>
-          <span className="sr-only">last poll </span>
-          {clock ?? '--:--:--'}
-        </span>
-      </nav>
+        <fieldset className="controls-line" aria-label="Operator controls">
+          {controls}
+        </fieldset>
+      </div>
       <div className="shell-body">
         {error && (
           <p className="alert notice shell-notice" role="alert">
@@ -106,7 +103,7 @@ function ProjectMenu({
   onRepo: (repo: string) => void
 }) {
   const { open, setOpen, close, rootRef, triggerRef, listRef, listId, onListKey, onTriggerKey } =
-    useMenuDisclosure(initiallyOpen)
+    useMenuDisclosure('project', initiallyOpen)
   if (repositories.length < 2) {
     return <span className="project">{repo ? projectLabel(repo) : 'no repository configured'}</span>
   }

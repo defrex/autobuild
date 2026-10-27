@@ -8,6 +8,7 @@ import {
   type OperatorBuildView,
   type OperatorDashboardSnapshot,
   type OperatorTicketDetail,
+  type OperatorTicketPage,
   type OperatorTicketQueue,
   type OperatorAnswerRequest,
   type OperatorBuildControlRequest,
@@ -115,11 +116,16 @@ export class OperatorApiClient {
   }
   listTickets(
     repo: string,
-    filters: { state?: string; labels?: string[] } = {},
+    filters: { state?: string; labels?: string[]; page?: OperatorTicketPage } = {},
   ): Promise<OperatorTicketQueue> {
     const query = new URLSearchParams()
     if (filters.state !== undefined) query.set('state', filters.state)
     for (const label of filters.labels ?? []) query.append('label', label)
+    if (filters.page) {
+      query.set('limit', String(filters.page.limit))
+      if (filters.page.offset !== undefined) query.set('offset', String(filters.page.offset))
+      if (filters.page.order !== undefined) query.set('order', filters.page.order)
+    }
     const suffix = query.size > 0 ? `tickets?${query}` : 'tickets'
     return this.request(repo, suffix)
   }

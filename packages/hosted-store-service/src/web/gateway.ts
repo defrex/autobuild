@@ -31,6 +31,11 @@ function operatorSuffix(method: string, parts: string[]): boolean {
   if (method === 'GET' && ['dashboard', 'status', 'builds', 'harvest/status'].includes(tail))
     return true
   if (method === 'POST' && ['bulk-control', 'harvest/control'].includes(tail)) return true
+  // Tickets: reads, state counts, and moving a ticket between states. Authoring
+  // and editing stay with the operator agent.
+  if (method === 'GET' && parts[0] === 'tickets' && parts.length <= 2) return true
+  if (method === 'POST' && parts[0] === 'tickets' && parts.length === 3 && parts[2] === 'move')
+    return true
   if (parts[0] === 'settings' && ['intake', 'auto-merge-default'].includes(parts[1] ?? '')) {
     return (
       (method === 'PUT' && parts.length === 2) ||

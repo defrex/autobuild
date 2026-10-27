@@ -6,6 +6,8 @@ Provenance: audiences, the usage scene, and the parity commitment were first
 confirmed with the maintainer on 2026-09-07. The product tiers, the broadened
 audience, the operator-agent model, organizations, the revised parity
 commitment, and the revised visual constraint were confirmed on 2026-10-24.
+The ticket tabs, browser ticket moves, and modal destructive confirmation were
+confirmed on 2026-10-27.
 Everything else is drawn from the repository (`SPEC.md`, `README.md`, `docs/`,
 the hosted store service app tree). Correct it here if it is wrong; do not
 reopen the confirmed fields without a reason.
@@ -38,8 +40,10 @@ Roles on a deployment of the web service:
   organization's members.
 - **Member:** reaches every project the organization owns.
 
-Ticket authoring and grooming are not browser jobs. They happen in conversation
-with the operator agent.
+Ticket authoring and editing are not browser jobs. They happen in conversation
+with the operator agent. The browser shows every ticket and moves one between
+lifecycle states: enqueue a triaged ticket, ice it where the project keeps an
+icebox, or dequeue a ready one back to triage.
 
 ## Product Purpose
 
@@ -122,16 +126,20 @@ appended to the same log.
 
 Confirmed capabilities of the web app today:
 
-- **Builds.** A dispatcher status bar (active/limit, queued, repository paused
-  or running, unclaimed observations/threshold) with toggles for intake,
-  default auto merge, and the harvest gate, plus Pause all and Resume all. A
-  pipeline table with one row per nonterminal build: ticket id and slug,
-  status, pipeline steps with elapsed time, pull request state, and controls
-  (pause or resume, enable or disable auto merge, discard, abort). A harvest
-  row for the observation-harvest workflow. Each build has its own page with
-  escalations, an answer composer (guidance, retry, dismiss, review-round
-  ceiling, revised spec from a supplied body or the amended ticket), session
-  rows with token usage, and transcript viewing.
+- **Tabs.** Triage, Queue, Active and Done, with ticket counts for Triage and
+  Queue and active/limit for Active. Repository controls sit at the right of
+  the same line: repository paused, toggles for intake and the harvest gate,
+  plus Pause all and Resume all. Lists page as the reader scrolls.
+- **Builds (Active, the home page).** One row per nonterminal build: ticket id
+  and slug, status, pipeline steps with elapsed time, pull request state. A
+  harvest row for the observation-harvest workflow. Each build has its own page
+  with its controls (pause or resume, discard, abort), escalations, an answer
+  composer (guidance, retry, dismiss, review-round ceiling, revised spec from
+  a supplied body or the amended ticket), merge consent, the pipeline, and the
+  build's ticket.
+- **Tickets (Triage, Queue, Done).** Rows with id, title, labels, dependencies
+  and an excerpt. Each ticket has its own page with its body and comments, any
+  related build, and its moves: Enqueue or Ice from Triage, Dequeue from Queue.
 - **Sign-in page.** Provider buttons and an access-refused message.
 
 In progress (integration node file-103): organizations, super users, and an
@@ -141,8 +149,9 @@ Constraints future work must preserve:
 
 - The dashboard shows acknowledged durable state. Settings and controls are
   never optimistically rendered.
-- Destructive intent is a second step. Abort confirms before writing; a first
-  interaction never writes destructive intent. Discard applies only to queued
+- Destructive intent is a second step. Abort, member removal and project moves
+  confirm in a modal dialog before writing; a first interaction never writes
+  destructive intent. Discard applies only to queued
   builds and returns the ticket to Ready; abort returns work to Triage. The
   two are deliberately distinct.
 - Every control and answer is an event in the log. The UI cannot add actions

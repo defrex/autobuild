@@ -60,6 +60,7 @@ import {
   ticketCreateRequestSchema,
   ticketStateCreateRequestSchema,
   ticketMoveRequestSchema,
+  ticketPageSchema,
   ticketUpdateRequestSchema,
   toggleHarvestGate,
   toggleRepositorySetting,
@@ -295,6 +296,19 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       if (req.method === 'GET' && rest.length === 1) {
         const state = url.searchParams.get('state')
         const hasLabels = url.searchParams.has('label')
+        const limit = url.searchParams.get('limit')
+        const offset = url.searchParams.get('offset')
+        const order = url.searchParams.get('order')
+        const page =
+          limit === null
+            ? undefined
+            : ticketPageSchema.safeParse({
+                limit: Number(limit),
+                ...(offset !== null ? { offset: Number(offset) } : {}),
+                ...(order !== null ? { order } : {}),
+              })
+        if (page && !page.success)
+          throw new HttpError(400, 'validation', `invalid ticket page: ${page.error.message}`)
         return json(
           200,
           await listOperatorTickets({
@@ -303,6 +317,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             backend: opts.ticketBackend,
             ...(state !== null ? { state } : {}),
             ...(hasLabels ? { labels: url.searchParams.getAll('label') } : {}),
+            ...(page ? { page: page.data } : {}),
           }),
         )
       }

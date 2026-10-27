@@ -6,15 +6,13 @@ import type {
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   buildActionAvailability,
-  type DashboardBuild,
-  parseTranscript,
+  capacityExplanation,
   repositoryActionAvailability,
-  type TranscriptPresentation,
 } from '@defrex/autobuild/operator-presentation'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import * as api from './api'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { buildLink, projectLink } from './project-selection'
+import { buildLink, projectLink, type TicketTab, type ViewTab } from './project-selection'
 import {
   type AnswerStep,
   type BuildControlAction,
@@ -26,10 +24,21 @@ import {
   type Selection,
 } from './BuildsView'
 import { answerRequest, classifyAnswerReply, classifyControlReply } from './control-reply'
-import { clockText, LoadingControls } from './frame'
+import { LoadingControls } from './frame'
 import { createDashboardRefresher, type DashboardRefresher } from './refresh'
 import { OperatorShell } from './Shell'
 import { createNowTicker } from './ticker'
+import {
+  type TicketMove,
+  TicketListView,
+  TicketPageView,
+  tabForState,
+  ticketMoves,
+  usePagedTickets,
+  useTicketDetail,
+  useTicketMeta,
+  ViewTabs,
+} from './tickets'
 import { reconcileDashboard } from './view-model'
 
 interface ClientProps {
@@ -39,6 +48,10 @@ interface ClientProps {
   repositories: readonly string[]
   /** Set on a build's own page; absent on the builds list. */
   buildSlug?: string
+  /** Set on a ticket lifecycle tab; absent means the active builds. */
+  tab?: TicketTab
+  /** Set on a ticket's own page. */
+  ticketId?: string
 }
 
 /**
@@ -75,6 +88,8 @@ export function DashboardClient({
   repositories,
   initialSelection,
   buildSlug,
+  tab,
+  ticketId,
 }: ClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -95,8 +110,6 @@ export function DashboardClient({
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<string>()
   const [now, setNow] = useState(Date.now())
-  const [transcript, setTranscript] = useState<TranscriptPresentation>()
-  const [pollPending, setPollPending] = useState(false)
   const answerPending = useRef(false)
   const refresherRef = useRef<DashboardRefresher | undefined>(undefined)
   const repoRef = useRef(repo)
@@ -113,7 +126,6 @@ export function DashboardClient({
           if (!signal.aborted && cause instanceof api.WebOperatorError && cause.status === 404) {
             snapshotCache.delete(repository)
             setSnapshot(undefined)
-            setTranscript(undefined)
             setSelection(undefined)
             setHoverPreview(undefined)
             setAnswerStep(undefined)
@@ -137,7 +149,7 @@ export function DashboardClient({
         setError(undefined)
       },
       onError: setError,
-      onPendingChange: setPollPending,
+      onPendingChange: () => {},
     })
     refresherRef.current = refresher
     const onVisibility = () => {
@@ -200,6 +212,32 @@ export function DashboardClient({
   const model = snapshot?.model
   const pageBuild = buildSlug ? model?.builds.find((row) => row.slug === buildSlug) : undefined
   const listHref = projectLink(repo, '')
+  // Bumped after a ticket write so every ticket read refreshes at once.
+  const [ticketVersion, ticketsChanged] = useReducer((n: number) => n + 1, 0)
+  const ticketMeta = useTicketMeta(repo, ticketVersion)
+  const names = ticketMeta.names
+  const ticketPage = usePagedTickets(
+    repo,
+    tab && names ? names[tab === 'queue' ? 'ready' : tab] : undefined,
+    // The queue reads in dispatch order; triage and done read newest first.
+    tab === 'queue' ? 'oldest' : 'newest',
+    ticketVersion,
+  )
+  const pageTicket = useTicketDetail(repo, ticketId ?? pageBuild?.ticketId, ticketVersion)
+  const currentTab: ViewTab | undefined = ticketId
+    ? tabForState(pageTicket.detail?.ticket.state, names)
+    : (tab ?? 'active')
+  const moveTicket = (move: TicketMove) => {
+    const detail = pageTicket.detail
+    if (!detail) return
+    void act(`ticket:${detail.ticket.ref.id}`, async () => {
+      await api.moveTicket(repo, detail.ticket.ref.id, {
+        state: move.state,
+        expectedRevision: detail.ticket.revision,
+      })
+      ticketsChanged()
+    })
+  }
 
   const activate = (next: Selection) => {
     setSelection(sameSelection(selection, next) ? undefined : next)
@@ -292,23 +330,6 @@ export function DashboardClient({
     })()
   }
 
-  const loadTranscript = async (row: DashboardBuild, kind: string, rev: number) => {
-    setPending(`transcript:${row.slug}`)
-    try {
-      const response = await fetch(
-        `/api/web/repos/${encodeURIComponent(repo)}/builds/${encodeURIComponent(row.slug)}/artifacts/${encodeURIComponent(kind)}?rev=${rev}`,
-        { cache: 'no-store' },
-      )
-      if (response.status === 401) return window.location.assign('/sign-in')
-      if (!response.ok) throw new Error(`transcript unavailable (${response.status})`)
-      setTranscript(parseTranscript(await response.text()))
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(undefined)
-    }
-  }
-
   // Keyboard parity with the terminal legend. The handler reads the latest
   // render through a ref so the listener binds once.
   const keyHandler = useRef<(event: KeyboardEvent) => void>(() => {})
@@ -334,6 +355,8 @@ export function DashboardClient({
       return
     }
     if (editorTarget) return
+    // An open confirmation owns the keyboard: Enter confirms, Escape dismisses.
+    if (confirmingAbort && event.key !== 'Enter' && event.key !== 'Escape') return
     const available = pageBuild ? buildActionAvailability(pageBuild) : undefined
     const repository = repositoryActionAvailability(model)
     const busy = pending !== undefined
@@ -393,8 +416,6 @@ export function DashboardClient({
       repositories={repositories}
       identity={identity}
       isSuperUser={isSuperUser}
-      clock={snapshot ? clockText(snapshot.generatedAt, now) : undefined}
-      pending={pending !== undefined || pollPending}
       error={repo ? error : 'no repository configured'}
       onRepo={(next) => {
         if (answerPending.current) return
@@ -405,6 +426,25 @@ export function DashboardClient({
         await fetch('/api/auth/sign-out', { method: 'POST' })
         window.location.assign('/sign-in')
       }}
+      tabs={
+        repo ? (
+          <ViewTabs
+            repo={repo}
+            current={currentTab}
+            page={!buildSlug && !ticketId}
+            counts={{
+              // A source the web cannot read shows a dash rather than a placeholder forever.
+              triage: names ? ticketMeta.counts?.[names.triage] : ticketMeta.error && '–',
+              queue: names ? ticketMeta.counts?.[names.ready] : ticketMeta.error && '–',
+              active: model ? (
+                <span title={capacityExplanation(model.capacity).trim() || undefined}>
+                  {model.active.current}/{model.active.limit}
+                </span>
+              ) : undefined,
+            }}
+          />
+        ) : null
+      }
       controls={
         model ? (
           <DispatcherControls
@@ -430,7 +470,7 @@ export function DashboardClient({
             confirmingAbort={confirmingAbort === buildSlug}
             answerStep={answerStep}
             answerPending={answerPending.current}
-            transcript={transcript}
+            ticket={pageTicket}
             onRowBuildControl={control}
             onRowRequestAbort={setConfirmingAbort}
             onCancelAbort={() => setConfirmingAbort(undefined)}
@@ -440,7 +480,27 @@ export function DashboardClient({
             onSubmitAnswerStep={submitAnswerStep}
             onCancelAnswerStep={cancelAnswerStep}
             onAnswer={answer}
-            onTranscript={loadTranscript}
+          />
+        ) : ticketId ? (
+          <TicketPageView
+            repo={repo}
+            id={ticketId}
+            {...pageTicket}
+            moves={ticketMoves(pageTicket.detail?.ticket.state, names, ticketMeta.counts)}
+            pending={pending !== undefined}
+            onMove={moveTicket}
+          />
+        ) : tab ? (
+          <TicketListView
+            repo={repo}
+            tab={tab}
+            onOpenTicket={(href) => router.push(href)}
+            page={{
+              ...ticketPage,
+              ...(ticketPage.error || ticketMeta.error
+                ? { error: ticketPage.error ?? ticketMeta.error }
+                : {}),
+            }}
           />
         ) : (
           <BuildsView

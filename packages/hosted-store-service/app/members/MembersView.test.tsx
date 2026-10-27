@@ -43,14 +43,16 @@ test('owner cannot remove own row; plain members have no mutation controls', () 
   expect(member).not.toContain('Add member')
   expect(member).toContain('An organization owner')
 })
-test('super user owner control and inline removal state name the revoked grant', () => {
+test('super user owner control and the removal dialog name the revoked grant', () => {
   const html = renderToStaticMarkup(
     <MembersView {...base} isSuperUser confirmation="pending@example.com" />,
   )
   expect(html).toContain('Organization owner')
+  expect(html).toContain('<dialog class="confirm-dialog"')
+  expect(html).toContain('Remove pending@example.com?')
   expect(html).toContain('Other organization grants')
   expect(html).toContain('Cancel')
-  expect(html).not.toContain('dialog')
+  expect(html).not.toContain('access-confirm')
 })
 test('empty organizations and projects offer bootstrap without invented counts', () => {
   const html = renderToStaticMarkup(

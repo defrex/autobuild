@@ -169,46 +169,144 @@ export function DashboardSurface({ children }: { children: ReactNode }) {
   return <section className="dashboard-surface">{children}</section>
 }
 
-const LOADING_ROWS = ['first', 'second', 'third', 'fourth', 'fifth'] as const
-const LOADING_CONTROLS = ['queue', 'active', 'observations', 'intake', 'merge', 'harvest'] as const
+/** One placeholder text line; `w` is its width in `ch` or percent of the measure. */
+function Line({ w, className }: { w: string; className?: string }) {
+  return <span className={className ? `sk ${className}` : 'sk'} style={{ width: w }} />
+}
 
-/** Neutral control geometry occupying the shell line before the first model arrives. */
+/** Deterministic width variety so the placeholders read as text, not bars. */
+const TITLE_W = ['46%', '58%', '38%', '64%', '50%', '42%']
+const META_W = ['34%', '28%', '40%', '30%', '36%', '26%']
+const PROSE_W = ['96%', '100%', '92%', '98%', '71%']
+
+/** Neutral geometry for the right-aligned repository controls. */
 export function LoadingControls() {
   return (
     <span className="loading-controls" aria-hidden="true">
-      {LOADING_CONTROLS.map((control) => (
-        <span className="skeleton-control control-item" data-control={control} key={control} />
+      {['8ch', '9ch', '7ch', '8ch'].map((width, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: fixed decorative geometry
+        <span className="sk sk-control" style={{ width }} key={index} />
       ))}
     </span>
   )
 }
 
-/** Static, decorative row geometry with one assistive loading announcement. */
-export function LoadingRows({ label }: { label: string }) {
+export type LoadingKind = 'builds' | 'tickets' | 'build-page' | 'ticket-page' | 'ticket-body'
+
+/** Paragraphs of placeholder prose, as a ticket body renders. */
+function LoadingProse({ paragraphs }: { paragraphs: number }) {
   return (
-    <div className="loading-state">
-      <p className="sr-only" aria-live="polite" aria-atomic="true">
-        {label}
-      </p>
-      <div className="skeletons" aria-hidden="true">
-        {LOADING_ROWS.map((row) => (
-          <div className="skeleton-row" data-loading-row="" key={row}>
-            <span className="skeleton-identity" />
-            <span className="skeleton-state" />
-            <span className="skeleton-steps" />
-          </div>
-        ))}
-      </div>
+    <div className="sk-prose">
+      {Array.from({ length: paragraphs }, (_, p) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: fixed decorative geometry
+        <div className="sk-paragraph" key={p}>
+          {(p === 0 ? PROSE_W.slice(0, 3) : PROSE_W).map((w, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed decorative geometry
+            <Line w={w} key={i} />
+          ))}
+        </div>
+      ))}
     </div>
   )
 }
 
-/** Wall clock as HH:MM:SS, the header's top-right corner. */
-export function clockText(iso: string | undefined, fallback: number): string {
-  const date = iso ? new Date(iso) : new Date(fallback)
-  const time = Number.isNaN(date.getTime()) ? new Date(fallback) : date
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`
+/** The identity column, title and status line every row and page head shares. */
+function LoadingHead({ index, status = true }: { index: number; status?: boolean }) {
+  return (
+    <>
+      <Line w="7ch" className="sk-id" />
+      <div className="sk-main">
+        <div className="sk-titleline">
+          <Line w={TITLE_W[index % TITLE_W.length]!} className="sk-title" />
+          {status && <Line w="7ch" className="sk-status" />}
+        </div>
+        <Line w={META_W[index % META_W.length]!} className="sk-meta" />
+      </div>
+    </>
+  )
+}
+
+function LoadingGeometry({ kind, rows }: { kind: LoadingKind; rows: number }) {
+  switch (kind) {
+    case 'builds':
+    case 'tickets':
+      return (
+        <>
+          {Array.from({ length: rows }, (_, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed decorative geometry
+            <div className="sk-row" data-loading-row="" key={index}>
+              <LoadingHead index={index} status={kind === 'builds'} />
+              {kind === 'builds' ? (
+                <div className="sk-steps">
+                  {['10ch', '15ch', '15ch', '17ch', '15ch'].map((w, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: fixed decorative geometry
+                    <Line w={w} key={i} />
+                  ))}
+                </div>
+              ) : (
+                <div className="sk-excerpt">
+                  <Line w="88%" />
+                  <Line w={index % 2 ? '52%' : '67%'} />
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )
+    case 'build-page':
+    case 'ticket-page':
+      return (
+        <div className="sk-page">
+          <div className="sk-row sk-head" data-loading-row="">
+            <LoadingHead index={0} />
+            <div className="sk-buttons">
+              <span className="sk sk-button" />
+              <span className="sk sk-button ghost" />
+            </div>
+          </div>
+          <div className="sk-sections">
+            {kind === 'build-page' && (
+              <>
+                <Line w="30%" />
+                <div className="sk-section">
+                  <Line w="8ch" className="sk-heading" />
+                  {['18ch', '24ch', '20ch', '24ch', '22ch', '12ch', '16ch'].map((w, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: fixed decorative geometry
+                    <Line w={w} key={i} />
+                  ))}
+                </div>
+                <Line w="6ch" className="sk-heading" />
+              </>
+            )}
+            <LoadingProse paragraphs={3} />
+          </div>
+        </div>
+      )
+    case 'ticket-body':
+      return <LoadingProse paragraphs={2} />
+  }
+}
+
+/** Static, decorative geometry shaped like the content it stands in for, with one assistive announcement. */
+export function LoadingRows({
+  label,
+  kind = 'builds',
+  rows = 5,
+}: {
+  label: string
+  kind?: LoadingKind
+  rows?: number
+}) {
+  return (
+    <div className="loading-state" data-loading={kind}>
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {label}
+      </p>
+      <div className="skeletons" aria-hidden="true">
+        <LoadingGeometry kind={kind} rows={rows} />
+      </div>
+    </div>
+  )
 }
 
 /** Frame-wide column widths in cells, so ids and STATUS align down the page. */

@@ -9,10 +9,9 @@ import {
   formatRollback,
   handPushedLabel,
   handPushedText,
-  capacityExplanation,
   displayText,
-  pauseResumeHelp,
   buildActionAvailability,
+  capacityExplanation,
   landingPolicyDisplay,
   mergeVocabulary,
   mergeSummary,
@@ -21,14 +20,15 @@ import {
   repositoryActionAvailability,
   type DashboardHarvest,
   type DashboardModel,
-  type TranscriptPresentation,
 } from '@defrex/autobuild/operator-presentation'
+import type { OperatorTicketDetail } from '@defrex/autobuild-hosted-store-service/operator-api'
 import Link from 'next/link'
 import {
   type CSSProperties,
   type PointerEvent,
   type PointerEventHandler,
   type ReactNode,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -41,7 +41,10 @@ import {
   MessagePreview,
   StepLine,
 } from './frame'
-import { buildLink, projectLink } from './project-selection'
+import { ConfirmDialog } from './ConfirmDialog'
+import { LoadMore } from './LoadMore'
+import { buildLink } from './project-selection'
+import { BuildTicketSection } from './tickets'
 import { pipelineProvenance } from './view-model'
 
 export type Selection = { kind: 'build'; slug: string } | { kind: 'harvest' }
@@ -117,7 +120,8 @@ export interface BuildPageViewProps {
   confirmingAbort: boolean
   answerStep?: AnswerStep
   answerPending: boolean
-  transcript?: TranscriptPresentation
+  /** The build's ticket, read live from the ticket source. */
+  ticket: { detail?: OperatorTicketDetail; error?: string }
   onRowBuildControl: (slug: string, action: BuildControlAction) => void
   onRowRequestAbort: (slug: string) => void
   onCancelAbort: () => void
@@ -125,7 +129,6 @@ export interface BuildPageViewProps {
   onSubmitAnswerStep: () => void
   onCancelAnswerStep: () => void
   onAnswer: (slug: string, body: OperatorAnswerRequest) => void
-  onTranscript: (build: DashboardBuild, kind: string, rev: number) => void
 }
 
 type Tone = 'alert' | 'warn' | 'live' | 'ok'
@@ -191,8 +194,13 @@ export function buildRowActions(row: DashboardBuild): BuildRowAction[] {
   return actions
 }
 
+/** Builds page like ticket lists; most projects fit on the first page. */
+const BUILD_PAGE = 25
+
 export function BuildsView(props: BuildsViewProps) {
   const { model, repo, now, selection, hoverPreview } = props
+  const [shown, setShown] = useState(BUILD_PAGE)
+  const showMore = useCallback(() => setShown((count) => count + BUILD_PAGE), [])
   const preview = (next: Selection) => (event: PointerEvent) => {
     if (
       canPreviewPointer(
@@ -222,11 +230,20 @@ export function BuildsView(props: BuildsViewProps) {
   }
   return (
     <DashboardSurface>
-      {(model.warningLines?.length ||
-        model.availableUpgrade ||
-        model.handoffs?.length ||
-        model.rollback) && (
+      {Boolean(
+        model.warningLines?.length ||
+          model.availableUpgrade ||
+          model.handoffs?.length ||
+          model.rollback ||
+          model.capacity?.borrowingNodes.length,
+      ) && (
         <div className="messages">
+          {model.capacity?.borrowingNodes.length ? (
+            <p className="slack notice capacity-notice">
+              active {model.active.current}/{model.active.limit}
+              {capacityExplanation(model.capacity)}
+            </p>
+          ) : null}
           {model.rollback && <p className="warn notice">{formatRollback(model.rollback)}</p>}
           {model.handoffs?.map((handoff) => (
             <p className="warn notice" key={`${handoff.run}:${handoff.correlation}`}>
@@ -265,7 +282,7 @@ export function BuildsView(props: BuildsViewProps) {
             onRowHarvest={props.onRowHarvest}
           />
         )}
-        {model.builds.map((row) => (
+        {model.builds.slice(0, shown).map((row) => (
           <BuildRow
             key={row.slug}
             row={row}
@@ -281,6 +298,12 @@ export function BuildsView(props: BuildsViewProps) {
         ))}
         {model.builds.length === 0 && !model.harvest && <li className="slack">no active builds</li>}
       </ol>
+      <LoadMore
+        shown={Math.min(shown, model.builds.length)}
+        total={model.builds.length}
+        loading={false}
+        onMore={showMore}
+      />
       <section className="legend" aria-label="Step marks">
         <span>
           <code className="ok">[x]</code> done
@@ -319,32 +342,6 @@ export function DispatcherControls({
   const repository = repositoryActionAvailability(model)
   return (
     <>
-      <span className="control-item fact-item">
-        <span>queue {model.queued}</span>
-        <span className="sep" aria-hidden>
-          |
-        </span>
-      </span>
-      <span
-        className="control-item fact-item"
-        data-borrowing={model.capacity?.borrowingNodes.length ? '' : undefined}
-      >
-        <span>
-          active {model.active.current}/{model.active.limit}
-          {capacityExplanation(model.capacity)}
-        </span>
-        <span className="sep" aria-hidden>
-          |
-        </span>
-      </span>
-      <span className="control-item fact-item">
-        <span>
-          observations {model.observations.current}/{model.observations.limit}
-        </span>
-        <span className="sep" aria-hidden>
-          |
-        </span>
-      </span>
       {model.repositoryPaused && (
         <span className="control-item toggle repository-state">
           repository<b className="off">PAUSED</b>
@@ -661,19 +658,11 @@ function BuildSummary({
 
 /** A build's own page: its identity, any escalation to answer, and its full detail. */
 export function BuildPageView(props: BuildPageViewProps) {
-  const { model, repo, slug, now, pending, answerStep, answerPending } = props
-  const back = (
-    <nav className="crumbs" aria-label="Breadcrumb">
-      <Link className="word" href={projectLink(repo, '')}>
-        <span aria-hidden>← </span>builds
-      </Link>
-    </nav>
-  )
+  const { model, slug, now, pending, answerStep, answerPending } = props
   if (!model) {
     return (
       <DashboardSurface>
-        {back}
-        <LoadingRows label={`Loading ${slug}.`} />
+        <LoadingRows kind="build-page" label={`Loading ${slug}.`} />
       </DashboardSurface>
     )
   }
@@ -681,7 +670,6 @@ export function BuildPageView(props: BuildPageViewProps) {
   if (!row) {
     return (
       <DashboardSurface>
-        {back}
         <p className="slack build-missing">
           {slug} is not an active build. It may have merged, closed, or been aborted.
         </p>
@@ -691,7 +679,6 @@ export function BuildPageView(props: BuildPageViewProps) {
   const answering = answerStep?.slug === row.slug
   return (
     <DashboardSurface>
-      {back}
       <article className="build-page" aria-label={row.slug}>
         <header className="build-head">
           <BuildSummary
@@ -703,6 +690,16 @@ export function BuildPageView(props: BuildPageViewProps) {
               </h2>
             }
           />
+          {!answering && (
+            <BuildActions
+              build={row}
+              pending={pending}
+              confirmingAbort={props.confirmingAbort}
+              onRowBuildControl={props.onRowBuildControl}
+              onRowRequestAbort={props.onRowRequestAbort}
+              onCancelAbort={props.onCancelAbort}
+            />
+          )}
         </header>
         {!row.integrationRow && row.status === 'blocked' && row.blockers.length > 0 && (
           <section className="signoff" aria-label={`Escalation for ${row.slug}`}>
@@ -774,19 +771,8 @@ export function BuildPageView(props: BuildPageViewProps) {
             onControl={props.onRowBuildControl}
           />
         )}
-        <BuildDetail
-          build={row}
-          now={now}
-          pending={pending}
-          transcript={props.transcript}
-          confirmingAbort={props.confirmingAbort}
-          answerStep={answering ? answerStep : undefined}
-          onRowBuildControl={props.onRowBuildControl}
-          onRowRequestAbort={props.onRowRequestAbort}
-          onCancelAbort={props.onCancelAbort}
-          onCancelAnswerStep={props.onCancelAnswerStep}
-          onTranscript={props.onTranscript}
-        />
+        <BuildDetail build={row} now={now} />
+        <BuildTicketSection ticketId={row.ticketId} {...props.ticket} />
       </article>
     </DashboardSurface>
   )
@@ -845,36 +831,82 @@ function BlockedAnswerStep({
 
 type AnswerChoice = OperatorAnswerRequest['resolution'] | 'revise-spec-ticket'
 
-function BuildDetail({
+/** The emphasis each build control carries: one primary, destructive ones ghosted. */
+function actionClass(action: BuildRowAction['action']): string {
+  if (action === 'request-abort') return 'btn ghost action'
+  if (action === 'discard') return 'btn action'
+  return 'btn primary action'
+}
+
+/**
+ * A build's controls as buttons beside its identity. Abort asks again in a
+ * modal, so nothing destructive is written on the first press and the page
+ * does not shift.
+ */
+function BuildActions({
   build,
-  now,
   pending,
-  transcript,
   confirmingAbort,
-  answerStep,
   onRowBuildControl,
   onRowRequestAbort,
   onCancelAbort,
-  onCancelAnswerStep,
-  onTranscript,
 }: {
   build: DashboardBuild
-  now: number
   pending?: string
-  transcript?: TranscriptPresentation
   confirmingAbort: boolean
-  answerStep?: AnswerStep
   onRowBuildControl: BuildPageViewProps['onRowBuildControl']
   onRowRequestAbort: BuildPageViewProps['onRowRequestAbort']
   onCancelAbort: BuildPageViewProps['onCancelAbort']
-  onCancelAnswerStep: BuildPageViewProps['onCancelAnswerStep']
-  onTranscript: BuildPageViewProps['onTranscript']
 }) {
-  const answering = answerStep !== undefined
-  const abortConfirmationId = `abort-confirmation-${encodeURIComponent(build.slug)}`
   const busy = pending !== undefined
+  // The primary control leads; abort, the destructive one, goes last.
+  const controls = buildRowActions(build).sort(
+    (a, b) => Number(a.action === 'request-abort') - Number(b.action === 'request-abort'),
+  )
+  if (!controls.length) return null
+  return (
+    <>
+      <div
+        className="controls actions build-actions"
+        role="toolbar"
+        aria-label={`Controls for ${build.slug}`}
+        onKeyDown={(event) => handleRowControlKey(event)}
+      >
+        {controls.map((control) => (
+          <button
+            type="button"
+            className={actionClass(control.action)}
+            key={control.action}
+            disabled={busy}
+            aria-label={`${control.label} ${build.slug}`}
+            onClick={() => {
+              if (control.action === 'request-abort') onRowRequestAbort(build.slug)
+              else onRowBuildControl(build.slug, control.action)
+            }}
+          >
+            {control.label}
+          </button>
+        ))}
+      </div>
+      <ConfirmDialog
+        open={confirmingAbort}
+        title={`Abort ${build.slug}?`}
+        confirmLabel="Abort build"
+        pending={busy}
+        onConfirm={() => onRowBuildControl(build.slug, 'abort')}
+        onCancel={onCancelAbort}
+      >
+        <p>
+          The live session stops, the workspace and branches are removed, and an open pull request
+          is closed. The ticket returns to Triage labelled as aborted.
+        </p>
+      </ConfirmDialog>
+    </>
+  )
+}
+
+function BuildDetail({ build, now }: { build: DashboardBuild; now: number }) {
   const ceilingText = reviewCeilingText(build)
-  const sessions = build.sessions ?? []
 
   return (
     <article
@@ -921,72 +953,6 @@ function BuildDetail({
           </span>
         )}
       </div>
-
-      <section className="section">
-        <h3>Actions</h3>
-        {buildActionAvailability(build).primary && <p className="dim">{pauseResumeHelp}</p>}
-        {confirmingAbort && (
-          <p className="message alert" id={abortConfirmationId} role="status">
-            <span aria-hidden>! </span>abort {build.slug}? Enter confirms, Esc cancels
-          </p>
-        )}
-        {!answering && (
-          <div
-            className="controls actions"
-            role="toolbar"
-            aria-label={`Controls for ${build.slug}`}
-            aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
-            onKeyDown={(event) =>
-              handleRowControlKey(
-                event,
-                answering ? onCancelAnswerStep : confirmingAbort ? onCancelAbort : undefined,
-              )
-            }
-          >
-            {answering ? null : confirmingAbort ? (
-              <>
-                <button
-                  type="button"
-                  className="word action"
-                  disabled={busy}
-                  aria-label={`CONFIRM ABORT ${build.slug}`}
-                  onClick={() => onRowBuildControl(build.slug, 'abort')}
-                >
-                  CONFIRM ABORT
-                </button>
-                <button
-                  type="button"
-                  className="word action"
-                  disabled={busy}
-                  aria-label={`CANCEL abort ${build.slug}`}
-                  onClick={onCancelAbort}
-                >
-                  CANCEL
-                </button>
-              </>
-            ) : (
-              buildRowActions(build).map((control) => (
-                <button
-                  type="button"
-                  className="word action"
-                  key={control.action}
-                  disabled={busy}
-                  aria-label={`${control.label} ${build.slug}`}
-                  onClick={() => {
-                    if (control.action === 'request-abort') onRowRequestAbort(build.slug)
-                    else onRowBuildControl(build.slug, control.action)
-                  }}
-                >
-                  {control.label}
-                </button>
-              ))
-            )}
-            {buildRowActions(build).length === 0 && !answering && !confirmingAbort && (
-              <span className="slack">no actions available</span>
-            )}
-          </div>
-        )}
-      </section>
 
       {build.integrationDetail &&
         build.integrationRow &&
@@ -1129,92 +1095,10 @@ function BuildDetail({
           <pre className="block">{build.setupError}</pre>
         </section>
       )}
-
-      <section className="section">
-        <h3>Sessions</h3>
-        {sessions.length > 0 ? (
-          <ul className="sessions">
-            {sessions.map((session) => (
-              <li key={session.id}>
-                <b>{session.role}</b>
-                <span>phase {session.phase}</span>
-                {session.round !== undefined && <span>round {session.round}</span>}
-                <span>runtime {session.runtime}</span>
-                {session.model !== undefined && <span>model {session.model}</span>}
-                <span>{session.status}</span>
-                {session.cause && <span>cause {session.cause}</span>}
-                {session.fallbackReason && <span>fresh session: {session.fallbackReason}</span>}
-                {session.reclaimedBy && (
-                  <span className="slack">
-                    by {session.reclaimedBy.instance} at resume boundary{' '}
-                    {session.reclaimedBy.resumedFromSeq}, transcript unavailable
-                  </span>
-                )}
-                {session.usage && (
-                  <span className="slack">
-                    tokens {session.usage.inputTokens} in/{session.usage.outputTokens} out,{' '}
-                    {session.usage.turns} turns
-                  </span>
-                )}
-                {session.transcript && (
-                  <button
-                    type="button"
-                    className="word"
-                    disabled={busy}
-                    onClick={() =>
-                      onTranscript(build, session.transcript!.kind, session.transcript!.rev)
-                    }
-                  >
-                    open transcript
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="slack">no agent sessions recorded</p>
-        )}
-        {transcript && <Transcript value={transcript} />}
-      </section>
     </article>
   )
 }
 
-function Transcript({ value }: { value: TranscriptPresentation }) {
-  if (value.kind === 'raw') {
-    return (
-      <section className="section">
-        <h3>Transcript</h3>
-        <pre className="block">{value.text}</pre>
-      </section>
-    )
-  }
-  return (
-    <section className="section transcript">
-      <h3>Transcript</h3>
-      {'notice' in value && <p className="warn">{value.notice}</p>}
-      {value.turns.map((turn, index) => (
-        <article key={`${turn.prompt}-${turn.text}`}>
-          <h4>Turn {index + 1}</h4>
-          <p>
-            <span className="slack">prompt </span>
-            {turn.prompt}
-          </p>
-          <pre className="block">{turn.text}</pre>
-          {turn.failure && <p className="alert notice">{turn.failure}</p>}
-          {turn.usage && (
-            <p className="slack">
-              usage {turn.usage.inputTokens} in/{turn.usage.outputTokens} out
-              {turn.usage.turns ? `, ${turn.usage.turns} turns` : ''}
-            </p>
-          )}
-        </article>
-      ))}
-    </section>
-  )
-}
-
-/** Nodes need the projected readiness state; their merge step alone is not a gate. */
 export function awaitingConsent(build: DashboardBuild): boolean {
   if (build.landing?.decision?.mode !== 'consent' || build.landing.command?.kind === 'land')
     return false
