@@ -112,7 +112,7 @@ Sandbox preparation order:
 
 - **Runtimes.** Every primary and alternate runtime needs a pinned install and exact-version preflight, and gets only the credentials named in `environmentVariables`, except declared [accounts](configuration-overview.md#accounts), whose credentials remain on the host and are brokered by egress policy using guest placeholders.
 - **Repetition.** New sandboxes repeat provisioning and preflights rerun before each build-runner; keep setup idempotent.
-- **Validation.** `bun ab init --validate` runs named provisioning, setup, runtime and Store checks in a disposable environment, deletes it even on failure, and starts no build. For every declared account, including unused accounts, it runs a tool-free Claude Code model probe; these probes create no ordinary build phase or persistent agent session.
+- **Validation.** `bun ab init --validate` runs named provisioning, setup, runtime and Store checks in a disposable environment, deletes it even on failure, and starts no build. For every declared account, including unused accounts, it runs a tool-free model probe through the account's runtime (Claude Code for Claude/Kimi, Codex for ChatGPT); these probes create no ordinary build phase or persistent agent session. Hosted ChatGPT project secrets report readiness from write-only status metadata instead; the first hosted build is the live check.
 - **Lifetime.** `timeoutSeconds` bounds a sandbox; provider operations have their own timeouts. An intact sandbox resumes; an expired or lost one is rebuilt from durable workspace and publication evidence, losing unpublished work that lived only on it.
 
 ### Private repositories

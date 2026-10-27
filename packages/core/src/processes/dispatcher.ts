@@ -551,6 +551,8 @@ export interface TickOpts {
    * resume, lease sweep, and in-flight runners continue. Absent defaults true.
    */
   acceptNewWork?: boolean
+  /** Repair/settle active execution policies only; suppress all intake and launches. */
+  observationOnly?: boolean
   /**
    * Repository-derived claim-time default supplied by the CLI for this tick.
    * True records the existing durable auto-merge request only on builds
@@ -980,6 +982,7 @@ export class Dispatcher {
     await this.settleHarvestExecutions(opts)
     if (this.outOfBudget(opts)) return report
     await this.settleOrchestratorSandboxes(report, opts)
+    if (opts.observationOnly) return report
     if (this.outOfBudget(opts)) return report
     // The default fan-out runs before the janitor so one tick both records the
     // consent and lets the janitor act on it (the janitor reduces a fresh read

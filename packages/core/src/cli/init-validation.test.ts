@@ -2500,3 +2500,116 @@ ${roles}`,
     ).toBe(true)
   },
 )
+
+test('hosted ChatGPT metadata readiness reaches the guest probe for multiple accounts', async () => {
+  const { ProjectCredentials } = await import('./project-credentials')
+  const { FakeForge } = await import('../ports/forge/fake')
+  const { repo, config } = await committedLocalRepo('ab-hosted-chatgpt-readiness-')
+  const origin = 'https://github.com/example/readiness'
+  let metadataReads = 0
+  const service = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request) {
+      expect(new URL(request.url).pathname).toBe('/secrets/v1/list')
+      metadataReads++
+      return Response.json({
+        version: 1,
+        secrets: ['PLAN_ACCESS', 'OTHER_ACCESS'].map((name) => ({
+          name,
+          kind: 'chatgpt-subscription',
+          owner: 'member',
+          setAt: new Date().toISOString(),
+          fingerprint: 'a'.repeat(16),
+          status: 'ready',
+          failureCode: null,
+          lastSuppliedAt: null,
+        })),
+      })
+    },
+  })
+  const env = {
+    AB_STORE: service.url.origin,
+    XDG_CONFIG_HOME: join(repo, '.autobuild', 'user-config'),
+  }
+  try {
+    new ProjectCredentials(env).save({
+      service: env.AB_STORE,
+      repo: origin,
+      id: 'a'.repeat(32),
+      token: `abp_1_${'a'.repeat(32)}_${'b'.repeat(64)}`,
+    })
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      config +
+        `
+[accounts."plan,primary"]
+kind = "chatgpt-subscription"
+credentialEnv = "PLAN_ACCESS"
+[accounts.other]
+kind = "chatgpt-subscription"
+credentialEnv = "OTHER_ACCESS"
+`,
+    )
+    for (const command of [
+      ['git', 'remote', 'add', 'origin', origin],
+      ['git', 'add', 'autobuild.toml'],
+      ['git', 'commit', '-m', 'hosted accounts'],
+    ])
+      expect((await spawnExec(command, { cwd: repo })).exitCode).toBe(0)
+    let runtimeChecks = 0
+    const report = await validateInitReadiness({
+      targetRepo: repo,
+      env,
+      runtimes: {
+        ...usableRuntime,
+        fake: {
+          ...usableRuntime.fake!,
+          initUsable: async () => {
+            runtimeChecks++
+            return { usable: true, reason: 'ready' }
+          },
+        },
+        codex: {
+          runner,
+          servesModels: ['gpt-'],
+          oneShot: {
+            complete: async () => {
+              throw new Error('hosted metadata must not attempt inference')
+            },
+          },
+        },
+      },
+      openStore: () => readOnlyStore([]),
+      createForge: async () => new FakeForge(),
+    })
+    expect(report.exitCode).toBe(0)
+    expect(metadataReads).toBe(1)
+    expect(runtimeChecks).toBe(1)
+    for (const name of ['plan,primary', 'other'])
+      expect(
+        report.checks.some(
+          (check) =>
+            check.name === `account ${JSON.stringify(name)}` &&
+            check.status === 'pass' &&
+            check.detail.includes('Hosted metadata readiness only'),
+        ),
+      ).toBe(true)
+  } finally {
+    await service.stop(true)
+  }
+})
+
+test('missing local ChatGPT credential names the account and local login destination', async () => {
+  const { repo, config } = await committedLocalRepo('ab-local-chatgpt-missing-')
+  await writeFile(
+    join(repo, 'autobuild.toml'),
+    config +
+      '\n[accounts.personal]\nkind = "chatgpt-subscription"\ncredentialEnv = "PLAN_ACCESS"\n',
+  )
+  const report = await validateInitReadiness({ targetRepo: repo, env: {} })
+  expect(report.exitCode).toBe(1)
+  expect(report.checks[0]!.detail).toBe(
+    'Credential absent; run ab accounts login "personal" --local',
+  )
+})
