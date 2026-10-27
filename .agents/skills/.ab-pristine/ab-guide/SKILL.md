@@ -985,7 +985,7 @@ consumed by the core `plan` phase, and nothing is reported.
 | `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
 | `account` | Named billing account; inherits independently on primaries and alternates. Omission selects the sole Claude subscription account for a Claude route. |
 | `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; when neither names a model, a Claude route selecting a Kimi Code account uses `kimi-for-coding`, and every other route uses its runtime's own default. |
-| `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Model and parsed protocol/output-mode spellings are rejected eagerly; Claude routes with a selected account additionally reject `--settings`, `--setting-sources`, and `--bare` because Autobuild owns their authentication settings. |
+| `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Model and parsed protocol/output-mode spellings are rejected eagerly; Claude routes with a selected account additionally reject `--settings`, `--setting-sources`, and `--bare` because Autobuild owns their authentication settings. Codex routes selecting a ChatGPT subscription account additionally reject `-c`, `--config`, `--profile`, `-p`, `--enable`, and `--disable` because Autobuild owns their provider and configuration routing. |
 | `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role and directs migration to `args`. |
 | `sessionBudgetSeconds` | policy fallback | optional positive integer | Active-time budget for each build phase session on this logical role; suspended intervals are excluded and native continuation retains the original ceiling. Omitted ⇒ inherit `[roles.default].sessionBudgetSeconds`; absent there too ⇒ `[policy].sessionBudgetSeconds`. One value covers the primary and every alternate. |
 | `alternates` | `[]` | optional ordered array of strict `{ runtime?, model?, account?, args?, extensions? }` entries | Failure-triggered targets. Omitted ⇒ inherit `[roles.default].alternates`; a role list, including `[]`, replaces it wholesale. Each entry overlays that role's effective primary axes and is eagerly validated. `extensions` remains only the deprecated no-op. |
@@ -1007,7 +1007,11 @@ emit: Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex
 rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude
 routes with a selected account additionally reject `--settings`,
 `--setting-sources`, and `--bare` because Autobuild owns their authentication
-settings. Routes without an account retain the existing argument behavior. Exact
+settings. Codex routes selecting a ChatGPT subscription account additionally
+reject `-c`, `--config`, `--profile`, `-p`, `--enable`, and `--disable`
+because Autobuild owns their provider and configuration routing. This includes
+using `-c` to set reasoning effort. Routes without an account retain the existing
+argument behavior. Exact
 spellings, `--option=value` forms, and documented compact short aliases join
 that same role-naming aggregate. Every other option passes through without
 Autobuild validation, including sandbox, approval, session, tool, skill,

@@ -2261,8 +2261,11 @@ Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
 also reject a standalone `--` because Autobuild owns and appends that structural
 separator immediately before their positional prompt. Claude routes with a selected
 account additionally reject `--settings`, `--setting-sources`, and `--bare`
-because Autobuild owns their authentication settings. Routes without an account
-retain the existing argument behavior. Those option spellings,
+because Autobuild owns their authentication settings. Codex routes selecting a
+ChatGPT subscription account additionally reject `-c`, `--config`, `--profile`,
+`-p`, `--enable`, and `--disable` because Autobuild owns their provider and
+configuration routing. This includes using `-c` to set reasoning effort. Routes
+without an account retain the existing argument behavior. Those option spellings,
 `--option=value` forms, compact documented short aliases, and the exact affected
 prompt separator join the eager aggregated startup error with a
 role/runtime-specific diagnostic. Every other option passes through without
