@@ -163,6 +163,7 @@ export interface WorkspaceReadinessContext {
   configBytes: string
   exec: Exec
   redact: (value: unknown) => string
+  accounts?: import('../../config/accounts').Accounts
   runtimeReferences: readonly RuntimeReferenceGroup[]
   stdout: (line: string) => void
   signal?: AbortSignal

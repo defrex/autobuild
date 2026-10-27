@@ -1,3 +1,4 @@
+import { selectedAccountSchema } from '../config/accounts'
 import { runtimeIdentitySchema } from './runtime'
 import { viaSchema } from './envelope'
 import { nativeSessionHandleSchema } from './native-session'
@@ -141,6 +142,7 @@ export const agentFailureCauseSchema = z.enum([
 
 /** One configured execution target that failed within a single phase attempt. */
 export const providerAttemptSchema = z.strictObject({
+  account: selectedAccountSchema.optional(),
   index: z.number().int().nonnegative(),
   session: z.string().min(1),
   runner: z.string().min(1),
@@ -846,6 +848,7 @@ export const eventPayloadSchemas = {
     model: z.string().optional(),
     /** Optional only so historical events replay without migration. */
     args: z.array(z.string()).optional(),
+    account: selectedAccountSchema.optional(),
     phase: phaseSchema,
     round: round.optional(),
     /** Stream id this session's live view writes to (SPEC §9, session
