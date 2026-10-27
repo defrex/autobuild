@@ -1,3 +1,4 @@
+import type { SelectedAccount } from '../config/accounts'
 import {
   advanceVerifyStage,
   initialVerifyStageState,
@@ -118,6 +119,7 @@ export interface OpenSession {
   nativeHandle?: NativeSessionHandle
   continuation?: EventPayload<'session.started'>['continuation']
   budgetMs?: number
+  account?: SelectedAccount
   args?: string[]
   startedAt: string
   nativeResumeFallback?: boolean
@@ -463,7 +465,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 24
+export const BUILD_REDUCER_VERSION = 25
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -865,6 +867,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           continuation: event.payload.continuation,
           budgetMs: event.payload.budgetMs,
           args: event.payload.args,
+          account: event.payload.account,
           startedAt: event.ts,
           nativeHandle: event.payload.continuation?.handle,
           session: event.payload.session,

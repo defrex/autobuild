@@ -93,6 +93,43 @@ describe('settleExecution', () => {
     }
   }
 
+  test('missing-credential attention is durable and deduplicated while exits still release leases and settle publication', async () => {
+    const attention =
+      'Missing credentials: account "review" (REVIEW_TOKEN): renew with claude setup-token'
+    let observation: ExecutionObservation = { state: 'running', attention }
+    const h = harness(observation)
+    h.execution.observe = async () => observation
+    await h.seed()
+    await h.store.claimLease('build', 'i1', 60_000)
+    await h.store.append('build', {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'i1',
+        commandId: 'cmd-1',
+      },
+    })
+    const settle = async () => settleExecution(h, 'build', await h.store.getEvents('build'))
+    expect(await settle()).toBe('running')
+    expect(await settle()).toBe('running')
+    const blocked = await h.store.getEvents('build')
+    const escalations = blocked.filter((event) => event.type === 'escalation.raised')
+    expect(escalations).toHaveLength(1)
+    expect(escalations[0]!.payload.question).toBe(attention)
+    expect((await h.store.getBuild('build'))!.lease?.holder).toBe('i1')
+    observation = { state: 'ended', exitCode: 0, attention }
+    expect(await settle()).toBe('settled')
+    expect((await h.store.getBuild('build'))!.lease).toBeUndefined()
+    expect(h.settled).toEqual(['build'])
+    expect(
+      (await h.store.getEvents('build')).filter((event) => event.type === 'escalation.raised'),
+    ).toHaveLength(1)
+    expect(await settle()).toBe('settled')
+    expect(h.settled).toEqual(['build'])
+  })
+
   for (const exitCode of [0, 1]) {
     test(`durable relaunch intent survives supervisor loss; exit ${exitCode} remains factual`, async () => {
       const h = harness({ state: 'ended', exitCode })

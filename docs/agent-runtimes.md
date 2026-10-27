@@ -16,11 +16,11 @@ A runtime transports agent turns: it starts, continues, cancels and ends session
 
 Install with `bun add -d --exact @defrex/autobuild`. Examples are complete minimal configs for local execution: install and authenticate the CLI on the dispatcher host, then run `bun ab init --validate`.
 
-A subscription login is host state and doesn't reach a remote sandbox. Remotely, provision every selected runtime and alternate and forward only API credentials; see [Workspaces](workspaces.md).
+Claude Code supports named subscription and Kimi Code billing [accounts](configuration-overview.md#accounts). In a remote sandbox, the guest holds placeholders and host egress policy supplies credentials only to the selected provider. Use the unmodified runtime with your own subscription for ordinary individual usage. Provision every selected runtime and alternate; Pi and Codex retain their existing authentication. See [Workspaces](workspaces.md).
 
 | Runtime | Models | Model ids | Default model |
 |---|---|---|---|
-| `claude` | Anthropic, via Claude Code | `claude-` family | the CLI's default |
+| `claude` | Anthropic or a selected Kimi Code account, via Claude Code | `claude-` family; Kimi membership IDs with a Kimi account | CLI default; `kimi-for-coding` for Kimi |
 | `codex` | OpenAI, via the Codex CLI | `gpt-` family | the CLI's default |
 | `pi` | many providers | `provider/model` | `kimi-coding/k3` |
 
@@ -28,7 +28,7 @@ Set the model with the role's `model` field, not in `args`; the adapter owns mod
 
 ### Claude Code (`claude`)
 
-Install `claude` ([setup](https://code.claude.com/docs/en/setup)) and log in. API-backed environments need a provider credential such as `ANTHROPIC_API_KEY`, not copied login state; see [Claude authentication](https://code.claude.com/docs/en/authentication).
+Install `claude` ([setup](https://code.claude.com/docs/en/setup)) and log in. Remote environments can select a declared subscription or Kimi Code account; legacy API routes can use `ANTHROPIC_API_KEY`. Host login files are not copied; see [Claude authentication](https://code.claude.com/docs/en/authentication).
 
 <!-- seam-config:start -->
 ```toml

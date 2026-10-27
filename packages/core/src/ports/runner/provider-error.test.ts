@@ -92,3 +92,16 @@ describe('classifyProviderError', () => {
     expect(isAlternateEligible(credentialFailure('not logged in'))).toBe(false)
   })
 })
+
+test('OAuth credential rejections require renewal while quota retains fallback', () => {
+  for (const message of [
+    'OAuth access token is invalid',
+    'Failed to authenticate. API Error: 401 Invalid bearer token',
+    'OAuth access token is expired',
+  ]) {
+    const failure = classifyProviderError(message)
+    expect(failure.cause).toBe('credentials')
+    expect(isAlternateEligible(failure)).toBe(false)
+  }
+  expect(isAlternateEligible(classifyProviderError('OAuth access token quota exceeded'))).toBe(true)
+})
