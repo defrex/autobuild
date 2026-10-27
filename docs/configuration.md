@@ -22,10 +22,12 @@ An **acceptance check** is a repository-owned agent verify step that runs the bu
 
 ## `[accounts]`
 
-Named accounts select billing for the unmodified Claude Code runtime, using
-only the user's own subscription within ordinary individual usage. Provision
-credentials manually on the dispatcher host; Autobuild never runs
-`claude setup-token`, signs in, or collects its output.
+Named accounts select billing for Claude Code or Codex using the user's own
+subscription or membership. Provision Claude and Kimi credentials manually on
+the dispatcher host; Autobuild never runs `claude setup-token` or collects its
+output. ChatGPT subscription accounts use OpenAI's browser authorization through
+`ab accounts login NAME`; see [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions)
+for destinations, protected storage and the single-refresher rule.
 
 <!-- config-fragment:accounts -->
 ```toml
@@ -51,12 +53,15 @@ model = "kimi-for-coding"
 
 `account` inherits independently on roles and alternates. Without an explicit
 selection, a Claude route chooses the sole Claude subscription account; multiple
-subscription accounts require an explicit selection. Account references on other
-runtimes are rejected. Repositories with no accounts retain legacy authentication.
+Claude subscription accounts require an explicit selection. ChatGPT accounts
+require explicit selection on Codex; Claude and Kimi accounts require Claude Code.
+Incompatible runtime selections are rejected. Repositories with no accounts
+retain legacy authentication.
 Locally a Claude subscription can use its named token or the host login; Kimi
-requires its membership key. Invalid credentials need renewal (`claude setup-token`
-for Claude, replacement membership key for Kimi); quota and overload failures
-retain alternate fallback.
+requires its membership key. Invalid Claude/Kimi credentials need renewal
+(`claude setup-token` for Claude, replacement membership key for Kimi). Invalid
+ChatGPT credentials require `ab accounts login NAME` for the owning destination;
+quota and overload failures retain alternate fallback.
 
 Choose the region of your Kimi membership. The default `overseas` selects
 `https://api.kimi.ai/coding/`; `china` selects `https://api.kimi.com/coding/`.
@@ -70,9 +75,18 @@ an exact account placeholder header only on its provider's exact hostname.
 The next dispatcher observation tick refreshes credentials for subsequent
 requests without reprovisioning. Changing a local dispatcher's `.env` still needs
 a restart. Accounts are deployment-owned descriptors; configuration artifacts
-contain variable names, never values. Validation reports host credential presence
-and makes one minimal Claude Code model request per declared account, including
-unused accounts, in the disposable sandbox.
+contain variable names, never values. ChatGPT accounts must use credential slots
+distinct from every other account. Existing ChatGPT descriptors cannot be
+replaced or removed during live configuration reload: stop dispatch first, or
+introduce a new account name. This restriction qualifies the hot-reload entries
+below.
+
+Validation reports credential readiness and makes one minimal model request per
+declared account, including unused accounts, through its runtime (Claude Code
+for Claude/Kimi, Codex for ChatGPT) in the disposable sandbox. Hosted ChatGPT
+project secrets report readiness from write-only status metadata instead; the
+first hosted build is the live check. See
+[ChatGPT subscriptions](accounts.md#chatgpt-subscriptions).
 
 <!-- configuration-reference:accounts -->
 
@@ -85,7 +99,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Named Claude subscription or Kimi Code billing accounts. Descriptors contain credential variable names only.
+**Description:** Named Claude subscription, Kimi Code, or ChatGPT subscription billing accounts. Descriptors contain credential variable names only.
 
 **Constraints:** Entry names: nonempty
 
@@ -93,7 +107,7 @@ unused accounts, in the disposable sandbox.
 
 **TOML key:** `accounts.<name>`
 
-- **Type:** `strict table | strict table`
+- **Type:** `strict table | strict table | strict table`
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
@@ -101,6 +115,32 @@ unused accounts, in the disposable sandbox.
 **Description:** Named nonsecret billing account descriptor.
 
 **Constraints:** None beyond the input type.
+
+#### `accounts.<name>.kind` (kind = "chatgpt-subscription")
+
+**TOML key:** `accounts.<name>.kind`
+
+- **Type:** `"chatgpt-subscription"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "chatgpt-subscription"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
+
+**Constraints:** None beyond the input type.
+
+#### `accounts.<name>.credentialEnv` (kind = "chatgpt-subscription")
+
+**TOML key:** `accounts.<name>.credentialEnv`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "chatgpt-subscription"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
+
+**Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
 
 #### `accounts.<name>.kind` (kind = "claude-subscription")
 
@@ -111,7 +151,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "claude-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Claude subscription or Kimi Code membership using the unmodified Claude runtime.
+**Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
 
 **Constraints:** None beyond the input type.
 
@@ -124,7 +164,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "claude-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Dispatcher-host environment variable holding the credential; never the credential itself.
+**Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
 
 **Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
 
@@ -137,7 +177,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "kimi-code"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Claude subscription or Kimi Code membership using the unmodified Claude runtime.
+**Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
 
 **Constraints:** None beyond the input type.
 
@@ -150,7 +190,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "kimi-code"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Dispatcher-host environment variable holding the credential; never the credential itself.
+**Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
 
 **Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
 
@@ -334,7 +374,7 @@ These fields hot-reload:
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's selection applies unless unknown names require default-all fallback, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
-| `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary; credentials refresh on observation ticks. |
+| `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary, except existing ChatGPT descriptors require stopped dispatch before replacement or removal (see [accounts](#accounts)); credentials refresh on observation ticks. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
@@ -1340,8 +1380,8 @@ plugins, installed skills, setup, runtimes, checks, and phase CLI commands all
 resolve in the guest checkout. Only names in `environmentVariables`, declared account placeholders, and scoped `AB_STORE`/`AB_TOKEN` enter
 commands—dispatcher environment variables are never copied wholesale. Pi in a
 sandbox should use an API-key provider such as `vercel-ai-gateway/...` with
-`AI_GATEWAY_API_KEY`; never copy dispatcher `~/.pi` state, OAuth refresh tokens,
-or attempt an interactive login. Codex and plugin runtimes retain their existing API authentication. Claude Code can instead select a declared billing account, whose real credential stays on the host.
+`AI_GATEWAY_API_KEY`; never copy dispatcher `~/.pi` state, Pi OAuth refresh tokens,
+or attempt an interactive login. Plugin runtimes retain their existing API authentication. Claude Code can select a subscription or Kimi billing account. Codex can explicitly select a ChatGPT subscription authorized with `bun ab accounts login NAME`; one local dispatcher or hosted refreshing secret owns renewal, and the real tokens stay on the host.
 
 The opt-in live lifecycle suite is
 `packages/core/src/scenarios/vercel-sandbox.live.test.ts`. Set
@@ -2235,8 +2275,11 @@ Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
 also reject a standalone `--` because Autobuild owns and appends that structural
 separator immediately before their positional prompt. Claude routes with a selected
 account additionally reject `--settings`, `--setting-sources`, and `--bare`
-because Autobuild owns their authentication settings. Routes without an account
-retain the existing argument behavior. Those option spellings,
+because Autobuild owns their authentication settings. Codex routes selecting a
+ChatGPT subscription account additionally reject `-c`, `--config`, `--profile`,
+`-p`, `--enable`, and `--disable` because Autobuild owns their provider and
+configuration routing. This includes using `-c` to set reasoning effort. Routes
+without an account retain the existing argument behavior. Those option spellings,
 `--option=value` forms, compact documented short aliases, and the exact affected
 prompt separator join the eager aggregated startup error with a
 role/runtime-specific diagnostic. Every other option passes through without
@@ -3380,9 +3423,11 @@ the existing text-download projection.
   Git remote can fetch/push with the process's Git credentials;
 - Claude sessions invoke the local `claude` CLI and use its configured login;
   install Claude Code, launch `claude`, and complete login before dispatching;
-- Codex sessions invoke the local `codex` CLI and use its configured login;
-  install Codex, run `codex login`, and complete authentication before
-  dispatching;
+- Codex sessions invoke the local `codex` CLI. Without a named ChatGPT account,
+  run `codex login` before dispatching. Named ChatGPT accounts use
+  `ab accounts login NAME --local` for a local dispatcher or `--project` for a
+  connected project; they preserve the user's ambient Codex login. See
+  [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions);
 - Pi sessions use Pi's provider authentication: start `pi` and run `/login`
   inside the interactive session, or, for non-interactive use, supply the
   provider credentials Pi supports (such as provider API keys in the environment).
@@ -3470,7 +3515,10 @@ progress is not shown. Harvest does not consume build capacity.
   and Contents write permission.
 - **Agent runtime/provider:** authenticate the runtime selected by the merged
   role. A missing Codex adapter diagnostic names both `codex runtime` and the
-  `codex` executable; install it and run `codex login`. A 401/402/403,
+  `codex` executable; install it. For legacy Codex authentication, run
+  `codex login`. For a named ChatGPT account, sign in again with
+  `ab accounts login NAME --local` or `--project` for the owning destination; see
+  [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions). A 401/402/403,
   permission, quota, or billing rejection is treated as a permanent provider
   failure rather than retried indefinitely. For Pi, confirm the
   provider-qualified model and provider login.

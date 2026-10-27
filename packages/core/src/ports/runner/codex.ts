@@ -1,3 +1,5 @@
+import { accountRemedy, type SelectedAccount } from '../../config/accounts'
+import { chatgptProvider } from './chatgpt-provider'
 import { hostname } from 'node:os'
 import {
   guardNativeHandle,
@@ -53,6 +55,7 @@ import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 import { sessionEnv } from './session-env'
 
 export interface CodexCliInvocation {
+  account?: SelectedAccount
   /** Arguments after the `codex` executable. */
   args: string[]
   cwd: string
@@ -251,14 +254,21 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     ]
     for (const feature of ONE_SHOT_DISABLED_FEATURES) args.push('--disable', feature)
     if (input.model !== undefined) args.push(CODEX_MODEL_ARG, input.model)
-    args.push(...(input.args ?? []), CODEX_PROMPT_BOUNDARY, input.prompt)
+    const provider = await chatgptProvider(input.account, sessionEnv(input.env), input.cwd)
+    args.push(
+      ...(input.args ?? []),
+      ...provider.args.filter((arg) => arg !== '--ignore-user-config'),
+      CODEX_PROMPT_BOUNDARY,
+      input.prompt,
+    )
 
     const turn = await this.runPrompt({
       args,
       cwd: input.cwd,
-      env: sessionEnv(input.env),
+      account: input.account,
+      env: provider.env,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
-    })
+    }).finally(provider.close)
     if (turn.failure !== undefined) throw new Error(turn.failure.message)
     if (turn.toolItems.length > 0) {
       throw new Error(
@@ -445,40 +455,49 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       SHELL_ENV_INHERIT,
     )
     if (opts.model !== undefined) args.push(CODEX_MODEL_ARG, opts.model)
-    args.push(...(opts.args ?? []))
+    const provider =
+      opts.account?.descriptor.kind === 'chatgpt-subscription'
+        ? await chatgptProvider(opts.account, sessionEnv(opts.env), opts.workspacePath)
+        : { env: sessionEnv(opts.env), args: [] as string[], close: async () => {} }
+    args.push(...(opts.args ?? []), ...provider.args)
     if (resume !== undefined) args.push(resume)
     args.push(CODEX_PROMPT_BOUNDARY, prompt)
     const invocation: CodexCliInvocation = {
       args,
       cwd: opts.workspacePath,
-      env: sessionEnv(opts.env),
+      account: opts.account,
+      env: provider.env,
       ...(signal !== undefined ? { signal } : {}),
     }
-    if (opts.stream === undefined && opts.onNativeSession === undefined)
-      return this.runPrompt(invocation)
-    if (opts.stream === undefined) {
-      if (this.runCliStream !== undefined)
-        return this.runStreamingPrompt(invocation, undefined, observe)
-      const turn = await this.runPrompt(invocation)
-      for (const event of turn.events) await observeEvent(event)
-      return turn
-    }
+    try {
+      if (opts.stream === undefined && opts.onNativeSession === undefined)
+        return await this.runPrompt(invocation)
+      if (opts.stream === undefined) {
+        if (this.runCliStream !== undefined)
+          return await this.runStreamingPrompt(invocation, undefined, observe)
+        const turn = await this.runPrompt(invocation)
+        for (const event of turn.events) await observeEvent(event)
+        return turn
+      }
 
-    // Streaming turn: translate while the CLI runs. Without an injected
-    // streaming boundary (offline fakes), the buffered path still translates
-    // after completion — degraded latency, same content.
-    const emitter = opts.stream
-    emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
-    let turn: CodexTurn
-    if (this.runCliStream !== undefined) {
-      turn = await this.runStreamingPrompt(invocation, emitter, observe)
-    } else {
-      turn = await this.runPrompt(invocation)
-      for (const event of turn.events) await observeEvent(event)
-      translateBufferedCodexTurn(turn, (parts) => emitter?.append(parts))
+      // Streaming turn: translate while the CLI runs. Without an injected
+      // streaming boundary (offline fakes), the buffered path still translates
+      // after completion — degraded latency, same content.
+      const emitter = opts.stream
+      emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
+      let turn: CodexTurn
+      if (this.runCliStream !== undefined) {
+        turn = await this.runStreamingPrompt(invocation, emitter, observe)
+      } else {
+        turn = await this.runPrompt(invocation)
+        for (const event of turn.events) await observeEvent(event)
+        translateBufferedCodexTurn(turn, (parts) => emitter?.append(parts))
+      }
+      this.emitTurnEnd(turn, emitter, signal)
+      return turn
+    } finally {
+      await provider.close()
     }
-    this.emitTurnEnd(turn, emitter, signal)
-    return turn
   }
 
   /** Completed-turn, failed-turn, and cancelled-turn closing parts. */
@@ -550,7 +569,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       // The result promise below still carries the CLI's exit and stderr.
     }
     const cli = await handle.result
-    return this.finishTurn(cli, acc.snapshot())
+    return this.finishTurn(cli, acc.snapshot(), invocation.account)
   }
 
   private async runPrompt(invocation: CodexCliInvocation): Promise<CodexTurn> {
@@ -560,11 +579,15 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     } catch (error) {
       return launchFailure(error)
     }
-    return this.finishTurn(cli, parseCodexOutput(cli.stdout))
+    return this.finishTurn(cli, parseCodexOutput(cli.stdout), invocation.account)
   }
 
   /** Shared post-processing of a completed CLI run. */
-  private finishTurn(cli: CodexCliResult, parsed: ParsedCodexOutput): CodexTurn {
+  private finishTurn(
+    cli: CodexCliResult,
+    parsed: ParsedCodexOutput,
+    account?: SelectedAccount,
+  ): CodexTurn {
     const text = parsed.assistantText.join('\n')
     let failureMessage: string | undefined
     let loggedOut = false
@@ -588,6 +611,15 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
       failureMessage = `${this.name} runtime: Codex CLI stream ended without a turn.completed event`
     }
 
+    if (
+      failureMessage &&
+      account?.descriptor.kind === 'chatgpt-subscription' &&
+      classifyProviderError(failureMessage, { status: parsed.statuses[0], codes: parsed.codes })
+        .cause === 'credentials'
+    ) {
+      failureMessage = accountRemedy(account)
+      loggedOut = true
+    }
     return {
       text,
       usage: parsed.usage,
