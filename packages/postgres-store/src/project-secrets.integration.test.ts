@@ -1,3 +1,4 @@
+import { chatgptStateSchema } from '@defrex/autobuild/project-secrets'
 import { expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import { migratePostgres } from './schema'
@@ -736,5 +737,73 @@ live(
       expect(snapshot.env.PLAN_ACCESS).toBe('short-lived')
       expect(calls).toBe(1)
       await store.markSupplied(snapshot)
+    }),
+)
+
+live(
+  'typed ChatGPT registrations retain encrypted rotating state and stable project host identity',
+  () =>
+    fixture(async (sql, _url, projects) => {
+      const now = Date.now()
+      let calls = 0
+      const adapter: RefreshKind = {
+        validateState: (raw) => chatgptStateSchema.safeParse(raw).success,
+        refresh: async (raw) => {
+          calls++
+          const state = chatgptStateSchema.parse(raw)
+          const next = {
+            ...state,
+            accessToken: 'sentinel-next-access',
+            refreshToken: 'sentinel-next-refresh',
+            expiresAt: now + 7200000,
+            earliestRefreshAt: now + 3600000,
+          }
+          return {
+            accessToken: next.accessToken,
+            expiresAt: next.expiresAt,
+            earliestRefreshAt: next.earliestRefreshAt,
+            state: next,
+          }
+        },
+      }
+      const store = new PostgresProjectSecrets(
+        sql,
+        projects,
+        () => key,
+        new Map([['chatgpt-subscription', adapter]]),
+      )
+      const hostId = await store.chatgptHost(repo)
+      expect(hostId).toBe(await store.chatgptHost(repo))
+      const state = {
+        version: 1 as const,
+        hostId,
+        clientId: 'issued',
+        subject: 'subject',
+        accessToken: 'sentinel-initial-access',
+        refreshToken: 'sentinel-initial-refresh',
+        idToken: 'sentinel-id-token',
+        scopes: ['chatgpt.tokens.use.direct', 'offline_access'],
+        expiresAt: now + 3600000,
+        earliestRefreshAt: now - 1000,
+      }
+      await store.setChatGPT(repo, 'CHATGPT_ACCESS', state, 'member')
+      const snapshots = await Promise.all([
+        store.resolveForTick(repo, now + 600000, now + 10000),
+        store.resolveForTick(repo, now + 600000, now + 10000),
+      ])
+      expect(calls).toBe(1)
+      expect(snapshots[0]!.env).toEqual({ CHATGPT_ACCESS: 'sentinel-next-access' })
+      const persisted = JSON.stringify(await sql`SELECT * FROM project_secrets`)
+      const metadata = JSON.stringify(await store.list(repo))
+      for (const value of [
+        'sentinel-initial-access',
+        'sentinel-initial-refresh',
+        'sentinel-next-access',
+        'sentinel-next-refresh',
+        'sentinel-id-token',
+      ]) {
+        expect(persisted).not.toContain(value)
+        expect(metadata).not.toContain(value)
+      }
     }),
 )

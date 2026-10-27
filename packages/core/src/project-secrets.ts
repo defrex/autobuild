@@ -130,3 +130,6 @@ export function decodeSecretMetadata(raw: unknown): ProjectSecretMetadata {
     ...(r.warnings === undefined ? {} : { warnings: [...r.warnings] }),
   }
 }
+
+export { chatgptStateSchema, credentialValues, type ChatGPTState } from './accounts/chatgpt-state'
+export { refreshChatGPT } from './accounts/chatgpt-oauth'

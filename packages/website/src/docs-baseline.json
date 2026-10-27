@@ -200,11 +200,12 @@
     "title": "Repository configuration",
     "group": "reference",
     "description": "Map autobuild.toml settings to verification, agent roles, capacity, ticket readiness, merge policy, and editable skills.",
-    "textHash": "c9985a3210cfba6420544493c95e56583abe4df7a3fe047de8af5c01ef9bf85e",
+    "textHash": "9e3490af178932a65b0d9f4e370b3fa22849dfb589828a058fa8d6a910b34ad1",
     "headings": [
       "Commands and extension steps",
       "Roles, models, and limits",
       "Accounts",
+      "ChatGPT subscriptions",
       "Admission and merge",
       "Editable skills and installation"
     ],
@@ -212,6 +213,7 @@
       "[commands]\ntypecheck = \"bun tsc --noEmit\"\n\n[verify]\nsteps = [\"types\", \"acceptance\"]\n\n[verify.types]\nkind = \"check\"\ncommand = \"typecheck\"\nalways = true\n\n[verify.acceptance]\nkind = \"agent\"\nskill = \"verify-acceptance\" # repository-authored skill",
       "capacity = 2\n\n[roles.default]\nruntime = \"claude\"\n\n[roles.code-review]\nruntime = \"pi\"\nmodel = \"kimi-coding/k3\"\n\n[policy]\nmaxReviewRounds = 6\nmaxVerifyAttempts = 3\nsessionBudgetSeconds = 3600",
       "[accounts.personal]\nkind = \"claude-subscription\"\ncredentialEnv = \"CLAUDE_CODE_OAUTH_TOKEN\"\n\n[accounts.kimi]\nkind = \"kimi-code\"\ncredentialEnv = \"KIMI_CODE_KEY\"\nregion = \"overseas\"\n\n[accounts.kimi-china]\nkind = \"kimi-code\"\ncredentialEnv = \"KIMI_CHINA_KEY\"\nregion = \"china\"\n\n[roles.implement]\nruntime = \"claude\"\naccount = \"kimi\"\nmodel = \"kimi-for-coding\"",
+      "[accounts.chatgpt]\nkind = \"chatgpt-subscription\"\ncredentialEnv = \"CHATGPT_ACCESS_TOKEN\"\n\n[roles.implement]\nruntime = \"codex\"\naccount = \"chatgpt\"",
       "bun ab init\nbun ab init --validate",
       "bun ab upgrade"
     ]

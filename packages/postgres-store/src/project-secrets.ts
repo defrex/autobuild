@@ -1,7 +1,10 @@
 import { SQL } from 'bun'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHmac } from 'node:crypto'
 import {
   ProjectSecretError,
+  chatgptStateSchema,
+  refreshChatGPT,
+  type ChatGPTState,
   validateSecretName,
   validateSecretValue,
   type ProjectSecretMetadata,
@@ -34,6 +37,8 @@ export interface SecretSnapshot {
 export interface ProjectSecretsManagement {
   list(repo: string): Promise<ProjectSecretMetadata[]>
   set(repo: string, name: string, value: string, actor: string): Promise<void>
+  chatgptHost?(repo: string): Promise<string>
+  setChatGPT?(repo: string, name: string, state: ChatGPTState, actor: string): Promise<void>
   remove(repo: string, name: string, actor: string): Promise<void>
 }
 export interface ProjectSecretsResolver {
@@ -126,7 +131,47 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     validateSecretValue(value)
     return this.setPayload(repo, name, 'static', { value }, actor)
   }
-  /** Internal only: future provider sign-in writes opaque refresh state here. */
+  async chatgptHost(raw: string): Promise<string> {
+    const repo = await this.registered(raw)
+    const key = this.key()
+    if (!key) throw new ProjectSecretError('key-unavailable')
+    const bytes = createHmac('sha256', key)
+      .update(JSON.stringify(['chatgpt-host', repo]))
+      .digest()
+      .subarray(0, 16)
+    bytes[6] = (bytes[6]! & 15) | 64
+    bytes[8] = (bytes[8]! & 63) | 128
+    const hex = bytes.toString('hex')
+    return (
+      'urn:uuid:' +
+      [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join(
+        '-',
+      )
+    )
+  }
+  async setChatGPT(repo: string, name: string, raw: ChatGPTState, actor: string): Promise<void> {
+    const result = chatgptStateSchema.safeParse(raw)
+    if (!result.success || result.data.expiresAt <= this.now())
+      throw new ProjectSecretError('invalid-secret')
+    const state = result.data
+    if (state.hostId !== (await this.chatgptHost(repo)))
+      throw new ProjectSecretError('invalid-secret')
+    await this.setPayload(
+      repo,
+      name,
+      'chatgpt-subscription',
+      {
+        accessToken: state.accessToken,
+        expiresAt: state.expiresAt,
+        ...(state.earliestRefreshAt === undefined
+          ? {}
+          : { earliestRefreshAt: state.earliestRefreshAt }),
+        state,
+      },
+      actor,
+    )
+  }
+  /** Internal provider state never crosses the metadata read protocol. */
   async setPayload(
     raw: string,
     name: string,
@@ -384,7 +429,25 @@ export async function openPostgresProjectSecretsFromEnv(
       sql,
       projects,
       () => env.AB_PROJECT_SECRETS_KEY,
-      new Map(),
+      new Map([
+        [
+          'chatgpt-subscription',
+          {
+            validateState: (state: unknown) => chatgptStateSchema.safeParse(state).success,
+            refresh: async (raw: unknown, signal: AbortSignal) => {
+              const state = await refreshChatGPT(chatgptStateSchema.parse(raw), signal)
+              return {
+                accessToken: state.accessToken,
+                expiresAt: state.expiresAt,
+                ...(state.earliestRefreshAt === undefined
+                  ? {}
+                  : { earliestRefreshAt: state.earliestRefreshAt }),
+                state,
+              }
+            },
+          },
+        ],
+      ]),
       Date.now,
       true,
     )

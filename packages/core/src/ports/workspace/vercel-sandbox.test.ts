@@ -3662,3 +3662,45 @@ test('legacy observation makes no policy writes and still settles command exit',
   })
   expect(h.sandbox.policies).toHaveLength(updates)
 })
+
+test('ChatGPT policies rotate for active sessions and missing credentials stop the guest', async () => {
+  const env: Record<string, string | undefined> = {
+    CHATGPT_ACCESS: 'sentinel-chatgpt-first',
+    ANTHROPIC_API_KEY: 'legacy-key',
+  }
+  const accounts = {
+    plan: { kind: 'chatgpt-subscription', credentialEnv: 'CHATGPT_ACCESS' },
+  } as const
+  const h = harness({ accounts: () => accounts, accountEnv: env })
+  const workspace = await h.provider.provision({
+    repo: '/repo',
+    baseBranch: 'main',
+    branch: 'ab/chatgpt',
+  })
+  h.sandbox.detachedWait = () => new Promise(() => undefined)
+  const execution = await h.provider.buildExecution.start({
+    slug: 'chatgpt',
+    storeRef: 'https://store.example.test',
+    instance: 'i',
+    workspaceRef: workspace.ref,
+  })
+  expect(JSON.stringify(h.sandbox.commands)).not.toContain(env.CHATGPT_ACCESS!)
+  const commands = h.sandbox.commands.length
+  for (const token of ['sentinel-chatgpt-second', 'sentinel-chatgpt-third']) {
+    env.CHATGPT_ACCESS = token
+    expect(await h.provider.buildExecution.observe!(execution.identity!)).toEqual({
+      state: 'running',
+    })
+    const policy = JSON.stringify(h.sandbox.policies.at(-1))
+    expect(policy).toContain('api.openai.com')
+    expect(policy).toContain(token)
+    expect(policy).not.toContain('sentinel-chatgpt-first')
+    expect(h.sandbox.commands.length).toBe(commands)
+  }
+  delete env.CHATGPT_ACCESS
+  const failed = await h.provider.buildExecution.observe!(execution.identity!)
+  expect(failed.state).toBe('lost')
+  expect(failed.attention).toContain('plan')
+  expect(failed.attention).toContain('ab accounts login')
+  expect(h.sandbox.stops).toBeGreaterThan(0)
+})

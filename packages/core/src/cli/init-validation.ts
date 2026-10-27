@@ -1,3 +1,7 @@
+import { LocalCredentials } from '../accounts/local-credentials'
+import { LocalAccountOwner } from '../accounts/local-owner'
+import { abSecrets } from './secrets'
+import type { ProjectSecretMetadata } from '../project-secrets'
 import { accountRemedy } from '../config/accounts'
 import { createForge } from '../ports/forge/create'
 import {
@@ -76,10 +80,7 @@ function effectiveTargets(
   // the pipeline can consume rather than every declared role table.
   createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds, config.accounts)
   return effectiveRuntimeReferences(config).flatMap((group) => {
-    const selected =
-      group.runtime === 'claude' && Object.keys(config.accounts).length
-        ? group.legacyAuthentication
-        : group
+    const selected = Object.keys(config.accounts).length ? group.legacyAuthentication : group
     if (selected === undefined) return []
     const defaultModel = runtimes[group.runtime]?.defaultModel
     return {
@@ -234,9 +235,21 @@ export async function runGuestReadinessProbe(opts: {
         detail: `${descriptor.credentialEnv} is ${opts.env[descriptor.credentialEnv] ? 'present' : 'absent'}${!opts.env[descriptor.credentialEnv] && descriptor.kind === 'claude-subscription' ? '; run claude setup-token for remote use' : ''}`,
       })
       const account = { name, descriptor }
-      const completion = runtimes.claude?.oneShot
+      const runtime = descriptor.kind === 'chatgpt-subscription' ? 'codex' : 'claude'
+      if (
+        descriptor.kind === 'chatgpt-subscription' &&
+        (JSON.parse(opts.env.AB_CHATGPT_HOSTED_READINESS ?? '[]') as string[]).includes(name)
+      ) {
+        checks.push({
+          name: `account ${JSON.stringify(name)}`,
+          status: 'pass',
+          detail: 'Hosted metadata readiness only; the first hosted build is the live check',
+        })
+        continue
+      }
+      const completion = runtimes[runtime]?.oneShot
       try {
-        if (!completion) throw new Error('Claude runtime has no model probe capability')
+        if (!completion) throw new Error(`${runtime} runtime has no model probe capability`)
         await completion.complete({
           prompt: 'Reply only OK.',
           cwd: opts.repo,
@@ -247,7 +260,7 @@ export async function runGuestReadinessProbe(opts: {
           ),
           account,
           model:
-            descriptor.kind === 'kimi-code' ? 'kimi-for-coding' : runtimes.claude?.defaultModel,
+            descriptor.kind === 'kimi-code' ? 'kimi-for-coding' : runtimes[runtime]?.defaultModel,
           signal: AbortSignal.any([
             AbortSignal.timeout(30_000),
             ...(opts.signal ? [opts.signal] : []),
@@ -256,7 +269,7 @@ export async function runGuestReadinessProbe(opts: {
         checks.push({
           name: `account ${JSON.stringify(name)}`,
           status: 'pass',
-          detail: 'minimal Claude Code model request succeeded',
+          detail: `minimal ${runtime} model request succeeded`,
         })
       } catch (error) {
         checks.push({
@@ -423,7 +436,8 @@ function hostPreflight(config: Config, env: Record<string, string | undefined>):
     throw new Error('ticket source "linear" requires LINEAR_API_KEY')
 }
 
-export async function validateInitReadiness(opts: {
+async function validateInitReadinessInner(opts: {
+  resolvedRepo?: string
   targetRepo: string
   env: Record<string, string | undefined>
   /** The raw launcher process environment, alongside the dotenv-augmented
@@ -441,7 +455,7 @@ export async function validateInitReadiness(opts: {
 }): Promise<InitValidationReport> {
   const exec = opts.exec ?? spawnExec
   if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
-  const repo = await resolveMainRepo(opts.targetRepo, exec)
+  const repo = opts.resolvedRepo ?? (await resolveMainRepo(opts.targetRepo, exec))
   const configPath = join(repo, 'autobuild.toml')
   const configBytes = await readFile(configPath, 'utf8')
   const config = await loadConfig(configPath)
@@ -737,5 +751,84 @@ export async function validateInitReadiness(opts: {
       name: redact(check.name),
       detail: redact(check.detail),
     })),
+  }
+}
+
+/** Validation consumes the current owner's access value, never its refresh token. */
+export async function validateInitReadiness(
+  opts: Parameters<typeof validateInitReadinessInner>[0],
+): Promise<InitValidationReport> {
+  const exec = opts.exec ?? spawnExec
+  const repo = await resolveMainRepo(opts.targetRepo, exec)
+  const config = await loadConfig(join(repo, 'autobuild.toml'))
+  const accounts = Object.entries(config.accounts).filter(
+    ([, a]) => a.kind === 'chatgpt-subscription',
+  )
+  if (!accounts.length) return validateInitReadinessInner({ ...opts, resolvedRepo: repo })
+  const credentials = new LocalCredentials(join(repo, '.autobuild'))
+  const owner = new LocalAccountOwner(credentials)
+  const claimed: string[] = []
+  const env = { ...opts.env }
+  const checks: InitValidationReport['checks'] = []
+  try {
+    const service = opts.env.AB_STORE?.trim() || config.store?.url
+    let metadata: ProjectSecretMetadata[] | undefined
+    if (
+      service &&
+      isRemoteStoreRef(service) &&
+      accounts.some(([name]) => !credentials.load(name))
+    ) {
+      await abSecrets('list', undefined, {
+        cwd: repo,
+        env: opts.env,
+        exec,
+        json: true,
+        print: (text) => {
+          metadata = JSON.parse(text).secrets
+        },
+      })
+    }
+    for (const [name, descriptor] of accounts) {
+      const record = credentials.load(name)
+      if (record) {
+        if (!record.owner) {
+          owner.claim(name)
+          claimed.push(name)
+          await owner.tick({ [name]: descriptor })
+        }
+        const current = credentials.load(name)!
+        if (current.status !== 'ready' || current.state.expiresAt <= Date.now())
+          throw new Error(`account ${JSON.stringify(name)}: sign in again with ab accounts login`)
+        env[descriptor.credentialEnv] = current.state.accessToken
+      } else {
+        const entry = metadata?.find(
+          (s) => s.name === descriptor.credentialEnv && s.kind === 'chatgpt-subscription',
+        )
+        const ready = entry?.status === 'ready' && entry.failureCode === null
+        checks.push({
+          name: `account ${JSON.stringify(name)}`,
+          status: ready ? 'pass' : 'fail',
+          detail: entry
+            ? `Hosted credential ${entry.status}; owner ${entry.owner}; set ${entry.setAt}; ${entry.warnings?.join(', ') || 'no refresh-window warning'}. The first hosted build is the live check.`
+            : 'Credential absent; run ab accounts login NAME --project',
+        })
+        if (!ready)
+          return {
+            provider: config.workspace.provider,
+            context:
+              config.workspace.provider === 'git-worktree' ? 'local worktree' : 'Vercel Sandbox',
+            checks,
+            exitCode: 1,
+          }
+        env.AB_CHATGPT_HOSTED_READINESS = [env.AB_CHATGPT_HOSTED_READINESS, name]
+          .filter(Boolean)
+          .join(',')
+        env[descriptor.credentialEnv] = 'autobuild-hosted-metadata-only'
+      }
+    }
+    const report = await validateInitReadinessInner({ ...opts, env, resolvedRepo: repo })
+    return { ...report, checks: [...checks, ...report.checks] }
+  } finally {
+    for (const name of claimed) owner.release(name)
   }
 }

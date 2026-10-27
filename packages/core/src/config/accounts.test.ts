@@ -142,3 +142,19 @@ test.each(['AB_BUILD_RUNNER_OPTIONS', 'AB_HARVEST_RUNNER_OPTIONS'])(
     expect(ambient.KIMI_KEY).toBe('sentinel-previously-forwarded')
   },
 )
+
+test('ChatGPT configuration requires Codex and a unique host-resolved credential slot', () => {
+  const base =
+    '[tickets]\nsource="file"\nreadyState="Ready"\n[roles.default]\nruntime="codex"\naccount="plan"\n'
+  const declaration =
+    '\n[accounts.plan]\nkind="chatgpt-subscription"\ncredentialEnv="PLAN_ACCESS"\n'
+  expect(parseConfig(base + declaration).accounts.plan?.kind).toBe('chatgpt-subscription')
+  expect(() =>
+    parseConfig(base.replace('runtime="codex"', 'runtime="claude"') + declaration),
+  ).toThrow('codex')
+  expect(() =>
+    parseConfig(
+      `${base + declaration}\n[accounts.other]\nkind="chatgpt-subscription"\ncredentialEnv="PLAN_ACCESS"`,
+    ),
+  ).toThrow('distinct')
+})

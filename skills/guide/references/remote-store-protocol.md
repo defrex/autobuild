@@ -1397,9 +1397,17 @@ build, delegated, internal and administrative credentials are refused.
 | --- | --- | --- |
 | `GET /secrets/v1/list?repo=<encoded repository identity>` | Project identity | `{version: 1, secrets: [...]}` |
 | `POST /secrets/v1/set` | `{version: 1, repo, name, value}` | `{version: 1, ok: true}` |
+| `GET /secrets/v1/chatgpt-host?repo=<encoded repository identity>` | Project identity | `{version: 1, hostId}` (nonsecret destination identity) |
+| `POST /secrets/v1/chatgpt` | `{version: 1, repo, name, state}` (validated ChatGPT registration) | `{version: 1, ok: true}` |
 | `POST /secrets/v1/remove` | `{version: 1, repo, name}` | `{version: 1, ok: true}` |
 
-Writes accept only the listed fields. Values are nonempty strings, at most
+The ChatGPT write accepts a strict versioned registration containing its destination
+host ID, issued client ID, validated subject, granted scopes, access/refresh/ID
+tokens and expiry/refresh window. It validates destination identity and stores
+only an encrypted refreshing payload. No response exposes tokens or provider
+state; browser authorization completes on the operator's machine.
+
+Writes accept only the listed fields. Static values are nonempty strings, at most
 64 KiB in UTF-8, without NUL. Names are case-sensitive environment identifiers
 `[A-Z_][A-Z0-9_]*`, at most 128 characters. Dispatcher authority and process-control
 names are reserved: store, forge, Vercel, cron, database, object-storage, loader,
@@ -1423,6 +1431,9 @@ to a kernel, not that a build completed.
 
 On each hosted tick the complete current project set overrides the deployment
 environment for that project only. Replacement/removal applies on the next tick.
+Resolution failure still runs a kernel observation with account credentials
+withheld so existing guest token policies are revoked and affected ChatGPT
+executions stop with attention. It cannot silently retain an old token transform.
 Resolution and handoff validate the complete generation/revision set; a stale
 handoff dispatches nothing. Encryption configuration errors, decryption failures,
 and refresh failures fail the affected project closed without a partial set;

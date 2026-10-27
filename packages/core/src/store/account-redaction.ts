@@ -1,3 +1,4 @@
+import { sensitiveAccountValues } from '../accounts/sensitive'
 import type { Accounts } from '../config/accounts'
 import type { BuildStore } from './types'
 import type { StreamPart } from './streams/types'
@@ -83,7 +84,10 @@ export function accountRedactor(
 ): AccountRedactor {
   return new AccountRedactor(() => {
     const current = typeof env === 'function' ? env() : env
-    return Object.values(accounts()).map((account) => current[account.credentialEnv])
+    return [
+      ...sensitiveAccountValues,
+      ...Object.values(accounts()).map((account) => current[account.credentialEnv]),
+    ]
   })
 }
 
