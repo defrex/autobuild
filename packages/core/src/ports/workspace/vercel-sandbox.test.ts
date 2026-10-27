@@ -3662,3 +3662,50 @@ test('legacy observation makes no policy writes and still settles command exit',
   })
   expect(h.sandbox.policies).toHaveLength(updates)
 })
+
+test('ChatGPT policies rotate and missing credentials are fenced without stopping other routes', async () => {
+  const env: Record<string, string | undefined> = {
+    CHATGPT_ACCESS: 'sentinel-chatgpt-first',
+    ANTHROPIC_API_KEY: 'legacy-key',
+    CLAUDE_ACCESS: 'sentinel-unaffected-claude',
+  }
+  const accounts = {
+    plan: { kind: 'chatgpt-subscription', credentialEnv: 'CHATGPT_ACCESS' },
+    claude: { kind: 'claude-subscription', credentialEnv: 'CLAUDE_ACCESS' },
+  } as const
+  const h = harness({ accounts: () => accounts, accountEnv: env })
+  const workspace = await h.provider.provision({
+    repo: '/repo',
+    baseBranch: 'main',
+    branch: 'ab/chatgpt',
+  })
+  h.sandbox.detachedWait = () => new Promise(() => undefined)
+  const execution = await h.provider.buildExecution.start({
+    slug: 'chatgpt',
+    storeRef: 'https://store.example.test',
+    instance: 'i',
+    workspaceRef: workspace.ref,
+  })
+  expect(JSON.stringify(h.sandbox.commands)).not.toContain(env.CHATGPT_ACCESS!)
+  const commands = h.sandbox.commands.length
+  for (const token of ['sentinel-chatgpt-second', 'sentinel-chatgpt-third']) {
+    env.CHATGPT_ACCESS = token
+    expect(await h.provider.buildExecution.observe!(execution.identity!)).toEqual({
+      state: 'running',
+    })
+    const policy = JSON.stringify(h.sandbox.policies.at(-1))
+    expect(policy).toContain('api.openai.com')
+    expect(policy).toContain(token)
+    expect(policy).not.toContain('sentinel-chatgpt-first')
+    expect(h.sandbox.commands.length).toBe(commands)
+  }
+  const stops = h.sandbox.stops
+  delete env.CHATGPT_ACCESS
+  const failed = await h.provider.buildExecution.observe!(execution.identity!)
+  expect(failed.state).toBe('running')
+  expect(failed.attention).toContain('plan')
+  expect(failed.attention).toContain('ab accounts login')
+  expect(h.sandbox.stops).toBe(stops)
+  expect(JSON.stringify(h.sandbox.policies.at(-1))).not.toContain('sentinel-chatgpt-third')
+  expect(JSON.stringify(h.sandbox.policies.at(-1))).toContain('sentinel-unaffected-claude')
+})

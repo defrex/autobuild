@@ -85,7 +85,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Named Claude subscription or Kimi Code billing accounts. Descriptors contain credential variable names only.
+**Description:** Named Claude subscription, Kimi Code, or ChatGPT subscription billing accounts. Descriptors contain credential variable names only.
 
 **Constraints:** Entry names: nonempty
 
@@ -93,7 +93,7 @@ unused accounts, in the disposable sandbox.
 
 **TOML key:** `accounts.<name>`
 
-- **Type:** `strict table | strict table`
+- **Type:** `strict table | strict table | strict table`
 - **Default:** `omitted`
 - **Required:** Required
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
@@ -101,6 +101,32 @@ unused accounts, in the disposable sandbox.
 **Description:** Named nonsecret billing account descriptor.
 
 **Constraints:** None beyond the input type.
+
+#### `accounts.<name>.kind` (kind = "chatgpt-subscription")
+
+**TOML key:** `accounts.<name>.kind`
+
+- **Type:** `"chatgpt-subscription"`
+- **Default:** `omitted`
+- **Required:** Required when kind = "chatgpt-subscription"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
+
+**Constraints:** None beyond the input type.
+
+#### `accounts.<name>.credentialEnv` (kind = "chatgpt-subscription")
+
+**TOML key:** `accounts.<name>.credentialEnv`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required when kind = "chatgpt-subscription"
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
+
+**Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
 
 #### `accounts.<name>.kind` (kind = "claude-subscription")
 
@@ -111,7 +137,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "claude-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Claude subscription or Kimi Code membership using the unmodified Claude runtime.
+**Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
 
 **Constraints:** None beyond the input type.
 
@@ -124,7 +150,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "claude-subscription"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Dispatcher-host environment variable holding the credential; never the credential itself.
+**Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
 
 **Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
 
@@ -137,7 +163,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "kimi-code"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Claude subscription or Kimi Code membership using the unmodified Claude runtime.
+**Description:** Claude subscription, Kimi Code membership, or ChatGPT subscription (Codex only).
 
 **Constraints:** None beyond the input type.
 
@@ -150,7 +176,7 @@ unused accounts, in the disposable sandbox.
 - **Required:** Required when kind = "kimi-code"
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Dispatcher-host environment variable holding the credential; never the credential itself.
+**Description:** Host credential variable name; ChatGPT names a host-resolved access-token slot, never a credential value.
 
 **Constraints:** matches /^[A-Za-z_][A-Za-z0-9_]*$/; Autobuild control variables cannot hold account credentials; Portable environment variable identifier; AB_ control variables are reserved.
 
@@ -1340,8 +1366,8 @@ plugins, installed skills, setup, runtimes, checks, and phase CLI commands all
 resolve in the guest checkout. Only names in `environmentVariables`, declared account placeholders, and scoped `AB_STORE`/`AB_TOKEN` enter
 commands—dispatcher environment variables are never copied wholesale. Pi in a
 sandbox should use an API-key provider such as `vercel-ai-gateway/...` with
-`AI_GATEWAY_API_KEY`; never copy dispatcher `~/.pi` state, OAuth refresh tokens,
-or attempt an interactive login. Codex and plugin runtimes retain their existing API authentication. Claude Code can instead select a declared billing account, whose real credential stays on the host.
+`AI_GATEWAY_API_KEY`; never copy dispatcher `~/.pi` state, Pi OAuth refresh tokens,
+or attempt an interactive login. Plugin runtimes retain their existing API authentication. Claude Code can select a subscription or Kimi billing account. Codex can explicitly select a ChatGPT subscription authorized with `bun ab accounts login NAME`; one local dispatcher or hosted refreshing secret owns renewal, and the real tokens stay on the host.
 
 The opt-in live lifecycle suite is
 `packages/core/src/scenarios/vercel-sandbox.live.test.ts`. Set
@@ -2235,8 +2261,11 @@ Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
 also reject a standalone `--` because Autobuild owns and appends that structural
 separator immediately before their positional prompt. Claude routes with a selected
 account additionally reject `--settings`, `--setting-sources`, and `--bare`
-because Autobuild owns their authentication settings. Routes without an account
-retain the existing argument behavior. Those option spellings,
+because Autobuild owns their authentication settings. Codex routes selecting a
+ChatGPT subscription account additionally reject `-c`, `--config`, `--profile`,
+`-p`, `--enable`, and `--disable` because Autobuild owns their provider and
+configuration routing. This includes using `-c` to set reasoning effort. Routes
+without an account retain the existing argument behavior. Those option spellings,
 `--option=value` forms, compact documented short aliases, and the exact affected
 prompt separator join the eager aggregated startup error with a
 role/runtime-specific diagnostic. Every other option passes through without

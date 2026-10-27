@@ -1,3 +1,4 @@
+import { sensitiveAccountValues } from '../accounts/sensitive'
 /**
  * Readiness-probe helpers shared by the local-worktree and remote validation
  * paths (AUT-516). Moved out of `cli/init-validation.ts` so the remote
@@ -39,7 +40,10 @@ export function createReadinessRedactor(
   ].sort((left, right) => right.length - left.length)
   return (value) => {
     let text = message(value)
-    for (const secret of secrets) text = text.split(secret).join('[REDACTED]')
+    for (const secret of [...sensitiveAccountValues, ...secrets].sort(
+      (a, b) => b.length - a.length,
+    ))
+      text = text.split(secret).join('[REDACTED]')
     return text
   }
 }
