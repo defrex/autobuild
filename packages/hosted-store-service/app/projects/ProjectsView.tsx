@@ -164,26 +164,28 @@ export function ProjectsView(
                   <div className="access-row project-row" key={repo}>
                     <span className="project">{repo}</span>
                     <span>{org.name}</span>
-                    {props.isSuperUser && (
-                      <button
-                        type="button"
-                        className="word slack"
-                        disabled={pending || forbidden || !destination(repo, org.id)}
-                        onClick={() => props.onMove?.(repo)}
-                      >
-                        Move…
-                      </button>
-                    )}
-                    {(props.isSuperUser || org.membershipRole === 'owner') && (
-                      <button
-                        type="button"
-                        className="word danger"
-                        disabled={pending || forbidden}
-                        onClick={() => props.onDelete?.(repo)}
-                      >
-                        Delete…
-                      </button>
-                    )}
+                    <div className="access-actions">
+                      {props.isSuperUser && (
+                        <button
+                          type="button"
+                          className="word slack"
+                          disabled={pending || forbidden || !destination(repo, org.id)}
+                          onClick={() => props.onMove?.(repo)}
+                        >
+                          Move…
+                        </button>
+                      )}
+                      {(props.isSuperUser || org.membershipRole === 'owner') && (
+                        <button
+                          type="button"
+                          className="word danger"
+                          disabled={pending || forbidden}
+                          onClick={() => props.onDelete?.(repo)}
+                        >
+                          Delete…
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ),
               ),
