@@ -67,6 +67,7 @@ export function accessFixture(id: string) {
     return (
       <MembersView
         {...base}
+        signInUrl="https://autobuild.example.com/sign-in"
         isSuperUser={state === 'members-super'}
         menuOpen={
           state === 'members-super' || state === 'members-owner' || state === 'members-member'

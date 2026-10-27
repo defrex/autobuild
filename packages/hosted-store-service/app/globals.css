@@ -903,6 +903,18 @@ a.rowhead {
   font-size: 0.93em;
   margin: 6px 0 0;
 }
+.copy-link {
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  color: var(--slack);
+  vertical-align: -0.125em;
+  line-height: 1;
+}
+.copy-link:hover,
+.copy-link.copied {
+  color: var(--teal);
+}
 .access-row {
   border-top: 1px solid var(--rule);
   display: grid;

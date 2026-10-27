@@ -1,5 +1,5 @@
 'use client'
-import { Fragment } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { AccessFrame, type FrameProps } from '../access/Frame'
 import type { Organization, Snapshot } from '../access/api'
 export interface MembersProps extends FrameProps {
@@ -8,6 +8,8 @@ export interface MembersProps extends FrameProps {
   confirmation?: string
   forbidden?: boolean
   email?: string
+  /** The deployment's sign-in page, which an owner sends to the people they add. */
+  signInUrl?: string
   onEmail?: (email: string) => void
   onOrg?: (id: string) => void
   onAdd?: () => void
@@ -91,8 +93,15 @@ export function MembersView(props: MembersProps) {
                 </button>
               </div>
               <p className="slack access-help">
-                They join the first time they sign in with GitHub using this email. Until then they
-                show as pending.
+                After you add someone, ask them to sign up via{' '}
+                {props.signInUrl ? (
+                  <>
+                    <span className="project">{props.signInUrl}</span>{' '}
+                    <CopyLink value={props.signInUrl} />
+                  </>
+                ) : (
+                  'the sign-in page.'
+                )}
               </p>
             </form>
           ) : (
@@ -190,5 +199,41 @@ export function MembersView(props: MembersProps) {
         </>
       )}
     </AccessFrame>
+  )
+}
+
+/** A bare glyph button, so the help text keeps flowing around it. */
+function CopyLink({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return (
+    <button
+      type="button"
+      className={`copy-link${copied ? ' copied' : ''}`}
+      aria-label="Copy sign-up link"
+      title={copied ? 'Copied' : 'Copy sign-up link'}
+      onClick={() => {
+        navigator.clipboard?.writeText(value).then(
+          () => setCopied(true),
+          () => undefined,
+        )
+      }}
+    >
+      <svg viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true">
+        <path
+          d="M5.5 5.5h8v8h-8z M10.5 2.5h-8v8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+      </svg>
+      <span className="sr-only" aria-live="polite">
+        {copied ? 'Copied' : ''}
+      </span>
+    </button>
   )
 }

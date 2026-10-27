@@ -82,3 +82,15 @@ test('a failed roster load does not claim the operator has no membership', () =>
   expect(html).toContain('access service is unavailable')
   expect(html).not.toContain('do not belong')
 })
+
+test('the add form tells the owner to send the sign-in page themselves', () => {
+  const html = renderToStaticMarkup(
+    <MembersView {...base} signInUrl="https://autobuild.example.com/sign-in" />,
+  )
+  expect(html).toContain('ask them to sign up via')
+  expect(html).toContain('https://autobuild.example.com/sign-in')
+  expect(html).toContain('aria-label="Copy sign-up link"')
+  const bare = renderToStaticMarkup(<MembersView {...base} />)
+  expect(bare).toContain('the sign-in page')
+  expect(bare).not.toContain('Copy sign-up link')
+})

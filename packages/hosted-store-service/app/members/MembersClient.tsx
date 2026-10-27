@@ -8,10 +8,12 @@ export function MembersClient({
   identity,
   isSuperUser,
   initialOrg,
+  signInUrl,
 }: {
   identity: string
   isSuperUser: boolean
   initialOrg?: string
+  signInUrl: string
 }) {
   const [requested, setRequested] = useState(initialOrg)
   const [email, setEmail] = useState('')
@@ -53,6 +55,7 @@ export function MembersClient({
       error={state.error}
       forbidden={state.forbidden}
       email={email}
+      signInUrl={signInUrl}
       confirmation={activeConfirmation}
       onRefresh={() => {
         setConfirmation(undefined)
