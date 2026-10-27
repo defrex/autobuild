@@ -1,3 +1,4 @@
+import { admitHostedRequest } from './project-lifecycle'
 import { seedTicketStates, policyStateNames } from './ticket-states'
 import type { Exec } from './retry'
 import type { SQL } from 'bun'
@@ -24,6 +25,7 @@ export class PostgresTicketPolicyStore implements TicketPolicyStore {
   async put(repo: string, policy: HostedTicketPolicy, writer: string): Promise<void> {
     const parsed = hostedTicketPolicySchema.parse(policy)
     await this.sql.begin(async (tx) => {
+      await admitHostedRequest(tx as SQL)
       await tx`SELECT singleton FROM project_registry_state WHERE singleton = true FOR UPDATE`
       const [registration] =
         await tx`SELECT seq, action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`

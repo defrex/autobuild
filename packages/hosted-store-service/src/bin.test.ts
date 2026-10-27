@@ -204,3 +204,20 @@ test('ticket team assignment validates arguments before opening its independent 
   expect(opens).toBe(1)
   expect(closes).toBe(1)
 })
+
+test('admin removal help explicitly retains data and points to permanent web deletion', async () => {
+  const lines: string[] = []
+  await runHostedCli(
+    ['projects'],
+    {},
+    (line) => {
+      lines.push(line)
+    },
+    (line) => {
+      lines.push(line)
+    },
+  )
+  const help = lines.join('\n')
+  expect(help).toContain('unregisters access only; all project data is retained')
+  expect(help).toContain('web Projects page')
+})

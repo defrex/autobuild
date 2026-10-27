@@ -1,3 +1,4 @@
+import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import {
   ProjectSecretError,
   validateSecretName,
@@ -81,7 +82,7 @@ export function projectSecretsHandler(options: {
       } else await store.remove(principal.repo, body.name, principal.user)
       return json({ version: 1, ok: true })
     } catch (error) {
-      if (error instanceof MachineAuthError)
+      if (error instanceof MachineAuthError || error instanceof AccessError)
         return json({ error: error.message, kind: 'auth' }, error.status)
       if (error instanceof ProjectSecretError)
         return json(
