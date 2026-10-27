@@ -86,8 +86,11 @@ host and replace the example runtime and model with your account's values.
 Origin mode reads configuration from the forge and cannot load checkout-relative
 plugins. Export push-capable `GITHUB_TOKEN` or `GH_TOKEN`; forge credentials stay
 on the host. Sandbox provisioning needs `VERCEL_OIDC_TOKEN` or the durable
-`VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` tuple. Guests receive only
-declared runtime API credentials and scoped execution grants.
+`VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` tuple. Guests receive runtime
+API credentials allowlisted through `environmentVariables`, nonsecret billing
+account placeholders, and scoped Store execution authority. Real account
+credentials stay on the host and are applied by provider-scoped egress header
+transforms.
 See [origin-mode setup](setup.md#running-the-dispatcher-without-a-checkout-origin-mode) and [Workspaces](workspaces.md).
 
 ## Writing your own
