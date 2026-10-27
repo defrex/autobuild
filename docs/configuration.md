@@ -2222,9 +2222,12 @@ runtime does not discard a model inherited from `default`; the resulting exact
 pair must be compatible. Autobuild never searches for a runtime that happens
 to serve a configured model and never substitutes a different model to repair
 an invalid pair. The only implicit fill is when neither the role nor `default`
-names a model, in which case the selected runtime uses its own default. Every
-alternate overlays that concrete role's effective primary runtime, model, and
-args, then undergoes the same exact-pair validation. Each configured string is
+names a model: a `claude` route selecting a Kimi Code account defaults to
+`kimi-for-coding`, while every other route uses its runtime's own default. Every
+alternate overlays that concrete role's effective primary runtime, model, account,
+and args, then undergoes the same exact-pair validation. Model defaults are applied
+after these axes are merged, so an alternate without an explicit or inherited
+model uses the default for its own selected account and runtime. Each configured string is
 one argv token; Autobuild does not shell-expand it. The narrow rejected set is
 derived from the model and machine-readable protocol options each adapter emits:
 Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
@@ -2252,9 +2255,10 @@ Autobuild does not install Pi. `ab init` reports a missing or older executable
 as unusable, and `pi` must be logged in for every configured model. `ab models`
 lists this local catalog, while `ab models --available` limits it to models with
 configured credentials. Builtin and plugin runtimes use the same exact-pair
-validation and event attribution. With no configured model, the selected runtime uses its declared
-default when present: Claude and Codex delegate to their local CLI's selected
-default, while Pi declares `kimi-coding/k3`. Codex accepts unqualified `gpt-*`
+validation and event attribution. With no configured or inherited model, a Claude
+route selecting a Kimi Code account uses `kimi-for-coding`. Other routes use their
+runtime's declared default when present: Claude and Codex delegate to their local
+CLI's selected default, while Pi declares `kimi-coding/k3`. Codex accepts unqualified `gpt-*`
 ids. Pi ids remain provider-qualified—including the independent
 `openai-codex/*` route—and `ab models [query]` looks them up. Pi always passes
 `--no-extensions` to disable ambient package discovery and loads the Autobuild

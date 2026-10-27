@@ -982,7 +982,7 @@ consumed by the core `plan` phase, and nothing is reported.
 |---|---|---|---|
 | `runtime` | — | required on `default`; otherwise optional, nonempty string | Runtime for this role. A child that omits it inherits `[roles.default].runtime`. Must name a registered runtime. |
 | `account` | Named billing account; inherits independently on primaries and alternates. Omission selects the sole Claude subscription account for a Claude route. |
-| `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; only when neither names a model does the merged runtime supply its own default. |
+| `model` | — | optional, nonempty string | Model for this role. A role that omits it inherits `[roles.default].model`; when neither names a model, a Claude route selecting a Kimi Code account uses `kimi-for-coding`, and every other route uses its runtime's own default. |
 | `args` | `[]` | optional, array of nonempty strings | Ordered extra CLI argv tokens for every phase and tool-free one-shot invocation. Omitted ⇒ inherit `[roles.default].args`; a set list, including `[]`, replaces it wholesale. Each string is one token, without shell parsing. Model and parsed protocol/output-mode spellings are rejected eagerly; Claude routes with a selected account additionally reject `--settings`, `--setting-sources`, and `--bare` because Autobuild owns their authentication settings. |
 | `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role and directs migration to `args`. |
 | `sessionBudgetSeconds` | policy fallback | optional positive integer | Active-time budget for each build phase session on this logical role; suspended intervals are excluded and native continuation retains the original ceiling. Omitted ⇒ inherit `[roles.default].sessionBudgetSeconds`; absent there too ⇒ `[policy].sessionBudgetSeconds`. One value covers the primary and every alternate. |
@@ -993,8 +993,11 @@ role over the raw `default` entry, then validate the exact runtime/model pair.
 The named runtime must serve the named model. A model-only role never searches
 for another runtime, and an incompatible inherited model is never replaced by
 the selected runtime's default. The one implicit fill-in is benign: if neither
-the phase role nor `default` names a model, the merged runtime uses its own
-default model. Compatibility failures name the role, runtime, model, and served
+the phase role nor `default` names a model, a Claude route selecting a Kimi Code
+account uses `kimi-for-coding`; every other route uses its runtime's own default.
+Alternates overlay the primary runtime, model, account, and args before model
+defaults are applied, so an alternate without an explicit or inherited model uses
+the default for its own selected account and runtime. Compatibility failures name the role, runtime, model, and served
 model families; all problems in `default` and every declared role are
 aggregated by one eager resolver construction before judgment runs. Runtime
 adapters reject the model and parsed protocol/output-mode options they
