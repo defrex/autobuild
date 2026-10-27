@@ -1321,30 +1321,37 @@ and destination IDs. All migration facts survive dispatcher-run turnover.
 Conflicting identity reuse or source-qualified mappings fail replay closed.
 
 
-Browser lookup returns `{connection,assignment,organizations}`. `connection` may
-be null; `assignment` is `new` only when neither registry history nor retained
-assignment exists, otherwise `fixed`. Organizations are eligible `{id,name,membershipRole}`
-destinations for a new project (all for super users, actual memberships otherwise),
-empty for fixed reconnects or unknown codes. Context uses the same lookup limits,
-expiry, admission and foreign-project masking; it does not assign anything.
-Clients select a destination only for new projects with eligible organizations;
-zero destinations cannot approve, and fixed reconnects send no destination.
-One actual membership permits implicit selection; a super user with a sole
-eligible organization but no membership sends that ID explicitly.
+Browser lookup returns `{connection,assignment,organizations,assignedOrganization}`.
+`connection` may be null. `assignment` is `new` for any unassigned project,
+regardless of registry history, and `fixed` for an assigned project.
+`assignedOrganization` is its current `{id,name}`, or null for unassigned or
+unknown projects. Organizations are eligible `{id,name,membershipRole}`
+destinations for unassigned projects (all for super users, actual memberships
+otherwise), empty for fixed reconnects or unknown codes. Context uses the same
+lookup limits, expiry, admission and foreign-project masking; it assigns nothing.
 
-Browser connection approval accepts optional `organizationId` in the decide JSON.
-A new project defaults to the approver's only actual membership; zero or multiple
-memberships require an explicit org, including for super users. Members can select
-their own orgs; super users can select any org. Registration, assignment and
-credential insertion commit atomically. Reconnect requires current project access
-and preserves its assignment; moving projects uses organization management only.
-Previously registered unassigned projects, whether active or removed, can be
-reconnected only by super users and remain unassigned. Any registry history
-distinguishes an existing project from a new one. Assigning its retained history
-to an organization requires the super-user management route after re-registration.
-Browser lookup and decisions hide foreign projects as unknown
-connections, even after resolution. Machine request/poll/cancel/status/revoke
-contracts and existing credentials are unchanged.
+Valid code links open approval directly, showing a checking status during lookup.
+Signed-out users return from sign-in to that approval. Missing or malformed codes
+retain manual entry. The approval screen always shows the organization: a
+read-only name for assigned projects, or destination choices for unassigned ones.
+A sole option is visibly selected and its ID explicitly submitted. Multiple
+options require a choice; zero destinations prevent approval and explain that
+a super user must create an organization.
+
+Browser approval requires `organizationId` for every unassigned project,
+including fresh, legacy active and removed projects, even for super users or
+single-membership approvers. Members can select their own orgs; super users can
+select any org. Missing IDs return 400; ineligible or nonexistent IDs return 403.
+Registration, assignment, credential insertion and the approval decision commit
+atomically; refusal changes none of them. Current access and assignment are
+rechecked under the access lock. Assigned reconnects keep their organization;
+a different supplied ID is refused, and moves use organization management.
+Previously registered unassigned projects remain accessible only to super users
+until management assignment or an authorized reconnect approval assigns them.
+Denial requires no destination and changes no assignment.
+Browser lookup and decisions hide foreign projects as unknown connections, even
+after resolution. Machine request/poll/cancel/status/revoke contracts and existing
+credentials are unchanged.
 
 ## Operator presence
 
