@@ -1,3 +1,4 @@
+import { SETTINGS_SCENARIOS, settingsFixture } from './settings-fixtures'
 import { fullDocumentScreenshot } from './full-document'
 import { verifyStagesCapture } from '../../../tools/verify-stages-capture'
 import { ACCESS_SCENARIOS, accessFixture } from './access-fixtures'
@@ -94,6 +95,34 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 const SCENARIOS: readonly WebFrameSpec[] = [
+  ...SETTINGS_SCENARIOS.flatMap((name) =>
+    ['wide', 'narrow'].map((size) => ({
+      id: `settings-${name}-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 900,
+      requires: [
+        'Settings',
+        'Account credentials',
+        ...(name === 'empty'
+          ? ['No project secrets have been set.']
+          : [
+              'KIMI_API_KEY',
+              'never supplied',
+              'refreshing',
+              'refresh-failed',
+              ...(name === 'no-dispatcher' ? [] : ['missing']),
+              ...(name === 'no-dispatcher'
+                ? ['ab accounts login <account> --project']
+                : ['ab accounts login personal-chatgpt --project']),
+              'refresh window is shorter',
+            ]),
+        ...(name === 'refused' ? ['An administrator must fix it.'] : []),
+        ...(name === 'pending' ? ['Saving…'] : []),
+        ...(name === 'no-dispatcher' ? ['No dispatcher run is recorded yet.'] : []),
+        ...(name === 'remove' ? ['Remove secret', 'next observation'] : []),
+      ],
+    })),
+  ),
   ...ACCESS_SCENARIOS.flatMap((name) =>
     ['wide', 'narrow'].map((size) => ({
       id: `access-${name}-${size}`,
@@ -841,6 +870,8 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
 }
 
 async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<ReactNode> {
+  const settings = settingsFixture(spec.id)
+  if (settings) return settings
   const access = accessFixture(spec.id)
   if (access) return access
   if (spec.id.startsWith('integration-consent-pending-'))
@@ -1348,7 +1379,7 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     '- [ ] Title-first rows retain ticket, slug, status, all facts and steps. Current teal, done green, provisional amber, pending slack; timing is quiet.',
     '- [ ] Escalations show the complete red question, explanation, one answer composer, and full-bleed phone treatment with full-width primary answer.',
     '- [ ] Merge consent is amber on ground with Merge/Hold. No optimistic success or unconfirmed abort.',
-    '- [ ] The tab line leads with Triage, Queue, Active and Done and marks the current tab; abort confirms in the square confirmation dialog with a red primary and ghost Cancel.',
+    '- [ ] The tab line leads with Triage, Queue, Active, Done and Settings and marks the current tab; abort confirms in the square confirmation dialog with a red primary and ghost Cancel.',
     '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
     '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',
     '',
