@@ -997,9 +997,12 @@ the phase role nor `default` names a model, the merged runtime uses its own
 default model. Compatibility failures name the role, runtime, model, and served
 model families; all problems in `default` and every declared role are
 aggregated by one eager resolver construction before judgment runs. Runtime
-adapters reject only the model and parsed protocol/output-mode options they
+adapters reject the model and parsed protocol/output-mode options they
 emit: Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex
-rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Exact
+rejects `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude
+routes with a selected account additionally reject `--settings`,
+`--setting-sources`, and `--bare` because Autobuild owns their authentication
+settings. Routes without an account retain the existing argument behavior. Exact
 spellings, `--option=value` forms, and documented compact short aliases join
 that same role-naming aggregate. Every other option passes through without
 Autobuild validation, including sandbox, approval, session, tool, skill,

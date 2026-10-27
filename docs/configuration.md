@@ -2230,7 +2230,10 @@ derived from the model and machine-readable protocol options each adapter emits:
 Claude rejects `-p`/`--print`, `--output-format`, and `--model`; Codex rejects
 `--json` and `--model`/`-m`; Pi rejects `--mode` and `--model`. Claude and Codex
 also reject a standalone `--` because Autobuild owns and appends that structural
-separator immediately before their positional prompt. Those option spellings,
+separator immediately before their positional prompt. Claude routes with a selected
+account additionally reject `--settings`, `--setting-sources`, and `--bare`
+because Autobuild owns their authentication settings. Routes without an account
+retain the existing argument behavior. Those option spellings,
 `--option=value` forms, compact documented short aliases, and the exact affected
 prompt separator join the eager aggregated startup error with a
 role/runtime-specific diagnostic. Every other option passes through without
