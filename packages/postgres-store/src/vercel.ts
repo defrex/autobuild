@@ -1,7 +1,8 @@
-import { get, put, type get as getType, type put as putType } from '@vercel/blob'
+import { del, get, put, type get as getType, type put as putType } from '@vercel/blob'
 import { Buffer } from 'node:buffer'
 import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
 import { blobPath } from './s3'
+import type { BlobMaintenance } from './blob-maintenance'
 
 type Put = typeof putType
 type Get = typeof getType
@@ -14,9 +15,10 @@ export interface VercelBlobStoreOptions {
   storeId?: string
   put?: Put
   get?: Get
+  del?: typeof del
 }
 
-export class VercelBlobStore implements BlobStore {
+export class VercelBlobStore implements BlobStore, BlobMaintenance {
   private readonly putFn: Put
   private readonly getFn: Get
 
@@ -40,6 +42,18 @@ export class VercelBlobStore implements BlobStore {
       allowOverwrite: true,
       ...this.auth(),
     })
+  }
+
+  async delete(hash: string): Promise<void> {
+    await (this.options.del ?? del)(blobPath(hash, this.options.prefix), this.auth())
+  }
+
+  async deleteMany(hashes: string[]): Promise<void> {
+    if (hashes.length)
+      await (this.options.del ?? del)(
+        hashes.map((hash) => blobPath(hash, this.options.prefix)),
+        this.auth(),
+      )
   }
 
   async get(hash: string): Promise<Uint8Array | null> {

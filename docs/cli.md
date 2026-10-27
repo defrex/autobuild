@@ -47,3 +47,14 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `harvest` — Inspect or drive observation harvesting.
 
 Phase commands (`context`, `done`, `verdict`) use runner-scoped session authority: the runner starts phase agents, never your operator agent. See [Skills](skills.md).
+
+
+Permanent hosted data removal is available on the web app's Projects page to
+super users and owners of the project's organization. `ab disconnect` only
+revokes a credential; admin `projects remove` only unregisters access and retains
+data. Project deletion removes hosted builds, tickets, blobs, secrets and accounts,
+revokes every credential and retains only a minimal deletion audit. It does not
+change local files or configuration. Failed cleanup is retryable with access
+already refused. Reconnecting requires fresh browser approval and starts empty,
+with hosted ticket numbering reset to 1. See
+[permanent project deletion](operator-api.md#permanent-project-deletion).
