@@ -49,3 +49,17 @@ export function recordRepositoryExistence(store: object, repo: string, exists: b
   }
   entries.set(repo, exists)
 }
+
+/** Hosted composition opts in; a standalone PostgreSQL adapter has no registry
+ * requirement. A first admission is immutable for the lifetime of a request. */
+const hosted = new AsyncLocalStorage<Map<string, string>>()
+export function withHostedProjectContext<T>(work: () => T): T {
+  return hosted.getStore() ? work() : hosted.run(new Map(), work)
+}
+export function hostedProjectContext(): Map<string, string> | undefined {
+  return hosted.getStore()
+}
+export function rememberProjectGeneration(repo: string, generation: string): void {
+  const context = hosted.getStore()
+  if (context && !context.has(repo)) context.set(repo, generation)
+}
