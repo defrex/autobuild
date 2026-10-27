@@ -17,7 +17,14 @@ import {
   requireTicket,
   updateTicket,
 } from '../ports/tickets/operations'
-import type { DependencyState, Ticket, TicketSource, TicketUpdate } from '../ports/types'
+import type {
+  DependencyState,
+  Ticket,
+  TicketSource,
+  TicketUpdate,
+  TicketPage,
+  TicketPageListing,
+} from '../ports/types'
 import type { BuildStore } from '../store/types'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { effectiveConfig } from './query'
@@ -53,11 +60,7 @@ export interface OperatorTicketQueue {
 }
 
 /** A window over a listing. `newest` reverses the source's oldest-first order. */
-export interface OperatorTicketPage {
-  limit: number
-  offset?: number
-  order?: 'oldest' | 'newest'
-}
+export type OperatorTicketPage = TicketPage
 
 export interface OperatorTicketBuild {
   slug: string
@@ -113,21 +116,23 @@ export async function listOperatorTickets(opts: {
     state: opts.state ?? triageState,
     ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
   }
+  const nativePage = opts.page !== undefined && source.listPage !== undefined
   const [listing, states] = await Promise.all([
-    source.listReady(criteria),
+    nativePage ? source.listPage!(criteria, opts.page!) : source.listReady(criteria),
     opts.backend.statesFor(context, source),
   ])
-  const ordered = opts.page?.order === 'newest' ? [...listing.tickets].reverse() : listing.tickets
+  const ordered =
+    !nativePage && opts.page?.order === 'newest' ? [...listing.tickets].reverse() : listing.tickets
   const offset = opts.page?.offset ?? 0
   return {
     states,
-    tickets: opts.page ? ordered.slice(offset, offset + opts.page.limit) : ordered,
+    tickets: opts.page && !nativePage ? ordered.slice(offset, offset + opts.page.limit) : ordered,
     diagnostics: listing.diagnostics,
     criteria,
     triageState,
     readyState,
     doneState: lifecycle.done,
-    total: listing.tickets.length,
+    total: nativePage ? (listing as TicketPageListing).total : listing.tickets.length,
   }
 }
 

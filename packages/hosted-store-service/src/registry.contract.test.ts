@@ -633,6 +633,29 @@ describe('agent tool registry contract', () => {
     expectJsonClean(toolFiltered)
   })
 
+  test('tickets.list uses native pages through the MCP registry', async () => {
+    const world = await seedWorld()
+    Object.assign(world.source, {
+      async listPage(criteria: unknown, page: unknown) {
+        expect(criteria).toEqual({ state: 'Backlog', labels: ['web'] })
+        expect(page).toMatchObject({ limit: 0, offset: 7, order: 'newest' })
+        return { tickets: [], diagnostics: ['native'], total: 42 }
+      },
+    })
+    world.source.listReady = async () => {
+      throw new Error('full read forbidden')
+    }
+    const result = await toolFor(world)('tickets.list', {
+      repo,
+      state: 'Backlog',
+      labels: ['web'],
+      limit: 0,
+      offset: 7,
+      order: 'newest',
+    })
+    expect(result).toMatchObject({ tickets: [], diagnostics: ['native'], total: 42 })
+  })
+
   test('tickets.get matches the ticket detail route', async () => {
     const world = await seedWorld()
     const originalGet = world.source.get.bind(world.source)
