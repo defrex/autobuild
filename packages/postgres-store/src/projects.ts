@@ -1,4 +1,6 @@
+import { hostedProjectContext, rememberProjectGeneration } from './request-context'
 import { SQL } from 'bun'
+import { randomUUID } from 'node:crypto'
 import { normalizeConnectionRepository as normalizeProjectRepository } from '@defrex/autobuild/connection'
 import { resolvePostgresUrl, type PostgresEnv } from './env'
 import { assertSchema, PROJECT_SCHEMA_DDL } from './schema'
@@ -93,13 +95,28 @@ export class PostgresProjectRegistry implements ProjectRegistry {
   async has(repo: string): Promise<boolean> {
     const [row] = await this
       .sql`SELECT action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`
-    return row?.action === 'added'
+    if (row?.action !== 'added') return false
+    if (hostedProjectContext()) {
+      const [current] = await this
+        .sql`SELECT generation FROM project_generations WHERE repo = ${repo}
+        AND NOT EXISTS (SELECT 1 FROM project_deletions WHERE repo = ${repo})`
+      if (!current) return false
+      rememberProjectGeneration(repo, String(current.generation))
+    }
+    return true
   }
 
   private async addIn(tx: SQL, repo: string, user: string): Promise<ProjectEntry> {
     const [previous] =
       await tx`SELECT repo, action, actor, ts FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`
     if (previous?.action === 'added') return entry(previous)
+    const [lifecycle] = await tx`SELECT to_regclass('project_deletions') AS present`
+    if (lifecycle?.present) {
+      const [pending] = await tx`SELECT 1 FROM project_deletions WHERE repo = ${repo}`
+      if (pending) throw new Error('project deletion is unfinished')
+      await tx`INSERT INTO project_generations (repo, generation) VALUES (${repo}, ${randomUUID()})
+        ON CONFLICT (repo) DO UPDATE SET generation = EXCLUDED.generation`
+    }
     const [row] = await tx`INSERT INTO project_journal (seq, repo, action, actor, ts)
       VALUES (nextval('project_journal_seq'), ${repo}, 'added', ${user}, ${new Date().toISOString()})
       RETURNING repo, actor, ts`

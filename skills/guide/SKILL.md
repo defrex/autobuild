@@ -2691,3 +2691,20 @@ automatic and explicit demand points, minimal presence paths and upgrade behavio
 Deprecated config spelling for `[merge]` / `[[merge]]`; see the
 [compatibility notes](references/merge-policy.md#deprecated-spellings). Never
 declare both spellings, including empty arrays. `ab upgrade` migrates this key.
+
+
+### Permanent hosted project deletion
+
+Super users and organization owners can permanently delete an authorized project
+from the web Projects page after an inline warning and count preview. This removes
+hosted state, tickets, blobs, secrets and accounts, revokes all credentials and
+retains only repository, actor, deletion time and an opaque generation id as audit.
+`ab disconnect` only revokes the saved credential; admin `projects remove` only
+unregisters access and retains data. Failed deletion leaves access refused and
+supports retry; registration waits for cleanup. Legacy untraceable orphan blobs
+with no ownership record or retained project reference are excluded from deletion.
+A fresh connection requires browser approval and starts empty, including hosted
+ticket numbering from 1. Old credentials remain invalid with 401; independently
+repository-established requests receive 403 project not registered. See
+[project deletion](references/operator-api.md#permanent-project-deletion) for
+generation-bound preview tokens and API semantics.

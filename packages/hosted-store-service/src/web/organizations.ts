@@ -1,3 +1,5 @@
+import { normalizeProjectRepository } from '@defrex/autobuild-postgres-store/projects'
+import type { ProjectDeletion } from '@defrex/autobuild-postgres-store/project-deletion'
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { type HumanAccess, validSession } from './access'
 import { parseWebAuthEnv } from './config'
@@ -5,6 +7,7 @@ import type { GatewaySession } from './gateway'
 
 /** Browser-only management contract. No stock organization endpoints are exposed. */
 export function createOrganizationHandler(options: {
+  deletion?: () => Promise<ProjectDeletion>
   access: HumanAccess
   getSession(headers: Headers): Promise<GatewaySession | null>
   now?: () => Date
@@ -62,6 +65,30 @@ export function createOrganizationHandler(options: {
       const string = (key: string): string => {
         if (typeof body[key] !== 'string') throw new AccessError(400, `invalid ${key}`)
         return body[key]
+      }
+      if (parts.join('/') === 'projects/deletion' && options.deletion) {
+        let repo: string
+        const normalize = (value: string) => {
+          try {
+            return normalizeProjectRepository(value)
+          } catch {
+            throw new AccessError(400, 'invalid repository')
+          }
+        }
+        const deletion = await options.deletion()
+        if (method === 'GET') {
+          const query = new URL(request.url).searchParams
+          if (query.getAll('repo').length !== 1 || [...query.keys()].some((key) => key !== 'repo'))
+            throw new AccessError(400, 'invalid fields')
+          repo = normalize(query.get('repo')!)
+          return respond(await deletion.preview(actor, repo))
+        }
+        if (method === 'DELETE') {
+          fields('repo')
+          repo = normalize(string('repo'))
+          await deletion.delete(actor, repo, request.headers.get('if-match'))
+          return respond({ deleted: true })
+        }
       }
       if (parts.join('/') === 'projects/unassigned' && method === 'GET')
         return respond({ projects: await store.unassigned(actor) })
