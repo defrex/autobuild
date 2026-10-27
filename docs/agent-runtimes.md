@@ -16,7 +16,7 @@ A runtime transports agent turns: it starts, continues, cancels and ends session
 
 Install with `bun add -d --exact @defrex/autobuild`. Examples are complete minimal configs for local execution: install and authenticate the CLI on the dispatcher host, then run `bun ab init --validate`.
 
-Claude Code supports named subscription and Kimi Code billing [accounts](configuration-overview.md#accounts). In a remote sandbox, the guest holds placeholders and host egress policy supplies credentials only to the selected provider. Use the unmodified runtime with your own subscription for ordinary individual usage. Provision every selected runtime and alternate; Pi and Codex retain their existing authentication. See [Workspaces](workspaces.md).
+Claude Code supports named subscription and Kimi Code billing [accounts](configuration-overview.md#accounts). In a remote sandbox, the guest holds placeholders and host egress policy supplies credentials only to the selected provider. Use the unmodified runtime with your own subscription for ordinary individual usage. Provision every selected runtime and alternate; Pi retains its existing authentication. Codex can explicitly select a ChatGPT subscription account; see [billing accounts](configuration-overview.md#accounts). See [Workspaces](workspaces.md).
 
 | Runtime | Models | Model ids | Default model |
 |---|---|---|---|
@@ -43,7 +43,7 @@ runtime = "claude"
 
 ### Codex (`codex`)
 
-Install `codex` ([CLI instructions](https://developers.openai.com/codex/cli)) and run `codex login`. API use needs its own credential, commonly `OPENAI_API_KEY`, with billing authority; see [Codex authentication](https://developers.openai.com/codex/auth).
+Install `codex` ([CLI instructions](https://developers.openai.com/codex/cli)). Legacy routes use `codex login`; named ChatGPT subscription routes use `bun ab accounts login NAME` and leave that ambient login untouched. API use needs its own credential, commonly `OPENAI_API_KEY`, with billing authority; see [Codex authentication](https://developers.openai.com/codex/auth).
 
 <!-- seam-config:start -->
 ```toml

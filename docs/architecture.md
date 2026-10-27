@@ -1702,9 +1702,16 @@ Deployment-owned `[accounts.<name>]` descriptors contain `kind` and
 Role and alternate `account` axes inherit independently. Claude routes default
 to the sole Claude subscription account; ambiguity, unknown references and
 incompatible runtimes fail configuration. No accounts preserves legacy behavior.
-Only the unmodified Claude Code runtime, the user's own subscription and ordinary
-individual usage are supported. Credentials are provisioned manually; Autobuild
-never signs in or captures setup-token output.
+Claude and Kimi accounts require the unmodified Claude Code runtime; ChatGPT
+subscription accounts require explicit Codex selection. Use the user's own plan
+for ordinary individual usage. Claude and Kimi credentials are provisioned
+manually. ChatGPT credentials are authorized with `ab accounts login NAME
+[--local|--project]`. The local dispatcher or hosted refreshing project secret
+is the sole refresh owner; no sandbox refreshes. Local Codex uses a protected
+loopback inference transport and isolated CODEX_HOME, preserving the shell HOME
+and leaving ambient login untouched.
+Hosted validation uses write-only metadata and states that the first hosted
+build is the live check; local validation makes a minimal runtime request.
 
 Local sessions resolve host credentials after ambient merging. Remote sessions
 receive account placeholders; exact provider hostname and placeholder header
