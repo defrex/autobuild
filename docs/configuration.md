@@ -22,10 +22,12 @@ An **acceptance check** is a repository-owned agent verify step that runs the bu
 
 ## `[accounts]`
 
-Named accounts select billing for the unmodified Claude Code runtime, using
-only the user's own subscription within ordinary individual usage. Provision
-credentials manually on the dispatcher host; Autobuild never runs
-`claude setup-token`, signs in, or collects its output.
+Named accounts select billing for Claude Code or Codex using the user's own
+subscription or membership. Provision Claude and Kimi credentials manually on
+the dispatcher host; Autobuild never runs `claude setup-token` or collects its
+output. ChatGPT subscription accounts use OpenAI's browser authorization through
+`ab accounts login NAME`; see [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions)
+for destinations, protected storage and the single-refresher rule.
 
 <!-- config-fragment:accounts -->
 ```toml
@@ -51,12 +53,15 @@ model = "kimi-for-coding"
 
 `account` inherits independently on roles and alternates. Without an explicit
 selection, a Claude route chooses the sole Claude subscription account; multiple
-subscription accounts require an explicit selection. Account references on other
-runtimes are rejected. Repositories with no accounts retain legacy authentication.
+Claude subscription accounts require an explicit selection. ChatGPT accounts
+require explicit selection on Codex; Claude and Kimi accounts require Claude Code.
+Incompatible runtime selections are rejected. Repositories with no accounts
+retain legacy authentication.
 Locally a Claude subscription can use its named token or the host login; Kimi
-requires its membership key. Invalid credentials need renewal (`claude setup-token`
-for Claude, replacement membership key for Kimi); quota and overload failures
-retain alternate fallback.
+requires its membership key. Invalid Claude/Kimi credentials need renewal
+(`claude setup-token` for Claude, replacement membership key for Kimi). Invalid
+ChatGPT credentials require `ab accounts login NAME` for the owning destination;
+quota and overload failures retain alternate fallback.
 
 Choose the region of your Kimi membership. The default `overseas` selects
 `https://api.kimi.ai/coding/`; `china` selects `https://api.kimi.com/coding/`.
@@ -70,9 +75,18 @@ an exact account placeholder header only on its provider's exact hostname.
 The next dispatcher observation tick refreshes credentials for subsequent
 requests without reprovisioning. Changing a local dispatcher's `.env` still needs
 a restart. Accounts are deployment-owned descriptors; configuration artifacts
-contain variable names, never values. Validation reports host credential presence
-and makes one minimal Claude Code model request per declared account, including
-unused accounts, in the disposable sandbox.
+contain variable names, never values. ChatGPT accounts must use credential slots
+distinct from every other account. Existing ChatGPT descriptors cannot be
+replaced or removed during live configuration reload: stop dispatch first, or
+introduce a new account name. This restriction qualifies the hot-reload entries
+below.
+
+Validation reports credential readiness and makes one minimal model request per
+declared account, including unused accounts, through its runtime (Claude Code
+for Claude/Kimi, Codex for ChatGPT) in the disposable sandbox. Hosted ChatGPT
+project secrets report readiness from write-only status metadata instead; the
+first hosted build is the live check. See
+[ChatGPT subscriptions](accounts.md#chatgpt-subscriptions).
 
 <!-- configuration-reference:accounts -->
 
@@ -360,7 +374,7 @@ These fields hot-reload:
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
 | `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's selection applies unless unknown names require default-all fallback, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
-| `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary; credentials refresh on observation ticks. |
+| `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary, except existing ChatGPT descriptors require stopped dispatch before replacement or removal (see [accounts](#accounts)); credentials refresh on observation ticks. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
@@ -3409,9 +3423,11 @@ the existing text-download projection.
   Git remote can fetch/push with the process's Git credentials;
 - Claude sessions invoke the local `claude` CLI and use its configured login;
   install Claude Code, launch `claude`, and complete login before dispatching;
-- Codex sessions invoke the local `codex` CLI and use its configured login;
-  install Codex, run `codex login`, and complete authentication before
-  dispatching;
+- Codex sessions invoke the local `codex` CLI. Without a named ChatGPT account,
+  run `codex login` before dispatching. Named ChatGPT accounts use
+  `ab accounts login NAME --local` for a local dispatcher or `--project` for a
+  connected project; they preserve the user's ambient Codex login. See
+  [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions);
 - Pi sessions use Pi's provider authentication: start `pi` and run `/login`
   inside the interactive session, or, for non-interactive use, supply the
   provider credentials Pi supports (such as provider API keys in the environment).
@@ -3499,7 +3515,10 @@ progress is not shown. Harvest does not consume build capacity.
   and Contents write permission.
 - **Agent runtime/provider:** authenticate the runtime selected by the merged
   role. A missing Codex adapter diagnostic names both `codex runtime` and the
-  `codex` executable; install it and run `codex login`. A 401/402/403,
+  `codex` executable; install it. For legacy Codex authentication, run
+  `codex login`. For a named ChatGPT account, sign in again with
+  `ab accounts login NAME --local` or `--project` for the owning destination; see
+  [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions). A 401/402/403,
   permission, quota, or billing rejection is treated as a permanent provider
   failure rather than retried indefinitely. For Pi, confirm the
   provider-qualified model and provider login.
