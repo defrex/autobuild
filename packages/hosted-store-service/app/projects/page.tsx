@@ -4,10 +4,10 @@ import { ProjectsClient } from './ProjectsClient'
 export const dynamic = 'force-dynamic'
 export default async function ProjectsPage() {
   const session = await accessSession()
-  if (!session.isSuperUser)
+  if (!session.isSuperUser && !session.isOwner)
     return (
-      <AccessFrame {...session} title="Projects" error="super user required">
-        <p>Only super users can manage projects.</p>
+      <AccessFrame {...session} title="Projects" error="organization owner required">
+        <p>Organization owners and super users can manage projects.</p>
       </AccessFrame>
     )
   return <ProjectsClient {...session} />

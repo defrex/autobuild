@@ -5,6 +5,7 @@ import { resolvePostgresUrl } from './env'
 import { S3BlobStore } from './s3'
 import { openPostgresBuildStore, type PostgresBuildStore } from './store'
 import { VercelBlobStore } from './vercel'
+import type { BlobMaintenance } from './blob-maintenance'
 
 type Env = Record<string, string | undefined>
 const required = (env: Env, name: string): string => {
@@ -125,7 +126,11 @@ export function openPostgresBlobsFromEnv(env: Env): BlobStore {
   return openPostgresBlobs(parsePostgresStoreEnv(env))
 }
 
-function openPostgresBlobs(config: PostgresStoreConfig): BlobStore {
+export function openPostgresBlobMaintenanceFromEnv(env: Env): BlobMaintenance {
+  return openPostgresBlobs(parsePostgresStoreEnv(env))
+}
+
+function openPostgresBlobs(config: PostgresStoreConfig): BlobStore & BlobMaintenance {
   if (config.backend === 's3') {
     const client = new S3Client({
       region: config.region,
