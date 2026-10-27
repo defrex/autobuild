@@ -810,7 +810,7 @@ export async function validateInitReadiness(
           status: ready ? 'pass' : 'fail',
           detail: entry
             ? `Hosted credential ${entry.status}; owner ${entry.owner}; set ${entry.setAt}; ${entry.warnings?.join(', ') || 'no refresh-window warning'}. The first hosted build is the live check.`
-            : 'Credential absent; run ab accounts login NAME --project',
+            : `Credential absent; run ab accounts login ${JSON.stringify(name)} ${service && isRemoteStoreRef(service) ? '--project' : '--local'}`,
         })
         if (!ready)
           return {

@@ -32,6 +32,7 @@ export interface SecretSnapshot {
   repo: string
   minimumValidUntil?: number
   env: Record<string, string>
+  unavailable?: string[]
   versions: { name: string; generation: string; revision: string }[]
 }
 export interface ProjectSecretsManagement {
@@ -43,6 +44,7 @@ export interface ProjectSecretsManagement {
 }
 export interface ProjectSecretsResolver {
   resolveForTick(repo: string, minimumValidUntil: number, deadline: number): Promise<SecretSnapshot>
+  resolveForObservation?(repo: string): Promise<SecretSnapshot>
   markSupplied(snapshot: SecretSnapshot): Promise<void>
 }
 interface Row {
@@ -361,6 +363,30 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     }
     throw new ProjectSecretError('secret-unavailable')
   }
+  /** Ready credentials for policy repair only; never authorizes intake or launch. */
+  async resolveForObservation(raw: string): Promise<SecretSnapshot> {
+    const repo = await this.registered(raw)
+    const { rows, payloads } = await this.read(repo)
+    const snapshot: SecretSnapshot = {
+      repo,
+      minimumValidUntil: this.now(),
+      env: {},
+      unavailable: [],
+      versions: rows.map((r) => ({
+        name: r.name,
+        generation: r.generation,
+        revision: String(r.revision),
+      })),
+    }
+    rows.forEach((r, i) => {
+      const p = payloads[i]!
+      if (r.status !== 'ready' || ('expiresAt' in p && p.expiresAt <= this.now())) {
+        snapshot.unavailable!.push(r.name)
+      } else snapshot.env[r.name] = 'value' in p ? p.value : p.accessToken
+    })
+    if (!(await this.current(snapshot, false))) throw new ProjectSecretError('stale-secrets')
+    return snapshot
+  }
   private async fail(r: Row, code: string) {
     await this.sql.begin(async (tx) => {
       await this.lock(tx as SQL, r.repo)
@@ -375,7 +401,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
       const rows: Row[] =
         await tx`SELECT * FROM project_secrets WHERE repo=${snapshot.repo} ORDER BY name`
       if (
-        rows.some((r) => r.status !== 'ready') ||
+        rows.some((r) => r.status !== 'ready' && !snapshot.unavailable?.includes(r.name)) ||
         JSON.stringify(
           rows.map((r) => ({
             name: r.name,
@@ -389,6 +415,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
       if (rows.length === 0) return true
       const cipher = await this.cipher(tx as SQL)
       for (const row of rows) {
+        if (snapshot.unavailable?.includes(row.name)) continue
         validateSecretName(row.name)
         const payload = cipher.decrypt(
           context(snapshot.repo, row.name, row.kind),
@@ -401,8 +428,11 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
         )
           return false
       }
-      if (supplied)
-        await tx`UPDATE project_secrets SET last_supplied_at=${new Date(this.now()).toISOString()} WHERE repo=${snapshot.repo}`
+      if (supplied) {
+        const names = Object.keys(snapshot.env)
+        if (names.length)
+          await tx`UPDATE project_secrets SET last_supplied_at=${new Date(this.now()).toISOString()} WHERE repo=${snapshot.repo} AND name IN ${tx(names)}`
+      }
       return true
     })
   }

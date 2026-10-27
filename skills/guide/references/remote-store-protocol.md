@@ -1431,13 +1431,15 @@ to a kernel, not that a build completed.
 
 On each hosted tick the complete current project set overrides the deployment
 environment for that project only. Replacement/removal applies on the next tick.
-Resolution failure still runs a kernel observation with account credentials
-withheld so existing guest token policies are revoked and affected ChatGPT
-executions stop with attention. It cannot silently retain an old token transform.
-Resolution and handoff validate the complete generation/revision set; a stale
-handoff dispatches nothing. Encryption configuration errors, decryption failures,
-and refresh failures fail the affected project closed without a partial set;
-other projects can continue. Projects without saved secrets resolve and supply an
+Resolution failure suppresses intake and all new execution launches. When the
+ready subset can be read, a revision-fenced observation-only pass repairs running
+execution policies: unavailable names are withheld, their transforms are revoked,
+and unrelated ready account transforms remain active. It performs no janitor,
+resume, lease-sweep, or harvest launch work. If encryption or decryption prevents
+reading that subset, the project is skipped. Resolution and handoff validate the
+complete generation/revision set, including unavailable rows; a stale handoff
+runs no observation or dispatch. Normal dispatch still requires the complete
+usable secret set; other projects can continue. Projects without saved secrets resolve and supply an
 empty set without encryption configuration, including when another project has
 secrets. All secret mutations still require valid encryption configuration, even
 on an empty project. An empty snapshot becomes stale if a secret is added before

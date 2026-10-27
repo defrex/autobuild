@@ -99,7 +99,10 @@ Sandboxes hold stable placeholders; only an exact bearer match on
 an isolated CODEX_HOME and a capability-protected loopback Responses forwarder which
 reads current durable state and never refreshes. The shell HOME stays intact
 for Git identity and other operator tools. Missing sandbox credentials revoke
-only their egress transforms; unrelated routes keep running. A failed policy
+only their egress transforms; unrelated routes keep running. If hosted secret
+resolution fails, intake and new execution launches wait for recovery. A
+revision-fenced observation-only pass uses ready credentials to repair running
+policies; if those credentials cannot be read, the project is skipped. A failed policy
 update stops the sandbox because revocation could not be confirmed.
 
 A failed or uncertain refresh is terminal for that credential generation.

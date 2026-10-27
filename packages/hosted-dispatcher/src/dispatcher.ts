@@ -401,7 +401,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           })
         let token: string
         let snapshot: SecretSnapshot
-        let resolver: ProjectSecretsResolver
+        let resolver: ProjectSecretsResolver | undefined
         let resolutionFailed = false
         try {
           resolver = await openSecrets()
@@ -416,7 +416,14 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           repositories.push({ repository, outcome: 'failed', runId, error: message })
           logError(`${LOG_PREFIX} ${invocation}: ${repository} ${message}`)
           resolutionFailed = true
-          snapshot = { repo: repository, env: {}, versions: [] }
+          // Repair active policies without admitting any new work. If even the
+          // ready subset cannot be read (for example a missing key), skip safely.
+          if (!resolver?.resolveForObservation) continue
+          try {
+            snapshot = await resolver.resolveForObservation(repository)
+          } catch {
+            continue
+          }
         }
         const redact = (line: string) =>
           Object.values(snapshot.env)
@@ -447,7 +454,12 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           ...snapshot.env,
           AB_STORE: config.origin,
           AB_TOKEN: token,
-          ...(resolutionFailed ? { AB_PROJECT_SECRETS_FAILED: '1' } : {}),
+          ...(resolutionFailed
+            ? {
+                AB_PROJECT_SECRETS_FAILED: '1',
+                AB_PROJECT_SECRETS_UNAVAILABLE: JSON.stringify(snapshot.unavailable ?? []),
+              }
+            : {}),
         }
         delete childEnv.AB_PROJECT_SECRETS_KEY
         // A Vercel Function receives the deployment's OIDC token as a request
@@ -468,7 +480,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           childEnv.GH_TOKEN = forgeOverride
         }
         try {
-          if (!resolutionFailed) await resolver!.markSupplied(snapshot)
+          await resolver!.markSupplied(snapshot)
           await dispatch({
             // `targetRepo` here is a caller-facing identity token, not a
             // path: origin mode (AUT-302) has no checkout. `abDispatch`

@@ -2599,3 +2599,17 @@ credentialEnv = "OTHER_ACCESS"
     await service.stop(true)
   }
 })
+
+test('missing local ChatGPT credential names the account and local login destination', async () => {
+  const { repo, config } = await committedLocalRepo('ab-local-chatgpt-missing-')
+  await writeFile(
+    join(repo, 'autobuild.toml'),
+    config +
+      '\n[accounts.personal]\nkind = "chatgpt-subscription"\ncredentialEnv = "PLAN_ACCESS"\n',
+  )
+  const report = await validateInitReadiness({ targetRepo: repo, env: {} })
+  expect(report.exitCode).toBe(1)
+  expect(report.checks[0]!.detail).toBe(
+    'Credential absent; run ab accounts login "personal" --local',
+  )
+})

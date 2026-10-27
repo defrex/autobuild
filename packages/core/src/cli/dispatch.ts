@@ -546,7 +546,8 @@ async function defaultWire(
   )
   const { runtimes } = createProductionRuntimes()
   if (opts.env.AB_PROJECT_SECRETS_FAILED === '1')
-    for (const a of Object.values(config.accounts)) delete opts.env[a.credentialEnv]
+    for (const name of JSON.parse(opts.env.AB_PROJECT_SECRETS_UNAVAILABLE ?? '[]') as string[])
+      delete opts.env[name]
   let accounts = config.accounts
   const credentials = new LocalCredentials(join(state.checkout, '.autobuild'))
   const owner = new LocalAccountOwner(credentials)
@@ -1269,6 +1270,7 @@ class DispatchLoop {
         resumeCurrent,
         viewRefreshed: true,
         acceptNewWork: settings.intake,
+        observationOnly: this.opts.env.AB_PROJECT_SECRETS_FAILED === '1',
         defaultAutoMerge: settings.defaultAutoMerge,
         autoMergeUser: buildControlUser(this.opts.env),
         // Invocation bound forwarded into the tick: per-item loops inside the

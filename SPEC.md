@@ -4167,7 +4167,11 @@ No public surface returns material. Authority and process-control names are rese
 Every hosted tick resolves a coherent complete set, overlays project values onto
 its own deployment environment, and records revision-fenced supply timestamps at
 kernel handoff. Encryption keys are excluded from child environments. A failed
-resolution skips that project, without partial delivery. Projects without secrets
+resolution prevents intake and launches for that project. If ready credentials can
+be read and revision-fenced, an observation-only recovery pass supplies them solely
+to repair running execution policies, withholding unavailable names. Unrelated
+account transforms remain active; no janitor, resume, lease-sweep, or harvest work
+is launched. If the ready subset cannot be read, the project is skipped. Projects without secrets
 resolve and hand off an empty set without encryption configuration; all secret
 mutations still require a valid key. Adding a secret invalidates an earlier empty
 snapshot before handoff. Local dispatch behavior
