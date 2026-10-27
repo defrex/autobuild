@@ -90,11 +90,17 @@ client identifier belongs to the authorized ChatGPT registration. Reauthorizatio
 keeps identity and registration associated. Never copy the ambient Codex login.
 
 Exactly one owner refreshes each connection: the local dispatcher or the
-hosted refreshing secret. Credentials rotate atomically before delivery.
+hosted refreshing secret. Credentials rotate atomically before delivery. Expired access tokens remain
+refreshable after dispatcher downtime; a live validator or dispatcher claim
+cannot be displaced. Only a proven dead process or a released claim permits
+a successor to own renewal.
 Sandboxes hold stable placeholders; only an exact bearer match on
 `api.openai.com` receives the current access token at egress. Local Codex uses
-an isolated home and a capability-protected loopback Responses forwarder which
-reads current durable state and never refreshes.
+an isolated CODEX_HOME and a capability-protected loopback Responses forwarder which
+reads current durable state and never refreshes. The shell HOME stays intact
+for Git identity and other operator tools. Missing sandbox credentials revoke
+only their egress transforms; unrelated routes keep running. A failed policy
+update stops the sandbox because revocation could not be confirmed.
 
 A failed or uncertain refresh is terminal for that credential generation.
 Sign in again with `bun ab accounts login chatgpt` for the same destination;

@@ -263,8 +263,6 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
         await this.fail(expired, 'refresh-expired')
         throw new ProjectSecretError('secret-unavailable')
       }
-      if (payloads.some((payload) => 'expiresAt' in payload && payload.expiresAt <= this.now()))
-        throw new ProjectSecretError('secret-unavailable')
       let retry = false
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i]!,
@@ -279,9 +277,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
           continue
         }
         if (r.kind === 'static' || refreshed.has(JSON.stringify([r.name, r.generation]))) continue
-        if ('expiresAt' in p && p.expiresAt <= this.now())
-          throw new ProjectSecretError('secret-unavailable')
-        if ('expiresAt' in p && (p.earliestRefreshAt ?? p.expiresAt - 300_000) > this.now())
+        if ('expiresAt' in p && (p.earliestRefreshAt ?? p.expiresAt - 600_000) > this.now())
           continue
         if (!('state' in p) || (p.earliestRefreshAt ?? 0) > this.now())
           throw new ProjectSecretError('secret-unavailable')

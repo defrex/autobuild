@@ -25,6 +25,7 @@ export interface LocalCredential {
   state: ChatGPTState
   status: 'ready' | 'refreshing' | 'failed'
   owner?: string
+  ownerPid?: number
 }
 const error = () =>
   new Error('ChatGPT credential storage unavailable; check permissions and sign in again')
@@ -186,7 +187,7 @@ export class LocalCredentials {
         descriptor,
         state,
         status: 'ready',
-        ...(old?.owner ? { owner: old.owner } : {}),
+        ...(old?.owner ? { owner: old.owner, ownerPid: old.ownerPid } : {}),
       })
     })
   }

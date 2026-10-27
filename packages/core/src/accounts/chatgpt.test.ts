@@ -334,3 +334,116 @@ test('managed Codex state refuses parent and leaf symlinks without opening user 
     }
   }
 })
+
+test('ChatGPT isolates CODEX_HOME while preserving the shell HOME and Git identity', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ab-chatgpt-home-'))
+  try {
+    const home = join(root, 'operator-home')
+    mkdirSync(home)
+    await Bun.write(
+      join(home, '.gitconfig'),
+      '[user]\nname = Operator\nemail = operator@example.test\n',
+    )
+    const provider = await chatgptProvider(
+      { name: 'plan', descriptor },
+      { HOME: home, AB_ACCOUNT_PLACEHOLDERS: '1' },
+      root,
+    )
+    try {
+      expect(provider.env.HOME).toBe(home)
+      expect(provider.env.CODEX_HOME).toBe(join(root, '.ab', 'codex-chatgpt'))
+      expect(provider.args).toContain('--ignore-user-config')
+      const git = Bun.spawn(['git', 'var', 'GIT_AUTHOR_IDENT'], {
+        cwd: root,
+        env: { PATH: process.env.PATH, ...provider.env },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(await new Response(git.stdout).text()).toContain('Operator <operator@example.test>')
+      expect(await git.exited).toBe(0)
+    } finally {
+      await provider.close()
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+import { renewLocalAccounts } from './local-owner'
+test('dispatcher renewal recovers an expired access token after restart', async () => {
+  const f = fixture()
+  try {
+    const now = Date.now()
+    f.credentials.install('plan', descriptor, { ...state, expiresAt: now - 3600000 })
+    let calls = 0
+    const owner = new LocalAccountOwner(f.credentials, async (previous) => {
+      calls++
+      expect(previous.refreshToken).toBe(state.refreshToken)
+      return { ...state, accessToken: 'renewed-after-downtime', expiresAt: now + 3600000 }
+    })
+    const env: Record<string, string> = {}
+    const claimed = new Set<string>()
+    await renewLocalAccounts(owner, { plan: descriptor }, env, claimed, now)
+    expect(calls).toBe(1)
+    expect(env.CHATGPT).toBe('renewed-after-downtime')
+    expect(claimed.has('plan')).toBe(true)
+    expect(f.credentials.load('plan')?.status).toBe('ready')
+    owner.release('plan')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('dispatcher cannot take a live validator claim during its refresh', async () => {
+  const f = fixture()
+  try {
+    let finish!: (state: ChatGPTState) => void
+    const validator = new LocalAccountOwner(
+      f.credentials,
+      () =>
+        new Promise((r) => {
+          finish = r
+        }),
+    )
+    validator.claim('plan')
+    const pending = validator.tick({ plan: descriptor }, state.expiresAt - 50000)
+    const dispatcher = new LocalAccountOwner(new LocalCredentials(f.root), async () => {
+      throw new Error('dispatcher must not refresh')
+    })
+    const env = { CHATGPT: 'stale' }
+    await renewLocalAccounts(dispatcher, { plan: descriptor }, env, new Set())
+    expect(f.credentials.load('plan')?.status).toBe('refreshing')
+    expect(f.credentials.load('plan')?.owner).toBe(validator.id)
+    expect(env.CHATGPT).toBeUndefined()
+    finish({ ...state, accessToken: 'validator-rotated', expiresAt: Date.now() + 3600000 })
+    await pending
+    validator.release('plan')
+    await renewLocalAccounts(dispatcher, { plan: descriptor }, env, new Set())
+    expect(env.CHATGPT).toBe('validator-rotated')
+    dispatcher.release('plan')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('only a proven dead owner can be reclaimed and uncertain refresh stays failed', async () => {
+  const f = fixture()
+  try {
+    const child = Bun.spawn([process.execPath, '-e', ''], { stdout: 'ignore', stderr: 'ignore' })
+    await child.exited
+    for (const status of ['ready', 'refreshing'] as const) {
+      f.credentials.save('plan', {
+        ...f.credentials.load('plan')!,
+        owner: 'dead-owner',
+        ownerPid: child.pid,
+        status,
+      })
+      const successor = new LocalAccountOwner(f.credentials)
+      successor.claim('plan')
+      expect(f.credentials.load('plan')?.status).toBe(status === 'ready' ? 'ready' : 'failed')
+      successor.release('plan')
+    }
+  } finally {
+    f.cleanup()
+  }
+})

@@ -2064,14 +2064,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }
       if (refreshed.missing.length) {
         attention = `Missing credentials: ${refreshed.missing.join('; ')}`
-        if (
-          Object.values(accounts).some(
-            (a) => a.kind === 'chatgpt-subscription' && !this.options.env[a.credentialEnv],
-          )
-        ) {
-          await sandbox.stop({ signal: this.operationSignal() })
-          return { state: 'lost', attention }
-        }
+        // The updated policy fences the missing account by removing its bearer
+        // transform. Its next request fails authentication through the runtime's
+        // account-specific recovery path. Keep other routes in this guest alive:
+        // declarations include unused accounts and do not identify active sessions.
       }
     }
     const diagnosed = (observation: ExecutionObservation): ExecutionObservation =>

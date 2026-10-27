@@ -12,13 +12,13 @@ export class LocalAccountOwner {
     readonly credentials: LocalCredentials,
     private readonly refresh = refreshChatGPT,
   ) {}
-  claim(name: string, acknowledgedTakeover = false): void {
+  claim(name: string): void {
     this.credentials.locked(name, () => {
       const r = this.credentials.load(name)
-      if (!r || (r.owner && r.owner !== this.id && !acknowledgedTakeover))
+      if (!r || (r.owner && r.owner !== this.id && !ownerProcessEnded(r.ownerPid)))
         throw new Error('ChatGPT account already owned or missing')
       if (r.status === 'refreshing') r.status = 'failed'
-      this.credentials.save(name, { ...r, owner: this.id })
+      this.credentials.save(name, { ...r, owner: this.id, ownerPid: process.pid })
     })
   }
   release(name: string): void {
@@ -26,6 +26,7 @@ export class LocalAccountOwner {
       const r = this.credentials.load(name)
       if (r?.owner === this.id) {
         delete r.owner
+        delete r.ownerPid
         this.credentials.save(name, r)
       }
     })
@@ -77,5 +78,46 @@ export class LocalAccountOwner {
       env[descriptor.credentialEnv] = r.state.accessToken
     }
     return env
+  }
+}
+
+/** Unknown ownership and permission errors remain live; only OS proof of exit
+ * permits reclaiming a record. An abandoned rotating attempt still fails closed. */
+function ownerProcessEnded(pid: number | undefined): boolean {
+  if (!Number.isSafeInteger(pid) || pid! <= 0) return false
+  try {
+    process.kill(pid!, 0)
+    return false
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
+
+/** Dispatcher renewal also recovers ready credentials after sleep or downtime.
+ * Access expiry is not refresh failure; only the owner may consume refresh state. */
+export async function renewLocalAccounts(
+  owner: LocalAccountOwner,
+  accounts: Accounts,
+  env: Record<string, string | undefined>,
+  claimed: Set<string>,
+  now = Date.now(),
+): Promise<void> {
+  for (const [name, descriptor] of Object.entries(accounts)) {
+    if (descriptor.kind !== 'chatgpt-subscription') continue
+    try {
+      const record = owner.credentials.load(name)
+      if (!record || record.status === 'failed') {
+        delete env[descriptor.credentialEnv]
+        continue
+      }
+      owner.claim(name)
+      claimed.add(name)
+      // Only expose a still-valid access value during the rotating HTTP call.
+      if (record.state.expiresAt > now) env[descriptor.credentialEnv] = record.state.accessToken
+      else delete env[descriptor.credentialEnv]
+      Object.assign(env, await owner.tick({ [name]: descriptor }, now))
+    } catch {
+      delete env[descriptor.credentialEnv]
+    }
   }
 }

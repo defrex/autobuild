@@ -4176,8 +4176,10 @@ attempt, persist replacement state before delivery, and fail expired attempts
 without takeover. A failed credential requires explicit replacement. Valid
 credentials before their earliest refresh time remain usable, even inside a
 requested future validity horizon. The first eligible five-minute hosted tick
-refreshes and persists rotation before supply; expiration or refresh failure
-prevents supply. A refresh window shorter than five minutes plus a one-minute
+refreshes and persists rotation before supply, including expired access state
+after downtime when the refresh credential remains ready. Providers without an
+earliest refresh time use a ten-minute pre-expiry margin. Failed or uncertain
+refresh attempts prevent supply. A refresh window shorter than five minutes plus a one-minute
 margin emits typed advisory metadata, never invalidates a valid credential and
 never causes revocation. The public
 CLI writes static values or typed ChatGPT registrations; a web settings screen
@@ -4196,7 +4198,8 @@ for ordinary individual usage. Claude and Kimi credentials are provisioned
 manually. ChatGPT credentials are authorized with `ab accounts login NAME
 [--local|--project]`. The local dispatcher or hosted refreshing project secret
 is the sole refresh owner; no sandbox refreshes. Local Codex uses a protected
-loopback inference transport and isolated home, leaving ambient login untouched.
+loopback inference transport and isolated CODEX_HOME, preserving the shell HOME
+and leaving ambient login untouched.
 Hosted validation uses write-only metadata and states that the first hosted
 build is the live check; local validation makes a minimal runtime request.
 

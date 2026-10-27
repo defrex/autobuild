@@ -820,9 +820,10 @@ export async function validateInitReadiness(
             checks,
             exitCode: 1,
           }
-        env.AB_CHATGPT_HOSTED_READINESS = [env.AB_CHATGPT_HOSTED_READINESS, name]
-          .filter(Boolean)
-          .join(',')
+        env.AB_CHATGPT_HOSTED_READINESS = JSON.stringify([
+          ...(JSON.parse(env.AB_CHATGPT_HOSTED_READINESS ?? '[]') as string[]),
+          name,
+        ])
         env[descriptor.credentialEnv] = 'autobuild-hosted-metadata-only'
       }
     }

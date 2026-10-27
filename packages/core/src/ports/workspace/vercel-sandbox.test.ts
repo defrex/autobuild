@@ -3663,13 +3663,15 @@ test('legacy observation makes no policy writes and still settles command exit',
   expect(h.sandbox.policies).toHaveLength(updates)
 })
 
-test('ChatGPT policies rotate for active sessions and missing credentials stop the guest', async () => {
+test('ChatGPT policies rotate and missing credentials are fenced without stopping other routes', async () => {
   const env: Record<string, string | undefined> = {
     CHATGPT_ACCESS: 'sentinel-chatgpt-first',
     ANTHROPIC_API_KEY: 'legacy-key',
+    CLAUDE_ACCESS: 'sentinel-unaffected-claude',
   }
   const accounts = {
     plan: { kind: 'chatgpt-subscription', credentialEnv: 'CHATGPT_ACCESS' },
+    claude: { kind: 'claude-subscription', credentialEnv: 'CLAUDE_ACCESS' },
   } as const
   const h = harness({ accounts: () => accounts, accountEnv: env })
   const workspace = await h.provider.provision({
@@ -3697,10 +3699,13 @@ test('ChatGPT policies rotate for active sessions and missing credentials stop t
     expect(policy).not.toContain('sentinel-chatgpt-first')
     expect(h.sandbox.commands.length).toBe(commands)
   }
+  const stops = h.sandbox.stops
   delete env.CHATGPT_ACCESS
   const failed = await h.provider.buildExecution.observe!(execution.identity!)
-  expect(failed.state).toBe('lost')
+  expect(failed.state).toBe('running')
   expect(failed.attention).toContain('plan')
   expect(failed.attention).toContain('ab accounts login')
-  expect(h.sandbox.stops).toBeGreaterThan(0)
+  expect(h.sandbox.stops).toBe(stops)
+  expect(JSON.stringify(h.sandbox.policies.at(-1))).not.toContain('sentinel-chatgpt-third')
+  expect(JSON.stringify(h.sandbox.policies.at(-1))).toContain('sentinel-unaffected-claude')
 })

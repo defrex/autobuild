@@ -159,7 +159,7 @@ Exactly one owner refreshes each connection: the local dispatcher or the
 hosted refreshing secret. Credentials rotate atomically before delivery.
 Sandboxes hold stable placeholders; only an exact bearer match on
 `api.openai.com` receives the current access token at egress. Local Codex uses
-an isolated home and a capability-protected loopback Responses forwarder which
+an isolated CODEX_HOME and a capability-protected loopback Responses forwarder which
 reads current durable state and never refreshes.
 
 A failed or uncertain refresh is terminal for that credential generation.

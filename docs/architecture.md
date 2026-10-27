@@ -1704,7 +1704,8 @@ for ordinary individual usage. Claude and Kimi credentials are provisioned
 manually. ChatGPT credentials are authorized with `ab accounts login NAME
 [--local|--project]`. The local dispatcher or hosted refreshing project secret
 is the sole refresh owner; no sandbox refreshes. Local Codex uses a protected
-loopback inference transport and isolated home, leaving ambient login untouched.
+loopback inference transport and isolated CODEX_HOME, preserving the shell HOME
+and leaving ambient login untouched.
 Hosted validation uses write-only metadata and states that the first hosted
 build is the live check; local validation makes a minimal runtime request.
 

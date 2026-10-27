@@ -1,5 +1,5 @@
 import { LocalCredentials } from '../accounts/local-credentials'
-import { LocalAccountOwner } from '../accounts/local-owner'
+import { LocalAccountOwner, renewLocalAccounts } from '../accounts/local-owner'
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import { capturedBuildConfig } from '../processes/verify-cycle-config'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
@@ -573,25 +573,7 @@ async function defaultWire(
       accountTimer.unref()
     }
     if (renewal) return renewal
-    renewal = (async () => {
-      for (const [name, descriptor] of Object.entries(accounts)) {
-        if (descriptor.kind !== 'chatgpt-subscription') continue
-        try {
-          const record = credentials.load(name)
-          if (!record || record.status === 'failed' || record.state.expiresAt <= Date.now()) {
-            delete opts.env[descriptor.credentialEnv]
-            continue
-          }
-          owner.claim(name, true)
-          claimed.add(name)
-          // Keep the valid previous access value available while HTTP rotates.
-          opts.env[descriptor.credentialEnv] = record.state.accessToken
-          Object.assign(opts.env, await owner.tick({ [name]: descriptor }))
-        } catch {
-          delete opts.env[descriptor.credentialEnv]
-        }
-      }
-    })().finally(() => {
+    renewal = renewLocalAccounts(owner, accounts, opts.env, claimed).finally(() => {
       renewal = undefined
     })
     return renewal

@@ -1448,8 +1448,10 @@ or CLI write formats. The five-minute hosted cadence is unchanged. A token that
 is valid now but not yet refreshable is supplied unchanged; a caller’s future
 validity horizon cannot reject it. The first tick at or after the provider’s
 earliest-refresh time rotates the credential and commits encrypted replacement
-state before supply. Providers omitting that time use a five-minute pre-expiry
-refresh margin. Expired credentials or refresh failures prevent supply. A valid
+state before supply. Providers omitting that time use a ten-minute pre-expiry
+refresh margin to tolerate a delayed five-minute tick. After downtime, expired
+access state is refreshed before supply while its durable status remains ready.
+Failed or uncertain refresh attempts prevent supply and require replacement. A valid
 credential is never revoked merely because its refresh window is short. A durable
 attempt permits only one refresh caller across overlapping ticks. An abandoned attempt expires to failed without reusing the
 possibly consumed refresh token; explicit replacement is required. Errors use

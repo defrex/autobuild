@@ -60,7 +60,6 @@ export async function chatgptProvider(
     )
   for (const [key, value] of Object.entries(selected))
     if ([...sensitiveAccountValues].some((secret) => value.includes(secret))) delete selected[key]
-  selected.HOME = home
   selected.CODEX_HOME = home
   selected.AUTOBUILD_CHATGPT_BEARER = credential
   const provider = 'model_providers.autobuild_chatgpt.'

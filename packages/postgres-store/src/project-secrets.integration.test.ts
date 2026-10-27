@@ -655,7 +655,51 @@ live(
     }),
 )
 
-live('expired complete sets fail before refresh HTTP without revoking valid peers', () =>
+live('a missed tick refreshes expired access state and retains static peers', () =>
+  fixture(async (sql, _url, projects) => {
+    let now = Date.now(),
+      calls = 0
+    const store = new PostgresProjectSecrets(
+      sql,
+      projects,
+      () => key,
+      new Map([
+        [
+          'fake',
+          {
+            validateState: (s: unknown) => typeof s === 'string',
+            async refresh(state: unknown) {
+              calls++
+              expect(state).toBe('refresh-original')
+              return { accessToken: 'renewed', state: 'rotated', expiresAt: now + 3600000 }
+            },
+          },
+        ],
+      ]),
+      () => now,
+    )
+    await store.set(repo, 'STATIC_PEER', 'static-value', 'member')
+    await store.setPayload(
+      repo,
+      'PLAN_ACCESS',
+      'fake',
+      {
+        accessToken: 'old',
+        state: 'refresh-original',
+        expiresAt: now + 3600000,
+      },
+      'member',
+    )
+    now += 3700000
+    const result = await store.resolveForTick(repo, now + 600000, now + 1000)
+    expect(result.env).toEqual({ STATIC_PEER: 'static-value', PLAN_ACCESS: 'renewed' })
+    expect(calls).toBe(1)
+    expect((await store.list(repo)).every((entry) => entry.status === 'ready')).toBe(true)
+    await store.markSupplied(result)
+  }),
+)
+
+live('providers without a refresh window renew ten minutes before expiry', () =>
   fixture(async (sql, _url, projects) => {
     const now = Date.now()
     let calls = 0
@@ -670,7 +714,7 @@ live('expired complete sets fail before refresh HTTP without revoking valid peer
             validateState: (s: unknown) => typeof s === 'string',
             async refresh() {
               calls++
-              throw new Error('must not run')
+              return { accessToken: 'renewed', state: 'rotated', expiresAt: now + 3600000 }
             },
           },
         ],
@@ -679,21 +723,19 @@ live('expired complete sets fail before refresh HTTP without revoking valid peer
     )
     await store.setPayload(
       repo,
-      'A_VALID',
+      'PLAN_ACCESS',
       'fake',
-      { accessToken: 'valid', state: 'refresh-valid', expiresAt: now + 30000 },
+      {
+        accessToken: 'old',
+        state: 'original',
+        expiresAt: now + 9 * 60000,
+      },
       'member',
     )
-    await store.setPayload(
-      repo,
-      'Z_EXPIRED',
-      'fake',
-      { accessToken: 'expired', state: 'refresh-expired', expiresAt: now },
-      'member',
+    expect((await store.resolveForTick(repo, now + 600000, now + 1000)).env.PLAN_ACCESS).toBe(
+      'renewed',
     )
-    await expect(store.resolveForTick(repo, now, now + 1000)).rejects.toThrow('secret-unavailable')
-    expect(calls).toBe(0)
-    expect((await store.list(repo)).every((entry) => entry.status === 'ready')).toBe(true)
+    expect(calls).toBe(1)
   }),
 )
 
