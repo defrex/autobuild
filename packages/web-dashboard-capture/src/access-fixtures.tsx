@@ -119,6 +119,8 @@ export function accessFixture(id: string) {
         status: 'pending',
       }}
       context={{
+        assignedOrganization:
+          state === 'connect-fixed' ? { id: a.organization.id, name: a.organization.name } : null,
         assignment: state === 'connect-fixed' ? 'fixed' : 'new',
         organizations:
           state === 'connect-zero' || state === 'connect-fixed'
@@ -127,7 +129,6 @@ export function accessFixture(id: string) {
               ? [a.organization]
               : [a.organization, b.organization],
       }}
-      selectedOrganization={state === 'connect-multiple' ? 'acme' : undefined}
     />
   )
 }
