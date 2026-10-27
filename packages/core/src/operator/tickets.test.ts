@@ -378,7 +378,7 @@ test('native pages forward criteria and window without a full read or double sli
   const calls: unknown[] = []
   const native = Object.assign(source, {
     async listPage(criteria: unknown, page: unknown) {
-      expect(this).toBe(source)
+      expect(this as unknown).toBe(source)
       calls.push({ criteria, page })
       return { tickets: [seed], diagnostics: ['native diagnostic'], total: 99 }
     },

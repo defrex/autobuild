@@ -178,7 +178,7 @@ test('tree-capable native page normalization retains node targets and metadata',
   const source = Object.assign(fake, {
     integrationTree: true as const,
     async listPage() {
-      expect(this).toBe(fake)
+      expect(this as unknown).toBe(fake)
       return {
         tickets: [{ ...node, kind: 'node' as const, target: 'AUT-99' }],
         diagnostics: ['kept'],
