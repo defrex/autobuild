@@ -10,10 +10,69 @@ import { LocalCredentials } from '../packages/core/src/accounts/local-credential
 import { LocalAccountOwner } from '../packages/core/src/accounts/local-owner'
 import { accountPolicy } from '../packages/core/src/ports/workspace/account-policy'
 import { accountPlaceholder } from '../packages/core/src/config/accounts'
+import { vercelSdkCredentials } from '../packages/core/src/ports/workspace/vercel-sandbox'
 import { credentialValues } from '../packages/core/src/accounts/chatgpt-state'
 
 function line(name: string, pass: boolean) {
   process.stdout.write(`${pass ? 'PASS' : 'FAIL'} ${name}\n`)
+}
+/** Instance methods reuse the authenticated client established by Sandbox.create,
+ * including stop/delete; they do not accept separate credentials. */
+export async function createProofSandbox(
+  networkPolicy: NonNullable<Parameters<typeof Sandbox.create>[0]>['networkPolicy'],
+  timeout: number,
+  env: Record<string, string | undefined> = process.env,
+  create = Sandbox.create,
+) {
+  return create({ ...vercelSdkCredentials(env), runtime: 'node24', timeout, networkPolicy })
+}
+
+export async function deleteProofSandbox(
+  sandbox: Pick<Sandbox, 'stop' | 'delete'>,
+  report = line,
+): Promise<boolean> {
+  let stopped = true
+  try {
+    await sandbox.stop()
+  } catch {
+    stopped = false
+  }
+  try {
+    await sandbox.delete()
+    report('sandbox-deleted', stopped)
+    return stopped
+  } catch {
+    report('sandbox-deleted', false)
+    return false
+  }
+}
+
+export async function preflight() {
+  let sandbox: Sandbox | undefined
+  try {
+    // Exercise the exact account-transform shape without any ChatGPT credential.
+    const account = { kind: 'chatgpt-subscription' as const, credentialEnv: 'PROOF_ACCESS' }
+    const policy = accountPolicy(
+      'allow-all',
+      { proof: account },
+      { PROOF_ACCESS: 'preflight-inert-value' },
+    ).policy
+    sandbox = await createProofSandbox(policy, 60000)
+    const command = await sandbox.runCommand({ cmd: 'true' })
+    const pass = command.exitCode === 0
+    line('sandbox-created', pass)
+    if (!pass) process.exitCode = 1
+  } catch {
+    line('sandbox-created', false)
+    process.exitCode = 1
+  } finally {
+    if (sandbox) {
+      if (!(await deleteProofSandbox(sandbox))) process.exitCode = 1
+    } else {
+      line('sandbox-deleted', false)
+      process.exitCode = 1
+    }
+  }
 }
 function roll(value: Uint8Array): number {
   let hash = 0
@@ -83,6 +142,7 @@ try {
 async function main() {
   const name = process.argv[2]
   if (!name || process.argv.length !== 3) throw new Error('usage')
+  if (name === '--preflight') return preflight()
   const root = await resolveMainRepo(process.cwd(), spawnExec)
   const config = await loadConfig(join(root, 'autobuild.toml'))
   const account = config.accounts[name]
@@ -120,11 +180,7 @@ async function main() {
         { [name]: account },
         { [account.credentialEnv]: state.accessToken },
       ).policy
-    sandbox = await Sandbox.create({
-      runtime: 'node24',
-      timeout: 75 * 60000,
-      networkPolicy: policy(),
-    })
+    sandbox = await createProofSandbox(policy(), 75 * 60000)
     line('sandbox-created', true)
     const install = await sandbox.runCommand({
       cmd: 'npm',
@@ -254,19 +310,12 @@ async function main() {
       ])
     })
   } finally {
-    try {
-      if (sandbox) {
-        await sandbox.stop()
-        line('sandbox-deleted', true)
-      }
-    } catch {
-      line('sandbox-deleted', false)
-      process.exitCode = 1
-    }
+    if (sandbox && !(await deleteProofSandbox(sandbox))) process.exitCode = 1
     owner.release(name)
   }
 }
-await main().catch(() => {
-  line('live-proof', false)
-  process.exitCode = 1
-})
+if (import.meta.main)
+  await main().catch(() => {
+    line('live-proof', false)
+    process.exitCode = 1
+  })
