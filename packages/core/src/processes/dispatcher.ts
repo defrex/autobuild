@@ -1387,6 +1387,7 @@ export class Dispatcher {
           {
             store: this.store,
             execution,
+            ids: this.deps.ids,
             ...(this.settlePublication !== undefined
               ? { settlePublication: this.settlePublication }
               : {}),
@@ -1437,6 +1438,25 @@ export class Dispatcher {
           ...(execution.sessionId !== undefined ? { sessionId: execution.sessionId } : {}),
           commandId: execution.commandId,
         })
+        if (observation.attention) {
+          const current = this.store.repositoryFacts()
+          const authorization = current.harvestAuthorizations[JSON.stringify(execution.execution)]
+          const run = current.harvest.runs.find((run) => run.run === authorization?.payload.run)
+          // A model session has a durable run authorization. Escalation is
+          // terminal and deduplicates across ticks and dispatcher restarts;
+          // the execution itself remains observable until its command exits.
+          if (run?.status === 'running')
+            await this.store.appendRepo(this.deps.repo, {
+              actor: KERNEL,
+              type: 'harvest.escalated',
+              payload: {
+                run: run.run,
+                source: 'policy',
+                reason: observation.attention,
+                observations: run.observations,
+              },
+            })
+        }
         // Conservatism: an unresolvable observation (provider error) throws
         // and is contained below — it never reaps.
         if (observation.state === 'running') continue

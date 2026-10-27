@@ -1,3 +1,5 @@
+import { accountRemedy } from '../../config/accounts'
+import { accountEnvironment, accountSettings } from './account-env'
 import { hostname } from 'node:os'
 import {
   guardNativeHandle,
@@ -228,7 +230,9 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
    * resumable session persistence. With no built-in or MCP tools, the single
    * print-mode prompt cannot enter a tool-result loop. */
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
+    const env = accountEnvironment(sessionEnv(input.env), input.account, input.model)
     const args = this.baseArgs()
+    args.push(...accountSettings(env, input.account))
     args.push('--tools', '', '--disallowedTools', 'mcp__*', '--no-session-persistence')
     if (input.model !== undefined) args.push(CLAUDE_MODEL_ARG, input.model)
     args.push(...(input.args ?? []), CLAUDE_PROMPT_BOUNDARY, input.prompt)
@@ -236,7 +240,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     const turn = await this.runPrompt({
       args,
       cwd: input.cwd,
-      env: sessionEnv(input.env),
+      env,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     })
     if (turn.failure !== undefined) throw new Error(turn.failure.message)
@@ -385,6 +389,24 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     prompt: string,
     opts: AgentStartOpts,
     session: { sessionId: string } | { resume: string },
+    signal = opts.signal,
+  ): Promise<ClaudeTurn> {
+    let turn: ClaudeTurn
+    try {
+      turn = await this.runAuthenticatedTurn(prompt, opts, session, signal)
+    } catch (error) {
+      if (!opts.account) throw error
+      turn = launchFailure(error)
+    }
+    if (opts.account && turn.failure?.cause === 'credentials')
+      turn.failure.message += `; ${accountRemedy(opts.account)}`
+    return turn
+  }
+
+  private async runAuthenticatedTurn(
+    prompt: string,
+    opts: AgentStartOpts,
+    session: { sessionId: string } | { resume: string },
     signal: AbortSignal | undefined = opts.signal,
   ): Promise<ClaudeTurn> {
     const observe = nativeObserver(
@@ -418,10 +440,12 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     if (opts.stream !== undefined) args.push(CLAUDE_INCLUDE_PARTIAL_ARG)
     args.push(...(opts.args ?? []), CLAUDE_PROMPT_BOUNDARY, prompt)
 
+    const env = accountEnvironment(sessionEnv(opts.env), opts.account, opts.model)
+    args.unshift(...accountSettings(env, opts.account))
     const invocation: ClaudeCliInvocation = {
       args,
       cwd: opts.workspacePath,
-      env: sessionEnv(opts.env),
+      env,
       ...(signal !== undefined ? { signal } : {}),
     }
     if (opts.stream === undefined && opts.onNativeSession === undefined)

@@ -1,3 +1,4 @@
+import { randomIds, type IdSource } from '../ids'
 /**
  * Settlement of foreign build executions from durable facts plus provider
  * liveness (AUT-301). Today's completion handling hangs off the in-memory
@@ -11,7 +12,7 @@
  * is treated as `running`. Supervision decisions reap or settle only on
  * provider proof, never on an unknown.
  */
-import { DISPATCHER } from '../events/envelope'
+import { DISPATCHER, KERNEL } from '../events/envelope'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type {
   BuildExecution,
@@ -121,11 +122,12 @@ function observationIdentity(open: {
  * a recorded completion was written and publication was settled; `lost` means
  * the provider proved the execution gone without an exit code (publication is
  * deliberately left to the existing abandonment flow); `running` means the
- * guest is alive or unknowable — no writes. */
+ * guest is alive or unknowable. Independent host attention may still be recorded. */
 export type ExecutionSettlement = 'running' | 'settled' | 'lost'
 
 export interface ExecutionSettlementDeps {
   store: BuildStore
+  ids?: IdSource
   /** The observing provider's executor. Settlement requires the `observe`
    * capability; without it the caller supervises as before. */
   execution: BuildExecution
@@ -163,7 +165,7 @@ export function settleExecution(
 /** `settleExecution` over an already-derived open execution, for callers that
  * hold the projection (a reducer snapshot advanced to the log tail) and so
  * never need the event array. A `running` result or an observation error
- * touches no event rows. */
+ * touches no event rows unless the provider also reports actionable attention. */
 export async function settleOpenExecution(
   deps: ExecutionSettlementDeps,
   slug: string,
@@ -176,6 +178,22 @@ export async function settleOpenExecution(
     observation = await deps.execution.observe(observationIdentity(open))
   } catch {
     return 'running'
+  }
+  if (observation.attention) {
+    const state = (await readBuildFacts(deps.store, slug)).value.state
+    if (!state.openEscalations.some((entry) => entry.question === observation.attention))
+      await deps.store.append(slug, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          id: (deps.ids ?? randomIds())('esc'),
+          phase: state.phase ?? 'setup',
+          ...(state.round > 0 ? { round: state.round } : {}),
+          source: 'policy',
+          policyCause: 'non-retryable-phase-failure',
+          question: observation.attention,
+        },
+      })
   }
   if (observation.state === 'running') return 'running'
 

@@ -6601,7 +6601,7 @@ describe('Dispatcher harvest execution settlement', () => {
       environmentId?: string
       sessionId?: string
       commandId?: string
-    }) => Promise<{ state: 'running' } | { state: 'ended'; exitCode?: number } | { state: 'lost' }>,
+    }) => Promise<import('../ports/workspace/build-execution').ExecutionObservation>,
   ) {
     const reapCalls: Array<{ provider: string; ref: string }> = []
     const provider = {
@@ -6637,6 +6637,50 @@ describe('Dispatcher harvest execution settlement', () => {
       },
     })
   }
+
+  test('account attention escalates the authorized harvest once while a later exit still reaps it', async () => {
+    const attention =
+      'Missing credentials: account "kimi" (KIMI_KEY): replace the Kimi membership key'
+    let ended = false
+    const { provider, reapCalls } = harvestProvider(async () =>
+      ended ? { state: 'ended', exitCode: 0, attention } : { state: 'running', attention },
+    )
+    const h = harness({ workspaceProvider: provider })
+    await seedExecution(h)
+    await h.store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'harvest-account',
+        observations: [{ build: 'origin', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'harvest.execution.authorized',
+      payload: {
+        execution: 'host-harvest-i1',
+        run: 'harvest-account',
+        launch: 'started',
+        leaseHolder: 'holder',
+      },
+    })
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    let events = await h.store.getRepoEvents(REPO)
+    expect(events.filter((event) => event.type === 'harvest.escalated')).toHaveLength(1)
+    expect(events.find((event) => event.type === 'harvest.escalated')!.payload.reason).toBe(
+      attention,
+    )
+    expect(reapCalls).toHaveLength(0)
+    ended = true
+    await h.dispatcher.tick()
+    events = await h.store.getRepoEvents(REPO)
+    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(true)
+    expect(events.filter((event) => event.type === 'harvest.escalated')).toHaveLength(1)
+    expect(reapCalls).toHaveLength(1)
+  })
 
   test('a provider-proved lost execution is reaped and closed with the snapshot outcome', async () => {
     const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
