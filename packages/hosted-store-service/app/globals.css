@@ -1119,7 +1119,7 @@ a.rowhead {
   text-decoration: underline;
   text-underline-offset: 0.25em;
 }
-.btn.danger.primary {
+.btn.danger.primary:not(:disabled) {
   background: var(--red);
   border-color: var(--red);
   color: var(--ground);

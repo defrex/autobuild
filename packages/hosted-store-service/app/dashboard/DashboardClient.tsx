@@ -43,6 +43,7 @@ import { reconcileDashboard } from './view-model'
 
 interface ClientProps {
   identity: string
+  isOwner?: boolean
   isSuperUser?: boolean
   initialSelection: string
   repositories: readonly string[]
@@ -84,6 +85,7 @@ export function isNativeKeyboardActivation(key: string, target: ClosestTarget | 
 
 export function DashboardClient({
   identity,
+  isOwner,
   isSuperUser,
   repositories,
   initialSelection,
@@ -415,6 +417,7 @@ export function DashboardClient({
       repo={repo}
       repositories={repositories}
       identity={identity}
+      isOwner={isOwner}
       isSuperUser={isSuperUser}
       error={repo ? error : 'no repository configured'}
       onRepo={(next) => {

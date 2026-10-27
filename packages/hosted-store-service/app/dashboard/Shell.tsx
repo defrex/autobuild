@@ -8,6 +8,7 @@ export interface OperatorShellProps {
   repo: string
   repositories: readonly string[]
   identity: string
+  isOwner?: boolean
   isSuperUser?: boolean
   /** Initial account-menu disclosure for offline presentation fixtures. */
   menuOpen?: boolean
@@ -33,6 +34,7 @@ export function OperatorShell({
   repo,
   repositories,
   identity,
+  isOwner,
   isSuperUser,
   menuOpen,
   projectMenuOpen,
@@ -57,6 +59,7 @@ export function OperatorShell({
         </h1>
         <AccountMenu
           identity={identity}
+          isOwner={isOwner}
           isSuperUser={isSuperUser}
           menuOpen={menuOpen}
           onSignOut={onSignOut}

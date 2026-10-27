@@ -43,5 +43,10 @@ export type { VercelBlobStoreOptions } from './vercel'
 export * from './projects'
 export * from './credentials'
 
-export { openPostgresBlobsFromEnv, migratePostgresFromEnv } from './config'
+export {
+  openPostgresBlobsFromEnv,
+  openPostgresBlobMaintenanceFromEnv,
+  migratePostgresFromEnv,
+} from './config'
+export type { BlobMaintenance } from './blob-maintenance'
 export * from './ticket-assignments'

@@ -8,5 +8,10 @@ export async function accessSession() {
   if (!session || !validSession(session)) redirect('/sign-in')
   const principal = await humanAccess.principal(session.user.email)
   if (!principal) redirect('/sign-in?error=access_denied')
-  return { identity: principal.email, isSuperUser: principal.isSuperUser() }
+  const organizations = await (await humanAccess.store()).organizations(principal)
+  return {
+    isOwner: organizations.some((org) => org.membershipRole === 'owner'),
+    identity: principal.email,
+    isSuperUser: principal.isSuperUser(),
+  }
 }

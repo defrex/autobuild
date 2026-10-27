@@ -2,11 +2,13 @@
 import { Menu } from '../dashboard/Menu'
 export function AccountMenu({
   identity,
+  isOwner = false,
   isSuperUser = false,
   menuOpen,
   onSignOut,
 }: {
   identity: string
+  isOwner?: boolean
   isSuperUser?: boolean
   menuOpen?: boolean
   onSignOut?: () => void
@@ -22,6 +24,7 @@ export function AccountMenu({
           items: [
             { label: 'Builds', href: '/' },
             { label: 'Members', href: '/members' },
+            ...(isOwner && !isSuperUser ? [{ label: 'Projects', href: '/projects' }] : []),
           ],
         },
         ...(isSuperUser
