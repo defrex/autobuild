@@ -34,7 +34,25 @@ import {
   openPostgresBuildStoreFromEnv,
   openPostgresProjectRegistryFromEnv,
 } from '@defrex/autobuild-postgres-store'
+import { openPostgresOrganizationStoreFromEnv } from '@defrex/autobuild-postgres-store/organizations'
+import { openPostgresTicketDatabase } from '@defrex/autobuild-postgres-store'
+import { PostgresTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { prepareHappyScenario, prepareScenario } from './dashboard-capture'
+import {
+  DEV_TICKET_POLICY,
+  type DevTicket,
+  HAPPY_TICKETS,
+  MIXED_TICKET_IDS,
+  MIXED_TICKETS,
+} from './web-dashboard-dev-tickets'
+import {
+  lengthSpread,
+  newest,
+  readTracker,
+  type TrackerFixture,
+  trackerFixture,
+  trackerRoot,
+} from './web-dashboard-dev-tracker'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 const WEB_PORT = 3100
@@ -68,7 +86,6 @@ export function devEnv(): Record<string, string> {
     AB_S3_SECRET_ACCESS_KEY: 'abdevsecret123',
     AB_S3_FORCE_PATH_STYLE: 'true',
     AB_STORE_SECRET: 'web-dev-store-secret-not-for-production-use',
-    AB_TICKET_BACKEND: 'database',
     BETTER_AUTH_SECRET: 'web-dev-better-auth-secret-0123456789abcdefghij',
     BETTER_AUTH_URL: WEB_ORIGIN,
     AB_WEB_AUTH_PROVIDERS: 'github',
@@ -103,6 +120,10 @@ interface ReplayOptions {
   target: BuildStore
   clock: ReturnType<typeof settableClock>
   repo: string
+  /** Scenario ticket ids rewritten to the hosted ids the fixtures use. */
+  ticketIds?: Record<string, string>
+  /** Scenario titles and slugs rewritten wherever they appear, in order. */
+  replacements?: [string, string][]
 }
 
 /**
@@ -110,10 +131,23 @@ interface ReplayOptions {
  * repository identity, shifting every timestamp so the newest event landed a
  * moment ago instead of on the capture's fixed July clock.
  */
-async function replayScenario({ harness, target, clock, repo }: ReplayOptions): Promise<void> {
+async function replayScenario({
+  harness,
+  target,
+  clock,
+  repo,
+  ticketIds = {},
+  replacements = [],
+}: ReplayOptions): Promise<void> {
   const source = harness.store
   const origin = harness.origin
-  const rename = <T>(value: T): T => JSON.parse(JSON.stringify(value).replaceAll(origin, repo)) as T
+  const rename = <T>(value: T): T => {
+    let text = JSON.stringify(value).replaceAll(origin, repo)
+    for (const [from, to] of Object.entries(ticketIds))
+      text = text.replaceAll(`"${from}"`, `"${to}"`)
+    for (const [from, to] of replacements) text = text.replaceAll(from, to)
+    return JSON.parse(text) as T
+  }
 
   const builds = (await source.listBuilds()).filter((record) => record.repo === origin)
   const repoEvents = (await source.getRepo(origin)) ? await source.getRepoEvents(origin) : []
@@ -154,18 +188,20 @@ async function replayScenario({ harness, target, clock, repo }: ReplayOptions): 
 
   for (const record of builds) {
     clock.set(shifted(record.createdAt))
+    const slug = rename(record.slug)
     await target.createBuild({
-      slug: record.slug,
+      slug,
       repo,
-      ...(record.ticket ? { ticket: record.ticket } : {}),
-      ...(record.branch ? { branch: record.branch } : {}),
+      // Fixture builds belong to the hosted ticket fixtures, not the scenario's fake source.
+      ...(record.ticket ? { ticket: { ...rename(record.ticket), source: 'database' } } : {}),
+      ...(record.branch ? { branch: rename(record.branch) } : {}),
     })
     for (const meta of await source.listArtifacts(record.slug)) {
       const artifact = await source.getArtifact(record.slug, meta.kind, meta.revision)
       if (!artifact)
         throw new Error(`artifact ${record.slug}/${meta.kind}@${meta.revision} vanished`)
       clock.set(shifted(meta.createdAt))
-      const deposited = await target.putArtifact(record.slug, {
+      const deposited = await target.putArtifact(slug, {
         kind: meta.kind,
         content: artifact.content,
         metadata: rename(meta.metadata),
@@ -178,7 +214,7 @@ async function replayScenario({ harness, target, clock, repo }: ReplayOptions): 
     }
     for (const event of await source.getEvents(record.slug)) {
       clock.set(shifted(event.ts))
-      await target.append(record.slug, {
+      await target.append(slug, {
         actor: event.actor,
         type: event.type,
         payload: rename(event.payload),
@@ -192,7 +228,7 @@ async function replayScenario({ harness, target, clock, repo }: ReplayOptions): 
     if (!record.lease) continue
     const ttl = shifted(record.lease.expiresAt).getTime() - Date.now()
     if (ttl <= 0) continue
-    await target.claimLease(record.slug, record.lease.holder, ttl)
+    await target.claimLease(rename(record.slug), record.lease.holder, ttl)
   }
   if (repoRecord?.lease) {
     const ttl = shifted(repoRecord.lease.expiresAt).getTime() - Date.now()
@@ -271,6 +307,157 @@ async function resetDatabase(url: string): Promise<void> {
   await migratePostgres(url)
 }
 
+/**
+ * Give the access pages something to show: one organization owning `happy`
+ * with a joined and a pending member, one empty organization, and `mixed`
+ * left waiting for an organization.
+ */
+async function seedOrganizations(env: Record<string, string>): Promise<void> {
+  const sql = new SQL(env.AB_POSTGRES_URL!)
+  try {
+    const now = new Date()
+    await sql`INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+      VALUES (${'web-dev-teammate'}, ${'Sam Teammate'}, ${'sam@example.com'}, true, ${now}, ${now})
+      ON CONFLICT (email) DO NOTHING`
+  } finally {
+    await sql.close()
+  }
+  const store = await openPostgresOrganizationStoreFromEnv(env)
+  const actor = { email: IDENTITY, isSuperUser: () => true }
+  const example = await store.create(actor, 'Example Co', 'example-co')
+  for (const email of [IDENTITY, 'sam@example.com', 'new.hire@example.com'])
+    await store.addMember(actor, example.id, email)
+  await store.setOwner(actor, example.id, IDENTITY)
+  await store.assign(actor, example.id, REPOSITORIES.happy)
+  await store.create(actor, 'Side Project', 'side-project')
+}
+
+/** The scripted builds each scenario replays, by fixture ticket id. */
+const HAPPY_BUILDS = [
+  { id: 'AUT-129', title: 'Parallel verify steps', slug: 'parallel-verify-steps' },
+  { id: 'AUT-131', title: 'Cache warm on deploy', slug: 'cache-warm-on-deploy' },
+  { id: 'AUT-133', title: 'Ticket source adapters', slug: 'ticket-source-adapters' },
+  { id: 'AUT-134', title: 'Dashboard key legend', slug: 'dashboard-key-legend' },
+  { id: 'AUT-136', title: 'Harvest dedup window', slug: 'harvest-dedup-window' },
+]
+const MIXED_BUILDS = [
+  { id: 'CAP-41', title: 'Plan blocked dashboard', slug: 'plan-blocked-dashboard' },
+  { id: 'CAP-42', title: 'Implement blocked dashboard', slug: 'implement-blocked-dashboard' },
+  { id: 'CAP-43', title: 'Complete dashboard evidence', slug: 'complete-dashboard-evidence' },
+  { id: 'CAP-44', title: 'Queued dashboard evidence', slug: 'queued-dashboard-evidence' },
+]
+
+interface TicketFixtures {
+  happy: TrackerFixture
+  mixed: TrackerFixture
+  source: string
+}
+
+/**
+ * Real specs from this repository's file tracker when it is reachable: the
+ * happy builds keep their own historical tickets (AUT-129..136 are real), the
+ * mixed builds take done tickets spread across the length range, and the tabs
+ * fill with the newest triage, icebox (as ready) and done tickets. Without a
+ * tracker the hand-written fixtures stand in.
+ */
+function ticketFixtures(): TicketFixtures {
+  const root = trackerRoot(REPO_ROOT)
+  const tracker = root ? readTracker(root) : undefined
+  if (!tracker || HAPPY_BUILDS.some((build) => !tracker.has(build.id))) {
+    return {
+      happy: { tickets: HAPPY_TICKETS, replacements: [] },
+      mixed: { tickets: MIXED_TICKETS, replacements: [] },
+      source: 'hand-written fixtures',
+    }
+  }
+  const happyBuilds = HAPPY_BUILDS.map((build) => ({ ...build, real: tracker.get(build.id)! }))
+  // Volumes big enough that every tab pages.
+  const triage = newest(tracker, 'triage', 31)
+  const done = newest(tracker, 'done', 61)
+  const icebox = newest(tracker, 'icebox', 10)
+  const used = new Set([...happyBuilds.map((b) => b.real.id), ...done.map((t) => t.id)])
+  const mixedReal = lengthSpread(tracker, MIXED_BUILDS.length, used)
+  return {
+    happy: trackerFixture({
+      teamKey: 'AUT',
+      builds: happyBuilds,
+      states: [
+        { state: 'triage', tickets: triage.slice(0, 30) },
+        { state: 'ready', tickets: icebox.slice(0, 5) },
+        { state: 'icebox', tickets: icebox.slice(5) },
+        { state: 'done', tickets: done.slice(0, 60) },
+      ],
+      firstNumber: 1001,
+    }),
+    mixed: trackerFixture({
+      teamKey: 'CAP',
+      builds: MIXED_BUILDS.map((build, i) => ({ ...build, real: mixedReal[i]! })),
+      states: [
+        { state: 'triage', tickets: triage.slice(30) },
+        { state: 'done', tickets: done.slice(60) },
+      ],
+      firstNumber: 101,
+    }),
+    source: root!,
+  }
+}
+
+/** Hosted tickets in every lifecycle state, numbered to match the builds. */
+async function seedTickets(env: Record<string, string>, fixtures: TicketFixtures): Promise<void> {
+  const sql = new SQL(env.AB_POSTGRES_URL!)
+  const database = await openPostgresTicketDatabase(env.AB_POSTGRES_URL!)
+  try {
+    const projects: [string, string, DevTicket[]][] = [
+      [REPOSITORIES.happy, 'AUT', fixtures.happy.tickets],
+      [REPOSITORIES.mixed, 'CAP', fixtures.mixed.tickets],
+    ]
+    for (const [repo, teamKey, tickets] of projects) {
+      const policy = DEV_TICKET_POLICY(teamKey)
+      await new PostgresTicketPolicyStore(sql).put(repo, policy, IDENTITY)
+      const states = database.source({
+        repo,
+        teamKey,
+        lifecycle: {
+          triage: policy.tickets.triageState,
+          ready: policy.tickets.readyState,
+          doing: policy.tickets.claimedState,
+          done: policy.tickets.doneState,
+        },
+      })
+      // The happy project defers work to an icebox; the mixed one has none.
+      if (repo === REPOSITORIES.happy)
+        await states.addState('icebox', { about: 'Deferred work nothing should start yet.' })
+      const source = database.source({
+        repo,
+        teamKey,
+        lifecycle: {
+          triage: policy.tickets.triageState,
+          ready: policy.tickets.readyState,
+          doing: policy.tickets.claimedState,
+          done: policy.tickets.doneState,
+        },
+        createState: policy.tickets.createState,
+      })
+      for (const ticket of tickets) {
+        await source.create(
+          {
+            title: ticket.title,
+            body: ticket.body,
+            labels: ticket.labels ?? [],
+            blockedBy: ticket.blockedBy ?? [],
+            ...(ticket.kind ? { kind: ticket.kind } : {}),
+          },
+          { requestedId: ticket.id, state: ticket.state },
+        )
+        for (const comment of ticket.comments ?? []) await source.comment(ticket.id, comment.body)
+      }
+    }
+  } finally {
+    await database.close()
+    await sql.close()
+  }
+}
+
 /** Insert a Better Auth user + session and return the signed cookie value. */
 async function mintSession(env: Record<string, string>): Promise<string> {
   const sql = new SQL(env.AB_POSTGRES_URL!)
@@ -298,19 +485,34 @@ async function seed(): Promise<void> {
   const env = devEnv()
   console.log(`resetting ${env.AB_POSTGRES_URL}`)
   await resetDatabase(env.AB_POSTGRES_URL!)
+  const fixtures = ticketFixtures()
+  console.log(`tickets from ${fixtures.source}`)
   const clock = settableClock()
   const target = await openPostgresBuildStoreFromEnv(env, { clock })
   try {
     console.log('preparing scripted scenarios')
     const happy = await prepareHappyScenario()
     try {
-      await replayScenario({ harness: happy.harness, target, clock, repo: REPOSITORIES.happy })
+      await replayScenario({
+        harness: happy.harness,
+        target,
+        clock,
+        repo: REPOSITORIES.happy,
+        replacements: fixtures.happy.replacements,
+      })
     } finally {
       await happy.harness.cleanup()
     }
     const mixed = await prepareScenario()
     try {
-      await replayScenario({ harness: mixed, target, clock, repo: REPOSITORIES.mixed })
+      await replayScenario({
+        harness: mixed,
+        target,
+        clock,
+        repo: REPOSITORIES.mixed,
+        ticketIds: MIXED_TICKET_IDS,
+        replacements: fixtures.mixed.replacements,
+      })
     } finally {
       await mixed.cleanup()
     }
@@ -325,6 +527,8 @@ async function seed(): Promise<void> {
     await registry.close()
   }
   const cookie = await mintSession(env)
+  await seedOrganizations(env)
+  await seedTickets(env, fixtures)
   await Bun.write(SESSION_TOKEN_FILE, cookie)
   console.log(`seeded ${Object.values(REPOSITORIES).join(' and ')} for ${IDENTITY}`)
 }
