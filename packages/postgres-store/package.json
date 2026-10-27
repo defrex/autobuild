@@ -54,6 +54,10 @@
     "./project-secrets": {
       "types": "./src/project-secrets.ts",
       "import": "./src/project-secrets.ts"
+    },
+    "./project-deletion": {
+      "types": "./src/project-deletion.ts",
+      "import": "./src/project-deletion.ts"
     }
   },
   "bin": {

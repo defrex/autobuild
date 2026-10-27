@@ -32,7 +32,9 @@ export async function operatorPage(
     }
     redirect(canonical(initialSelection, params.toString()))
   }
+  const organizations = await (await humanAccess.store()).organizations(principal)
   return {
+    isOwner: organizations.some((org) => org.membershipRole === 'owner'),
     identity: session.user.email.toLowerCase(),
     isSuperUser: principal.isSuperUser(),
     repositories,

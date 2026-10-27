@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { PROJECT_LIFECYCLE_LOCK } from './project-lifecycle'
 import { lockAccess, PostgresOrganizationStore, type HumanActor } from './organizations'
 import { insertPreparedCredential } from './credentials'
 import { SQL } from 'bun'
@@ -77,9 +79,14 @@ export class PostgresConnectionStore implements ConnectionStore {
     for (let attempt = 0; attempt < 5; attempt++) {
       const id = randomBytes(16).toString('hex')
       const code = randomBytes(5).toString('hex').toUpperCase()
-      const [row] = await this
-        .sql`INSERT INTO project_connections (id, repo, credential_id, digest, capability_hash, code, created_at, expires_at, status)
+      const rows = await this.sql.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
+        const [pending] = await tx`SELECT 1 FROM project_deletions WHERE repo = ${repo}`
+        if (pending) throw new ConnectionError(403, 'project not registered')
+        return tx`INSERT INTO project_connections (id, repo, credential_id, digest, capability_hash, code, created_at, expires_at, status)
         VALUES (${id}, ${repo}, ${input.credentialId}, ${input.digest}, ${hash(capability)}, ${code}, ${now.toISOString()}, ${new Date(now.getTime() + 600000).toISOString()}, 'pending') ON CONFLICT DO NOTHING RETURNING *`
+      })
+      const [row] = rows
       if (row) return { ...record(row), capability }
     }
     throw new ConnectionError(503, 'connection creation unavailable; retry')
@@ -198,9 +205,13 @@ export class PostgresConnectionStore implements ConnectionStore {
     if (!(await this.lookup(code, actor, principal)))
       throw new ConnectionError(404, 'unknown connection')
     return this.sql.begin(async (tx) => {
-      const [row] = await tx`SELECT * FROM project_connections WHERE code = ${code} FOR UPDATE`
-      const now = this.now()
+      await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
       await lockAccess(tx as SQL)
+      const [row] = await tx`SELECT * FROM project_connections WHERE code = ${code} FOR UPDATE`
+      if (!row) throw new ConnectionError(404, 'unknown connection')
+      const [pending] = await tx`SELECT 1 FROM project_deletions WHERE repo = ${row.repo}`
+      if (pending) throw new ConnectionError(403, 'project not registered')
+      const now = this.now()
       await this.checkConnection(tx as SQL, row.repo, principal)
       if (row.status !== 'pending') return record(row)
       const status = new Date(row.expires_at) <= now ? 'expired' : approve ? 'approved' : 'denied'
@@ -223,8 +234,10 @@ export class PostgresConnectionStore implements ConnectionStore {
           target = organizationId
           await tx`INSERT INTO project_organizations (repo, organization_id) VALUES (${row.repo}, ${target!})`
         }
-        if (previous?.action !== 'added')
+        if (previous?.action !== 'added') {
+          await tx`INSERT INTO project_generations (repo,generation) VALUES (${row.repo},${randomUUID()}) ON CONFLICT (repo) DO UPDATE SET generation = EXCLUDED.generation`
           await tx`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${row.repo}, 'added', ${actor}, ${now.toISOString()})`
+        }
         // A collision aborts the whole transaction, including project registration.
         await insertPreparedCredential(tx as SQL, {
           id: row.credential_id,
