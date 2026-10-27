@@ -33,7 +33,12 @@ function fixture() {
   const store: ConnectionStore = {
     start: async () => ({ ...connection, capability: 'c'.repeat(64) }),
     lookup: async () => connection,
-    approvalContext: async () => ({ connection, assignment: 'fixed', organizations: [] }),
+    approvalContext: async () => ({
+      connection,
+      assignment: 'fixed',
+      organizations: [],
+      assignedOrganization: null,
+    }),
     poll: async () => connection,
     decide: async (_code, _actor, approve) => {
       decisions++
@@ -126,7 +131,12 @@ test('real Better Auth session gates approval; cookie, allowlist and CSRF are re
   ).toBe(400)
   const lookup = await handle(req('browser/lookup', { code: connection.code }, { cookie }))
   expect(lookup.status).toBe(200)
-  expect(await lookup.json()).toEqual({ connection, assignment: 'fixed', organizations: [] })
+  expect(await lookup.json()).toEqual({
+    connection,
+    assignment: 'fixed',
+    organizations: [],
+    assignedOrganization: null,
+  })
   const response = await handle(
     req(
       'browser/decide',
