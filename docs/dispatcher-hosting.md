@@ -90,7 +90,7 @@ on the host. Sandbox provisioning needs `VERCEL_OIDC_TOKEN` or the durable
 API credentials allowlisted through `environmentVariables`, nonsecret billing
 account placeholders, and scoped Store execution authority. Real account
 credentials stay on the host and are applied by provider-scoped egress header
-transforms; see [Billing accounts](accounts.md).
+transforms.
 See [origin-mode setup](setup.md#running-the-dispatcher-without-a-checkout-origin-mode) and [Workspaces](workspaces.md).
 
 ## Writing your own
