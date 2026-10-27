@@ -34,14 +34,19 @@ export async function request<T>(
   method = 'GET',
   body?: unknown,
   signal?: AbortSignal,
+  headers?: Record<string, string>,
 ): Promise<T> {
   const response = await fetch(`/api/web/${path}`, {
     method,
     cache: 'no-store',
     signal,
+    headers,
     ...(body === undefined
       ? {}
-      : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+      : {
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify(body),
+        }),
   })
   if (response.status === 401) {
     window.location.assign('/sign-in')
@@ -87,4 +92,13 @@ export function organizationSlug(name: string): string {
     .replace(/-$/, '')
   if (!slug) throw new Error('Use a name containing letters or numbers to create an organization.')
   return slug
+}
+
+export interface DeletionPreview {
+  repo: string
+  token: string
+  builds: number
+  tickets: number
+  secrets: number
+  subscriptionAccounts: number
 }
