@@ -1,3 +1,4 @@
+import { PROJECT_LIFECYCLE_DDL } from './project-lifecycle-schema'
 import { PostgresProjectRegistry } from './projects'
 import type { PostgresEnv } from './env'
 import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
@@ -17,7 +18,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 18
+export const SCHEMA_VERSION = 19
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -879,7 +880,11 @@ CREATE TABLE IF NOT EXISTS project_secret_audit (
  id text PRIMARY KEY, repo text NOT NULL, name text NOT NULL, actor text NOT NULL,
  ts timestamptz NOT NULL, action text NOT NULL CHECK (action IN ('set','remove'))
 );`
-export const SCHEMA_DDL = `${SCHEMA_V17_DDL}\n${PROJECT_SECRETS_DDL}`
+export const SCHEMA_V18_DDL = `${SCHEMA_V17_DDL}\n${PROJECT_SECRETS_DDL}`
+export const SCHEMA_V18_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V18_DDL)
+  .digest('hex')
+export const SCHEMA_DDL = `${SCHEMA_V18_DDL}\n${PROJECT_LIFECYCLE_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -977,6 +982,31 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  project_generations: [
+    ['repo', 'text', true],
+    ['generation', 'text', true],
+  ],
+  project_deletions: [
+    ['repo', 'text', true],
+    ['generation', 'text', true],
+    ['organization_id', 'text', false],
+    ['actor', 'text', true],
+    ['ts', 'timestamp with time zone', true],
+  ],
+  project_deletion_blobs: [
+    ['repo', 'text', true],
+    ['blob_ref', 'text', true],
+  ],
+  project_blob_ownership: [
+    ['repo', 'text', true],
+    ['blob_ref', 'text', true],
+  ],
+  project_deletion_audit: [
+    ['repo', 'text', true],
+    ['generation', 'text', true],
+    ['actor', 'text', true],
+    ['ts', 'timestamp with time zone', true],
+  ],
   project_secrets: [
     ['repo', 'text', true],
     ['name', 'text', true],
@@ -1211,6 +1241,11 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'project_generations|p|repo||||',
+  'project_deletions|p|repo||||',
+  'project_deletion_blobs|p|repo,blob_ref||||',
+  'project_blob_ownership|p|repo,blob_ref||||',
+  'project_deletion_audit|p|repo,generation||||',
   'project_secrets|p|repo,name||||',
   'project_secrets|c|||||',
   'project_secret_keys|p|id||||',
@@ -1596,6 +1631,7 @@ export async function migratePostgres(
       await tx.unsafe(SCHEMA_V14_DDL)
       await tx.unsafe(OPERATOR_PRESENCE_DDL)
       await tx.unsafe(PROJECT_SECRETS_DDL)
+      await tx.unsafe(PROJECT_LIFECYCLE_DDL)
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
@@ -1776,6 +1812,8 @@ export async function migratePostgres(
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 18 && marker.checksum === SCHEMA_V18_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 17 && marker.checksum === SCHEMA_V17_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 16 && marker.checksum === SCHEMA_V16_CHECKSUM) {

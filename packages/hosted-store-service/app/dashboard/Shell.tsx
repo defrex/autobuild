@@ -8,6 +8,7 @@ export interface OperatorShellProps {
   repo: string
   repositories: readonly string[]
   identity: string
+  isOwner?: boolean
   isSuperUser?: boolean
   /** The last poll's wall clock, formatted; absent before the first frame. */
   clock?: string
@@ -34,6 +35,7 @@ export function OperatorShell({
   repo,
   repositories,
   identity,
+  isOwner,
   isSuperUser,
   clock,
   menuOpen,
@@ -59,6 +61,7 @@ export function OperatorShell({
         </h1>
         <AccountMenu
           identity={identity}
+          isOwner={isOwner}
           isSuperUser={isSuperUser}
           menuOpen={menuOpen}
           onSignOut={onSignOut}

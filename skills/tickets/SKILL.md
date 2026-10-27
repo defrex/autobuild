@@ -52,7 +52,8 @@ When `[tickets].source = "hosted"`, use readable ids such as `ENG-12` with
 `ab ticket show`, `update`, `move`, `block`, and `unblock`. Inputs accept any
 letter case and old UUID ids remain aliases. Output shows canonical readable
 ids; blocker references use the same identity. Numbering belongs to each project
-and never resets or reuses deleted numbers. A `teamKey` change affects future
+and never resets or reuses deleted numbers within a project lifetime. Permanent
+project deletion removes the counter; browser-approved reconnection starts at 1. A `teamKey` change affects future
 prefixes only. File and Linear id rules are unchanged. See the
 [hosted ticket protocol](../ab-guide/references/remote-ticket-protocol.md).
 

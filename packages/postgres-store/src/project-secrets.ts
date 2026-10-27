@@ -1,3 +1,4 @@
+import { admitHostedRequest } from './project-lifecycle'
 import { SQL } from 'bun'
 import { randomUUID, createHmac } from 'node:crypto'
 import {
@@ -186,6 +187,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     this.validatePayload(kind, payload)
     const repo = await this.registered(raw)
     await this.sql.begin(async (tx) => {
+      await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, repo)
       const cipher = await this.cipher(tx as SQL, true)
       const encrypted = cipher.encrypt(context(repo, name, kind), payload)
@@ -221,6 +223,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     if (!actor.trim()) throw new ProjectSecretError('invalid-secret')
     const repo = await this.registered(raw)
     await this.sql.begin(async (tx) => {
+      await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, repo)
       await this.cipher(tx as SQL)
       await tx`DELETE FROM project_secrets WHERE repo=${repo} AND name=${name}`
@@ -229,6 +232,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
   }
   private async read(repo: string): Promise<{ rows: Row[]; payloads: SecretPayload[] }> {
     return this.sql.begin(async (tx) => {
+      await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, repo)
       const rows: Row[] = await tx`SELECT * FROM project_secrets WHERE repo=${repo} ORDER BY name`
       // Projects that have not opted into secrets need no encryption configuration.
@@ -287,6 +291,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
           until = Math.min(deadline, this.now() + 60_000)
         // An uncertain claim commit is never followed by HTTP: propagate safely.
         const claimed: Row[] = await this.sql.begin(async (tx) => {
+          await admitHostedRequest(tx as SQL)
           await this.lock(tx as SQL, repo)
           return tx`UPDATE project_secrets SET status='refreshing',revision=revision+1,attempt_id=${attempt},attempt_deadline=${new Date(until).toISOString()}
           WHERE repo=${repo} AND name=${r.name} AND generation=${r.generation} AND revision=${r.revision} AND status='ready' RETURNING *`
@@ -315,6 +320,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
               throw new ProjectSecretError('secret-unavailable')
             // Commit rotated material before returning to resolution. Never repeat HTTP.
             await this.sql.begin(async (tx) => {
+              await admitHostedRequest(tx as SQL)
               await this.lock(tx as SQL, repo)
               const cipher = await this.cipher(tx as SQL)
               await tx`UPDATE project_secrets SET payload=${cipher.encrypt(context(repo, r.name, r.kind), result)},status='ready',revision=revision+1,attempt_id=NULL,attempt_deadline=NULL,failure_code=NULL
@@ -389,6 +395,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
   }
   private async fail(r: Row, code: string) {
     await this.sql.begin(async (tx) => {
+      await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, r.repo)
       await tx`UPDATE project_secrets SET status='failed',failure_code=${code},revision=revision+1
         WHERE repo=${r.repo} AND name=${r.name} AND generation=${r.generation} AND revision=${r.revision} AND status='refreshing' AND attempt_id=${r.attempt_id}`
@@ -397,6 +404,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
 
   private async current(snapshot: SecretSnapshot, supplied: boolean): Promise<boolean> {
     return this.sql.begin(async (tx) => {
+      await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, snapshot.repo)
       const rows: Row[] =
         await tx`SELECT * FROM project_secrets WHERE repo=${snapshot.repo} ORDER BY name`

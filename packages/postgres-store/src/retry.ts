@@ -1,3 +1,5 @@
+import { admitHostedRequest } from './project-lifecycle'
+import { hostedProjectContext } from './request-context'
 import { SQL } from 'bun'
 
 export type Row = Record<string, unknown>
@@ -199,6 +201,28 @@ export function attemptExec(target: SQL, plans: PlanInvalidations, retry = false
 export class PlanRetryRunner {
   private readonly plans = new PlanInvalidations()
 
+  private async hostedTx<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+    let failing: string | null = null
+    const run = (retry: boolean) =>
+      pool.begin(async (transaction) => {
+        await admitHostedRequest(transaction as SQL)
+        const attempt = attemptExec(transaction as SQL, this.plans, retry)
+        try {
+          return await body(attempt.exec)
+        } catch (error) {
+          failing = attempt.inFlight
+          throw error
+        }
+      }) as Promise<T>
+    try {
+      return await run(false)
+    } catch (error) {
+      if (!isPlanChangeError(error) || failing === null) throw error
+      this.plans.invalidate(failing)
+      return run(true)
+    }
+  }
+
   /** Run a non-transactional operation on one pinned pooled connection,
    * retrying it exactly once — same connection, statements freshly prepared —
    * when a cached plan fails to revalidate. A run body must not call a
@@ -207,6 +231,7 @@ export class PlanRetryRunner {
    * sequentially: failure attribution (`Attempt.inFlight`) reads the
    * statement most recently dispatched. */
   async run<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+    if (hostedProjectContext()) return this.hostedTx(pool, body)
     const conn = await pool.reserve()
     try {
       const attempt = attemptExec(conn, this.plans)
@@ -235,6 +260,7 @@ export class PlanRetryRunner {
    * rolls back, and the body re-runs in a fresh transaction on the same
    * connection with freshly prepared statements. */
   async tx<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+    if (hostedProjectContext()) return this.hostedTx(pool, body)
     const conn = await pool.reserve()
     try {
       // Attribution lives outside `begin`: the transaction executor only
