@@ -169,7 +169,12 @@ async function runGenerationPreflight(
             plugins,
             { repoRoot: launch.checkout, env },
           )
-          createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds)
+          createRuntimeResolver(
+            runtimes,
+            config.roles,
+            config.policy.sessionBudgetSeconds,
+            config.accounts,
+          )
           const facts = (await readDispatcherRunFacts(opened.store, opened.repo, handoff.run)).value
           if (facts.stopRequest || facts.stop)
             throw new Error('predecessor stopped during preflight')

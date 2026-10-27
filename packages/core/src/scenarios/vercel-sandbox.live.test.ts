@@ -265,3 +265,35 @@ describe.skipIf(!enabled)('Vercel Sandbox lifecycle (opt-in)', () => {
     30 * 60_000,
   )
 })
+
+/** Uses externally provisioned accounts and the real disposable model probes.
+ * No fixture tokens are synthesized, and no provider success is inferred from mocks. */
+describe.skipIf(process.env.AB_RUN_SANDBOX_ACCOUNTS_LIVE !== '1')(
+  'Vercel billing accounts (opt-in)',
+  () => {
+    test('probes every declared account through unmodified Claude Code and deletes the disposable sandbox', async () => {
+      const repoInput = process.env.AB_VERCEL_SANDBOX_LIVE_REPO
+      if (!repoInput)
+        throw new Error(
+          'AB_VERCEL_SANDBOX_LIVE_REPO must name an independently provisioned account fixture',
+        )
+      const repo = resolve(repoInput)
+      const config = await loadConfig(resolve(repo, 'autobuild.toml'))
+      if (config.workspace.provider !== 'vercel-sandbox' || !Object.keys(config.accounts).length)
+        throw new Error('The account fixture must select Vercel Sandbox and declare accounts')
+      const report = await validateInitReadiness({
+        targetRepo: repo,
+        env: process.env,
+        exec: spawnExec,
+      })
+      expect(report.exitCode).toBe(0)
+      for (const name of Object.keys(config.accounts))
+        expect(
+          report.checks.find((check) => check.name === `account ${JSON.stringify(name)}`)?.status,
+        ).toBe('pass')
+      expect(report.snapshotsDeleted).toBeDefined()
+      const facade = createVercelSdkFacade(process.env)
+      expect(await facade.get(report.workspace!)).toBeNull()
+    }, 300_000)
+  },
+)

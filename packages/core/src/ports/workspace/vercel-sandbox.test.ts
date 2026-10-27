@@ -270,6 +270,8 @@ function runtimeReferenceFixtures() {
 
 function harness(
   options: {
+    accounts?: () => import('../../config/accounts').Accounts
+    accountEnv?: Record<string, string | undefined>
     publishedSha?: string | null | (() => string | null)
     existingSha?: string | null
     provisionRuntimes?: boolean
@@ -383,7 +385,8 @@ function harness(
             }
           : {}),
       },
-      env: {
+      accounts: options.accounts,
+      env: options.accountEnv ?? {
         ANTHROPIC_API_KEY: 'runtime-secret',
         AB_TOKEN: 'scoped-store-token',
         GITHUB_TOKEN: 'forge-secret',
@@ -3579,4 +3582,83 @@ describe('validateVercelSandbox execOrThrow failure semantics', () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toBe('git remote get-url origin exited 7: noisy stdout')
   })
+})
+
+test('billing credentials stay out of all guest commands and rotate on observation without relaunch', async () => {
+  const env: Record<string, string | undefined> = {
+    ANTHROPIC_API_KEY: 'sentinel-old-credential',
+    SECOND_KEY: 'sentinel-second-credential',
+  }
+  const accounts = {
+    first: { kind: 'kimi-code', credentialEnv: 'ANTHROPIC_API_KEY', region: 'overseas' },
+    second: { kind: 'kimi-code', credentialEnv: 'SECOND_KEY', region: 'overseas' },
+  } as const
+  const h = harness({ accounts: () => accounts, accountEnv: env })
+  const workspace = await h.provider.provision({
+    repo: '/repo',
+    baseBranch: 'main',
+    branch: 'ab/billing',
+  })
+  h.sandbox.detachedWait = () => new Promise(() => undefined)
+  const execution = await h.provider.buildExecution.start({
+    slug: 'billing',
+    storeRef: 'https://store.example.test',
+    instance: 'i',
+    workspaceRef: workspace.ref,
+  })
+  const commandCount = h.sandbox.commands.length
+  expect(JSON.stringify(h.sandbox.commands)).not.toContain('sentinel-')
+  expect(JSON.stringify(h.sandbox.writes)).not.toContain('sentinel-')
+  const originalPolicy = JSON.stringify(h.sandbox.policies.at(-1))
+  expect(originalPolicy).toContain('sentinel-old-credential')
+  expect(originalPolicy).toContain('sentinel-second-credential')
+  expect(originalPolicy).toContain('autobuild-account-6669727374')
+  expect(originalPolicy).toContain('autobuild-account-7365636f6e64')
+  env.ANTHROPIC_API_KEY = 'sentinel-rotated-credential'
+  expect(await h.provider.buildExecution.observe!(execution.identity!)).toEqual({
+    state: 'running',
+  })
+  expect(h.sandbox.commands.length).toBe(commandCount)
+  const rotated = JSON.stringify(h.sandbox.policies.at(-1))
+  expect(rotated).toContain('sentinel-rotated-credential')
+  expect(rotated).not.toContain('sentinel-old-credential')
+  delete env.ANTHROPIC_API_KEY
+  const missing = await h.provider.buildExecution.observe!(execution.identity!)
+  expect(missing.state).toBe('running')
+  expect(missing.attention).toContain('ANTHROPIC_API_KEY')
+  expect(missing.attention).toContain('first')
+  expect(missing.attention).toContain('replace the Kimi')
+  h.sandbox.detachedCommands.get(execution.identity!.commandId!)!.exitCode = 0
+  const exited = await h.provider.buildExecution.observe!(execution.identity!)
+  expect(exited).toMatchObject({ state: 'ended', exitCode: 0, attention: missing.attention })
+  expect(h.sandbox.stops).toBeGreaterThan(0)
+  expect(JSON.stringify(h.sandbox.policies.at(-1))).not.toContain('sentinel-rotated-credential')
+})
+
+test('legacy observation makes no policy writes and still settles command exit', async () => {
+  const h = harness()
+  const workspace = await h.provider.provision({
+    repo: '/repo',
+    baseBranch: 'main',
+    branch: 'ab/legacy-observe',
+  })
+  h.sandbox.detachedWait = () => new Promise(() => undefined)
+  const execution = await h.provider.buildExecution.start({
+    slug: 'legacy-observe',
+    storeRef: 'https://store.example.test',
+    instance: 'i',
+    workspaceRef: workspace.ref,
+  })
+  const updates = h.sandbox.policies.length
+  h.sandbox.failRestore = true // Any newly introduced policy write would fail.
+  expect(await h.provider.buildExecution.observe!(execution.identity!)).toEqual({
+    state: 'running',
+  })
+  expect(h.sandbox.policies).toHaveLength(updates)
+  h.sandbox.detachedCommands.get(execution.identity!.commandId!)!.exitCode = 0
+  expect(await h.provider.buildExecution.observe!(execution.identity!)).toEqual({
+    state: 'ended',
+    exitCode: 0,
+  })
+  expect(h.sandbox.policies).toHaveLength(updates)
 })

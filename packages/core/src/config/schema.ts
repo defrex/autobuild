@@ -1,3 +1,4 @@
+import { accountSchema, selectAccount } from './accounts'
 import { isSafeStepName } from '../context-directory'
 /**
  * autobuild.toml schema (SPEC §16.1, D9): the one declarative per-repo config
@@ -645,6 +646,7 @@ export const finalizeSectionSchema = stepSection(
 const roleArgsSchema = z.array(z.string().min(1))
 
 const runtimeAxesSchema = z.strictObject({
+  account: z.string().min(1).regex(/\S/).optional(),
   runtime: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   args: roleArgsSchema.optional(),
@@ -653,6 +655,8 @@ const runtimeAxesSchema = z.strictObject({
 })
 
 documentFields(runtimeAxesSchema, {
+  account:
+    'Named billing account; inherits independently. Claude selects the sole subscription account when omitted.',
   runtime: 'Select an agent adapter.',
   model: 'Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.',
   args: 'Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.',
@@ -679,6 +683,8 @@ export const roleSchema = runtimeAxesSchema.extend({
 })
 
 documentFields(roleSchema, {
+  account:
+    'Named billing account; inherits independently. Claude selects the sole subscription account when omitted.',
   runtime: 'Select an agent adapter.',
   model: 'Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.',
   args: 'Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.',
@@ -1069,6 +1075,7 @@ export const configRootSchema = z.strictObject({
   // disappear ahead of both eager resolution and the unconsumed-key warning;
   // the registry-aware eager resolver requires default.runtime and can
   // therefore include the complete materialized runtime list in its diagnostic.
+  accounts: openMap('[accounts]', accountSchema).default({}),
   roles: openMap('[roles]', roleSchema),
   policy: policySchema.prefault({}),
   orchestrator: orchestratorSchema.prefault({}),
@@ -1103,6 +1110,8 @@ documentFields(configRootSchema, {
     'Ordered verification steps and applicability rules. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.',
   finalize:
     'Ordered post-PR steps. Failures are recorded without blocking the PR. Step names use ASCII letters, digits, ., _ and -; exactly . and .. are forbidden.',
+  accounts:
+    'Named Claude subscription or Kimi Code billing accounts. Descriptors contain credential variable names only.',
   roles: 'Named agent roles. The reserved default role provides inherited runtime axes.',
   policy: 'Lifecycle budgets, retries, convergence and harvest limits.',
   orchestrator:
@@ -1149,6 +1158,43 @@ const normalizedConfigSchema = configRootSchema.transform((input, ctx) => {
 })
 
 export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => {
+  const accountVariables = new Set(
+    Object.values(config.accounts).map((account) => account.credentialEnv),
+  )
+  for (const name of config.orchestrator.sandbox.environmentVariables)
+    if (accountVariables.has(name))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['orchestrator', 'sandbox', 'environmentVariables'],
+        message: `Account credential variable ${JSON.stringify(name)} cannot enter an operator sandbox`,
+      })
+  const defaults = config.roles.default ?? {}
+  for (const [role, spec] of Object.entries(config.roles)) {
+    const primary = {
+      runtime: spec.runtime ?? defaults.runtime,
+      account: spec.account ?? defaults.account,
+    }
+    const targets = [
+      primary,
+      ...(spec.alternates ?? defaults.alternates ?? []).map((alt) => ({
+        runtime: alt.runtime ?? primary.runtime,
+        account: alt.account ?? primary.account,
+      })),
+    ]
+    targets.forEach((target, index) => {
+      try {
+        selectAccount(
+          config.accounts,
+          target.runtime,
+          target.account,
+          `role ${JSON.stringify(role)}${index ? ` alternate[${index - 1}]` : ''}`,
+        )
+      } catch (error) {
+        ctx.addIssue({ code: 'custom', path: ['roles', role], message: (error as Error).message })
+      }
+    })
+  }
+
   for (const kind of ['verify', 'finalize'] as const) {
     const section = config[kind]
     if (!section) continue
