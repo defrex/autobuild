@@ -13,6 +13,7 @@ export interface ProjectDeletionPreview {
   subscriptionAccounts: number
 }
 export interface ProjectDeletion {
+  pending(actor: HumanActor): Promise<string[]>
   preview(actor: HumanActor, repo: string): Promise<ProjectDeletionPreview>
   delete(actor: HumanActor, repo: string, token: string | null): Promise<void>
 }
@@ -32,6 +33,15 @@ export class PostgresProjectDeletion implements ProjectDeletion {
         (SELECT organization_id FROM project_deletions WHERE repo = ${repo}),
         (SELECT organization_id FROM project_organizations WHERE repo = ${repo}))`
     if (!owner) throw new AccessError(403, 'organization owner required')
+  }
+
+  /** Management discovery only: fenced projects never re-enter normal project lists. */
+  async pending(actor: HumanActor): Promise<string[]> {
+    const rows = await this.sql`SELECT d.repo FROM project_deletions d WHERE
+      ${actor.isSuperUser()} OR EXISTS (SELECT 1 FROM organization_emails e
+        WHERE e.organization_id = d.organization_id AND e.email = ${actor.email} AND e.role = 'owner')
+      ORDER BY d.repo`
+    return rows.map((row: { repo: string }) => String(row.repo))
   }
 
   async preview(actor: HumanActor, raw: string): Promise<ProjectDeletionPreview> {
@@ -185,28 +195,42 @@ export class PostgresProjectDeletion implements ProjectDeletion {
         const tx = transaction as SQL
         await tx`SELECT pg_advisory_xact_lock(${PROJECT_BLOB_LOCK})`
         const candidates =
-          await tx`SELECT blob_ref FROM project_deletion_blobs WHERE repo = ${repo} AND EXISTS (SELECT 1 FROM project_deletions WHERE repo = ${repo} AND generation = ${generation}) ORDER BY blob_ref LIMIT 1 FOR UPDATE`
+          await tx`SELECT blob_ref FROM project_deletion_blobs WHERE repo = ${repo} AND EXISTS (SELECT 1 FROM project_deletions WHERE repo = ${repo} AND generation = ${generation}) ORDER BY blob_ref LIMIT 32 FOR UPDATE`
         if (!candidates.length) return false
-        const ref = candidates[0]!.blob_ref
-        await tx`DELETE FROM project_blob_ownership WHERE repo = ${repo} AND blob_ref = ${ref}`
-        const [shared] = await tx`SELECT 1 WHERE
-          EXISTS (SELECT 1 FROM project_blob_ownership WHERE repo <> ${repo} AND blob_ref = ${ref}) OR
-          EXISTS (SELECT 1 FROM project_deletion_blobs WHERE repo <> ${repo} AND blob_ref = ${ref}) OR
-          EXISTS (SELECT 1 FROM artifacts a JOIN builds b ON b.slug = a.build WHERE b.repo <> ${repo} AND a.blob_ref = ${ref}) OR
-          EXISTS (SELECT 1 FROM session_artifacts a JOIN sessions s ON s.id = a.session WHERE s.repo <> ${repo} AND a.blob_ref = ${ref}) OR
-          EXISTS (SELECT 1 FROM repo_artifacts WHERE repo <> ${repo} AND blob_ref = ${ref}) OR
-          EXISTS (SELECT 1 FROM streams s WHERE s.artifact_blob_ref = ${ref} AND (
-            s.repo <> ${repo} OR s.build IN (SELECT slug FROM builds WHERE repo <> ${repo})
-            OR s.session IN (SELECT id FROM sessions WHERE repo <> ${repo}))) OR
-          EXISTS (SELECT 1 FROM events e JOIN builds b ON b.slug=e.build WHERE b.repo <> ${repo}
-            AND jsonb_path_exists(e.payload, '$.**.blobRef ? (@ == $ref)', jsonb_build_object('ref', ${ref}::text))) OR
-          EXISTS (SELECT 1 FROM session_events e JOIN sessions s ON s.id=e.session WHERE s.repo <> ${repo}
-            AND jsonb_path_exists(e.payload, '$.**.blobRef ? (@ == $ref)', jsonb_build_object('ref', ${ref}::text))) OR
-          EXISTS (SELECT 1 FROM repo_events e WHERE e.repo <> ${repo}
-            AND jsonb_path_exists(e.payload, '$.**.blobRef ? (@ == $ref)', jsonb_build_object('ref', ${ref}::text))) OR
-          EXISTS (SELECT 1 FROM ticket_assets a, jsonb_array_elements(CASE WHEN jsonb_typeof(a.manifest) = 'string' THEN (a.manifest #>> '{}')::jsonb ELSE a.manifest END) e WHERE a.repo <> ${repo} AND e->>'blobRef' = ${ref})`
-        if (!shared) await this.blobs.delete(String(ref))
-        await tx`DELETE FROM project_deletion_blobs WHERE repo = ${repo} AND blob_ref = ${ref}`
+        const refs: string[] = candidates.map((row: { blob_ref: string }) => String(row.blob_ref))
+        const encoded = JSON.stringify(refs)
+        await tx`DELETE FROM project_blob_ownership WHERE repo = ${repo}
+          AND blob_ref IN (SELECT jsonb_array_elements_text(${encoded}::text::jsonb))`
+        // Extract legacy references once per batch, rather than scanning every
+        // event table once per object. The exclusive lock spans proof and I/O.
+        const shared = await tx`WITH surviving AS (
+          SELECT blob_ref FROM project_blob_ownership WHERE repo <> ${repo}
+          UNION ALL SELECT blob_ref FROM project_deletion_blobs WHERE repo <> ${repo}
+          UNION ALL SELECT a.blob_ref FROM artifacts a JOIN builds b ON b.slug = a.build WHERE b.repo <> ${repo}
+          UNION ALL SELECT a.blob_ref FROM session_artifacts a JOIN sessions s ON s.id = a.session WHERE s.repo <> ${repo}
+          UNION ALL SELECT blob_ref FROM repo_artifacts WHERE repo <> ${repo}
+          UNION ALL SELECT artifact_blob_ref FROM streams s WHERE s.repo <> ${repo}
+            OR s.build IN (SELECT slug FROM builds WHERE repo <> ${repo})
+            OR s.session IN (SELECT id FROM sessions WHERE repo <> ${repo})
+          UNION ALL SELECT value #>> '{}' FROM events e JOIN builds b ON b.slug=e.build,
+            jsonb_path_query(e.payload, '$.**.blobRef') value WHERE b.repo <> ${repo} AND jsonb_typeof(value) = 'string'
+          UNION ALL SELECT value #>> '{}' FROM session_events e JOIN sessions s ON s.id=e.session,
+            jsonb_path_query(e.payload, '$.**.blobRef') value WHERE s.repo <> ${repo} AND jsonb_typeof(value) = 'string'
+          UNION ALL SELECT value #>> '{}' FROM repo_events e,
+            jsonb_path_query(e.payload, '$.**.blobRef') value WHERE e.repo <> ${repo} AND jsonb_typeof(value) = 'string'
+          UNION ALL SELECT e->>'blobRef' FROM ticket_assets a,
+            jsonb_array_elements(CASE WHEN jsonb_typeof(a.manifest) = 'string' THEN (a.manifest #>> '{}')::jsonb ELSE a.manifest END) e
+            WHERE a.repo <> ${repo}
+        ) SELECT DISTINCT blob_ref FROM surviving
+          WHERE blob_ref IN (SELECT jsonb_array_elements_text(${encoded}::text::jsonb))`
+        const retained = new Set(shared.map((row: { blob_ref: string }) => String(row.blob_ref)))
+        const removable = refs.filter((ref) => !retained.has(ref))
+        if (removable.length) {
+          if (this.blobs.deleteMany) await this.blobs.deleteMany(removable)
+          else for (const ref of removable) await this.blobs.delete(ref)
+        }
+        await tx`DELETE FROM project_deletion_blobs WHERE repo = ${repo}
+          AND blob_ref IN (SELECT jsonb_array_elements_text(${encoded}::text::jsonb))`
         return true
       })
       if (!progressed) return

@@ -2701,7 +2701,8 @@ hosted state, tickets, blobs, secrets and accounts, revokes all credentials and
 retains only repository, actor, deletion time and an opaque generation id as audit.
 `ab disconnect` only revokes the saved credential; admin `projects remove` only
 unregisters access and retains data. Failed deletion leaves access refused and
-supports retry; registration waits for cleanup. Legacy untraceable orphan blobs
+supports retry from the Projects page’s unfinished deletions list, including after a
+reload or service restart; registration waits for cleanup. Legacy untraceable orphan blobs
 with no ownership record or retained project reference are excluded from deletion.
 A fresh connection requires browser approval and starts empty, including hosted
 ticket numbering from 1. Old credentials remain invalid with 401; independently

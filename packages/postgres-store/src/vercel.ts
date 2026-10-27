@@ -48,6 +48,14 @@ export class VercelBlobStore implements BlobStore, BlobMaintenance {
     await (this.options.del ?? del)(blobPath(hash, this.options.prefix), this.auth())
   }
 
+  async deleteMany(hashes: string[]): Promise<void> {
+    if (hashes.length)
+      await (this.options.del ?? del)(
+        hashes.map((hash) => blobPath(hash, this.options.prefix)),
+        this.auth(),
+      )
+  }
+
   async get(hash: string): Promise<Uint8Array | null> {
     const result = await this.getFn(blobPath(hash, this.options.prefix), {
       access: this.options.access,

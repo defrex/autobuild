@@ -215,3 +215,59 @@ describe('physical blob maintenance', () => {
     await expect(blobs.delete('absent')).rejects.toThrow('AccessDenied')
   })
 })
+
+test('Vercel batches exact prefixed keys with authentication and propagates failures', async () => {
+  const calls: unknown[][] = []
+  let fail = false
+  const blobs = new VercelBlobStore({
+    access: 'private',
+    prefix: '/project/',
+    token: 'token',
+    del: (async (...args: unknown[]) => {
+      calls.push(args)
+      if (fail) throw new Error('denied')
+    }) as never,
+  })
+  await blobs.deleteMany(['a', 'b'])
+  await blobs.deleteMany([])
+  expect(calls).toEqual([[['project/a', 'project/b'], { token: 'token' }]])
+  fail = true
+  await expect(blobs.deleteMany(['a'])).rejects.toThrow('denied')
+})
+
+test('S3 batches exact keys and versions, excludes prefix neighbors and rejects per-object errors', async () => {
+  const { DeleteObjectsCommand, ListObjectVersionsCommand } = await import('@aws-sdk/client-s3')
+  const batches: unknown[] = []
+  let fail = false
+  const blobs = new S3BlobStore({
+    bucket: 'bucket',
+    prefix: 'prefix',
+    client: {
+      send: async (command: unknown) => {
+        if (command instanceof DeleteObjectsCommand) {
+          batches.push(command.input)
+          return fail ? { Errors: [{ Key: 'prefix/a', Code: 'AccessDenied' }] } : {}
+        }
+        if (command instanceof ListObjectVersionsCommand)
+          return {
+            Versions: [
+              { Key: command.input.Prefix, VersionId: 'v1' },
+              { Key: `${command.input.Prefix}-neighbor`, VersionId: 'other' },
+            ],
+          }
+        throw new Error('unexpected command')
+      },
+    } as never,
+  })
+  await blobs.deleteMany(['a', 'b'])
+  expect(batches).toEqual([
+    {
+      Bucket: 'bucket',
+      Delete: { Objects: [{ Key: 'prefix/a' }, { Key: 'prefix/b' }], Quiet: true },
+    },
+    { Bucket: 'bucket', Delete: { Objects: [{ Key: 'prefix/a', VersionId: 'v1' }], Quiet: true } },
+    { Bucket: 'bucket', Delete: { Objects: [{ Key: 'prefix/b', VersionId: 'v1' }], Quiet: true } },
+  ])
+  fail = true
+  await expect(blobs.deleteMany(['a'])).rejects.toThrow('S3 physical batch deletion failed')
+})

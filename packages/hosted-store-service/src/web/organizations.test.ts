@@ -29,6 +29,8 @@ function fixture() {
       session: { expiresAt: expired ? new Date(0) : new Date(Date.now() + 60000) },
     }),
     deletion: async () => ({
+      pending: async (actor) =>
+        actor.isSuperUser() || actor.email === 'owner@example.com' ? [repo] : [],
       preview: async (actor, repository) => {
         if (actor.email !== 'owner@example.com' && !actor.isSuperUser())
           throw new AccessError(403, 'organization owner required')
@@ -65,6 +67,7 @@ function fixture() {
     )
   return {
     request,
+    pending: () => handler(new Request('https://app.example.com/api/web/projects/deletions')),
     calls,
     identity: (value: string) => {
       email = value
@@ -127,4 +130,15 @@ test('provider failures are safe and retryable', async () => {
   expect(response.status).toBe(503)
   expect(await response.text()).not.toContain('sensitive')
   expect(f.calls).toEqual([])
+})
+
+test('unfinished deletion discovery is session protected and owner scoped', async () => {
+  const f = fixture()
+  expect(await (await f.pending()).json()).toEqual({ projects: [repo] })
+  f.identity('member@example.com')
+  expect(await (await f.pending()).json()).toEqual({ projects: [] })
+  f.identity('root@example.com')
+  expect(await (await f.pending()).json()).toEqual({ projects: [repo] })
+  f.expire()
+  expect((await f.pending()).status).toBe(401)
 })

@@ -527,12 +527,87 @@ test.skipIf(!url)(
     await f.sql`INSERT INTO project_blob_ownership (repo,blob_ref) VALUES (${repo},'blob')`
     f.setFailure(true)
     await expect(deletion.delete(next, repo, preview.token)).rejects.toThrow('provider unavailable')
+    const reloaded = new PostgresProjectDeletion(f.sql, f.maintenance)
+    expect(await reloaded.pending(next)).toEqual([repo])
+    expect(await reloaded.pending(f.actor)).toEqual([repo])
+    expect(await reloaded.pending(owner)).toEqual([])
+    expect(await orgs.projects(next)).not.toContain(repo)
+    expect((await orgs.inspect(next, b.id)).projects).not.toContain(repo)
     await orgs.addMember(f.actor, b.id, owner.email)
     await orgs.setOwner(f.actor, b.id, owner.email)
     await expect(deletion.delete(next, repo, preview.token)).rejects.toMatchObject({ status: 403 })
+    expect(await reloaded.pending(next)).toEqual([])
+    expect(await reloaded.pending(owner)).toEqual([repo])
     f.setFailure(false)
-    await deletion.delete(owner, repo, preview.token)
+    await reloaded.delete(owner, repo, preview.token)
     const [audit] = await f.sql`SELECT actor FROM project_deletion_audit WHERE repo=${repo}`
     expect(audit.actor).toBe(next.email)
+    expect(await reloaded.pending(owner)).toEqual([])
+  },
+)
+
+test.skipIf(!url)(
+  'bounded cleanup batches retain all candidates on partial provider failure',
+  async () => {
+    const f = await fixture()
+    await f.registry.add(repo, f.actor.email)
+    const refs = Array.from({ length: 70 }, (_, i) => `blob-${String(i).padStart(3, '0')}`)
+    for (const ref of refs) {
+      f.objects.add(ref)
+      await f.sql`INSERT INTO project_blob_ownership (repo,blob_ref) VALUES (${repo},${ref})`
+    }
+    const batches: string[][] = []
+    let failure = true
+    const lifecycle = new PostgresProjectDeletion(f.sql, {
+      delete: async () => {
+        throw new Error('single-object path used')
+      },
+      deleteMany: async (batch) => {
+        batches.push([...batch])
+        for (const ref of batch) f.objects.delete(ref)
+        if (failure && batches.length === 2) throw new Error('partial batch failure')
+      },
+    })
+    const preview = await lifecycle.preview(f.actor, repo)
+    await expect(lifecycle.delete(f.actor, repo, preview.token)).rejects.toThrow(
+      'partial batch failure',
+    )
+    expect(batches.map((batch) => batch.length)).toEqual([32, 32])
+    expect((await f.sql`SELECT * FROM project_deletion_blobs WHERE repo=${repo}`).length).toBe(38)
+    expect(await lifecycle.pending(f.actor)).toEqual([repo])
+    failure = false
+    await lifecycle.delete(f.actor, repo, preview.token)
+    expect(batches.map((batch) => batch.length)).toEqual([32, 32, 32, 6])
+    expect(f.objects.size).toBe(0)
+    expect(await lifecycle.pending(f.actor)).toEqual([])
+  },
+)
+
+test.skipIf(!url)(
+  'batch reference proof preserves legacy event-only and removed asset references',
+  async () => {
+    const f = await fixture()
+    for (const repository of [repo, other]) await f.registry.add(repository, f.actor.email)
+    const refs = ['legacy-event', 'legacy-asset', 'exclusive']
+    for (const ref of refs) {
+      f.objects.add(ref)
+      await f.sql`INSERT INTO project_blob_ownership (repo,blob_ref) VALUES (${repo},${ref})`
+    }
+    await f.sql`INSERT INTO repo_streams (repo,created_at,updated_at) VALUES (${other},now(),now())`
+    await f.sql`INSERT INTO repo_events (repo,seq,ts,actor,type,payload) VALUES (${other},1,now(),'{}','legacy',${{ artifact: { blobRef: 'legacy-event' } }}::jsonb)`
+    await f.sql`INSERT INTO ticket_assets (repo,ticket_id,kind,name,revision,layout,manifest,size,removed,created_at) VALUES (${other},'ticket','design','reference',0,'file',${JSON.stringify([{ type: 'file', path: 'ref', blobRef: 'legacy-asset', size: 1 }])}::jsonb,1,true,now())`
+    const batches: string[][] = []
+    const lifecycle = new PostgresProjectDeletion(f.sql, {
+      delete: async () => {
+        throw new Error('single-object path used')
+      },
+      deleteMany: async (batch) => {
+        batches.push(batch)
+        for (const ref of batch) f.objects.delete(ref)
+      },
+    })
+    await lifecycle.delete(f.actor, repo, (await lifecycle.preview(f.actor, repo)).token)
+    expect(batches).toEqual([['exclusive']])
+    expect([...f.objects].sort()).toEqual(['legacy-asset', 'legacy-event'])
   },
 )

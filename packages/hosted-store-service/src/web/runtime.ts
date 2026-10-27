@@ -39,7 +39,7 @@ export function webGateway() {
   return {
     fetch: (request: Request) => {
       const path = new URL(request.url).pathname
-      return /^\/api\/web\/(orgs(?:\/|$)|projects\/(?:unassigned|deletion)(?:\/|$))/.test(path)
+      return /^\/api\/web\/(orgs(?:\/|$)|projects\/(?:unassigned|deletions?)(?:\/|$))/.test(path)
         ? management(request)
         : gateway!.fetch(request)
     },

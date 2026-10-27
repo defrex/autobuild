@@ -1,6 +1,6 @@
 'use client'
 import { useCallback, useEffect, useState, useRef } from 'react'
-import { request, snapshots, orgPath, type Discovery, type DeletionPreview } from '../access/api'
+import { request, projectManagement, orgPath, type DeletionPreview } from '../access/api'
 import { useAccess } from '../access/useAccess'
 import { confirmedTarget, type Confirmation } from '../access/state'
 import { ProjectsView } from './ProjectsView'
@@ -24,29 +24,19 @@ export function ProjectsClient({
   const [confirmation, setConfirmation] = useState<Confirmation>()
   const [destinations, setDestinations] = useState<Record<string, string>>({})
   const load = useCallback(
-    async (signal: AbortSignal) => {
-      const discovery = await request<Discovery>('orgs', 'GET', undefined, signal)
-      const [assigned, waiting] = await Promise.all([
-        snapshots(
-          discovery.organizations.filter((org) => isSuperUser || org.membershipRole === 'owner'),
-          signal,
-        ),
-        isSuperUser
-          ? request<{ projects: string[] }>('projects/unassigned', 'GET', undefined, signal)
-          : Promise.resolve(undefined),
-      ])
-      return { snapshots: assigned, unassigned: waiting?.projects }
-    },
+    (signal: AbortSignal) => projectManagement(isSuperUser, signal),
     [isSuperUser],
   )
   const state = useAccess(load)
   // Hide only until discovery acknowledges the completed purge. A later
   // reconnection with the same repository name must be visible again.
   useEffect(() => {
-    setHidden([])
-  }, [])
+    if (state.data) setHidden([])
+  }, [state.data])
   const sourceOf = (repo: string | undefined) =>
-    state.data?.snapshots.find((s) => repo && s.projects.includes(repo))?.organization.id
+    state.data?.pendingDeletions.includes(repo ?? '')
+      ? 'pending-deletion'
+      : state.data?.snapshots.find((s) => repo && s.projects.includes(repo))?.organization.id
   const activeConfirmation = confirmedTarget(confirmation, sourceOf(confirmation?.target))
   useEffect(() => {
     if (confirmation && !activeConfirmation) setConfirmation(undefined)
@@ -55,6 +45,7 @@ export function ProjectsClient({
     if (
       deleting &&
       ((!isSuperUser &&
+        deletionSource.current !== 'pending-deletion' &&
         state.data?.snapshots.find(
           (snapshot) => snapshot.organization.id === deletionSource.current,
         )?.organization.membershipRole !== 'owner') ||
@@ -127,7 +118,12 @@ export function ProjectsClient({
       preserve && !snapshot.projects.includes(deleting)
         ? [...snapshot.projects, deleting]
         : snapshot.projects
-    return { ...snapshot, projects: projects.filter((repo) => !hidden.includes(repo)) }
+    return {
+      ...snapshot,
+      projects: projects.filter(
+        (repo) => !hidden.includes(repo) && !state.data?.pendingDeletions.includes(repo),
+      ),
+    }
   })
   return (
     <ProjectsView
@@ -136,6 +132,7 @@ export function ProjectsClient({
       isSuperUser={isSuperUser}
       {...state.data}
       snapshots={visibleSnapshots}
+      pendingDeletions={state.data?.pendingDeletions.filter((repo) => !hidden.includes(repo))}
       pending={state.pending || deletionPending}
       deleting={deleting}
       deletionPreview={deletionPreview}

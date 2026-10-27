@@ -1,5 +1,6 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectVersionsCommand,
   NoSuchKey,
@@ -61,6 +62,67 @@ export class S3BlobStore implements BlobStore, BlobMaintenance {
       KeyMarker = page.NextKeyMarker
       VersionIdMarker = page.NextVersionIdMarker
     } while (KeyMarker !== undefined)
+  }
+
+  async deleteMany(hashes: string[]): Promise<void> {
+    const Bucket = this.options.bucket
+    const remove = async (Objects: Array<{ Key: string; VersionId?: string }>) => {
+      if (!Objects.length) return
+      const result = await this.options.client.send(
+        new DeleteObjectsCommand({
+          Bucket,
+          Delete: { Objects, Quiet: true },
+        }),
+      )
+      // S3 may return HTTP success with per-object retention/permission errors.
+      if (result.Errors?.length) throw new Error('S3 physical batch deletion failed')
+    }
+    // Bound concurrency and request sizes even for maintenance callers outside cleanup.
+    for (let start = 0; start < hashes.length; start += 32) {
+      const keys = [
+        ...new Set(
+          hashes.slice(start, start + 32).map((hash) => blobPath(hash, this.options.prefix)),
+        ),
+      ]
+      await remove(keys.map((Key) => ({ Key })))
+      for (let offset = 0; offset < keys.length; offset += 4) {
+        const outcomes = await Promise.allSettled(
+          keys.slice(offset, offset + 4).map(async (Key) => {
+            let KeyMarker: string | undefined
+            let VersionIdMarker: string | undefined
+            for (;;) {
+              const page = await this.options.client.send(
+                new ListObjectVersionsCommand({
+                  Bucket,
+                  Prefix: Key,
+                  KeyMarker,
+                  VersionIdMarker,
+                }),
+              )
+              const versions = [...(page.Versions ?? []), ...(page.DeleteMarkers ?? [])]
+                .filter((version) => version.Key === Key)
+                .map((version) => {
+                  if (!version.VersionId)
+                    throw new Error('S3 returned a version without an identity')
+                  return { Key, VersionId: version.VersionId }
+                })
+              for (let i = 0; i < versions.length; i += 1000)
+                await remove(versions.slice(i, i + 1000))
+              if (!page.IsTruncated) return
+              if (
+                !page.NextKeyMarker ||
+                (page.NextKeyMarker === KeyMarker && page.NextVersionIdMarker === VersionIdMarker)
+              )
+                throw new Error('S3 version pagination did not advance')
+              KeyMarker = page.NextKeyMarker
+              VersionIdMarker = page.NextVersionIdMarker
+            }
+          }),
+        )
+        const failed = outcomes.find((outcome) => outcome.status === 'rejected')
+        if (failed?.status === 'rejected') throw failed.reason
+      }
+    }
   }
 
   async get(hash: string): Promise<Uint8Array | null> {

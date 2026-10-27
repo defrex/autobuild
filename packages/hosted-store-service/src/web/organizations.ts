@@ -66,6 +66,8 @@ export function createOrganizationHandler(options: {
         if (typeof body[key] !== 'string') throw new AccessError(400, `invalid ${key}`)
         return body[key]
       }
+      if (parts.join('/') === 'projects/deletions' && method === 'GET' && options.deletion)
+        return respond({ projects: await (await options.deletion()).pending(actor) })
       if (parts.join('/') === 'projects/deletion' && options.deletion) {
         let repo: string
         const normalize = (value: string) => {

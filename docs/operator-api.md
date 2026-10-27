@@ -453,8 +453,16 @@ artifacts, hosted tickets and assets, secrets, subscription accounts, credential
 connections, presence and organization assignment. Blobs another project references
 or reserves survive. The only retained project record contains the repository,
 initiating actor, deletion time and one opaque generation id. Provider failure
-leaves access refused and durable cleanup pending; retry the same confirmation
-to finish, including after a service restart. Registration is blocked until cleanup
+leaves access refused and durable cleanup pending. The Projects page lists
+unfinished deletions with a **Finish deletion…** action, including after reloading,
+opening another tab or restarting the service. Reopen its inline confirmation to
+retry cleanup; Cancel only closes the confirmation and does not undo the cutoff.
+`GET /api/web/projects/deletions` returns `{projects: string[]}` for pending
+cleanup authorized to the current owner or super user, including unassigned
+projects for super users. Members and outsiders receive no pending project names.
+This management-only list does not restore projects to builds selectors or normal
+organization discovery. Cleanup commits progress in batches of at most 32 blobs,
+using provider batch deletion where supported; a failed batch remains retryable. Registration is blocked until cleanup
 finishes. Legacy untraceable orphan blobs with no ownership record or retained
 project reference are excluded from deletion.
 

@@ -102,3 +102,23 @@ export interface DeletionPreview {
   secrets: number
   subscriptionAccounts: number
 }
+
+/** Fresh server discovery includes fenced projects only in the management list. */
+export async function projectManagement(isSuperUser: boolean, signal?: AbortSignal) {
+  const discovery = await request<Discovery>('orgs', 'GET', undefined, signal)
+  const [assigned, waiting, unfinished] = await Promise.all([
+    snapshots(
+      discovery.organizations.filter((org) => isSuperUser || org.membershipRole === 'owner'),
+      signal,
+    ),
+    isSuperUser
+      ? request<{ projects: string[] }>('projects/unassigned', 'GET', undefined, signal)
+      : Promise.resolve(undefined),
+    request<{ projects: string[] }>('projects/deletions', 'GET', undefined, signal),
+  ])
+  return {
+    snapshots: assigned,
+    unassigned: waiting?.projects,
+    pendingDeletions: unfinished.projects,
+  }
+}

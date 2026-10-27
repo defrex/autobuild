@@ -77,3 +77,32 @@ test('loading never invents counts and cleanup error retains confirmation', () =
   expect(html).toContain('Cleanup unavailable. Retry.')
   expect(html).toContain(repo)
 })
+
+test('unfinished deletion survives fresh page rendering with only a finish action', () => {
+  const html = renderToStaticMarkup(
+    <ProjectsView {...base} snapshots={[]} pendingDeletions={[repo]} />,
+  )
+  expect(html).toContain(repo)
+  expect(html).toContain('Deletion unfinished')
+  expect(html).toContain('Finish deletion…')
+  expect(html).not.toContain('Move…')
+  expect(html).not.toContain('>Assign<')
+  const confirmation = renderToStaticMarkup(
+    <ProjectsView
+      {...base}
+      snapshots={[]}
+      pendingDeletions={[repo]}
+      deleting={repo}
+      deletionPreview={{
+        repo,
+        token: '"generation"',
+        builds: 0,
+        tickets: 0,
+        secrets: 0,
+        subscriptionAccounts: 0,
+      }}
+    />,
+  )
+  expect(confirmation).toContain('Finish deletion</button>')
+  expect(confirmation).toContain('Cancel')
+})

@@ -20,6 +20,9 @@ export const ACCESS_SCENARIOS = [
   'projects-delete-owner',
   'projects-delete-pending',
   'projects-delete-failed',
+  'projects-cleanup-owner',
+  'projects-cleanup-super',
+  'projects-cleanup-confirm',
   'projects-member',
   'connect-multiple',
   'connect-single',
@@ -108,18 +111,32 @@ export function accessFixture(id: string) {
     return (
       <ProjectsView
         identity="root@example.com"
-        isSuperUser={!['projects-delete-owner', 'projects-member'].includes(state)}
-        isOwner={state === 'projects-delete-owner'}
+        isSuperUser={
+          !['projects-delete-owner', 'projects-cleanup-owner', 'projects-member'].includes(state)
+        }
+        isOwner={state === 'projects-delete-owner' || state === 'projects-cleanup-owner'}
         snapshots={
           state === 'projects-member'
             ? [{ ...a, organization: { ...a.organization, membershipRole: 'member' } }]
-            : state === 'projects-delete-owner'
+            : state === 'projects-delete-owner' || state === 'projects-cleanup-owner'
               ? [a]
               : [a, b]
         }
-        deleting={state.startsWith('projects-delete') ? a.projects[1] : undefined}
+        pendingDeletions={
+          state.startsWith('projects-cleanup') ? ['https://github.com/acme/retired'] : undefined
+        }
+        deleting={
+          state === 'projects-cleanup-confirm'
+            ? 'https://github.com/acme/retired'
+            : state.startsWith('projects-delete')
+              ? a.projects[1]
+              : undefined
+        }
         deletionPreview={{
-          repo: a.projects[1]!,
+          repo:
+            state === 'projects-cleanup-confirm'
+              ? 'https://github.com/acme/retired'
+              : a.projects[1]!,
           token: '"generation"',
           builds: 24,
           tickets: 38,
@@ -133,7 +150,9 @@ export function accessFixture(id: string) {
             : undefined
         }
         unassigned={
-          state === 'projects-delete-owner' || state === 'projects-member'
+          state === 'projects-delete-owner' ||
+          state === 'projects-cleanup-owner' ||
+          state === 'projects-member'
             ? undefined
             : ['https://github.com/acme/mobile-with-a-long-repository-name']
         }
