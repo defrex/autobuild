@@ -490,3 +490,14 @@ access, revalidate and restart dispatch to refresh its startup diagnostics.
 Changing the connected ticket source does not itself migrate in-flight builds.
 Follow [ticket migration](ticket-migration.md), keeping the existing BuildStore
 and recording continuity before resuming build-related ticket writes.
+
+
+Permanent hosted data removal is available on the web app's Projects page to
+super users and owners of the project's organization. `ab disconnect` only
+revokes a credential; admin `projects remove` only unregisters access and retains
+data. Project deletion removes hosted builds, tickets, blobs, secrets and accounts,
+revokes every credential and retains only a minimal deletion audit. It does not
+change local files or configuration. Failed cleanup is retryable with access
+already refused. Reconnecting requires fresh browser approval and starts empty,
+with hosted ticket numbering reset to 1. See
+[permanent project deletion](operator-api.md#permanent-project-deletion).

@@ -4198,3 +4198,20 @@ launch artifacts contain no secret values. Credential rejections require renewal
 and bypass alternates; quota and availability retain existing fallback behavior.
 Account secrets are redacted at persistence boundaries, including split streamed
 deltas and prior values retained across rotation.
+
+
+### Hosted project deletion
+
+The Projects web surface allows super users and organization owners to preview
+counts and permanently delete their authorized projects with an inline confirmation.
+PostgreSQL fences the registration generation before physical blob cleanup and
+retains durable pending inventory for restart/retry. Upload ownership is reserved
+in a separate committed transaction before provider I/O; transaction-scoped shared
+blob locks cover upload/publication, and exclusive locks cover reference checks
+and physical deletion. Other projects' references and reservations preserve shared
+bytes. Completion removes all project rows except repository, actor, deletion time
+and an opaque generation id in the deletion audit. Old credentials receive 401;
+repository-established requests receive 403 project not registered. Approval of a
+fresh connection starts empty and resets hosted ticket numbering. `ab disconnect`
+revokes credentials only; admin `projects remove` unregisters without purging.
+See [project deletion protocol](docs/operator-api.md#permanent-project-deletion).

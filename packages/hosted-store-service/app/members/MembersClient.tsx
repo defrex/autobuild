@@ -6,11 +6,13 @@ import { confirmedTarget, type Confirmation } from '../access/state'
 import { MembersView } from './MembersView'
 export function MembersClient({
   identity,
+  isOwner,
   isSuperUser,
   initialOrg,
   signInUrl,
 }: {
   identity: string
+  isOwner?: boolean
   isSuperUser: boolean
   initialOrg?: string
   signInUrl: string
@@ -48,6 +50,7 @@ export function MembersClient({
   return (
     <MembersView
       identity={identity}
+      isOwner={isOwner}
       isSuperUser={state.data?.isSuperUser ?? isSuperUser}
       organizations={state.data?.organizations ?? []}
       selected={selected}
