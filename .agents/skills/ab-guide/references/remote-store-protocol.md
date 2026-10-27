@@ -1397,9 +1397,17 @@ build, delegated, internal and administrative credentials are refused.
 | --- | --- | --- |
 | `GET /secrets/v1/list?repo=<encoded repository identity>` | Project identity | `{version: 1, secrets: [...]}` |
 | `POST /secrets/v1/set` | `{version: 1, repo, name, value}` | `{version: 1, ok: true}` |
+| `GET /secrets/v1/chatgpt-host?repo=<encoded repository identity>` | Project identity | `{version: 1, hostId}` (nonsecret destination identity) |
+| `POST /secrets/v1/chatgpt` | `{version: 1, repo, name, state}` (validated ChatGPT registration) | `{version: 1, ok: true}` |
 | `POST /secrets/v1/remove` | `{version: 1, repo, name}` | `{version: 1, ok: true}` |
 
-Writes accept only the listed fields. Values are nonempty strings, at most
+The ChatGPT write accepts a strict versioned registration containing its destination
+host ID, issued client ID, validated subject, granted scopes, access/refresh/ID
+tokens and expiry/refresh window. It validates destination identity and stores
+only an encrypted refreshing payload. No response exposes tokens or provider
+state; browser authorization completes on the operator's machine.
+
+Writes accept only the listed fields. Static values are nonempty strings, at most
 64 KiB in UTF-8, without NUL. Names are case-sensitive environment identifiers
 `[A-Z_][A-Z0-9_]*`, at most 128 characters. Dispatcher authority and process-control
 names are reserved: store, forge, Vercel, cron, database, object-storage, loader,
@@ -1413,27 +1421,41 @@ Each metadata entry contains `name`, `kind`, `owner` (the member who set the
 current value), `setAt` (ISO timestamp), `fingerprint` (16 hexadecimal characters,
 keyed and non-reversible), `status` (`ready`, `refreshing`, `failed`), `failureCode`
 (null, `refresh-failed` or `refresh-expired`) and `lastSuppliedAt` (ISO timestamp
-or null). Set/replace resets delivery and failure metadata. Every set/remove
-records actor and time without material. Supply means the environment was handed
+or null). A refreshing secret may also include typed `warnings`, currently
+`["refresh-window-too-short"]` when its permitted refresh window is shorter than
+the five-minute tick interval plus a one-minute safety margin. This is advisory;
+missing warnings do not establish a sufficient window when encrypted state is
+unavailable for diagnosis. Set/replace resets delivery and failure metadata.
+Every set/remove records actor and time without material. Supply means the environment was handed
 to a kernel, not that a build completed.
 
 On each hosted tick the complete current project set overrides the deployment
 environment for that project only. Replacement/removal applies on the next tick.
-Resolution and handoff validate the complete generation/revision set; a stale
-handoff dispatches nothing. Encryption configuration errors, decryption failures,
-and refresh failures fail the affected project closed without a partial set;
-other projects can continue. Projects without saved secrets resolve and supply an
+Resolution failure suppresses intake and all new execution launches. When the
+ready subset can be read, a revision-fenced observation-only pass repairs running
+execution policies: unavailable names are withheld, their transforms are revoked,
+and unrelated ready account transforms remain active. It performs no janitor,
+resume, lease-sweep, or harvest launch work. If encryption or decryption prevents
+reading that subset, the project is skipped. Resolution and handoff validate the
+complete generation/revision set, including unavailable rows; a stale handoff
+runs no observation or dispatch. Normal dispatch still requires the complete
+usable secret set; other projects can continue. Projects without saved secrets resolve and supply an
 empty set without encryption configuration, including when another project has
 secrets. All secret mutations still require valid encryption configuration, even
 on an empty project. An empty snapshot becomes stale if a secret is added before
 handoff. Metadata remains available for diagnosis.
 
 Refreshing kinds are internal provider integrations, not arbitrary endpoint URLs
-or CLI write formats. Before delivery the resolver requires at least ten minutes
-of remaining access validity (five-minute tick interval plus scheduling allowance),
-honors provider earliest-refresh times, and commits rotated encrypted state before
-supplying the new token. A durable attempt permits only one refresh caller across
-overlapping ticks. An abandoned attempt expires to failed without reusing the
+or CLI write formats. The five-minute hosted cadence is unchanged. A token that
+is valid now but not yet refreshable is supplied unchanged; a caller’s future
+validity horizon cannot reject it. The first tick at or after the provider’s
+earliest-refresh time rotates the credential and commits encrypted replacement
+state before supply. Providers omitting that time use a ten-minute pre-expiry
+refresh margin to tolerate a delayed five-minute tick. After downtime, expired
+access state is refreshed before supply while its durable status remains ready.
+Failed or uncertain refresh attempts prevent supply and require replacement. A valid
+credential is never revoked merely because its refresh window is short. A durable
+attempt permits only one refresh caller across overlapping ticks. An abandoned attempt expires to failed without reusing the
 possibly consumed refresh token; explicit replacement is required. Errors use
 fixed safe codes and never reflect provider responses or submitted values.
 

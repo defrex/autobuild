@@ -961,6 +961,9 @@ export async function validateVercelSandbox(
           ),
           AB_STORE: options.storeRef,
           AB_TOKEN: options.storeToken,
+          ...(options.env.AB_CHATGPT_HOSTED_READINESS
+            ? { AB_CHATGPT_HOSTED_READINESS: options.env.AB_CHATGPT_HOSTED_READINESS }
+            : {}),
         },
       }),
     )
@@ -2050,9 +2053,22 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
       )
       const refreshed = accountPolicy(base, accounts, this.options.env)
-      await sandbox.update({ networkPolicy: refreshed.policy }, { signal: this.operationSignal() })
-      if (refreshed.missing.length)
+      try {
+        await sandbox.update(
+          { networkPolicy: refreshed.policy },
+          { signal: this.operationSignal() },
+        )
+      } catch {
+        await sandbox.stop({ signal: this.operationSignal() })
+        return { state: 'lost', attention: 'Account policy renewal failed; sandbox stopped' }
+      }
+      if (refreshed.missing.length) {
         attention = `Missing credentials: ${refreshed.missing.join('; ')}`
+        // The updated policy fences the missing account by removing its bearer
+        // transform. Its next request fails authentication through the runtime's
+        // account-specific recovery path. Keep other routes in this guest alive:
+        // declarations include unused accounts and do not identify active sessions.
+      }
     }
     const diagnosed = (observation: ExecutionObservation): ExecutionObservation =>
       attention === undefined ? observation : { ...observation, attention }

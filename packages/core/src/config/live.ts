@@ -250,6 +250,12 @@ export class LiveConfig {
     const config = composeReloadedConfig(this.startup, candidate)
     let resolver: RuntimeResolver
     try {
+      for (const [name, account] of Object.entries(this.snapshot.config.accounts)) {
+        if (account.kind === 'chatgpt-subscription' && !same(account, config.accounts[name]))
+          throw new Error(
+            `ChatGPT account ${JSON.stringify(name)} cannot change while dispatch is active; stop dispatch before replacing its descriptor`,
+          )
+      }
       resolver = createRuntimeResolver(
         this.runtimes,
         config.roles,
