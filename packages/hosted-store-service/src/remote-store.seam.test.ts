@@ -1431,3 +1431,43 @@ test.each([...new Set([AUTOBUILD_VERSION, '1.0.0-beta.0', '1.0.0'])])(
     await verifyAuditCapability(version, protocol, true)
   },
 )
+
+test('scan checkpoint routes enforce project authorization, lifecycle and strict validation', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('allowed')
+  const server = createStoreServer({
+    store,
+    auth: {
+      authenticate: async () => ({
+        kind: 'project',
+        repo: 'allowed',
+        user: 'operator',
+        credential: {} as never,
+      }),
+    },
+    requireRegistered: async (repo) => {
+      if (repo !== 'allowed') throw new Error('unregistered')
+    },
+  })
+  const headers = {
+    [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+    [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+    'content-type': 'application/json',
+  }
+  const request = (repo: string, method = 'GET', body?: unknown) =>
+    server.fetch(
+      new Request(`http://store/repos/${repo}/ticket-scan-checkpoint`, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    )
+  expect((await request('other')).status).toBe(403)
+  const next = { startedAt: '2026-01-01T00:00:00.000Z', anchor: 'a'.repeat(64) }
+  expect(
+    (await request('allowed', 'POST', { expected: null, next: { ...next, extra: true } })).status,
+  ).toBe(400)
+  expect((await request('allowed', 'POST', { expected: null, next })).status).toBe(200)
+  expect(await (await request('allowed')).json()).toEqual(next)
+  expect(await store.getRepoEvents('allowed')).toEqual([])
+})
