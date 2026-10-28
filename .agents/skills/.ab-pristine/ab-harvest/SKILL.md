@@ -53,7 +53,9 @@ cluster and author; you never create or move tickets.
    {"action":"suppress","reason":"...","observations":[...]}
    ```
 
-   Join only an existing unresolved ticket supplied by the ledger. Suppress a
+   Ledger lifecycle is scan-time context; filing checks existence and resolution
+   again before allowing a join, sharing that fresh lookup with hosted alias
+   resolution. Join only an existing unresolved ticket supplied by the ledger. Suppress a
    duplicate whose ledger ticket is resolved/missing, or a record that cannot
    support actionable work. Never invent a ticket reference.
 3. Finish exactly once:

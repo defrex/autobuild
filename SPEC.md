@@ -2172,7 +2172,11 @@ The fixed workflow is:
    nonbinding ordering do not become blockers. A fresh reviewer checks
    coverage, semantic dedup, spec quality, evidence, and both directions of
    that prerequisite rule. Only approval advances.
-3. **file (deterministic)** — refresh the selected TicketSource lifecycle for
+3. **file (deterministic)** — refresh ledger existence and resolution before
+   deciding join eligibility; scan-time lifecycle facts are context only. Each
+   same-source ledger ticket uses one fresh provider lookup, with hosted alias
+   resolution sharing that response. Missing, resolved, and foreign-source
+   ledger tickets cannot be joined. Refresh the selected TicketSource lifecycle for
    every declared blocker and same-source ticket that originated a create's
    clustered observations. Unknown agent-declared ids fail filing; missing,
    resolved, foreign-source, and absent origins contribute nothing. The created
