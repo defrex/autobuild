@@ -200,7 +200,9 @@ test('a verification-blocked node admits a repair child and verifies the repaire
   } finally {
     await h.cleanup()
   }
-})
+  // Real-Git repair/landing exceeded 5s in the full 4-vCPU sandbox unit run;
+  // all assertions passed at 4.76s focused alongside that run. Keep headroom.
+}, 15_000)
 
 test('an unfenced tree mismatch raises durable attention after completion and audits once', async () => {
   const { auditIntegrationLanding } = await import('../kernel/integration-landing')

@@ -15,7 +15,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
   expect(config.tickets.proposalState).not.toBe(config.tickets.readyState)
   expect(config.tickets.triageState).toBe('triage')
   expect(config.pr).toBeUndefined()
-  expect(config.commands.lint).toBe('bun run check')
+  expect(config.commands.lint).toBe('./scripts/verify-bun.sh bun run check')
   expect(config.verify.steps).toEqual([
     'lint',
     'types',
