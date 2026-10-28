@@ -14,126 +14,138 @@ for (const scenario of [
   'descendant-restack',
   'root-restack',
 ] as const) {
-  test(`real Git blocker presence: ${scenario}`, async () => {
-    const restacked = scenario.endsWith('-restack')
-    const route = scenario.replace(/-restack$/, '')
-    const blockerTarget = route === 'ancestor' ? 'A' : 'B'
-    const dependentTarget =
-      route === 'same'
-        ? 'B'
-        : route === 'descendant'
-          ? 'A'
-          : route === 'root' || route === 'node-root'
-            ? undefined
-            : 'C'
-    const handlers = happyHandlers()
-    const implement = handlers.implement!
-    let implementations = 0
-    handlers.implement = async (cli) => {
-      await writeFileIn(cli.ws, 'unique-change.txt', `${++implementations}\n`)
-      await implement(cli)
-    }
-    const h = await makeHarness({
-      localGitForge: true,
-      configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
-      handlers,
-      tickets: [
-        { ...readyTicket('A', { title: 'Node alpha' }), kind: 'node' },
-        { ...readyTicket('B', { title: 'Node beta' }), kind: 'node', target: 'A' },
-        { ...readyTicket('C', { title: 'Node gamma' }), kind: 'node', target: 'A' },
-        { ...readyTicket('BLOCK', { title: 'Prerequisite change' }), target: blockerTarget },
-        {
-          ...readyTicket('DEP', { title: 'Dependent change', state: 'In Progress' }),
-          target: dependentTarget,
-          blockedBy: [route === 'node-root' ? 'B' : 'BLOCK'],
-        },
-      ],
-    })
-    try {
-      for (let i = 0; i < 4; i++) await h.dispatcher.tick()
-      const record = async (id: string) =>
-        (await h.store.listBuilds()).find((r) => r.ticket?.id === id)
-      const blocker = (await record('BLOCK'))!
-      expect(blocker).toBeDefined()
-      await h.runLatest()
-      if (!restacked) await h.tickets.transition('DEP', 'Ready')
-      await h.dispatcher.tick()
-      expect(await record('DEP')).toBeUndefined()
-      const state = reduceBuild(await h.events(blocker.slug))
-      await h.forgeAdapter.squashMerge(h.origin, state.pr!.number, state.pr!.headSha)
-      await h.dispatcher.tick()
-      if (route === 'node-root') {
-        h.tickets.add({
-          ...readyTicket('SECOND', { title: 'Second prerequisite change' }),
-          target: 'B',
-        })
-        h.clock.advance(60_000)
-        await h.dispatcher.tick()
-        await h.runLatest()
-        const second = (await record('SECOND'))!
-        const secondState = reduceBuild(await h.events(second.slug))
-        await h.forgeAdapter.squashMerge(h.origin, secondState.pr!.number, secondState.pr!.headSha)
-        await h.dispatcher.tick()
+  // Real-Git presence/restack cases hit 5s in the 4-vCPU sandbox unit run;
+  // measured sibling at 5.47s and node-root at 7.01s alongside the suite.
+  // Retain all ancestry assertions with explicit headroom for this group.
+  const timeout = 15_000
+  test(
+    `real Git blocker presence: ${scenario}`,
+    async () => {
+      const restacked = scenario.endsWith('-restack')
+      const route = scenario.replace(/-restack$/, '')
+      const blockerTarget = route === 'ancestor' ? 'A' : 'B'
+      const dependentTarget =
+        route === 'same'
+          ? 'B'
+          : route === 'descendant'
+            ? 'A'
+            : route === 'root' || route === 'node-root'
+              ? undefined
+              : 'C'
+      const handlers = happyHandlers()
+      const implement = handlers.implement!
+      let implementations = 0
+      handlers.implement = async (cli) => {
+        await writeFileIn(cli.ws, 'unique-change.txt', `${++implementations}\n`)
+        await implement(cli)
       }
-      if (
-        route === 'sibling' ||
-        route === 'descendant' ||
-        route === 'root' ||
-        route === 'node-root'
-      ) {
-        expect(await record('DEP')).toBeUndefined()
-        const beta = (await record('B'))!
-        await h.dispatcher.tick()
-        const betaState = reduceBuild(await h.events(beta.slug))
-        expect(betaState.pr).toBeDefined()
-        const betaHead = await h.forgeAdapter.remoteBranchSha!(beta.branch!)
-        await h.forgeAdapter.squashMerge(h.origin, betaState.pr!.number, betaHead, {
-          buildSlug: beta.slug,
-        })
-        if (route === 'node-root') {
-          const { git } = await import('./harness')
-          const tree = await git(['rev-parse', `${betaHead}^{tree}`], h.origin)
-          const moved = await git(
-            ['commit-tree', tree, '-p', betaHead, '-m', 'unlanded source movement'],
-            h.origin,
-          )
-          await git(['update-ref', `refs/heads/${beta.branch}`, moved], h.origin)
-          await h.dispatcher.tick()
-          const contribution = reduceBuild(await h.events(beta.slug)).nodeRestack?.contribution
-          expect(contribution?.head).toBe(betaHead)
-          expect(contribution?.identities).not.toContain(`foreign:${moved}`)
-          expect(contribution?.identities).toContain(`build:${(await record('SECOND'))!.slug}`)
-        }
-      }
-      if (restacked) {
-        await h.dispatcher.tick()
-        const { git } = await import('./harness')
-        await git(['commit', '--allow-empty', '-m', 'unrelated root advancement'], h.origin)
+      const h = await makeHarness({
+        localGitForge: true,
+        configToml: `${CONFIG_TOML}\n[[merge]]\nfrom = "leaf"\nmode = "consent"\n`,
+        handlers,
+        tickets: [
+          { ...readyTicket('A', { title: 'Node alpha' }), kind: 'node' },
+          { ...readyTicket('B', { title: 'Node beta' }), kind: 'node', target: 'A' },
+          { ...readyTicket('C', { title: 'Node gamma' }), kind: 'node', target: 'A' },
+          { ...readyTicket('BLOCK', { title: 'Prerequisite change' }), target: blockerTarget },
+          {
+            ...readyTicket('DEP', { title: 'Dependent change', state: 'In Progress' }),
+            target: dependentTarget,
+            blockedBy: [route === 'node-root' ? 'B' : 'BLOCK'],
+          },
+        ],
+      })
+      try {
         for (let i = 0; i < 4; i++) await h.dispatcher.tick()
-        const beta = (await record('B'))!
-        const alpha = (await record('A'))!
-        const landing = reduceBuild(await h.events(beta.slug)).mergedSha!
-        const alphaHead = await h.forgeAdapter.remoteBranchSha!(alpha.branch!)
-        // No eager replay: the unchanged contribution still includes its landing.
-        expect((await git(['rev-list', alphaHead], h.origin)).split('\n')).toContain(landing)
-        expect(await record('DEP')).toBeUndefined()
-        await h.tickets.transition('DEP', 'Ready')
-        h.clock.advance(60_000)
-      }
-      if (route === 'root' || route === 'node-root') {
+        const record = async (id: string) =>
+          (await h.store.listBuilds()).find((r) => r.ticket?.id === id)
+        const blocker = (await record('BLOCK'))!
+        expect(blocker).toBeDefined()
+        await h.runLatest()
+        if (!restacked) await h.tickets.transition('DEP', 'Ready')
         await h.dispatcher.tick()
         expect(await record('DEP')).toBeUndefined()
-        const alpha = (await record('A'))!
-        const alphaState = reduceBuild(await h.events(alpha.slug))
-        expect(alphaState.pr).toBeDefined()
-        await h.forgeAdapter.squashMerge(h.origin, alphaState.pr!.number, alphaState.pr!.headSha)
+        const state = reduceBuild(await h.events(blocker.slug))
+        await h.forgeAdapter.squashMerge(h.origin, state.pr!.number, state.pr!.headSha)
+        await h.dispatcher.tick()
+        if (route === 'node-root') {
+          h.tickets.add({
+            ...readyTicket('SECOND', { title: 'Second prerequisite change' }),
+            target: 'B',
+          })
+          h.clock.advance(60_000)
+          await h.dispatcher.tick()
+          await h.runLatest()
+          const second = (await record('SECOND'))!
+          const secondState = reduceBuild(await h.events(second.slug))
+          await h.forgeAdapter.squashMerge(
+            h.origin,
+            secondState.pr!.number,
+            secondState.pr!.headSha,
+          )
+          await h.dispatcher.tick()
+        }
+        if (
+          route === 'sibling' ||
+          route === 'descendant' ||
+          route === 'root' ||
+          route === 'node-root'
+        ) {
+          expect(await record('DEP')).toBeUndefined()
+          const beta = (await record('B'))!
+          await h.dispatcher.tick()
+          const betaState = reduceBuild(await h.events(beta.slug))
+          expect(betaState.pr).toBeDefined()
+          const betaHead = await h.forgeAdapter.remoteBranchSha!(beta.branch!)
+          await h.forgeAdapter.squashMerge(h.origin, betaState.pr!.number, betaHead, {
+            buildSlug: beta.slug,
+          })
+          if (route === 'node-root') {
+            const { git } = await import('./harness')
+            const tree = await git(['rev-parse', `${betaHead}^{tree}`], h.origin)
+            const moved = await git(
+              ['commit-tree', tree, '-p', betaHead, '-m', 'unlanded source movement'],
+              h.origin,
+            )
+            await git(['update-ref', `refs/heads/${beta.branch}`, moved], h.origin)
+            await h.dispatcher.tick()
+            const contribution = reduceBuild(await h.events(beta.slug)).nodeRestack?.contribution
+            expect(contribution?.head).toBe(betaHead)
+            expect(contribution?.identities).not.toContain(`foreign:${moved}`)
+            expect(contribution?.identities).toContain(`build:${(await record('SECOND'))!.slug}`)
+          }
+        }
+        if (restacked) {
+          await h.dispatcher.tick()
+          const { git } = await import('./harness')
+          await git(['commit', '--allow-empty', '-m', 'unrelated root advancement'], h.origin)
+          for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+          const beta = (await record('B'))!
+          const alpha = (await record('A'))!
+          const landing = reduceBuild(await h.events(beta.slug)).mergedSha!
+          const alphaHead = await h.forgeAdapter.remoteBranchSha!(alpha.branch!)
+          // No eager replay: the unchanged contribution still includes its landing.
+          expect((await git(['rev-list', alphaHead], h.origin)).split('\n')).toContain(landing)
+          expect(await record('DEP')).toBeUndefined()
+          await h.tickets.transition('DEP', 'Ready')
+          h.clock.advance(60_000)
+        }
+        if (route === 'root' || route === 'node-root') {
+          await h.dispatcher.tick()
+          expect(await record('DEP')).toBeUndefined()
+          const alpha = (await record('A'))!
+          const alphaState = reduceBuild(await h.events(alpha.slug))
+          expect(alphaState.pr).toBeDefined()
+          await h.forgeAdapter.squashMerge(h.origin, alphaState.pr!.number, alphaState.pr!.headSha)
+        }
+        for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+        expect(await record('DEP')).toBeDefined()
+      } finally {
+        await h.cleanup()
       }
-      for (let i = 0; i < 3; i++) await h.dispatcher.tick()
-      expect(await record('DEP')).toBeDefined()
-    } finally {
-      await h.cleanup()
-    }
-  })
+    },
+    timeout,
+  )
 }
 
 for (const trailerFlag of [undefined, false]) {
@@ -483,4 +495,6 @@ for (const saturated of [false, true])
     } finally {
       await h.cleanup()
     }
-  })
+    // Real-Git queued-path refresh took 5.67s in the 4-vCPU sandbox alongside
+    // the unit suite; retain both capacity states and all presence assertions.
+  }, 15_000)

@@ -2001,47 +2001,59 @@ describe('abBuildStatus', () => {
   })
 
   test('accepts a differently located checkout of the same origin (the sandbox guest)', async () => {
-    const store = new MemoryBuildStore({ clock: steppingClock() })
-    await store.createBuild({
-      slug: 'guest',
-      repo: OTHER_REPO,
-      repoOrigin: 'https://github.com/acme/app',
-    })
-    const out: string[] = []
-    await abBuildStatus({
-      targetRepo: '/vercel/sandbox/workspace',
-      env: {},
-      exec: guestExec('/vercel/sandbox/workspace', 'git@github.com:acme/app.git'),
-      stdout: (line) => out.push(line),
-      openStore: () => store,
-      now: () => NOW,
-      slug: 'guest',
-    })
-    expect(out.join('\n')).toContain('build guest')
+    const guest = await mkdtemp(join(tmpdir(), 'ab-status-guest-'))
+    try {
+      await writeFile(join(guest, 'autobuild.toml'), MINIMAL_CONFIG)
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      await store.createBuild({
+        slug: 'guest',
+        repo: OTHER_REPO,
+        repoOrigin: 'https://github.com/acme/app',
+      })
+      const out: string[] = []
+      await abBuildStatus({
+        targetRepo: guest,
+        env: {},
+        exec: guestExec(guest, 'git@github.com:acme/app.git'),
+        stdout: (line) => out.push(line),
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'guest',
+      })
+      expect(out.join('\n')).toContain('build guest')
+    } finally {
+      await rm(guest, { recursive: true, force: true })
+    }
   })
 
   test('a different origin, or a legacy record without one, is still foreign on path mismatch', async () => {
-    const store = new MemoryBuildStore({ clock: steppingClock() })
-    await store.createBuild({
-      slug: 'foreign-origin',
-      repo: OTHER_REPO,
-      repoOrigin: 'https://github.com/other/app',
-    })
-    await store.createBuild({ slug: 'legacy', repo: OTHER_REPO })
-    for (const slug of ['foreign-origin', 'legacy']) {
-      await expect(
-        abBuildStatus({
-          targetRepo: '/vercel/sandbox/workspace',
-          env: {},
-          exec: guestExec('/vercel/sandbox/workspace', 'https://github.com/acme/app'),
-          stdout: () => {},
-          openStore: () => store,
-          now: () => NOW,
-          slug,
-        }),
-      ).rejects.toThrow(
-        `build "${slug}" belongs to repository "${OTHER_REPO}", not "https://github.com/acme/app"`,
-      )
+    const guest = await mkdtemp(join(tmpdir(), 'ab-status-guest-'))
+    try {
+      await writeFile(join(guest, 'autobuild.toml'), MINIMAL_CONFIG)
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      await store.createBuild({
+        slug: 'foreign-origin',
+        repo: OTHER_REPO,
+        repoOrigin: 'https://github.com/other/app',
+      })
+      await store.createBuild({ slug: 'legacy', repo: OTHER_REPO })
+      for (const slug of ['foreign-origin', 'legacy']) {
+        await expect(
+          abBuildStatus({
+            targetRepo: guest,
+            env: {},
+            exec: guestExec(guest, 'https://github.com/acme/app'),
+            stdout: () => {},
+            openStore: () => store,
+            now: () => NOW,
+            slug,
+          }),
+        ).rejects.toThrow(
+          `build "${slug}" belongs to repository "${OTHER_REPO}", not "https://github.com/acme/app"`,
+        )
+      }
+    } finally {
+      await rm(guest, { recursive: true, force: true })
     }
   })
 

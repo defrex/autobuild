@@ -1,3 +1,7 @@
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseBuildConfigMetadata,
+} from '../packages/core/src/processes/build-execution-state'
 import { verifyStagesCapture } from './verify-stages-capture'
 import { reportIntegrationFailures } from '../packages/core/src/kernel/integration-attention'
 import { rollbackCapture, ROLLBACK_AT } from './rollback-capture'
@@ -1702,6 +1706,23 @@ async function capturePaint(
   harness: E2eHarness,
   spec: FrameSpec,
 ): Promise<{ lines: string[]; model: DashboardModel }> {
+  // Live dashboards may paint before their asynchronous metadata enrichment.
+  // Freeze the scripted fixture's pinned provenance before this single-pass
+  // capture, rather than letting the final paint depend on enrichment timing.
+  const pipelineMetadata = new Map(
+    await Promise.all(
+      (await harness.store.listBuildsForRepo(harness.origin)).map(async (record) => {
+        const state = (await readBuildFacts(harness.store, record.slug)).value.state
+        const pin = state.verify.configPin
+        const artifact = await harness.store.getArtifact(
+          record.slug,
+          pin?.artifact.kind ?? BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+          pin?.artifact.rev,
+        )
+        return [record.slug, artifact === null ? {} : parseBuildConfigMetadata(artifact)] as const
+      }),
+    ),
+  )
   const terminal = new CaptureTerminal(spec.columns, spec.rows)
   const stderr: string[] = []
   let captured: string[] | undefined
@@ -1780,15 +1801,20 @@ async function capturePaint(
         ...(spec.selection ? { selection: spec.selection } : {}),
         // Runtime commits include generated fixture bytes; keep their visible
         // provenance stable just like the scripted clock and repository name.
-        builds: sourceModel.builds.map((build) => ({
-          ...build,
-          ...(spec.nativeSessions && build.slug === spec.detail?.slug
-            ? { sessions: nativeSessionCapture() }
-            : {}),
-          ...(build.pipelineSource
-            ? { pipelineSource: { ...build.pipelineSource, commit: 'capture-source' } }
-            : {}),
-        })),
+        builds: sourceModel.builds.map((build) => {
+          const metadata = pipelineMetadata.get(build.slug)
+          const pipelineSource = metadata ? metadata.pipelineSource : build.pipelineSource
+          return {
+            ...build,
+            ...(metadata ? { effectiveConfigRev: metadata.revision } : {}),
+            pipelineSource: pipelineSource
+              ? { ...pipelineSource, commit: 'capture-source' }
+              : undefined,
+            ...(spec.nativeSessions && build.slug === spec.detail?.slug
+              ? { sessions: nativeSessionCapture() }
+              : {}),
+          }
+        }),
         ...(spec.standby !== undefined ? { standby: spec.standby } : {}),
         ...(spec.availableUpgrade !== undefined ? { availableUpgrade: spec.availableUpgrade } : {}),
         ...(spec.forgeReadiness
