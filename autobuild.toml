@@ -65,13 +65,13 @@ credentialEnv = "CHATGPT_ACCESS_TOKEN"
 # after a sandbox rehydrate; the rest are referenced by name from check steps.
 [commands]
 setup = "bun install"
-lint = "bun run check"
-typecheck = "bun run typecheck"
-test = "bun run test"
-build = "bun run check:build"
+lint = "./scripts/verify-bun.sh bun run check"
+typecheck = "./scripts/verify-bun.sh bun run typecheck"
+test = "./scripts/verify-bun.sh bun run test"
+build = "./scripts/verify-bun.sh bun run check:build"
 # Integration tests need a real PostgreSQL; the sandbox's `postgres`
 # provisioning step installs it, and a local run uses the host's own.
-test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun run test:integration"
+test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' ./scripts/verify-bun.sh bun run test:integration"
 
 # The configured universe and stage order of verification. Members of a stage
 # run concurrently; every member must pass or skip before the next stage starts.
