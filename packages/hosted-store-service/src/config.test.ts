@@ -20,7 +20,7 @@ describe('hosted store configuration', () => {
     const config = parseHostedStoreEnv(valid)
     expect(config.hostname).toBe('0.0.0.0')
     expect(config.port).toBe(3000)
-    expect(HOSTED_ARTIFACT_MAX_BYTES).toBe(1024 * 1024)
+    expect(HOSTED_ARTIFACT_MAX_BYTES).toBe(2.5 * 1024 * 1024)
     expect(HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES).toBe(4 * 1024 * 1024)
   })
 

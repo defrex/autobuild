@@ -111,7 +111,7 @@ workspace validates its environment,
 serves health without touching persistence, and lazily retains one
 `openPostgresBuildStoreFromEnv` promise per warm process. Its Fetch handler has
 no Vercel branch; the package's `server.ts` is the sole `Bun.serve()` composition point.
-The fixed 1 MiB decoded artifact policy is enforced before backing mutation.
+The fixed 2.5 MiB decoded artifact policy is enforced before backing mutation.
 The `ab-hosted-store` binary signs admin or build/session tokens offline from
 `AB_STORE_SECRET`; the running service exposes no mint endpoint. Machine routes
 and later server-session human routes intentionally share one deployment.

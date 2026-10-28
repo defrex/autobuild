@@ -1,7 +1,12 @@
 import { parsePostgresStoreEnv, type PostgresStoreConfig } from '@defrex/autobuild-postgres-store'
 
 export type HostedStoreEnv = Record<string, string | undefined>
-export const HOSTED_ARTIFACT_MAX_BYTES = 1024 * 1024
+/** Decoded bytes per build artifact. Artifacts travel inline as base64 JSON,
+ * so this stays under Vercel's 4.5 MB function payload cap
+ * (https://vercel.com/docs/functions/limitations): 2.5 MiB encodes to about
+ * 3.5 MB. It admits full-page website and dashboard capture frames, which
+ * reached 2.3 MB on 2026-10-28. */
+export const HOSTED_ARTIFACT_MAX_BYTES = 2.5 * 1024 * 1024
 /** The largest ticket-asset request or response body the hosted deployment
  * carries: under Vercel's 4.5 MB function payload cap
  * (https://vercel.com/docs/functions/limitations). The effective per-asset
