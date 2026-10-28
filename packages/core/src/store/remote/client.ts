@@ -792,7 +792,12 @@ export class RemoteBuildStore implements BuildStore {
     const failure = diagnoseReducerValue(request.reducer, result.value)
     if (failure) fail(`invalid finished value at ${failure.path}: expected ${failure.expected}`)
     const identity = response.headers.get(CATALOG_IDENTITY_HEADER)
-    return { ...result, ...(identity === null ? {} : { catalogIdentity: identity }) }
+    return {
+      version: result.version,
+      cursor: result.cursor,
+      value: result.value as ReducerValue['value'],
+      ...(identity === null ? {} : { catalogIdentity: identity }),
+    }
   }
 
   private snapshotPath(scope: SnapshotScope, reducer: string): string {
