@@ -4,6 +4,8 @@ import { cachedRuntime } from '../packages/core/src/cli/dispatch-runtime-cache'
 import { distributionRoot } from '../packages/core/src/distribution'
 import {
   consumeGenerationMarker,
+  consumeUpgradeCondition,
+  DISPATCH_CONDITIONAL_ENV,
   GENERATION_EXITS,
   DISPATCH_LAUNCH_CONTEXT_ENV,
 } from '../packages/core/src/cli/dispatch-launch-contract'
@@ -12,12 +14,16 @@ let code: number = GENERATION_EXITS.failed
 const readerMode = process.argv[2]?.startsWith('--read-') ?? false
 let presentationOwner = process.argv[2] !== '--preflight'
 try {
+  const condition =
+    process.argv[2] === '--read-upgrade' ? consumeUpgradeCondition(process.env) : undefined
+  delete process.env[DISPATCH_CONDITIONAL_ENV]
   const launch = consumeGenerationMarker(process.env, distributionRoot())
   if (!(await cachedRuntime(launch.runtimeRoot)))
     throw new Error('dispatcher generation requires a completed cached runtime')
   const { loadDotEnv } = await import('../packages/core/src/cli/dotenv')
   const { join } = await import('node:path')
   loadDotEnv(join(launch.checkout, '.env'), process.env)
+  delete process.env[DISPATCH_CONDITIONAL_ENV]
   const { readHandoff } = await import('../packages/core/src/cli/dispatch-handoff')
   if (process.argv[2] === '--read-journal') {
     const { readGenerationJournal } = await import('../packages/core/src/cli/dispatch-handoff')
@@ -34,7 +40,9 @@ try {
   if (process.argv[2] === '--read-upgrade') {
     const { readUpgradeProjection } = await import('../packages/core/src/cli/dispatch-handoff')
     console.log(
-      JSON.stringify(await readUpgradeProjection(launch, process.argv.slice(3), process.env)),
+      JSON.stringify(
+        await readUpgradeProjection(launch, process.argv.slice(3), process.env, { condition }),
+      ),
     )
     process.exit(0)
   }

@@ -437,3 +437,230 @@ for (const invalid of ['version', 'value'] as const) {
     }
   }, 30_000)
 }
+test('conditional helpers refresh durable facts and revalidate target files without journal reads', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { readUpgradeProjection } = await import('./dispatch-handoff')
+  const { conditionalUpgradeClient } = await import('./dispatch-launch-contract')
+  const repo = await mkdtemp(join(tmpdir(), 'ab-conditional-handoff-'))
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const cacheId = `2.0.0-${'c'.repeat(64)}`
+  const root = join(repo, '.autobuild/runtime', cacheId, 'distribution')
+  const runtime = {
+    version: '1.0.0',
+    commit: 'unknown',
+    source: { kind: 'package' as const, location: '/old' },
+  }
+  const handoff = {
+    run: 'old',
+    lineage: 'launcher',
+    correlation: 'h',
+    from: runtime,
+    to: { ...runtime, version: '2.0.0' },
+    root,
+    cacheId,
+    target: { mode: 'installed' as const, key: 'two', source: '/install' },
+  }
+  const launch = {
+    version: 1 as const,
+    runtimeRoot: '/old',
+    checkout: repo,
+    run: 'old',
+    lineage: 'launcher',
+    journal: { repo, storeRef: '/memory' },
+  }
+  const client = conditionalUpgradeClient()
+  const calls: string[] = []
+  let injectAppend = false
+  let queryIdentity = 'reader'
+  const check = () =>
+    client(queryIdentity, (condition) =>
+      readUpgradeProjection(
+        launch,
+        ['dispatch'],
+        {},
+        {
+          condition,
+          openStore: () =>
+            new Proxy(store, {
+              get(target, key) {
+                if (key === 'close') return async () => {}
+                const value = Reflect.get(target, key, target)
+                if (typeof value !== 'function') return value
+                return async (...args: unknown[]) => {
+                  calls.push(String(key))
+                  const result = await value.apply(target, args)
+                  if (key === 'getRepoChangePosition' && injectAppend) {
+                    injectAppend = false
+                    await store.appendRepo(repo, {
+                      actor: DISPATCHER,
+                      type: 'dispatcher.target-prepared',
+                      payload: handoff,
+                    })
+                  }
+                  return result
+                }
+              },
+            }),
+        },
+      ),
+    )
+  expect((await check()).handoff).toBeNull()
+  // An append after sampling cannot be acknowledged by this older position.
+  injectAppend = true
+  queryIdentity = 'fresh-reader'
+  expect((await check()).handoff).toBeNull()
+  calls.length = 0
+  expect((await check()).handoff).toBeNull()
+  expect(calls).toContain('getReducerValue')
+  await mkdir(root, { recursive: true })
+  await writeFile(join(root, 'tsconfig.json'), '{}\n')
+  const writeIdentity = (id: string) =>
+    writeFile(
+      join(dirname(root), 'runtime.json'),
+      JSON.stringify({ version: 1, id, root, digest: 'c'.repeat(64) }),
+    )
+  await writeIdentity(cacheId)
+  calls.length = 0
+  expect((await check()).handoff).toEqual(handoff)
+  expect(calls).toEqual(['getRepoChangePosition'])
+  await writeIdentity('wrong')
+  calls.length = 0
+  await expect(check()).rejects.toThrow('invalid runtime metadata')
+  expect(calls).toEqual(['getRepoChangePosition'])
+  await writeIdentity(cacheId)
+  expect((await check()).handoff).toEqual(handoff)
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.yield-requested',
+    payload: { ...handoff, successor: 'new', mode: 'drain', evidence: 'compatible' },
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.handoff-started',
+    payload: {
+      ...handoff,
+      successor: 'new',
+      mode: 'drain',
+      startedAt: new Date().toISOString(),
+      deadline: new Date(Date.now() + 60_000).toISOString(),
+      builds: [],
+    },
+  })
+  expect((await check()).accepted).toBe(true)
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.terminal-released',
+    payload: handoff,
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.takeover',
+    payload: { ...handoff, successor: 'new' },
+  })
+  expect((await check()).takeover).toBe(true)
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.stop-requested',
+    payload: { run: 'old', signal: 'SIGINT' },
+  })
+  expect((await check()).handoff).toBeNull()
+})
+
+test('conditional rollback acknowledgement follows local retention on an unchanged position', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { readUpgradeProjection } = await import('./dispatch-handoff')
+  const { conditionalUpgradeClient } = await import('./dispatch-launch-contract')
+  const { syncRollbackRetention } = await import('./dispatch-runtime-use')
+  const repo = await mkdtemp(join(tmpdir(), 'ab-conditional-rollback-'))
+  const cache = join(repo, '.autobuild/runtime')
+  const cacheId = `2.0.0-${'d'.repeat(64)}`
+  const root = join(cache, cacheId, 'distribution')
+  await mkdir(root, { recursive: true })
+  await writeFile(join(root, 'tsconfig.json'), '{}\n')
+  await writeFile(
+    join(dirname(root), 'runtime.json'),
+    JSON.stringify({ version: 1, id: cacheId, root, digest: 'd'.repeat(64) }),
+  )
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const runtime = {
+    version: '1.0.0',
+    commit: 'unknown',
+    source: { kind: 'package' as const, location: '/old' },
+  }
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.runtime-rolled-back',
+    payload: {
+      correlation: 'rollback',
+      run: 'restored',
+      lineage: 'launcher',
+      predecessor: 'old',
+      successor: 'new',
+      handoff: 'h',
+      takeoverAt: new Date().toISOString(),
+      failures: 3,
+      failed: { ...runtime, version: '2.0.0' },
+      restored: runtime,
+      failedRoot: root,
+      restoredRoot: '/old',
+      target: { mode: 'installed', key: 'two', source: '/install' },
+      reason: 'fixture',
+    },
+  })
+  const launch = {
+    version: 1 as const,
+    runtimeRoot: '/old',
+    checkout: repo,
+    run: 'restored',
+    lineage: 'launcher',
+    journal: { repo, storeRef: '/memory' },
+    rollback: {
+      version: 1 as const,
+      correlation: 'rollback',
+      lineage: 'launcher',
+      predecessor: 'old',
+      successor: 'new',
+      handoff: 'h',
+      takeoverAt: new Date().toISOString(),
+      failures: 3 as const,
+      failed: { root, cacheId },
+      restored: { root: '/old', cacheId: 'old' },
+    },
+  }
+  const client = conditionalUpgradeClient()
+  let reads = 0
+  const check = () =>
+    client('rollback', (condition) =>
+      readUpgradeProjection(
+        launch,
+        ['dispatch'],
+        {},
+        {
+          condition,
+          openStore: () =>
+            new Proxy(store, {
+              get(target, key) {
+                if (key === 'close') return async () => {}
+                const value = Reflect.get(target, key, target)
+                if (typeof value !== 'function') return value
+                return (...args: unknown[]) => {
+                  reads++
+                  return value.apply(target, args)
+                }
+              },
+            }),
+        },
+      ),
+    )
+  expect((await check()).rollbackRetained).toBe(false)
+  syncRollbackRetention(cache, 'launcher', root)
+  reads = 0
+  expect((await check()).rollbackRetained).toBe(true)
+  expect(reads).toBe(1)
+  syncRollbackRetention(cache, 'launcher')
+  reads = 0
+  expect((await check()).rollbackRetained).toBe(false)
+  expect(reads).toBe(1)
+})

@@ -229,3 +229,125 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
   expect(metrics.rows - before.rows).toBe(1)
   expect(metrics.state - before.state).toBe(0)
 }
+
+/** Script a minute at both launcher cadences using the real runtime reader and
+ * launcher cache. Each helper gets a fresh facade; private reads use that same
+ * instrumented receiver rather than escaping into an uncounted reducer. */
+export async function upgradeReadBudget(store: BuildStore): Promise<void> {
+  const { readUpgradeProjection } = await import('../cli/dispatch-handoff')
+  const { conditionalUpgradeClient } = await import('../cli/dispatch-launch-contract')
+  for (const length of [100, 10_000]) {
+    const repo = `/upgrade-budget-${length}`
+    await store.ensureRepo(repo)
+    for (let i = 0; i < length; i++)
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+    const metrics = { position: 0, metadata: 0, reducer: 0, events: 0, rows: 0 }
+    const launch = {
+      version: 1 as const,
+      runtimeRoot: '/runtime',
+      checkout: repo,
+      journal: { repo, storeRef: '/memory' },
+      run: 'budget',
+      lineage: 'budget',
+    }
+    const client = conditionalUpgradeClient()
+    const check = () =>
+      client(repo, (condition) =>
+        readUpgradeProjection(
+          launch,
+          ['dispatch'],
+          {},
+          {
+            condition,
+            openStore: () =>
+              new Proxy(store, {
+                get(target, key, receiver) {
+                  if (key === 'close') return async () => {}
+                  // Memory reducer storage reads bypass public getRepoEvents. Count
+                  // the actual sliced rows at that private boundary as well.
+                  if (key === 'repoState')
+                    return (...args: unknown[]) => {
+                      const state = Reflect.get(target, key).apply(receiver, args)
+                      return new Proxy(state, {
+                        get(state, field) {
+                          const value = Reflect.get(state, field)
+                          if (field !== 'events') return value
+                          return new Proxy(value, {
+                            get(events, method) {
+                              if (method === 'slice')
+                                return (since: number, through: number) => {
+                                  const rows = events.slice(since, through)
+                                  metrics.events++
+                                  metrics.rows += rows.length
+                                  return rows
+                                }
+                              return Reflect.get(events, method)
+                            },
+                          })
+                        },
+                      })
+                    }
+                  const value = Reflect.get(target, key, receiver)
+                  if (typeof value !== 'function') return value
+                  if (typeof key !== 'string' || !key.startsWith('get')) return value.bind(receiver)
+                  return async (...args: unknown[]) => {
+                    // The queried run has not started. No candidate means no
+                    // historical per-run reconstruction, even at bootstrap.
+                    if (key === 'getReducerValue')
+                      expect((args[1] as { reducer: string }).reducer).not.toBe(
+                        'dispatcherRunFacts',
+                      )
+                    if (key === 'getRepoChangePosition') metrics.position++
+                    else if (key === 'getReducerValue' || key === 'getReducerSnapshot')
+                      metrics.reducer++
+                    else if (key === 'getRepoEvents' || key === 'getRepoStateEvents')
+                      metrics.events++
+                    else if (typeof key === 'string' && key.startsWith('get')) metrics.metadata++
+                    const result = await value.apply(receiver, args)
+                    if (
+                      (key === 'getRepoEvents' || key === 'getRepoStateEvents') &&
+                      Array.isArray(result)
+                    )
+                      metrics.rows += result.length
+                    return result
+                  }
+                },
+              }),
+          },
+        ),
+      )
+    // Bootstrap is explicitly measured separately from the idle bound.
+    await check()
+    expect(metrics.position).toBe(1)
+    expect(metrics.metadata).toBeGreaterThan(0)
+    expect(metrics.reducer).toBeGreaterThan(0)
+    expect(metrics.rows).toBeGreaterThanOrEqual(length)
+    for (const interval of [1_000, 250]) {
+      for (const key of Object.keys(metrics) as (keyof typeof metrics)[]) metrics[key] = 0
+      let now = 0
+      while (now < 60_000) {
+        await check()
+        now += interval
+      }
+      expect(metrics).toEqual({
+        position: 60_000 / interval,
+        metadata: 0,
+        reducer: 0,
+        events: 0,
+        rows: 0,
+      })
+    }
+    await store.appendRepo(repo, {
+      actor: humanActor('budget'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+    metrics.reducer = 0
+    await check()
+    expect(metrics.reducer).toBeGreaterThan(0)
+  }
+}

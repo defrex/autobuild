@@ -482,3 +482,8 @@ test('handoff seed, deadline delta and restored completion agree with the full j
   await restored.refresh()
   expect(projectHandoffs(dispatchUpgradeReducer.reduce(restored.events))).toEqual(full)
 })
+
+test('in-memory launcher idle reads cost one position request at both cadences and journal lengths', async () => {
+  const { upgradeReadBudget } = await import('../testing/dispatch-read-budget')
+  await upgradeReadBudget(new MemoryBuildStore())
+})
