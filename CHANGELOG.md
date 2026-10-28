@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## v1.2.0 — 2026-10-28
+
+This release builds out hosted projects. Hosted dispatcher ticks can now use encrypted project secrets, which operators manage from a new write-only Settings view, and they can delete a hosted project along with its remote state. Agent runtimes can now bill through subscription accounts, including ChatGPT subscriptions with single-owner token refresh, and connection links now open directly and require an organization assignment. Much of the release limits how much database reading recurring work can do: server-reduced answers are now canonical, idle hot-upgrade probes cost one store request, project liveness is checked once per request, ticket listings use native paging where the source supports it, and the hosted cron dispatcher's credentials and storage are now bounded. Other changes document the hosted protocols, make this repository's verify suite pass in Vercel Sandbox, and capture confirmation dialogs as modals with their backdrop.
+
+- [#778](https://github.com/defrex/autobuild/pull/778) — Share fresh provider lookups when filing harvest ledger entries
+- [#777](https://github.com/defrex/autobuild/pull/777) — Bound hosted cron dispatcher credentials and storage
+- [#775](https://github.com/defrex/autobuild/pull/775) — Bound idle hot-upgrade probes to one store request
+- [#774](https://github.com/defrex/autobuild/pull/774) — Make server reducer answers canonical
+- [#773](https://github.com/defrex/autobuild/pull/773) — Check hosted project liveness once per request
+- [#772](https://github.com/defrex/autobuild/pull/772) — Page ticket listings natively in sources that support it
+- [#771](https://github.com/defrex/autobuild/pull/771) — Capture confirmation dialogs as modals with their backdrop
+- [#770](https://github.com/defrex/autobuild/pull/770) — Add Settings for write-only project secret management
+- [#769](https://github.com/defrex/autobuild/pull/769) — Make this repository's verify suite green in Vercel Sandbox
+- [#768](https://github.com/defrex/autobuild/pull/768) — Delete hosted projects and their remote state from Projects
+- [#767](https://github.com/defrex/autobuild/pull/767) — Add ChatGPT subscription accounts with single-owner refresh
+- [#766](https://github.com/defrex/autobuild/pull/766) — Open connection links directly and require organization assignment
+- [#765](https://github.com/defrex/autobuild/pull/765) — Add subscription billing accounts for agent runtimes
+- [#764](https://github.com/defrex/autobuild/pull/764) — Add encrypted project secrets to hosted dispatcher ticks
+- [#763](https://github.com/defrex/autobuild/pull/763) — Document hosted protocols and remove server deployment guidance
+
 ## v1.1.0 — 2026-10-26
 
 This release runs verify steps in concurrent stages with opt-in fail-fast, re-pins verify configuration each cycle, and protects concurrent stages through effective config deposits. Merge terminology now replaces landing everywhere: `ab merge`, `[[merge]]` rules, MCP `merges.list` and `ab wait --for node-merged` are the new names, the old landing names still work as deprecated aliases, and `ab upgrade` migrates the config key. Each agent session now gets its own context directory under `.ab/`, so repository-authored skills must read hydrated inputs from `$AB_CONTEXT_DIR` instead of hardcoded `.ab/<file>` paths. The hosted side adds organization-scoped access with super-user and access management pages, the web dashboard moves to ANSI in light and dark, and reliability improves through transient-failure retries for restack and reconcile, orderly dispatcher handoffs no longer reported as lost, the embedded hosted operator runner removed, and an end to leaked temporary directories.
