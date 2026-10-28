@@ -87,7 +87,7 @@ describe('plugin SDK package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.8.0')
+    expect(PLUGIN_API_VERSION).toBe('1.9.0')
     for (const symbol of [
       describeAgentRunnerContract,
       describeTicketSourceContract,
@@ -304,16 +304,22 @@ describe('plugin SDK package surface', () => {
           FakeTicketSource,
           ForgeFailure, isForgeFailure,
           type ForgeFailureDetails, type ForgeRequestObserver, type ForgeRequestContext,
+          type TicketCriteria, type TicketPage, type TicketPageListing, type TicketSource,
           PLUGIN_API_VERSION,
           describeTicketSourceContract,
         } from '@defrex/autobuild/plugin-sdk'
 
+        const criteria: TicketCriteria = { state: 'Ready', labels: ['web'] }
+        const page: TicketPage = { limit: 0, offset: 2, order: 'newest' }
+        const listing: TicketPageListing = { tickets: [], diagnostics: [], total: 5 }
+        const native: NonNullable<TicketSource['listPage']> = async (_criteria, _page) => listing
+        if ((await native(criteria, page)).total !== 5) throw new Error('page types')
         const details: ForgeFailureDetails = { kind: 'rate-limited', resetAt: '2026-10-20T00:00:00.000Z' }
         const context: ForgeRequestContext = { build: 'fixture' }
         const observer: ForgeRequestObserver = (request) => { if (request.build !== context.build) throw new Error('context') }
         observer(context)
         if (!isForgeFailure(new ForgeFailure('limit', details))) throw new Error('missing runtime failure export')
-        if (PLUGIN_API_VERSION !== '1.8.0') {
+        if (PLUGIN_API_VERSION !== '1.9.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
         }
         if (typeof FakeTicketSource !== 'function') {
