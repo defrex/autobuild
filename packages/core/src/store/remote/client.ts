@@ -579,7 +579,9 @@ export class RemoteBuildStore implements BuildStore {
         ((response.status === 501 && body.data.kind === 'unsupported-operation') ||
           (response.status === 404 &&
             body.data.kind === 'not-found' &&
-            body.data.error === 'no route: GET /builds/:slug/artifact-meta'))
+            (body.data.error === 'no route: GET /builds/:slug/artifact-meta' ||
+              body.data.error ===
+                `no route: GET ${new URL(`${this.base}${this.buildPath(slug)}/artifact-meta`).pathname}`)))
       ) {
         this.artifactMetaUnsupported = true
         throw new ArtifactMetaUnsupportedError()

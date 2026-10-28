@@ -363,9 +363,12 @@ authorization and project scope as artifact reads. Unsupported backings return
 `501 {kind: "unsupported-operation", error: "latest artifact metadata is unsupported"}`.
 
 This additive route does not change the protocol identity. Older servers
-explicitly answer `404 {kind: "not-found", error: "no route: GET /builds/:slug/artifact-meta"}`.
-Only that precise unsupported-route response or the explicit 501 operation
-response disables metadata probing for the lifetime of a remote client.
+answer `404 {kind: "not-found", error: "no route: GET /builds/:slug/artifact-meta"}`
+from the store router, or the same envelope with the actual requested URL
+pathname from the hosted service router. Only these explicit route-miss responses
+(the literal route pattern or the exact requested metadata pathname) or the
+explicit 501 operation response disable metadata probing for the lifetime of a
+remote client. An unknown-build 404 remains a failure.
 The dispatcher then uses ordinary full artifact reads. Authentication,
 transport, malformed responses and other server errors remain failures; they
 never trigger event downloads or reconstruction of server-reduced values.

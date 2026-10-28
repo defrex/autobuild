@@ -1385,8 +1385,9 @@ describe('latest artifact metadata compatibility', () => {
   for (const [status, kind, error] of [
     [501, 'unsupported-operation', 'latest artifact metadata is unsupported'],
     [404, 'not-found', 'no route: GET /builds/:slug/artifact-meta'],
+    [404, 'not-found', 'no route: GET /builds/build/artifact-meta'],
   ] as const) {
-    test(`remembers explicit unsupported response ${status}`, async () => {
+    test(`remembers explicit unsupported response ${status}: ${error}`, async () => {
       let calls = 0
       const store = new RemoteBuildStore({
         url: 'http://store.test',
@@ -1403,10 +1404,33 @@ describe('latest artifact metadata compatibility', () => {
       expect(calls).toBe(1)
     })
   }
+  test('recognizes hosted route misses with a base pathname and encoded slug', async () => {
+    let calls = 0
+    const store = new RemoteBuildStore({
+      url: 'http://store.test/store',
+      fetchFn: (async (input: RequestInfo | URL) => {
+        calls++
+        const url = new URL(String(input))
+        expect(url.pathname).toBe('/store/builds/build%20name/artifact-meta')
+        return Response.json(
+          { kind: 'not-found', error: `no route: GET ${url.pathname}` },
+          { status: 404 },
+        )
+      }) as unknown as typeof fetch,
+    })
+    for (let i = 0; i < 3; i++) {
+      await expect(store.getLatestArtifactMeta('build name', 'pin')).rejects.toBeInstanceOf(
+        ArtifactMetaUnsupportedError,
+      )
+    }
+    expect(calls).toBe(1)
+  })
   for (const [status, body] of [
     [401, { kind: 'auth', error: 'denied' }],
     [403, { kind: 'auth', error: 'denied' }],
     [404, { kind: 'not-found', error: 'unknown build "build"' }],
+    [404, { kind: 'not-found', error: 'no route: GET /builds/build/artifacts' }],
+    [404, { kind: 'not-found', error: 'no route: GET /builds/other/artifact-meta' }],
     [500, { kind: 'internal', error: 'outage' }],
     [200, { unexpected: true }],
     [502, 'gateway'],
