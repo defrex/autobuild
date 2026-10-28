@@ -6,7 +6,6 @@ import {
 } from '../ports/runner/native-session'
 import type { NativeSessionHandle, AgentStartOpts } from '../ports/types'
 import { readRepositoryFacts } from '../store/reduced-reads'
-import { ticketIdentity } from '../ports/tickets/identity'
 import { issueTicketGrant } from '../ports/tickets/grants'
 import { delegateCredential } from '../store/remote/credentials'
 /**
@@ -1211,14 +1210,36 @@ export class HarvestRunner {
     )
     const packet = await loadScanPacket(store, repo, current.scan)
     const observations = packet.observations
-    const identity = ticketIdentity(tickets)
+    // One fresh lookup view per filing attempt, shared only by ledger and joins.
+    // Blocker refreshes retain their own authoritative boundary.
+    const lookups = new Map<string, ReturnType<typeof tickets.get>>()
+    const lookup = (id: string): ReturnType<typeof tickets.get> => {
+      let pending = lookups.get(id)
+      if (!pending) {
+        pending = tickets.get(id).then((ticket) => {
+          if (ticket?.ref.source === tickets.name) {
+            lookups.set(ticket.ref.id, Promise.resolve(ticket))
+          }
+          return ticket
+        })
+        lookups.set(id, pending)
+      }
+      return pending
+    }
+    const identity = async (ref: { source: string; id: string }): Promise<string> => {
+      const ticket =
+        ref.source === tickets.name && tickets.name === 'hosted' ? await lookup(ref.id) : null
+      return `${ref.source}:${ticket?.ref.source === ref.source ? ticket.ref.id : ref.id}`
+    }
     const knownLedger = new Map<string, (typeof packet.ledger)[number]>()
     for (const entry of packet.ledger) {
-      const current =
-        entry.ticket.source === tickets.name ? await tickets.get(entry.ticket.id) : null
-      knownLedger.set(await identity(entry.ticket), {
+      const current = entry.ticket.source === tickets.name ? await lookup(entry.ticket.id) : null
+      const ref = current?.ref.source === entry.ticket.source ? current.ref : entry.ticket
+      knownLedger.set(`${ref.source}:${ref.id}`, {
         ...entry,
-        ticket: current?.ref ?? entry.ticket,
+        ticket: ref,
+        exists: current !== null,
+        resolved: current?.resolved ?? false,
       })
     }
     const alreadyFiled = new Map(current.filed.map((entry) => [entry.proposalKey, entry]))

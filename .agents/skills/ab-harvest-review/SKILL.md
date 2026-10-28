@@ -30,7 +30,9 @@ not author proposals or touch tickets.
    - every `blockedBy` id is justified by evidence as a hard start gate;
      contextual citations, related work, and nonbinding preferences such as
      “do this later” must not become blockers, and ticket ids are never invented;
-   - joins name only an unresolved ledger proposal and resolved/missing ledger
+   - ledger lifecycle is scan-time context; filing refreshes existence and
+     resolution before allowing joins and shares that lookup with hosted alias
+     resolution. Joins name only an unresolved ledger proposal and resolved/missing ledger
      tickets are tombstones, not recreated work;
    - suppression has a concrete evidence-backed reason;
    - no proposal asks harvest to groom, ready, claim, or dispatch anything.
