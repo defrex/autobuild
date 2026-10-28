@@ -82,6 +82,11 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   claims tickets that pass the `[tickets]` ready
   gate, chooses a short immutable slug from the final conforming spec, and
   starts builds up to the top-level `capacity` bound.
+- **Failed preparation.** Durable preparation facts protect the claim-to-build
+  interval. Caught failures return tickets to Ready (invalid specs to Triage),
+  after exact build-ownership readback. Unresolved attempts stay withheld and
+  retry before intake, even at full capacity or with intake disabled. See
+  [Ticket preparation recovery](references/restacking.md#ticket-preparation-before-build-creation).
 - **Ticket assets** — files or folders attached to a ticket (see
   [Ticket assets](#ticket-assets)) are frozen into the build at claim and
   appear under `$AB_CONTEXT_DIR/assets/` in every phase, as inputs alongside the spec.

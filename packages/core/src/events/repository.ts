@@ -726,7 +726,48 @@ export const ticketMigrationEventPayloadSchemas = {
     }),
 } as const
 
+/** Durable claim-to-build preparation boundaries, independent of build streams. */
+const preparationIdentity = {
+  attempt: z.string().min(1),
+  ticket: ticketRefSchema,
+}
+export const ticketPreparationEventPayloadSchemas = {
+  'ticket-preparation.intended': z.strictObject({
+    ...preparationIdentity,
+    readyState: z.string().min(1),
+    claimedState: z.string().min(1),
+  }),
+  'ticket-preparation.claimed': z.strictObject(preparationIdentity),
+  'ticket-preparation.creation-selected': z.strictObject({
+    ...preparationIdentity,
+    slug: z.string().min(1),
+  }),
+  'ticket-preparation.failed': z.strictObject({
+    ...preparationIdentity,
+    stage: z.string().min(1),
+    claimed: z.boolean(),
+    handback: z.string().min(1),
+    error: z.string().min(1).max(4000),
+  }),
+  'ticket-preparation.recovery-failed': z.strictObject({
+    ...preparationIdentity,
+    claimed: z.boolean().optional(),
+    preparationError: z.string().min(1).max(4000).optional(),
+    error: z.string().min(1).max(4000),
+    retryAt: z.string().datetime(),
+  }),
+  'ticket-preparation.handback-selected': z.strictObject({
+    ...preparationIdentity,
+    state: z.string().min(1),
+  }),
+  'ticket-preparation.resolved': z.strictObject({
+    ...preparationIdentity,
+    outcome: z.enum(['lost-claim', 'handed-back', 'bounced', 'owned']),
+  }),
+}
+
 export const repositoryEventPayloadSchemas = {
+  ...ticketPreparationEventPayloadSchemas,
   ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
   ...changePresenceEventPayloadSchemas,
@@ -794,6 +835,14 @@ export type HarvestEventWrite<T extends HarvestEventType = HarvestEventType> =
 export const HARVEST_EVENT_TYPES = Object.keys(harvestEventPayloadSchemas) as HarvestEventType[]
 
 const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
+  'ticket-preparation.intended': ['dispatcher'],
+  'ticket-preparation.claimed': ['dispatcher'],
+  'ticket-preparation.creation-selected': ['dispatcher'],
+  'ticket-preparation.failed': ['dispatcher'],
+  'ticket-preparation.recovery-failed': ['dispatcher'],
+  'ticket-preparation.handback-selected': ['dispatcher'],
+  'ticket-preparation.resolved': ['dispatcher'],
+
   'tickets.migration-recorded': ['human'],
   'change-presence.observed': ['dispatcher', 'kernel'],
   'harvest.pause-requested': ['human'],

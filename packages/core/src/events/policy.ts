@@ -153,6 +153,14 @@ export const buildEventPolicy = {
   'phase.deferral-escalated': 'decisive',
 } satisfies Record<EventType, FactClassification>
 export const repositoryEventPolicy = {
+  'ticket-preparation.intended': 'decisive',
+  'ticket-preparation.claimed': 'decisive',
+  'ticket-preparation.creation-selected': 'decisive',
+  'ticket-preparation.failed': 'decisive',
+  'ticket-preparation.recovery-failed': 'decisive',
+  'ticket-preparation.handback-selected': 'decisive',
+  'ticket-preparation.resolved': 'decisive',
+
   'tickets.migration-recorded': 'decisive',
   'change-presence.observed': 'decisive',
   'harvest.pause-requested': 'decisive',

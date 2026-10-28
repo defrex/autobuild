@@ -550,3 +550,42 @@ export async function catalogSkewReadBudget(opts: {
   }
   expect(opts.eventRows()).toBe(0)
 }
+
+/** In-memory history seeding for preparation budgets; never used as a recurring read. */
+export async function seedPreparationHistory(store: BuildStore, repo: string, facts: number) {
+  await store.ensureRepo(repo)
+  for (let i = 0; i < facts / 2; i++) {
+    const ticket = { source: 'fake', id: `old-${i}` }
+    const attempt = `historical-${i}`
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: { attempt, ticket, readyState: 'Ready', claimedState: 'Doing' },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: { attempt, ticket, outcome: 'handed-back' },
+    })
+  }
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'ticket-preparation.intended',
+    payload: {
+      attempt: 'pending',
+      ticket: { source: 'fake', id: 'pending' },
+      readyState: 'Ready',
+      claimedState: 'Doing',
+    },
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'ticket-preparation.recovery-failed',
+    payload: {
+      attempt: 'pending',
+      ticket: { source: 'fake', id: 'pending' },
+      error: 'unknown claim outcome',
+      retryAt: '2099-01-01T00:00:00.000Z',
+    },
+  })
+}
