@@ -72,6 +72,15 @@ test('local SQL row budgets include adapter-internal persisted reads on fresh co
       store,
       costs,
       fresh: async () => new SqliteBuildStore({ database, blobs }),
+      seedScanHistory: async (repo, count) => {
+        database
+          .query(`WITH RECURSIVE numbers(n) AS (
+          SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n < ?
+        ) INSERT INTO repo_events(repo,seq,ts,actor,type,payload)
+          SELECT ?,n,'2026-01-01T00:00:00.000Z','{"kind":"human","user":"fixture"}',
+          'dispatcher.intake-set','{"enabled":false}' FROM numbers`)
+          .run(count, repo)
+      },
     })
   } finally {
     database.close()
