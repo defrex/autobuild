@@ -1,3 +1,4 @@
+import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import {
   operatorPresenceBodySchema,
   operatorPresenceWireSchema,
@@ -556,6 +557,36 @@ export class RemoteBuildStore implements BuildStore {
     )
     if (result === null) return null
     return { meta: result.meta, content: decodeBase64(result.contentBase64) }
+  }
+
+  private artifactMetaUnsupported = false
+
+  async getLatestArtifactMeta(slug: string, kind: string): Promise<ArtifactMeta | null> {
+    if (this.artifactMetaUnsupported) throw new ArtifactMetaUnsupportedError()
+    const response = await this.raw(
+      'GET',
+      `${this.buildPath(slug)}/artifact-meta?${new URLSearchParams({ kind })}`,
+    )
+    if (!response.ok) {
+      const body = errorBodySchema.safeParse(
+        await response
+          .clone()
+          .json()
+          .catch(() => null),
+      )
+      if (
+        body.success &&
+        ((response.status === 501 && body.data.kind === 'unsupported-operation') ||
+          (response.status === 404 &&
+            body.data.kind === 'not-found' &&
+            body.data.error === 'no route: GET /builds/:slug/artifact-meta'))
+      ) {
+        this.artifactMetaUnsupported = true
+        throw new ArtifactMetaUnsupportedError()
+      }
+      throw await this.toError(response)
+    }
+    return artifactMetaWireSchema.nullable().parse(await response.json())
   }
 
   async listArtifacts(slug: string, kind?: string): Promise<ArtifactMeta[]> {

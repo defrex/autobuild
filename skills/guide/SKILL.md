@@ -330,6 +330,12 @@ The distinctions that change an administrator's answer:
   still read the build worktree's branch-owned file. Dispatcher merge readiness,
   resume, and execution recovery use the runner's pinned commands, verify, and
   finalize configuration through the cycle capture's exact artifact revision.
+  Lease sweeps reuse at most 128 parsed effective-config pins in a disposable
+  LRU, probing the latest metadata revision on every lookup. Artifact-only
+  deposits invalidate reuse. Current facts, live settings and cycle captures
+  are recomputed; launch, resume and merge boundaries keep fresh artifact reads.
+  Restart or eviction costs a full reread. Legacy stores without metadata support
+  retain full artifact reads; invalid pins still withhold decisions and retry repair.
   At every verify-cycle entry, after restack or reconcile settles, the runner
   reads `autobuild.toml` from the execution checkout at resolved `HEAD` (including
   detached integration heads). `verify.config-captured` cites an immutable

@@ -1431,3 +1431,53 @@ test.each([...new Set([AUTOBUILD_VERSION, '1.0.0-beta.0', '1.0.0'])])(
     await verifyAuditCapability(version, protocol, true)
   },
 )
+
+describe('latest artifact metadata route', () => {
+  test('validates kind, preserves build scope, and reports unsupported backings explicitly', async () => {
+    const store = new MemoryBuildStore()
+    await store.createBuild(sampleBuildInput('meta-build'))
+    await store.createBuild(sampleBuildInput('other-build'))
+    const meta = await store.putArtifact('meta-build', { kind: 'pin', content: 'body' })
+    const server = createStoreServer({ store, secret: 'meta-secret' })
+    const token = mintToken('meta-secret', {
+      version: 1,
+      ownerAdmin: { user: 'owner' },
+      exp: Date.now() + 60_000,
+    })
+    const request = (slug: string, query: string) =>
+      server.fetch(
+        new Request(`http://store.test/builds/${slug}/artifact-meta${query}`, {
+          headers: {
+            authorization: `Bearer ${token}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          },
+        }),
+      )
+    expect(await (await request('meta-build', '?kind=pin')).json()).toEqual(meta)
+    expect(await (await request('meta-build', '?kind=missing')).json()).toBeNull()
+    for (const query of ['', '?kind=', '?kind=%20']) {
+      expect((await request('meta-build', query)).status).toBe(400)
+    }
+    expect(
+      (
+        await server.fetch(
+          new Request('http://store.test/builds/meta-build/artifact-meta?kind=pin', {
+            headers: {
+              [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+              [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            },
+          }),
+        )
+      ).status,
+    ).toBe(401)
+
+    Reflect.set(store, 'getLatestArtifactMeta', undefined)
+    const unsupported = await request('meta-build', '?kind=pin')
+    expect(unsupported.status).toBe(501)
+    expect(await unsupported.json()).toEqual({
+      kind: 'unsupported-operation',
+      error: 'latest artifact metadata is unsupported',
+    })
+  })
+})

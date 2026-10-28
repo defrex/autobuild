@@ -1,3 +1,4 @@
+import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
 import { CATALOG_IDENTITY_HEADER } from './version'
 /**
@@ -1378,4 +1379,50 @@ test('invalid digest batch fails schema validation without discovery fallback', 
   })
   await expect(client.getRepoBuildDigests('repo')).rejects.toThrow()
   expect(calls).toBe(1)
+})
+
+describe('latest artifact metadata compatibility', () => {
+  for (const [status, kind, error] of [
+    [501, 'unsupported-operation', 'latest artifact metadata is unsupported'],
+    [404, 'not-found', 'no route: GET /builds/:slug/artifact-meta'],
+  ] as const) {
+    test(`remembers explicit unsupported response ${status}`, async () => {
+      let calls = 0
+      const store = new RemoteBuildStore({
+        url: 'http://store.test',
+        fetchFn: (async () => {
+          calls++
+          return Response.json({ kind, error }, { status })
+        }) as unknown as typeof fetch,
+      })
+      for (let i = 0; i < 3; i++) {
+        await expect(store.getLatestArtifactMeta('build', 'pin')).rejects.toBeInstanceOf(
+          ArtifactMetaUnsupportedError,
+        )
+      }
+      expect(calls).toBe(1)
+    })
+  }
+  for (const [status, body] of [
+    [401, { kind: 'auth', error: 'denied' }],
+    [403, { kind: 'auth', error: 'denied' }],
+    [404, { kind: 'not-found', error: 'unknown build "build"' }],
+    [500, { kind: 'internal', error: 'outage' }],
+    [200, { unexpected: true }],
+    [502, 'gateway'],
+  ] as const) {
+    test(`does not downgrade or retain failure ${status}: ${JSON.stringify(body)}`, async () => {
+      let calls = 0
+      const store = new RemoteBuildStore({
+        url: 'http://store.test',
+        fetchFn: (async () => {
+          calls++
+          return Response.json(calls === 1 ? body : null, { status: calls === 1 ? status : 200 })
+        }) as unknown as typeof fetch,
+      })
+      await expect(store.getLatestArtifactMeta('build', 'pin')).rejects.toThrow()
+      expect(await store.getLatestArtifactMeta('build', 'pin')).toBeNull()
+      expect(calls).toBe(2)
+    })
+  }
 })

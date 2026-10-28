@@ -321,6 +321,7 @@ it to exist. An unknown build returns `404 not-found`.
 | `putReducerSnapshot` | `PUT /builds/{slug}/snapshots/{reducer}` | `{"version": int >= 1, "cursor": int >= 0, "state": JSON}`, at most 16 MiB (`413` above) | `200 {"written": boolean}`; the stored cursor never decreases, so a write at an equal or lower cursor (or an equal cursor at an equal or lower version) and one past the log's tail answer `written: false` |
 | `putArtifact` | `POST /builds/{slug}/artifacts` | artifact input | `201` + build artifact metadata |
 | `getArtifact` | `GET /builds/{slug}/artifacts?kind={kind}&rev={n}` | `kind` is required and nonempty; optional `rev` is parsed below | `200` + artifact read; an absent `rev` parameter selects the latest revision; a missing kind/revision is `200 null` |
+| `getLatestArtifactMeta?` | `GET /builds/{slug}/artifact-meta?kind={kind}` | required nonblank `kind` | `200` + latest validated artifact metadata or `null`; no blob content |
 | `listArtifacts` | `GET /builds/{slug}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
 | `claimLease` | `POST /builds/{slug}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeat` | `POST /builds/{slug}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
@@ -351,6 +352,23 @@ pass the last sequence it has processed without receiving it again. Artifact
 revisions are nonnegative; a requested revision that does not exist, including
 a negative one, produces `null`. A missing or empty `kind` on the artifact-read
 route is `400 validation`.
+
+The optional `BuildStore.getLatestArtifactMeta(slug, kind)` returns
+`Promise<ArtifactMeta | null>`, with the same unknown-build behavior as
+`getArtifact`. Implement it as a constant-size latest-revision lookup, never
+by listing revisions or loading blob content. Memory and PostgreSQL stores
+support it; PostgreSQL uses the existing `(build, kind, revision)` primary key
+in descending revision order with `LIMIT 1`. The route uses the same build
+authorization and project scope as artifact reads. Unsupported backings return
+`501 {kind: "unsupported-operation", error: "latest artifact metadata is unsupported"}`.
+
+This additive route does not change the protocol identity. Older servers
+explicitly answer `404 {kind: "not-found", error: "no route: GET /builds/:slug/artifact-meta"}`.
+Only that precise unsupported-route response or the explicit 501 operation
+response disables metadata probing for the lifetime of a remote client.
+The dispatcher then uses ordinary full artifact reads. Authentication,
+transport, malformed responses and other server errors remain failures; they
+never trigger event downloads or reconstruction of server-reduced values.
 
 The artifact-list `kind` is optional and is normally a nonempty stored kind.
 No pagination, deletion, retention, range request, or streaming endpoint is
@@ -1124,6 +1142,7 @@ Conforming servers map failures as follows:
 | `409` | `conflict` | Missing/mismatched package or protocol identity, duplicate build creation, appending to a closed stream (`stream "…" is closed`), or a backing conflict reported as already existing |
 | `413` | `validation` | Decoded artifact or serialized stream batch exceeds the configured ceiling; a ticket-asset request or response exceeds the deployment's request ceiling; the message names the ceiling |
 | `422` | `validation` | `EventValidationError` from build, repository, or session catalog validation, or a ticket-asset validation failure (including the 25 MiB limit); its message is preserved verbatim |
+| `501` | `unsupported-operation` | Optional latest artifact metadata capability is unavailable on the backing adapter |
 | `500` | `internal` | Any other unexpected backing or server failure; the thrown error message is returned |
 
 Authentication runs before resource lookup, and session authorization runs
