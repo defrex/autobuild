@@ -6417,6 +6417,94 @@ describe('Dispatcher durable supervision', () => {
     expect((await h.store.getEvents(slug)).some((e) => e.type === 'workspace.released')).toBe(false)
   })
 
+  async function seedEndedThenMissing(h: ReturnType<typeof harness>): Promise<string> {
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'foreign-1',
+        commandId: 'cmd-1',
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: {
+        instance: 'foreign-1',
+        workspaceRef: 'sandbox-g0',
+        outcome: 'completed',
+        exitCode: 0,
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'infrastructure.failed',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'launcher-2',
+        operation: 'start',
+        cause: 'missing',
+        attempt: 1,
+        retryable: true,
+        cleanupPending: true,
+        error: 'sandbox sandbox-g0 no longer exists',
+      },
+    })
+    expect(await h.store.claimLease(slug, 'launcher-2', 100)).toBe(true)
+    h.clock.advance(101)
+    return slug
+  }
+
+  test('a start that found the ended generation missing reaps and replaces it', async () => {
+    const operations: string[] = []
+    const h = harness({ workspaceProvider: remoteWorkspaceProvider(operations) })
+    const slug = await seedEndedThenMissing(h)
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+    await h.dispatcher.drainProvisioning()
+    const events = await h.store.getEvents(slug)
+    expect(events.findLast((e) => e.type === 'workspace.released')?.payload).toMatchObject({
+      ref: 'sandbox-g0',
+      reason: 'replacement',
+    })
+    expect(operations).toEqual(['provision'])
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('a blocked build whose ended generation is missing is reaped without a launch', async () => {
+    const operations: string[] = []
+    const h = harness({ workspaceProvider: remoteWorkspaceProvider(operations) })
+    const slug = await seedEndedThenMissing(h)
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc_infra',
+        phase: 'setup',
+        source: 'policy',
+        policyCause: 'infrastructure-failure-limit',
+        question: 'maxInfrastructureAttempts (3) exhausted during start',
+      },
+    })
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.drainProvisioning()
+    const events = await h.store.getEvents(slug)
+    expect(events.findLast((e) => e.type === 'workspace.released')?.payload).toMatchObject({
+      ref: 'sandbox-g0',
+      reason: 'blocked',
+    })
+    expect(operations).toEqual([])
+    expect(h.launches).toEqual([])
+  })
+
   test('a provider-proved loss falls through to the stale replacement path', async () => {
     const operations: string[] = []
     const { provider } = observingWorkspaceProvider(

@@ -4558,7 +4558,17 @@ export class Dispatcher {
       // place: the guest finished its work, the workspace is still the
       // build's, and replacing the environment would discard a healthy
       // generation. Only an unproven stale lease or a proved loss reaps.
-      let endedInPlace = facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch'
+      // A start that later found the open workspace missing is a proved loss
+      // too: the recorded end no longer vouches for an environment that is
+      // gone, and re-attaching would fail against the same ref forever.
+      const failure = state.infrastructureFailure
+      const workspaceMissing =
+        failure?.cause === 'missing' &&
+        failure.operation === 'start' &&
+        failure.workspaceRef === facts.workspace?.ref
+      let endedInPlace =
+        (facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch') &&
+        !workspaceMissing
       if (
         foreignExecution !== null &&
         foreignExecution.commandId !== undefined &&
