@@ -1,3 +1,7 @@
+import { Dispatcher } from './dispatcher'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import { FakeForge } from '../ports/forge/fake'
+import { manualClock } from '../testing/fixed'
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -13,6 +17,7 @@ import {
   artifactRef,
   harvestProposalKey,
   makeHarvestScanPacket,
+  loadScanPacket,
   scanUnclaimedObservations,
 } from './harvest'
 import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../ports/runner/fake'
@@ -137,7 +142,41 @@ async function seedOpenRun(opts: {
   )
 
   const proposals = opts.makeProposals?.(scan.observations) ?? proposalSet(scan.observations)
-  if (stage === 'started') return { run, proposals }
+  if (stage === 'started') {
+    const clock = manualClock()
+    for (let i = 0; i < 3; i++) {
+      await new Dispatcher({
+        store,
+        repo: '/repo',
+        config: config(),
+        tickets,
+        ids,
+        clock,
+        forge: new FakeForge(),
+        workspaces: new FakeWorkspaceProvider({ root: workspace, mode: 'logical' }),
+        launchRunner: async () => 'scheduled',
+        exec: async () => {
+          throw new Error('observation must not invoke git')
+        },
+      }).observeReady()
+      clock.advance(60_000)
+    }
+    const events = await store.getRepoEvents('/repo')
+    expect(
+      events.filter((event) => event.type === 'dispatcher.ticket-scan-completed'),
+    ).toHaveLength(1)
+    const started = events.find(
+      (event) => event.type === 'harvest.started' && event.payload.run === run,
+    )!
+    expect(
+      await loadScanPacket(
+        store,
+        '/repo',
+        (started.payload as { scan: { kind: string; rev: number } }).scan,
+      ),
+    ).toEqual(packet)
+    return { run, proposals }
+  }
 
   const proposalFile = join(workspace, '.ab', `${stage}-proposals.json`)
   const synthEnv = {

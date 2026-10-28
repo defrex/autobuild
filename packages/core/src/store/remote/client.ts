@@ -1,3 +1,5 @@
+import type { RepoTicketScanCheckpoint } from '../ticket-scan-checkpoint'
+import { scanCheckpointResponseSchema, scanCheckpointCasBodySchema } from './protocol'
 import {
   operatorPresenceBodySchema,
   operatorPresenceWireSchema,
@@ -1100,6 +1102,27 @@ export class RemoteBuildStore implements BuildStore {
     )
   }
 
+  async getRepoTicketScanCheckpoint(repo: string): Promise<RepoTicketScanCheckpoint | null> {
+    return this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/ticket-scan-checkpoint`,
+      scanCheckpointResponseSchema,
+    )
+  }
+  async compareAndSetRepoTicketScanCheckpoint(
+    repo: string,
+    expected: RepoTicketScanCheckpoint | null,
+    next: RepoTicketScanCheckpoint,
+  ): Promise<boolean> {
+    const body = scanCheckpointCasBodySchema.parse({ expected, next })
+    const result = await this.requestJson(
+      'POST',
+      `${this.repoPath(repo)}/ticket-scan-checkpoint`,
+      okResponseSchema,
+      body,
+    )
+    return result.ok
+  }
   async beginRepoTick(repo: string, holder: string): Promise<string | null> {
     return this.requestJson(
       'POST',
