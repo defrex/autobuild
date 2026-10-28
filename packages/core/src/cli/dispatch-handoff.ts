@@ -6,7 +6,16 @@ import { spawnExec } from '../ports/workspace/git-worktree'
 import { parseDispatchArgs } from './dispatch-args'
 import { readDispatchUpgrade, readDispatcherRunFacts } from '../store/reduced-reads'
 import { cachedRuntime } from './dispatch-runtime-cache'
-import type { GenerationLaunch } from './dispatch-launch-contract'
+import type {
+  GenerationLaunch,
+  UpgradeCondition,
+  UpgradeGuards,
+  UpgradeProjection,
+  ConditionalUpgradeResult,
+} from './dispatch-launch-contract'
+import { validChangePosition } from './dispatch-launch-contract'
+import type { UpgradeRun } from '../kernel/dispatch-upgrade'
+type DispatcherRunFacts = Awaited<ReturnType<typeof readDispatcherRunFacts>>['value']
 import type { Handoff } from '../kernel/dispatch-upgrade'
 
 /** Once a held run identifies its journal, readers retain that transport
@@ -67,66 +76,138 @@ export async function readHandoff(
     const selected = live ? state?.prepared : state?.handoff
     if (!selected || (!live && state?.completed) || state?.failure) return undefined
     const facts = (await readDispatcherRunFacts(opened.store, opened.repo, launch.run)).value
-    const handoff = selected.payload
-    if (
-      (!live &&
-        (facts.stop?.type !== 'dispatcher.run-stopped' ||
-          facts.stop.payload.outcome !== 'normal' ||
-          facts.stop.payload.signal !== undefined)) ||
-      facts.stopRequest ||
-      handoff.lineage !== launch.lineage
-    )
-      return undefined
-    const expected = join(launch.checkout, '.autobuild/runtime', handoff.cacheId, 'distribution')
-    if (
-      resolve(handoff.root) !== expected ||
-      dirname(dirname(handoff.root)) !== join(launch.checkout, '.autobuild/runtime')
-    )
-      return undefined
-    const candidate = await cachedRuntime(handoff.root)
-    if (candidate?.id !== handoff.cacheId) return undefined
-    return handoff
+    return validateHandoff(launch, selectHandoff(launch, state, facts, live))
   } finally {
     await opened.store.close()
   }
 }
 
+/** Durable selection is separate from local cache validation. */
+function selectHandoff(
+  launch: GenerationLaunch,
+  state: UpgradeRun | undefined,
+  facts: DispatcherRunFacts,
+  live: boolean,
+): Handoff | null {
+  const selected = live ? state?.prepared : state?.handoff
+  if (!selected || (!live && state?.completed) || state?.failure) return null
+  const handoff = selected.payload
+  if (
+    (!live &&
+      (facts.stop?.type !== 'dispatcher.run-stopped' ||
+        facts.stop.payload.outcome !== 'normal' ||
+        facts.stop.payload.signal !== undefined)) ||
+    facts.stopRequest ||
+    handoff.lineage !== launch.lineage
+  )
+    return null
+  return handoff
+}
+async function validateHandoff(
+  launch: GenerationLaunch,
+  handoff: Handoff | null,
+): Promise<Handoff | undefined> {
+  if (!handoff || handoff.lineage !== launch.lineage || handoff.run !== launch.run) return undefined
+  const expected = join(launch.checkout, '.autobuild/runtime', handoff.cacheId, 'distribution')
+  if (
+    resolve(handoff.root) !== expected ||
+    dirname(dirname(handoff.root)) !== join(launch.checkout, '.autobuild/runtime')
+  )
+    return undefined
+  return (await cachedRuntime(handoff.root))?.id === handoff.cacheId ? handoff : undefined
+}
+async function localGuards(launch: GenerationLaunch, guards: UpgradeGuards) {
+  return {
+    handoff: (await validateHandoff(launch, guards.handoff)) ?? null,
+    rollbackRetained:
+      guards.rollbackRecorded &&
+      (!guards.failedRoot || rollbackRuntimeRetained(guards.failedRoot, launch.lineage!)),
+  }
+}
+export function readUpgradeProjection(
+  launch: GenerationLaunch,
+  argv: string[],
+  env: Record<string, string | undefined>,
+): Promise<UpgradeProjection>
+export function readUpgradeProjection(
+  launch: GenerationLaunch,
+  argv: string[],
+  env: Record<string, string | undefined>,
+  options: { openStore?: StoreOpener; condition?: UpgradeCondition },
+): Promise<UpgradeProjection | ConditionalUpgradeResult>
 export async function readUpgradeProjection(
   launch: GenerationLaunch,
   argv: string[],
   env: Record<string, string | undefined>,
-) {
-  const opened = await openGenerationStore(launch, argv, env)
+  options: { openStore?: StoreOpener; condition?: UpgradeCondition } = {},
+): Promise<UpgradeProjection | ConditionalUpgradeResult> {
+  const opened = await openGenerationStore(launch, argv, env, options.openStore)
   try {
+    const condition = options.condition
+    // Sample before projection reads: concurrent appends invalidate the next poll.
+    const position =
+      condition && launch.journal
+        ? await opened.store.getRepoChangePosition(opened.repo)
+        : undefined
+    if (position !== undefined && !validChangePosition(position))
+      throw new Error('invalid upgrade change position')
+    if (position !== undefined && condition?.position === position && condition.guards) {
+      return {
+        conditionalVersion: 1,
+        kind: 'unchanged',
+        identity: condition.identity,
+        position,
+        ...(await localGuards(launch, condition.guards)),
+      }
+    }
     const record = await opened.store.getRepo(opened.repo)
     const journal =
       launch.journal ??
       (record?.lease?.holder === launch.run
         ? { storeRef: opened.storeRef, repo: opened.repo }
         : undefined)
-    if (!journal) return { version: 1, handoff: null, takeover: false }
-    const handoff = await readHandoff({ ...launch, journal }, argv, env, true)
-    const upgrades = (await readDispatchUpgrade(opened.store, opened.repo)).value
-    const state = upgrades.runs[launch.run!]
-    const rollbackRecorded =
-      !!launch.rollback && upgrades.rollbackIds.includes(launch.rollback.correlation)
-    const hold = launch.lineage ? upgrades.holds[launch.lineage] : undefined
-    return {
-      version: 1,
-      journal,
-      handoff: handoff ?? null,
-      rollbackVersion: 1,
-      rollbackRetained:
-        rollbackRecorded &&
-        (!hold || rollbackRuntimeRetained(hold.payload.failedRoot, launch.lineage!)),
-      takeover: !!state?.takeover,
-      takeoverAt: state?.takeover?.ts,
-      takeoverPayload: state?.takeover?.payload,
-      completed: !!state?.completed,
-      accepted: !!state?.handoff,
-      successor: state?.request?.payload.successor,
-      released: !!state?.released,
+    let projection: UpgradeProjection = { version: 1, handoff: null, takeover: false }
+    let guards: UpgradeGuards | undefined
+    if (journal) {
+      const upgrades = (await readDispatchUpgrade(opened.store, opened.repo)).value
+      const state = upgrades.runs[launch.run!]
+      const facts =
+        launch.run && launch.lineage && record && state?.prepared && !state.failure
+          ? (await readDispatcherRunFacts(opened.store, opened.repo, launch.run)).value
+          : undefined
+      const rollbackRecorded =
+        !!launch.rollback && upgrades.rollbackIds.includes(launch.rollback.correlation)
+      guards = {
+        handoff: facts ? selectHandoff(launch, state, facts, true) : null,
+        rollbackRecorded,
+        failedRoot:
+          rollbackRecorded && launch.lineage
+            ? (upgrades.holds[launch.lineage]?.payload.failedRoot ?? null)
+            : null,
+      }
+      projection = {
+        version: 1,
+        journal,
+        rollbackVersion: 1,
+        ...(await localGuards(launch, guards)),
+        takeover: !!state?.takeover,
+        takeoverAt: state?.takeover?.ts,
+        takeoverPayload: state?.takeover?.payload,
+        completed: !!state?.completed,
+        accepted: !!state?.handoff,
+        successor: state?.request?.payload.successor,
+        released: !!state?.released,
+      }
     }
+    return condition
+      ? {
+          conditionalVersion: 1,
+          kind: 'full',
+          identity: condition.identity,
+          projection,
+          ...(position !== undefined && guards ? { position, guards } : {}),
+        }
+      : projection
   } finally {
     await opened.store.close()
   }
