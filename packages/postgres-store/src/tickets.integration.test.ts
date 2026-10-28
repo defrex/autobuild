@@ -804,3 +804,201 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl)
+  test('initialized ticket operations complete while the project state lock is held', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const locker = new SQL(isolated.url)
+    const repo = 'initialized-lock'
+    const source = db.source({
+      repo,
+      teamKey: 'FAST',
+      lifecycle: {
+        triage: 'Inbox',
+        ready: 'Ready',
+        doing: 'Doing',
+        done: 'Done',
+      },
+    })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let acquired!: () => void
+    const held = new Promise<void>((resolve) => {
+      acquired = resolve
+    })
+    let transaction: Promise<unknown> | undefined
+    try {
+      const first = await source.create({ title: 'First', body: 'Body' })
+      const second = await source.create({ title: 'Second', body: 'Body' })
+      await source.transition(second.ref.id, 'Ready')
+      transaction = locker.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${repo}, 731926))`
+        acquired()
+        await gate
+      })
+      await held
+      // Completion while the holder remains gated proves absence of lock acquisition.
+      expect((await source.get(first.ref.id))?.title).toBe('First')
+      expect(await source.claim(second.ref.id)).toBe(true)
+      await source.create({ title: 'Third', body: 'Body' })
+      expect((await source.listReady({})).tickets).toHaveLength(3)
+      expect((await source.listReady({ state: 'Ready' })).tickets).toHaveLength(0)
+      expect((await source.listStates()).find((s) => s.name === 'Doing')?.tickets).toBe(1)
+    } finally {
+      release()
+      await transaction
+      await locker.close()
+      await db.close()
+      await isolated.cleanup()
+    }
+  }, 15000)
+
+if (testUrl)
+  test('cold sources, custom collisions and policy publication preserve all committed names', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const repo = 'https://github.com/acme/concurrent-states'
+    const context = {
+      repo,
+      teamKey: 'COLD',
+      lifecycle: {
+        triage: 'Inbox',
+        ready: 'Ready',
+        doing: 'Ready',
+        done: 'Done',
+      },
+    }
+    const one = db.source(context)
+    const two = db.source(context)
+    try {
+      await db.sql`INSERT INTO ab_ticket_states (repo, name) VALUES (${repo}, 'Inbox')`
+      const holder = await db.sql.reserve()
+      let cold: Promise<unknown> | undefined
+      try {
+        await holder`BEGIN`
+        await holder`SELECT pg_advisory_xact_lock(hashtextextended(${repo}, 731926))`
+        cold = Promise.all([one.get('missing'), two.listReady({})])
+        // Observe both independent transactions waiting on this exact lock.
+        const deadline = Date.now() + 10000
+        for (;;) {
+          const [row] = await holder`SELECT count(*)::integer AS waiting FROM pg_locks
+            WHERE locktype = 'advisory' AND NOT granted AND (classid, objid) IN
+              (SELECT classid, objid FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory')`
+          if (row!.waiting === 2) break
+          if (Date.now() > deadline) throw new Error('cold initializers did not reach state lock')
+          await Bun.sleep(10)
+        }
+      } finally {
+        await holder`ROLLBACK`
+        holder.release()
+        await cold
+      }
+      expect((await one.listStates()).map((s) => s.name).sort()).toEqual(['Done', 'Inbox', 'Ready'])
+      const collisions = await Promise.allSettled([one.addState('custom'), two.addState('custom')])
+      expect(collisions.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+      await new PostgresProjectRegistry(db.sql).add(repo, 'owner')
+      const policies = new PostgresTicketPolicyStore(db.sql)
+      const policy = (name: string) => ({
+        version: 1 as const,
+        tickets: {
+          source: 'hosted' as const,
+          teamKey: 'COLD',
+          triageState: name,
+          readyState: name,
+          claimedState: name,
+          doneState: name,
+          createState: name,
+          proposalState: name,
+        },
+      })
+      await Promise.all([
+        policies.put(repo, policy('Historical one'), 'one'),
+        policies.put(repo, policy('Historical two'), 'two'),
+        db.source({ ...context, createState: 'Concurrent init' }).get('missing'),
+      ])
+      expect(['Historical one', 'Historical two']).toContain(
+        (await policies.get(repo))!.tickets.triageState,
+      )
+      const names = (await one.listStates()).map((s) => s.name)
+      for (const name of ['Historical one', 'Historical two', 'Concurrent init'])
+        expect(names).toContain(name)
+      await db.sql.unsafe(
+        `CREATE FUNCTION reject_policy() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced publication failure'; END $$`,
+      )
+      await db.sql.unsafe(
+        `CREATE TRIGGER reject_policy BEFORE UPDATE ON project_ticket_policy FOR EACH ROW EXECUTE FUNCTION reject_policy()`,
+      )
+      const previous = await policies.get(repo)
+      await expect(policies.put(repo, policy('Rolled back'), 'failure')).rejects.toThrow(
+        'forced publication failure',
+      )
+      expect(await policies.get(repo)).toEqual(previous)
+      expect((await one.listStates()).map((s) => s.name)).not.toContain('Rolled back')
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
+
+if (testUrl)
+  test('a gated initialized ready-list transaction does not hold the state lock', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let arrived!: () => void
+    const entered = new Promise<void>((resolve) => {
+      arrived = resolve
+    })
+    class GatedRunner extends PlanRetryRunner {
+      override tx<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+        return super.tx(pool, (q) =>
+          body(
+            new Proxy(q, {
+              apply(target, receiver, args) {
+                if (
+                  (args[0] as TemplateStringsArray).join('').includes('ORDER BY created_at, id')
+                ) {
+                  return (async () => {
+                    arrived()
+                    await gate
+                    return Reflect.apply(target, receiver, args)
+                  })()
+                }
+                return Reflect.apply(target, receiver, args)
+              },
+            }),
+          ),
+        )
+      }
+    }
+    const context = { repo: 'gated-ready', teamKey: 'GATE' }
+    const lifecycle = { triage: 'Inbox', ready: 'Ready', doing: 'Doing', done: 'Done' }
+    const source = db.source({ ...context, lifecycle })
+    let listing: Promise<unknown> | undefined
+    try {
+      const ticket = await source.create({ title: 'Independent', body: 'Body' })
+      await source.transition(ticket.ref.id, 'Ready')
+      listing = new PostgresTicketSource(
+        db.sql,
+        { ...context, lifecycle },
+        lifecycle,
+        new GatedRunner(),
+      ).listReady({})
+      await entered
+      expect(await source.get(ticket.ref.id)).not.toBeNull()
+      expect(await source.claim(ticket.ref.id)).toBe(true)
+      await source.create({ title: 'During listing', body: 'Body' })
+      expect(await source.listStates()).toHaveLength(4)
+    } finally {
+      release()
+      await listing
+      await db.close()
+      await isolated.cleanup()
+    }
+  }, 15000)
