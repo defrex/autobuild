@@ -82,6 +82,8 @@ event log handling, state reducer. No I/O opinions — no ticket tracker, no
 telemetry vendor, no terminal.
 
 ### 3.2 Ports
+Ticket sources may optionally provide native `listPage(criteria, page)` windows with a matching total. Paged operator reads use it when present, otherwise slice the exhaustive listing; unpaged and dispatcher reads remain exhaustive.
+
 
 Interfaces to the world, each with swappable adapters:
 

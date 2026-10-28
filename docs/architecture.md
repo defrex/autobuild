@@ -1748,3 +1748,5 @@ repository-established requests receive 403 project not registered. Approval of 
 fresh connection starts empty and resets hosted ticket numbering. `ab disconnect`
 revokes credentials only; admin `projects remove` unregisters without purging.
 See [project deletion protocol](operator-api.md#permanent-project-deletion).
+
+The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
