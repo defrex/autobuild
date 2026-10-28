@@ -709,3 +709,98 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+import { PostgresTicketSource } from './tickets'
+import { PlanRetryRunner, type Exec } from './retry'
+
+if (testUrl)
+  test('native paging bounds SQL reads and preserves tied ordering, targets and blockers', async () => {
+    const isolated = await isolatedDatabase()
+    const database = await openPostgresTicketDatabase(isolated.url)
+    const observations: { query: string; rows: number }[] = []
+    class RecordingRetry extends PlanRetryRunner {
+      override tx<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+        return super.tx(pool, async (q) => {
+          const recording = Object.assign(
+            async (parts: TemplateStringsArray, ...values: unknown[]) => {
+              const rows = await q(parts, ...values)
+              observations.push({ query: parts.join('?'), rows: rows.length })
+              return rows
+            },
+            { array: q.array, unsafe: q.unsafe },
+          ) as Exec
+          return body(recording)
+        })
+      }
+    }
+    const lifecycle = { triage: 'Inbox', ready: 'Ready', doing: 'Doing', done: 'Done' }
+    const context = { repo: 'one', teamKey: 'AUT', lifecycle }
+    const source = new PostgresTicketSource(database.sql, context, lifecycle, new RecordingRetry())
+    try {
+      const target = await source.create({ title: 'node', body: 'x'.repeat(100000), kind: 'node' })
+      const unresolved = await source.create({ title: 'blocker', body: 'x'.repeat(100000) })
+      const resolved = await source.create(
+        { title: 'done blocker', body: 'x'.repeat(100000) },
+        { state: 'Done' },
+      )
+      for (let i = 0; i < 5; i++)
+        await source.create({
+          title: String(i),
+          body: 'page',
+          target: target.ref.id,
+          labels: i % 2 ? ['page'] : ['page', 'second'],
+          blockedBy: [unresolved.ref.id, resolved.ref.id],
+        })
+      await database
+        .source({ ...context, repo: 'two' })
+        .create({ title: 'foreign', body: 'foreign', labels: ['page'] })
+      await database.sql`UPDATE ab_tickets SET created_at = '2026-01-01' WHERE repo = 'one'`
+      for (const labels of [['page'], ['page', 'second']])
+        for (const order of ['oldest', 'newest'] as const) {
+          const full = await source.listReady({ state: 'inbox', labels })
+          for (const ticket of full.tickets) expect(ticket).not.toHaveProperty('blockersResolved')
+          for (const offset of [0, 1, 99]) {
+            observations.length = 0
+            const page = await source.listPage(
+              { state: 'inbox', labels },
+              { limit: 2, offset, order },
+            )
+            const expected = order === 'newest' ? [...full.tickets].reverse() : full.tickets
+            expect(page).toEqual({
+              tickets: expected.slice(offset, offset + 2),
+              diagnostics: [],
+              total: full.tickets.length,
+            })
+            const reads = observations.filter((o) => o.query.includes('SELECT ab_tickets.*'))
+            expect(reads).toHaveLength(1)
+            expect(reads[0]!.query).toMatch(/LIMIT \? OFFSET \?/)
+            expect(reads[0]!.rows).toBeLessThanOrEqual(2)
+            expect(reads[0]!.query).toContain('SELECT t.readable_id')
+            expect(observations.filter((o) => /SELECT \*/.test(o.query))).toEqual([])
+            expect(
+              observations
+                .filter((o) => o.query.includes('count(*)'))
+                .every((o) => !o.query.includes('body')),
+            ).toBe(true)
+          }
+          observations.length = 0
+          expect(await source.listPage({ labels }, { limit: 0 })).toEqual({
+            tickets: [],
+            diagnostics: [],
+            total: full.tickets.length,
+          })
+          expect(observations.some((o) => o.query.includes('SELECT ab_tickets.*'))).toBe(false)
+        }
+      expect((await source.listReady({})).tickets.every((t) => !('blockersResolved' in t))).toBe(
+        true,
+      )
+      expect(await source.dependencyStates([unresolved.ref.id, resolved.ref.id])).toMatchObject([
+        { resolved: false },
+        { resolved: true },
+      ])
+      await expect(source.listPage({ state: 'unknown' }, { limit: 1 })).rejects.toThrow('unknown')
+    } finally {
+      await database.close()
+      await isolated.cleanup()
+    }
+  })
