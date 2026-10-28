@@ -126,6 +126,10 @@ test.each([false, true])(
         expect(this).toBe(legacy)
         return { tickets: [ticket], diagnostics: [] }
       },
+      async listPage() {
+        expect(this).toBe(legacy)
+        return { tickets: [ticket], diagnostics: ['page'], total: 10 }
+      },
       async listStates() {
         expect(this).toBe(legacy)
         return [{ name: 'Triage', tickets: 1 }]
@@ -142,6 +146,11 @@ test.each([false, true])(
     }
     const source = compatibleTicketSource(frozen ? Object.freeze(legacy) : legacy)
     expect(await source.listReady({})).toMatchObject({ tickets: [{ kind: 'work' }] })
+    expect(await source.listPage!({}, { limit: 1 })).toMatchObject({
+      tickets: [{ kind: 'work' }],
+      diagnostics: ['page'],
+      total: 10,
+    })
     expect(await source.listStates!()).toEqual([{ name: 'Triage', tickets: 1 }])
     expect((await source.get(ticket.ref.id))!.kind).toBe('work')
     for (const patch of [
@@ -162,3 +171,24 @@ test.each([false, true])(
     expect((await fake.get(ticket.ref.id))!.title).toBe('New')
   },
 )
+
+test('tree-capable native page normalization retains node targets and metadata', async () => {
+  const fake = new FakeTicketSource()
+  const node = await fake.create({ title: 'node', body: 'body', kind: 'node' })
+  const source = Object.assign(fake, {
+    integrationTree: true as const,
+    async listPage() {
+      expect(this as unknown).toBe(fake)
+      return {
+        tickets: [{ ...node, kind: 'node' as const, target: 'AUT-99' }],
+        diagnostics: ['kept'],
+        total: 5,
+      }
+    },
+  })
+  expect(await compatibleTicketSource(source).listPage!({}, { limit: 1 })).toMatchObject({
+    tickets: [{ kind: 'node', target: 'AUT-99' }],
+    diagnostics: ['kept'],
+    total: 5,
+  })
+})
