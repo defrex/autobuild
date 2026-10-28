@@ -1105,7 +1105,7 @@ export class PostgresBuildStore implements BuildStore {
     signal?.throwIfAborted()
     if (!repo) throw new Error('repo is required')
     const identity = operatorIdentitySchema.parse(input)
-    return this.run(async (q) => {
+    return this.tx(async (q) => {
       signal?.throwIfAborted()
       const rows = await q`INSERT INTO operator_presence (repo,id,host,pid,started_at,heartbeat_at)
         VALUES (${repo},${identity.id},${identity.host},${identity.pid},${identity.startedAt},${this.now()})
@@ -1126,7 +1126,7 @@ export class PostgresBuildStore implements BuildStore {
 
   async removeOperatorPresence(repo: string, id: string): Promise<void> {
     id = operatorIdentitySchema.shape.id.parse(id)
-    await this.run(async (q) => {
+    await this.tx(async (q) => {
       await q`DELETE FROM operator_presence WHERE repo=${repo} AND id=${id}`
     })
   }
@@ -1350,7 +1350,7 @@ export class PostgresBuildStore implements BuildStore {
       },
       repair: async (key, observed, snapshot) => {
         const scopeKey = scope.kind === 'build' ? scope.slug : scope.repo
-        const rows: Row[] = await this.run(
+        const rows: Row[] = await this.tx(
           (q) =>
             q`UPDATE reducer_snapshots SET version=${snapshot.version}::integer, cursor=${snapshot.cursor}::bigint, state=${JSON.stringify(snapshot.state)}::jsonb, updated_at=${this.now()}::timestamptz WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND reducer=${key} AND version=${observed.snapshot.version}::integer AND cursor=${observed.snapshot.cursor}::bigint AND state::text=${observed.token}
           AND (${observed.snapshot.cursor}::bigint <= ${snapshot.cursor}::bigint OR ${observed.snapshot.cursor}::bigint > CASE WHEN ${scope.kind}='build' THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${scopeKey}),0) ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${scopeKey}),0) END)
@@ -1449,7 +1449,7 @@ export class PostgresBuildStore implements BuildStore {
       // Tail bounds and never-decrease guards remain atomic. Outside a request
       // the existence guard is atomic too; request-scoped reuse is safe because
       // repository journals have no deletion API.
-      const rows: Row[] = await this.run(
+      const rows: Row[] = await this.tx(
         (q) => q`INSERT INTO reducer_snapshots
             (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
           SELECT ${scope.kind}, ${key}, ${reducer}, ${snapshot.version}::integer,

@@ -1,9 +1,10 @@
-import { hostedProjectContext, rememberProjectGeneration } from './request-context'
+import { findProject } from './project-lifecycle'
+import { hostedProjectContext } from './request-context'
 import { SQL } from 'bun'
 import { randomUUID } from 'node:crypto'
 import { normalizeConnectionRepository as normalizeProjectRepository } from '@defrex/autobuild/connection'
 import { resolvePostgresUrl, type PostgresEnv } from './env'
-import { assertSchema, PROJECT_SCHEMA_DDL } from './schema'
+import { assertSchema, PROJECT_SCHEMA_DDL, PROJECT_ADMISSION_INDEX_DDL } from './schema'
 
 export interface ProjectEntry {
   repo: string
@@ -93,17 +94,10 @@ export class PostgresProjectRegistry implements ProjectRegistry {
   }
 
   async has(repo: string): Promise<boolean> {
+    if (hostedProjectContext()) return (await findProject(this.sql, repo)) !== null
     const [row] = await this
       .sql`SELECT action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`
-    if (row?.action !== 'added') return false
-    if (hostedProjectContext()) {
-      const [current] = await this
-        .sql`SELECT generation FROM project_generations WHERE repo = ${repo}
-        AND NOT EXISTS (SELECT 1 FROM project_deletions WHERE repo = ${repo})`
-      if (!current) return false
-      rememberProjectGeneration(repo, String(current.generation))
-    }
-    return true
+    return row?.action === 'added'
   }
 
   private async addIn(tx: SQL, repo: string, user: string): Promise<ProjectEntry> {
@@ -170,6 +164,7 @@ export async function initializeProjectRegistryForRecovery(
   await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(470281941)`
     await tx.unsafe(PROJECT_SCHEMA_DDL)
+    await tx.unsafe(PROJECT_ADMISSION_INDEX_DDL)
     await new PostgresProjectRegistry(tx as SQL).initializeFromEnvInTransaction(env)
   })
 }

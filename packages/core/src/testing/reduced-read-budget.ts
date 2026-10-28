@@ -180,6 +180,17 @@ export async function reducedReadBudget(opts: {
         return typeof value === 'function' ? value.bind(target) : value
       },
     })
+    // Explicit operation multiplication on fresh handles at both history sizes.
+    // Unchanged reduced reads never acquire historical event rows.
+    for (const operations of [1, 8]) {
+      reset()
+      for (let n = 0; n < operations; n++) {
+        await readBuildFacts(cold, slug)
+        await readRepositoryFacts(cold, repo)
+      }
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(operations * 20)
+    }
     await coldDispatchOnceBudget(store, cold, length, costs)
     reset()
     const view = new RepoViewStore(cold, { repo })

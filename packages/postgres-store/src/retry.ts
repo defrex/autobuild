@@ -1,3 +1,4 @@
+import { projectTransaction } from './request-context'
 import { admitHostedRequest } from './project-lifecycle'
 import { hostedProjectContext } from './request-context'
 import { SQL } from 'bun'
@@ -201,11 +202,11 @@ export function attemptExec(target: SQL, plans: PlanInvalidations, retry = false
 export class PlanRetryRunner {
   private readonly plans = new PlanInvalidations()
 
-  private async hostedTx<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+  private async hostedTx<T>(pool: SQL, body: (q: Exec) => Promise<T>, mutation = true): Promise<T> {
     let failing: string | null = null
     const run = (retry: boolean) =>
-      pool.begin(async (transaction) => {
-        await admitHostedRequest(transaction as SQL)
+      projectTransaction(pool, async (transaction) => {
+        if (mutation) await admitHostedRequest(transaction as SQL)
         const attempt = attemptExec(transaction as SQL, this.plans, retry)
         try {
           return await body(attempt.exec)
@@ -231,7 +232,7 @@ export class PlanRetryRunner {
    * sequentially: failure attribution (`Attempt.inFlight`) reads the
    * statement most recently dispatched. */
   async run<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
-    if (hostedProjectContext()) return this.hostedTx(pool, body)
+    if (hostedProjectContext()) return this.hostedTx(pool, body, false)
     const conn = await pool.reserve()
     try {
       const attempt = attemptExec(conn, this.plans)

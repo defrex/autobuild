@@ -456,7 +456,13 @@ initiating actor, deletion time and one opaque generation id. Provider failure
 leaves access refused and durable cleanup pending. The Projects page lists
 unfinished deletions with a **Finish deletion…** action, including after reloading,
 opening another tab or restarting the service. Reopen its confirmation dialog to
-retry cleanup; Cancel only closes the confirmation and does not undo the cutoff.
+retry cleanup with the original operation's preview token, even though the live
+generation was invalidated at the initial purge. A pending preview returns that
+same original token. Deletion waits only for mutation transactions already holding
+the project generation row, never for an entire HTTP request. Subsequent mutation
+transactions in an admitted request fail with `403 project not registered` and
+roll back; operations committed before the purge remain permissible.
+Cancel only closes the confirmation and does not undo the cutoff.
 `GET /api/web/projects/deletions` returns `{projects: string[]}` for pending
 cleanup authorized to the current owner or super user, including unassigned
 projects for super users. Members and outsiders receive no pending project names.
