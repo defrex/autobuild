@@ -230,3 +230,70 @@ test('conditional cache validates positions, identities, errors and malformed re
     })),
   ).rejects.toThrow()
 })
+
+test('older launcher accepts runtime-owned handoff extensions in legacy, full and unchanged replies', async () => {
+  const { conditionalUpgradeClient } = await import('./dispatch-launch-contract')
+  const owned = {
+    root: '/runtime',
+    cacheId: 'cache',
+    run: 'run',
+    lineage: 'lineage',
+    correlation: 'handoff',
+  }
+  // A future runtime may add modes, source kinds, or omit descriptors entirely.
+  for (const handoff of [
+    owned,
+    {
+      ...owned,
+      target: { mode: 'branch' },
+      from: { source: { kind: 'future-source' } },
+      to: { source: { kind: 'future-source' } },
+      future: { revision: 2 },
+    },
+  ]) {
+    const projection = { version: 1, handoff, takeover: false }
+    const client = conditionalUpgradeClient()
+    expect<unknown>(await client('reader', async () => projection)).toEqual(projection)
+    expect<unknown>(
+      await client('reader', async () => ({
+        conditionalVersion: 1,
+        identity: 'reader',
+        kind: 'full',
+        position: '1',
+        guards: { handoff, rollbackRecorded: false, failedRoot: null },
+        projection,
+      })),
+    ).toEqual(projection)
+    const updated = {
+      ...handoff,
+      target: { mode: 'another-future-mode' },
+      future: true,
+    }
+    expect<unknown>(
+      (
+        await client('reader', async (request) => {
+          expect(request.position).toBe('1')
+          return {
+            conditionalVersion: 1,
+            identity: 'reader',
+            kind: 'unchanged',
+            position: '1',
+            handoff: updated,
+            rollbackRetained: false,
+          }
+        })
+      ).handoff,
+    ).toEqual(updated)
+    // Opaque changes are safe; changing the launcher's actual destination is not.
+    await expect(
+      client('reader', async () => ({
+        conditionalVersion: 1,
+        identity: 'reader',
+        kind: 'unchanged',
+        position: '1',
+        handoff: { ...updated, root: '/different' },
+        rollbackRetained: false,
+      })),
+    ).rejects.toThrow('invalid unchanged upgrade response')
+  }
+})

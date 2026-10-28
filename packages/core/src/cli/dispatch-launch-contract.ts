@@ -218,28 +218,24 @@ export type ConditionalUpgradeResult =
 export function validChangePosition(value: unknown): value is string {
   return typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value)
 }
+// The public launcher outlives its runtimes. Only these fields belong to its
+// contract; target/source descriptors and future runtime fields remain opaque.
+const launcherHandoffFields = ['root', 'cacheId', 'run', 'lineage', 'correlation'] as const
 function validHandoff(value: unknown): boolean {
   if (value === null) return true
-  if (!value || typeof value !== 'object') return false
-  const h = value as UpgradeGuards['handoff'] & {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const h = value as Record<string, unknown>
   return (
-    ['root', 'cacheId', 'run', 'lineage', 'correlation'].every(
-      (key) => typeof (h as unknown as Record<string, unknown>)[key] === 'string',
-    ) &&
-    isAbsolute(h.root) &&
-    [h.from, h.to].every(
-      (runtime) =>
-        runtime &&
-        typeof runtime.version === 'string' &&
-        typeof runtime.commit === 'string' &&
-        runtime.source &&
-        ['source', 'package'].includes(runtime.source.kind) &&
-        typeof runtime.source.location === 'string',
-    ) &&
-    !!h.target &&
-    ['installed', 'source', 'pinned'].includes(h.target.mode) &&
-    typeof h.target.key === 'string' &&
-    typeof h.target.source === 'string'
+    launcherHandoffFields.every((key) => typeof h[key] === 'string') && isAbsolute(h.root as string)
+  )
+}
+function sameLauncherHandoff(
+  left: UpgradeProjection['handoff'],
+  right: UpgradeGuards['handoff'],
+): boolean {
+  return (
+    left === null ||
+    (right !== null && launcherHandoffFields.every((key) => left[key] === right[key]))
   )
 }
 function validUpgradeProjection(value: unknown): value is UpgradeProjection {
@@ -324,8 +320,7 @@ export function conditionalUpgradeClient() {
           result.position !== cache.position ||
           !validHandoff(result.handoff) ||
           typeof result.rollbackRetained !== 'boolean' ||
-          (result.handoff !== null &&
-            JSON.stringify(result.handoff) !== JSON.stringify(cache.guards.handoff)) ||
+          !sameLauncherHandoff(result.handoff, cache.guards.handoff) ||
           (result.rollbackRetained && !cache.guards.rollbackRecorded)
         )
           throw new Error('invalid unchanged upgrade response')
