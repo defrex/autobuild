@@ -372,3 +372,68 @@ test('restored generation validates takeover, deposits once under authority, and
     await rm(repo, { recursive: true, force: true })
   }
 })
+
+for (const invalid of ['version', 'value'] as const) {
+  test(`upgrade helper reports ${invalid} incompatibility on stderr without projection JSON`, async () => {
+    const { prepareLaunchRuntime } = await import('./dispatch-launcher')
+    const { releasePreparedRuntime } = await import('./dispatch-runtime-use')
+    const { distributionRoot } = await import('../distribution')
+    const { resolveReducerValue } = await import('../store/reducer-values')
+    const checkout = await mkdtemp(join(tmpdir(), 'ab-incompatible-reader-'))
+    const version = resolveReducerValue(
+      { kind: 'repo', repo: 'repo' },
+      { reducer: 'dispatchUpgrade' },
+    ).reducer.version
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        if (new URL(request.url).pathname.endsWith('/reducer-values'))
+          return Response.json({
+            version: version + (invalid === 'version' ? 1 : 0),
+            cursor: 0,
+            value: null,
+          })
+        return Response.json({
+          repo: 'repo',
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        })
+      },
+    })
+    const runtime = await prepareLaunchRuntime(distributionRoot(), distributionRoot(), checkout)
+    try {
+      const child = Bun.spawn(
+        [process.execPath, join(runtime.root, 'bin/ab-dispatch-generation.ts'), '--read-upgrade'],
+        {
+          env: {
+            ...process.env,
+            AB_DISPATCH_GENERATION: JSON.stringify({
+              version: 1,
+              runtimeRoot: runtime.root,
+              checkout,
+              originalInstall: distributionRoot(),
+              run: 'run',
+              lineage: 'lineage',
+              journal: { storeRef: server.url.toString(), repo: 'repo' },
+            }),
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      expect(code).not.toBe(0)
+      expect(stdout).toBe('')
+      expect(stderr).toContain('incompatible reducer dispatchUpgrade')
+      expect(stderr).toContain(`client version ${version}`)
+      expect(stderr).toContain(`server version ${version + (invalid === 'version' ? 1 : 0)}`)
+    } finally {
+      server.stop(true)
+      releasePreparedRuntime(runtime.root)
+    }
+  }, 30_000)
+}

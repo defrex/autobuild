@@ -186,9 +186,12 @@ describes recovery and the supported-window boundary.
 All event-derived checkpoints include the combined read-catalog fingerprint in
 their keys, independently of numeric reducer versions. Snapshot envelopes validate
 that fingerprint; another catalog's rows remain untouched. Remote named values
-use `x-autobuild-catalog-identity` for cache acceptance, keeping their strict
-three-field JSON body unchanged. Missing or mismatching identity, version or
-finished shape causes bounded local replay without a remote cache write.
+are canonical regardless of `x-autobuild-catalog-identity`, keeping their strict
+three-field JSON body unchanged. A reducer version mismatch, invalid envelope or
+unrepresentable finished shape raises `ReducerValueIncompatibilityError` with
+client/server versions and validation detail. No remote named read replays events.
+Repository digest batches likewise return the server batch with one scoped
+request and no discovery or per-build fallback.
 
 **Named reducer values.** `BuildStore.getReducerValue(scope, {reducer, args?})`
 returns `{version, cursor, value}` for each eligible entry in the executable

@@ -9,15 +9,16 @@ import {
   type OperatorPresence,
 } from '../operator-presence'
 import {
+  ReducerValueIncompatibilityError,
   clientIdentityError,
   classifyClient,
   releaseVersion,
   supportedClientRangeSchema,
 } from './compatibility'
 import { stampCompatibility, buildEventPolicy, repositoryEventPolicy } from '../../events/policy'
-import { READ_CATALOG_IDENTITY, projectStoredEvents } from '../../events/compatibility'
+import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
 import { CATALOG_IDENTITY_HEADER } from './version'
-import { validateReducerValue } from '../reducer-value-validation'
+import { diagnoseReducerValue } from '../reducer-value-validation'
 import { prepareEventWrite as validateEventWrite } from '../../events/catalog'
 import { prepareRepositoryEventWrite as validateRepositoryEventWrite } from '../../events/repository'
 import {
@@ -195,9 +196,6 @@ export interface RemoteBuildStoreOptions {
 export class RemoteBuildStore implements BuildStore {
   readonly catalogIdentity = READ_CATALOG_IDENTITY
   readonly networkReads = true
-  // Reader-local accumulators for this client instance. Never publish these into the service's
-  // cache: its catalog may interpret the same journal differently.
-  private readonly replayStates = new Map<string, { cursor: number; acc: unknown }>()
   private readonly base: string
   private readonly token: string | undefined
   private readonly fetchFn: typeof fetch
@@ -365,10 +363,7 @@ export class RemoteBuildStore implements BuildStore {
     const response = await this.raw('GET', `${this.repoPath(repo)}/build-digests`)
     if (!response.ok) throw await this.toError(response)
     const digests = buildDigestListSchema.parse(await response.json())
-    if (response.headers.get(CATALOG_IDENTITY_HEADER) === READ_CATALOG_IDENTITY)
-      return new Map(digests.map((digest) => [digest.slug, digest]))
-    const { readPersistedBuildDigests } = await import('../reduced-reads')
-    return readPersistedBuildDigests(this, repo)
+    return new Map(digests.map((digest) => [digest.slug, digest]))
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
@@ -760,49 +755,44 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
-    const { reducer, entry, identity: replayIdentity } = resolveReducerValue(scope, request)
+    const { reducer } = resolveReducerValue(scope, request)
     const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
     const response = await this.raw('POST', `${root}/reducer-values`, request)
     if (!response.ok) throw await this.toError(response)
-    const result = reducerValueSchema.parse(await response.json())
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error
+      throw new ReducerValueIncompatibilityError(
+        request.reducer,
+        scope,
+        reducer.version,
+        undefined,
+        'invalid reducer envelope: expected JSON',
+      )
+    }
+    const parsed = reducerValueSchema.safeParse(body)
+    const serverVersion =
+      body && typeof body === 'object' && 'version' in body && typeof body.version === 'number'
+        ? body.version
+        : undefined
+    const fail = (reason: string): never => {
+      throw new ReducerValueIncompatibilityError(
+        request.reducer,
+        scope,
+        reducer.version,
+        serverVersion,
+        reason,
+      )
+    }
+    if (!parsed.success) fail(`invalid reducer envelope: ${parsed.error.message}`)
+    const result = parsed.data!
+    if (result.version !== reducer.version) fail('reducer version mismatch')
+    const failure = diagnoseReducerValue(request.reducer, result.value)
+    if (failure) fail(`invalid finished value at ${failure.path}: expected ${failure.expected}`)
     const identity = response.headers.get(CATALOG_IDENTITY_HEADER)
-    if (
-      identity === READ_CATALOG_IDENTITY &&
-      result.version === reducer.version &&
-      validateReducerValue(request.reducer, result.value)
-    )
-      return {
-        version: result.version,
-        cursor: result.cursor,
-        value: result.value as ReducerValue['value'],
-        catalogIdentity: identity,
-      }
-    // Freeze at this response's cursor, including when concurrent reads finish
-    // out of order. Clone before folding: reducers may mutate their accumulator.
-    const cached = this.replayStates.get(replayIdentity)
-    const reusable = cached !== undefined && cached.cursor <= result.cursor ? cached : undefined
-    let cursor = reusable?.cursor ?? 0
-    let acc = reusable === undefined ? reducer.initial() : structuredClone(reusable.acc)
-    if (cursor < result.cursor) {
-      const events =
-        scope.kind === 'build'
-          ? await this.getEvents(scope.slug, cursor)
-          : await this.getRepoEvents(scope.repo, cursor)
-      const bounded = events.filter((event) => event.seq <= result.cursor)
-      for (const event of bounded) {
-        if (event.seq !== cursor + 1) throw new Error('noncontiguous reducer log')
-        cursor = event.seq
-      }
-      if (cursor !== result.cursor) throw new Error('incomplete reducer log')
-      acc = reducer.advance(acc, entry.adapt(projectStoredEvents(bounded)))
-    }
-    const value = entry.value(reducer.finish(structuredClone(acc)))
-    // Commit only successful folds, and never regress a concurrent accumulator.
-    if ((this.replayStates.get(replayIdentity)?.cursor ?? -1) <= cursor) {
-      this.replayStates.delete(replayIdentity)
-      this.replayStates.set(replayIdentity, { cursor, acc })
-    }
-    return { version: reducer.version, cursor, value, catalogIdentity: READ_CATALOG_IDENTITY }
+    return { ...result, ...(identity === null ? {} : { catalogIdentity: identity }) }
   }
 
   private snapshotPath(scope: SnapshotScope, reducer: string): string {
