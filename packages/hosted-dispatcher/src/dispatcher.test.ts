@@ -12,19 +12,41 @@ import {
 
 // Issuance seam records an opaque, distinct project-bound credential per tick.
 const issued = new Map<string, { repo: string; creator: string; expiresAt: Date }>()
-async function issueDispatcherCredential(
-  repo: string,
-  creator: string,
-  expiresAt: Date,
-): Promise<string> {
+async function issueDispatcherCredential(repo: string, creator: string, expiresAt: Date) {
   const token = `abp_1_${crypto.randomUUID()}`
   issued.set(token, { repo, creator, expiresAt })
-  return token
+  return { token, credential: { id: token } }
+}
+const openDispatcherCredentials = async () => ({
+  issue: issueDispatcherCredentialAdapter,
+  deleteDispatcherCredential: async (_repo: string, _id: string) => 1,
+  pruneDispatcherCredentials: async () => 0,
+  close: async () => {},
+})
+async function issueDispatcherCredentialAdapter(
+  repo: string,
+  creator: string,
+  options?: { expiresAt?: Date },
+) {
+  const result = await issueDispatcherCredential(repo, creator, options!.expiresAt!)
+  return {
+    ...result,
+    credential: {
+      ...result.credential,
+      repo,
+      purpose: 'dispatcher' as const,
+      createdAt: at.toISOString(),
+      createdBy: creator,
+      lastUsedAt: null,
+      revokedAt: null,
+      expiresAt: options!.expiresAt!.toISOString(),
+    },
+  }
 }
 const createHostedDispatcher = (options: HostedDispatcherOptions) =>
-  realCreateHostedDispatcher({ issueDispatcherCredential, openSecrets: emptySecrets, ...options })
+  realCreateHostedDispatcher({ openDispatcherCredentials, openSecrets: emptySecrets, ...options })
 const createDispatcherEndpoint = (options: HostedDispatcherOptions) =>
-  realCreateDispatcherEndpoint({ issueDispatcherCredential, openSecrets: emptySecrets, ...options })
+  realCreateDispatcherEndpoint({ openDispatcherCredentials, openSecrets: emptySecrets, ...options })
 
 const storeEnv = {
   AB_STORE_SECRET: 'test-signing-secret',
@@ -225,7 +247,7 @@ describe('createHostedDispatcher', () => {
       expect(issued.get(token)).toEqual({
         repo: call.repository!,
         creator: `system:${call.kernelRunId}`,
-        expiresAt: new Date(at.getTime() + 604800000),
+        expiresAt: new Date(at.getTime() + 300000),
       })
     }
     expect(calls[0]!.kernelRunId).not.toBe(calls[1]!.kernelRunId)
@@ -763,4 +785,141 @@ test('unauthorized requests never open registry; failed initialization is retrya
   expect((await endpoint.fetch(request('cron-secret'))).status).toBe(500)
   expect((await endpoint.fetch(request('cron-secret'))).status).toBe(200)
   expect(opens).toBe(2)
+})
+
+describe('cron credential lifecycle', () => {
+  const repo = 'https://github.com/acme/one'
+  const env = { ...baseEnv, AB_DISPATCHER_REPOSITORIES: repo }
+  const registry = () => testProjects([repo])
+  test('100 fresh idle invocations keep live credentials and stored rows bounded', async () => {
+    const { testCredentials } = await import('./testing/credentials')
+    const projects = registry()
+    const { store } = testCredentials(projects, '', clock)
+    let maximum = 0
+    for (let i = 0; i < 100; i++) {
+      const dispatcher = realCreateHostedDispatcher({
+        env,
+        clock,
+        openSecrets: emptySecrets,
+        openProjectRegistry: async () => projects,
+        openDispatcherCredentials: async () => store,
+        log: () => {},
+        logError: () => {},
+        dispatch: async ({ env: child }) => {
+          const rows = await store.list(repo)
+          maximum = Math.max(maximum, rows.length)
+          expect(rows).toHaveLength(1)
+          expect(await store.authenticate(child!.AB_TOKEN!, at)).not.toBeNull()
+          expect(rows[0]!.expiresAt).toBe(new Date(at.getTime() + 300_000).toISOString())
+        },
+      })
+      expect((await dispatcher.tick()).repositories[0]!.outcome).toBe('ticked')
+      expect(await store.list(repo)).toHaveLength(0)
+    }
+    expect(maximum).toBe(1)
+  })
+
+  for (const failAt of ['prune', 'issue', 'mark', 'dispatch', 'cleanup', 'both'] as const) {
+    test(`${failAt} failure closes storage, cleans issued rows, and reports diagnostics`, async () => {
+      const calls: string[] = []
+      const logs: string[] = []
+      const dispatcher = realCreateHostedDispatcher({
+        env,
+        clock,
+        openProjectRegistry: async () => registry(),
+        openSecrets: async () => ({
+          ...(await emptySecrets()),
+          markSupplied: async () => {
+            calls.push('mark')
+            if (failAt === 'mark') throw new Error('mark failure')
+          },
+        }),
+        openDispatcherCredentials: async () => ({
+          pruneDispatcherCredentials: async () => {
+            calls.push('prune')
+            if (failAt === 'prune') throw new Error('prune failure')
+            return 0
+          },
+          issue: async (repo, creator, options) => {
+            calls.push('issue')
+            if (failAt === 'issue') throw new Error('issue failure')
+            return issueDispatcherCredentialAdapter(repo, creator, options)
+          },
+          deleteDispatcherCredential: async () => {
+            calls.push('cleanup')
+            if (failAt === 'cleanup' || failAt === 'both')
+              throw new Error('private token cleanup detail')
+            return 1
+          },
+          close: async () => {
+            calls.push('close')
+          },
+        }),
+        dispatch: async ({ env: child }) => {
+          calls.push('dispatch')
+          if (failAt === 'dispatch' || failAt === 'both')
+            throw new Error(`dispatch failure ${child!.AB_TOKEN}`)
+        },
+        log: (line) => logs.push(line),
+        logError: (line) => logs.push(line),
+      })
+      const outcome = (await dispatcher.tick()).repositories[0]!
+      expect(outcome.outcome).toBe('failed')
+      expect(calls.at(-1)).toBe('close')
+      expect(calls.includes('cleanup')).toBe(!['prune', 'issue'].includes(failAt))
+      if (failAt === 'prune') expect(calls).toEqual(['prune', 'close'])
+      if (failAt === 'both') {
+        expect(outcome.error).toContain('dispatch failure')
+        expect(outcome.error).toContain('cleanup failed')
+      }
+      expect(logs.join('\n')).not.toContain('private token')
+      expect(JSON.stringify(outcome)).not.toContain('abp_1_')
+    })
+  }
+
+  test('overlapping invocations delete only their own credential', async () => {
+    const { testCredentials } = await import('./testing/credentials')
+    const projects = registry()
+    const { store } = testCredentials(projects, '', clock)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const make = (dispatch: NonNullable<HostedDispatcherOptions['dispatch']>) =>
+      realCreateHostedDispatcher({
+        env,
+        clock,
+        openSecrets: emptySecrets,
+        openProjectRegistry: async () => projects,
+        openDispatcherCredentials: async () => store,
+        dispatch,
+        log: () => {},
+        logError: () => {},
+      })
+    let firstToken = ''
+    const first = make(async ({ env: child }) => {
+      firstToken = child!.AB_TOKEN!
+      started()
+      await gate
+    }).tick()
+    await ready
+    await make(async () => {
+      expect(await store.list(repo)).toHaveLength(2)
+    }).tick()
+    expect(await store.authenticate(firstToken, at)).not.toBeNull()
+    expect(await store.list(repo)).toHaveLength(1)
+    release()
+    await first
+    expect(await store.list(repo)).toHaveLength(0)
+    const abandoned = await store.issue(repo, 'abandoned', {
+      purpose: 'dispatcher',
+      expiresAt: new Date(at.getTime() + 1),
+    })
+    expect(await store.pruneDispatcherCredentials(repo, new Date(at.getTime() + 2))).toBe(1)
+    expect(await store.authenticate(abandoned.token, at)).toBeNull()
+  })
 })

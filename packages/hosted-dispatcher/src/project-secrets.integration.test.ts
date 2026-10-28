@@ -41,7 +41,24 @@ live(
         },
         openProjectRegistry: async () => projects,
         openSecrets: async () => resolver,
-        issueDispatcherCredential: async () => 'dispatcher-token',
+        openDispatcherCredentials: async () => ({
+          issue: async () => ({
+            token: 'dispatcher-token',
+            credential: {
+              id: 'dispatcher-id',
+              repo: '',
+              purpose: 'dispatcher',
+              createdAt: '',
+              createdBy: '',
+              lastUsedAt: null,
+              revokedAt: null,
+              expiresAt: null,
+            },
+          }),
+          deleteDispatcherCredential: async () => 1,
+          pruneDispatcherCredentials: async () => 0,
+          close: async () => {},
+        }),
         dispatch: async (opts) => {
           dispatched.push(opts.repository!)
         },
@@ -121,7 +138,24 @@ live(
         },
         openProjectRegistry: async () => projects,
         openSecrets: async () => secrets,
-        issueDispatcherCredential: async () => 'dispatcher-token',
+        openDispatcherCredentials: async () => ({
+          issue: async () => ({
+            token: 'dispatcher-token',
+            credential: {
+              id: 'dispatcher-id',
+              repo: '',
+              purpose: 'dispatcher',
+              createdAt: '',
+              createdBy: '',
+              lastUsedAt: null,
+              revokedAt: null,
+              expiresAt: null,
+            },
+          }),
+          deleteDispatcherCredential: async () => 1,
+          pruneDispatcherCredentials: async () => 0,
+          close: async () => {},
+        }),
         dispatch: async (opts) => {
           ticks.push(opts.env)
         },
