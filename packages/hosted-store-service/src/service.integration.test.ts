@@ -953,6 +953,23 @@ if (testUrl)
       const backing = await openPostgresBuildStore(database.url, blobs)
       handles.push(backing)
       const costs = countStoreRows(backing)
+      let stateListings = 0
+      const countedTickets = new Proxy(tickets, {
+        get(target, key) {
+          if (key === 'source')
+            return (...args: Parameters<typeof tickets.source>) => {
+              const source = target.source(...args)
+              const list = source.listStates.bind(source)
+              source.listStates = async () => {
+                stateListings++
+                return list()
+              }
+              return source
+            }
+          const value = Reflect.get(target, key)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
       const service = createHostedStoreService({
         env: {
           AB_STORE_SECRET: 'cost-secret',
@@ -966,12 +983,12 @@ if (testUrl)
         openStore: async () => backing,
         openProjectRegistry: async () => projects,
         openCredentials: async () => credentials,
-        openTicketDatabase: async () => tickets,
+        openTicketDatabase: async () => countedTickets,
         openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       })
       const fetchFn = async (input: string | URL | Request, init?: RequestInit) =>
         service.fetch(new Request(input, init))
-      return { backing, costs, fetchFn }
+      return { backing, costs, fetchFn, stateListings: () => stateListings }
     }
     try {
       for (const count of [10, 3000])
@@ -1013,7 +1030,7 @@ if (testUrl)
                 type: 'dispatcher.intake-set',
                 payload: { enabled: true },
               })
-            const { backing, costs, fetchFn } = await compose()
+            const { backing, costs, fetchFn, stateListings } = await compose()
             const client = new HostedTicketSource({
               url: 'http://test',
               token,
@@ -1022,6 +1039,7 @@ if (testUrl)
               fetchFn,
             })
             await client.synchronizePolicy(ticketPolicy)
+            expect(stateListings()).toBe(reference ? 1 : 0)
             expect(costs.events).toBe(delta)
             expect(costs.metadata).toBeLessThan(20)
             await client.listStates()
@@ -1724,6 +1742,21 @@ if (testUrl)
           fetchFn: (input, init) => service.fetch(new Request(input, init)),
         })
         await ticketClient.listStates()
+        const stateCountLists = () =>
+          statements.filter((text) => text.includes('LEFT JOIN ab_tickets')).length
+        expect(stateCountLists()).toBe(1)
+        for (const operation of [
+          () => ticketClient.get('BUD-999'),
+          () => ticketClient.claim('BUD-999'),
+          () => ticketClient.listReady({}),
+        ]) {
+          statements.length = 0
+          await operation()
+          expect(stateCountLists()).toBe(0)
+        }
+        statements.length = 0
+        await ticketClient.create({ title: 'No eager listing', body: 'Body' })
+        expect(stateCountLists()).toBe(1) // state resolution only
         expect(projectQueryCounts(statements).admissions).toBe(1)
         expect(projectQueryCounts(statements).lifecycleLocks).toBe(0)
         expect(projectQueryCounts(statements).boundaries).toBeGreaterThan(0)

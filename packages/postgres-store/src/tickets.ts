@@ -5,7 +5,7 @@ import {
   validateStateName,
   validateStatePurpose,
 } from '@defrex/autobuild/hosted-tickets'
-import { seedTicketStates } from './ticket-states'
+import { seedTicketStates, lockTicketStates } from './ticket-states'
 import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
 import { SQL } from 'bun'
 import type {
@@ -142,6 +142,7 @@ export class PostgresTicketSource implements TicketSource {
     validateStateName(name, 'database ticket source')
     const about = validateStatePurpose(opts.about, 'database ticket source')
     return this.retry.tx(this.sql, async (q) => {
+      await lockTicketStates(q, this.repo)
       const states = await this.states(q)
       const clash = states.find((s) => s.name.toLowerCase() === name.toLowerCase())
       if (clash)
@@ -262,7 +263,7 @@ export class PostgresTicketSource implements TicketSource {
       throw new Error('ticket page limit and offset must be nonnegative integers')
     const labels = criteria.labels ?? []
     return this.retry.tx(this.sql, async (q) => {
-      await seedTicketStates(q, this.repo, this.configured)
+      if (criteria.state === undefined) await seedTicketStates(q, this.repo, this.configured)
       const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
       const counts: Row[] = await q`SELECT count(*)::text AS total FROM ab_tickets
         WHERE repo = ${this.repo} AND (${state}::text IS NULL OR state = ${state})
@@ -292,7 +293,7 @@ export class PostgresTicketSource implements TicketSource {
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
     return this.retry.tx(this.sql, async (q) => {
-      await seedTicketStates(q, this.repo, this.configured)
+      if (criteria.state === undefined) await seedTicketStates(q, this.repo, this.configured)
       const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
       const rows: Row[] =
         await q`SELECT *, revision::text AS revision, ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers FROM ab_tickets
