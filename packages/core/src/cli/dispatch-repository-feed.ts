@@ -1,7 +1,7 @@
 import { DISPATCH_HANDOFF_EVENT_TYPES } from '../store/repo-state-events'
 import { type RepositoryEvent, validateRepositoryEventWrite } from '../events/repository'
 import { defineReducer } from '../kernel/incremental'
-import { loadReducerSnapshot, persistReducerSnapshot } from '../store/snapshots'
+import { loadReducerSnapshot, persistReducerSnapshotOutcome } from '../store/snapshots'
 import type { BuildStore, Clock } from '../store/types'
 
 const handoffTypes = new Set<string>(DISPATCH_HANDOFF_EVENT_TYPES)
@@ -19,7 +19,7 @@ export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
 
 export const dispatchFrontendReducer = defineReducer({
   version: 4,
-  initial: (): { retained: RepositoryEvent[]; incompleteIdentities: boolean } => ({
+  initial: (): { retained: RepositoryEvent[]; incompleteIdentities: boolean; holder?: string } => ({
     retained: [],
     incompleteIdentities: true,
   }),
@@ -29,7 +29,15 @@ export const dispatchFrontendReducer = defineReducer({
       if (isDashboardRepositoryEvent(event) || event.type === 'dispatcher.run-started')
         facts.set(event.seq, event)
     }
-    acc.retained = [...facts.values()].sort((a, b) => a.seq - b.seq)
+    const sorted = [...facts.values()].sort((a, b) => a.seq - b.seq)
+    const latest = sorted.findLast((event) => event.type === 'dispatcher.run-started')
+    const holder = sorted.findLast(
+      (event) => event.type === 'dispatcher.run-started' && event.payload.run === acc.holder,
+    )
+    acc.retained = sorted.filter(
+      (event) => event.type !== 'dispatcher.run-started' || event === latest || event === holder,
+    )
+    acc.incompleteIdentities = true
   },
   finish: (acc) => acc.retained,
 })
@@ -41,7 +49,12 @@ export class DispatchRepositoryFeed {
   private ready = false
   private retained: RepositoryEvent[] = []
   private tail: Promise<void> = Promise.resolve()
-  private savedAt = -Infinity
+  private generation = 0
+  private settled: string | undefined
+  private nextSaveAt = -Infinity
+  private failures = 0
+  private saving: Promise<void> | undefined
+  private holder: string | undefined
   private boundary: number | undefined
   private recovery = false
   incompleteIdentities = true
@@ -95,6 +108,8 @@ export class DispatchRepositoryFeed {
       let cursor = this.cursor
       let retained = this.retained
       let incompleteIdentities = this.incompleteIdentities
+      let restoredKey: string | undefined
+      let restoredRetained: RepositoryEvent[] | undefined
       let delta: RepositoryEvent[]
       if (!this.ready) {
         if ((await this.store.getRepo(this.repo)) === null) {
@@ -115,6 +130,7 @@ export class DispatchRepositoryFeed {
             const state = snapshot.state as {
               retained: RepositoryEvent[]
               incompleteIdentities: boolean
+              holder?: string
             }
             if (!Array.isArray(state.retained) || typeof state.incompleteIdentities !== 'boolean')
               throw new Error('invalid projection')
@@ -127,8 +143,15 @@ export class DispatchRepositoryFeed {
               )
             )
               throw new Error('invalid retained fact')
-            incompleteIdentities = state.incompleteIdentities
-            retained = state.retained
+            if (state.holder !== undefined && typeof state.holder !== 'string')
+              throw new Error('invalid holder')
+            this.holder = state.holder
+            retained = dispatchFrontendReducer.advance({ ...state }, []).retained
+            incompleteIdentities = true
+            if (state.incompleteIdentities && retained.length === state.retained.length) {
+              restoredKey = `${snapshot.cursor}:${this.generation}`
+              restoredRetained = retained
+            }
             cursor = snapshot.cursor
             restored = true
           } catch {
@@ -161,10 +184,19 @@ export class DispatchRepositoryFeed {
         retained = this.retained
         incompleteIdentities = this.incompleteIdentities
       }
-      retained = dispatchFrontendReducer.advance({ retained, incompleteIdentities }, delta).retained
+      if (delta.length > 0)
+        retained = dispatchFrontendReducer.advance(
+          { retained, incompleteIdentities, holder: this.holder },
+          delta,
+        ).retained
       this.cursor = Math.max(cursor, delta.at(-1)?.seq ?? 0)
-      this.incompleteIdentities = incompleteIdentities
-      this.retained = retained
+      this.incompleteIdentities = true
+      if (restoredKey !== undefined) {
+        this.settled = restoredKey
+        this.retained = restoredRetained!
+      }
+      this.replaceRetained(retained)
+
       this.ready = true
       this.recovery = false
       result = delta
@@ -174,28 +206,77 @@ export class DispatchRepositoryFeed {
     return next.then(() => result)
   }
 
-  remember(events: readonly RepositoryEvent[], complete = false): void {
-    this.retained = dispatchFrontendReducer.advance(
-      { retained: this.retained, incompleteIdentities: this.incompleteIdentities },
-      events.filter((e) => e.seq <= this.cursor),
-    ).retained
-    if (complete) this.incompleteIdentities = false
+  private replaceRetained(events: RepositoryEvent[]): void {
+    // Sequence numbers identify immutable journal facts; no deep serialization on polls.
+    const changed =
+      events !== this.retained &&
+      (events.length !== this.retained.length ||
+        events.some((event, i) => event.seq !== this.retained[i]?.seq))
+    this.retained = events
+    if (changed) this.generation++
   }
 
-  async save(force = false): Promise<void> {
-    if (!this.ready || (!force && this.clock().getTime() - this.savedAt < 5000)) return
-    // A rejected equal-cursor put and an unavailable store still cost a
-    // request. Bound attempts, not just successful writes, on quiet polls.
-    this.savedAt = this.clock().getTime()
-    await persistReducerSnapshot(
+  selectHolder(holder: string | undefined): void {
+    if (this.holder === holder) return
+    this.generation++
+    this.holder = holder
+    this.replaceRetained(
+      dispatchFrontendReducer.advance(
+        {
+          retained: this.retained,
+          incompleteIdentities: true,
+          holder,
+        },
+        [],
+      ).retained,
+    )
+  }
+
+  remember(events: readonly RepositoryEvent[], _complete = false): void {
+    const eligible = events.filter((e) => e.seq <= this.cursor)
+    this.validate(
+      [...eligible].sort((a, b) => a.seq - b.seq),
+      0,
+      false,
+    )
+    this.replaceRetained(
+      dispatchFrontendReducer.advance(
+        { retained: this.retained, incompleteIdentities: true, holder: this.holder },
+        eligible,
+      ).retained,
+    )
+  }
+
+  save(force = false): Promise<void> {
+    if (this.saving) return force ? this.saving.then(() => this.save(true)) : this.saving
+    const key = `${this.cursor}:${this.generation}`
+    const now = this.clock().getTime()
+    if (!this.ready || key === this.settled || (!force && now < this.nextSaveAt))
+      return Promise.resolve()
+    const snapshot = {
+      version: dispatchFrontendReducer.version,
+      cursor: this.cursor,
+      state: { retained: this.retained, incompleteIdentities: true, holder: this.holder },
+    }
+    this.nextSaveAt = now + 30_000
+    this.saving = persistReducerSnapshotOutcome(
       this.store,
       { kind: 'repo', repo: this.repo },
       'dispatchFrontend',
-      {
-        version: dispatchFrontendReducer.version,
-        cursor: this.cursor,
-        state: { retained: this.retained, incompleteIdentities: this.incompleteIdentities },
-      },
+      snapshot,
     )
+      .then((outcome) => {
+        if (outcome === 'unavailable') {
+          this.nextSaveAt = this.clock().getTime() + Math.min(30_000 * 2 ** this.failures, 300_000)
+          this.failures = Math.min(this.failures + 1, 4)
+        } else {
+          this.settled = key
+          this.failures = 0
+        }
+      })
+      .finally(() => {
+        this.saving = undefined
+      })
+    return this.saving
   }
 }

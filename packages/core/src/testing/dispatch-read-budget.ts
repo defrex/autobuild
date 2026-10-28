@@ -1,11 +1,12 @@
 import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
-import { loadReducerSnapshot } from '../store/snapshots'
+import { loadReducerSnapshot, persistReducerSnapshot } from '../store/snapshots'
 import { expect } from 'bun:test'
 import { DispatchFrontend } from '../cli/dispatch-frontend'
 import type { DispatchChildResult } from '../cli/dispatch-process'
 import { createTerminalModeController } from '../cli/terminal-restore'
 import { DISPATCHER, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
+import type { RepositoryEvent } from '../events/repository'
 
 const tickCounters = {
   merged: 0,
@@ -45,11 +46,24 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
     records: 0,
     high: 0,
     puts: 0,
+    written: 0,
+    refused: 0,
+    exceptions: 0,
+    bytes: 0,
   }
   const putSnapshot = backing.putReducerSnapshot.bind(backing)
   backing.putReducerSnapshot = async (...args) => {
     metrics.puts++
-    return putSnapshot(...args)
+    metrics.bytes += Buffer.byteLength(JSON.stringify(args[2]))
+    try {
+      const written = await putSnapshot(...args)
+      if (written) metrics.written++
+      else metrics.refused++
+      return written
+    } catch (error) {
+      metrics.exceptions++
+      throw error
+    }
   }
   const getEvents = backing.getRepoEvents.bind(backing)
   const getState = backing.getRepoStateEvents.bind(backing)
@@ -178,7 +192,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       const before = { ...metrics }
       now += 6000
       await refresh()
-      expect(metrics.puts - before.puts).toBe(1)
+      expect(metrics.puts - before.puts).toBe((batch + 1) % 5 === 0 ? 1 : 0)
       expect(metrics.rows - before.rows).toBe(128)
       expect(metrics.events - before.events).toBe(1)
       expect(metrics.state - before.state).toBe(0)
@@ -186,7 +200,9 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       expect(metrics.digests - before.digests).toBe(1)
       expect(metrics.high - before.high).toBe(0)
       recordReads ??= metrics.records - before.records
-      expect(metrics.records - before.records).toBe(recordReads)
+      expect(metrics.records - before.records).toBe(
+        recordReads + (store === backing ? 0 : metrics.puts - before.puts),
+      )
       const size = JSON.stringify(
         (
           await loadReducerSnapshot(
@@ -210,8 +226,16 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       now += 500
       await refresh()
     }
-    expect(metrics.puts - beforeQuiet.puts).toBe(4)
+    expect(metrics.puts - beforeQuiet.puts).toBe(1)
     expect(metrics.rows).toBe(beforeQuiet.rows)
+    const settled = { ...metrics }
+    for (let poll = 0; poll < 120; poll++) {
+      now += 500
+      await refresh()
+    }
+    expect(metrics.puts).toBe(settled.puts)
+    expect(metrics.bytes).toBe(settled.bytes)
+    expect(metrics.rows).toBe(settled.rows)
   } finally {
     finish({ outcome: 'normal', exitCode: 0 })
     await running
@@ -228,6 +252,77 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
   expect((await feed.refresh()).length).toBe(1)
   expect(metrics.rows - before.rows).toBe(1)
   expect(metrics.state - before.state).toBe(0)
+
+  // Fixed relevant events/cursor isolate growth from unrelated legacy identities.
+  // This runs through both the local and existing real HTTP invocations.
+  const retentionRepo = '/dashboard-retention-budget'
+  await backing.ensureRepo(retentionRepo)
+  const history: RepositoryEvent[] = []
+  for (let i = 0; i < 10000; i++) {
+    history.push(
+      await backing.appendRepo(retentionRepo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: `old-${i}`,
+          pid: 1,
+          effectiveConfig: { kind: 'config', rev: 0 },
+          roleWarnings: [],
+        },
+      }),
+    )
+  }
+  const holder = history[0]!
+  const latest = history.at(-1)!
+  const sizes: number[] = []
+  const checkpoint = backing.getReducerSnapshot.bind(backing)
+  try {
+    for (const length of [100, 10000]) {
+      // Model a validated pre-upgrade version-4 cache without changing ordering.
+      backing.getReducerSnapshot = async (...args) => {
+        const snapshot = await checkpoint(...args)
+        if (!snapshot || args[0].kind !== 'repo' || args[0].repo !== retentionRepo) return snapshot
+        const state = snapshot.state as { catalogIdentity: string }
+        return {
+          ...snapshot,
+          state: {
+            ...state,
+            acc: {
+              retained: [...history.slice(0, length - 1), latest],
+              incompleteIdentities: false,
+              holder: 'old-0',
+            },
+          },
+        }
+      }
+      await persistReducerSnapshot(
+        store,
+        { kind: 'repo', repo: retentionRepo },
+        'dispatchFrontend',
+        {
+          version: 4,
+          cursor: latest.seq,
+          state: { retained: [], incompleteIdentities: true },
+        },
+      )
+      const projection = new DispatchRepositoryFeed(store, retentionRepo, () => new Date(now))
+      const rows = metrics.rows
+      const bytes = metrics.bytes
+      await projection.warm()
+      expect(projection.identities).toEqual([holder, latest])
+      expect(projection.incompleteIdentities).toBe(true)
+      sizes.push(metrics.bytes - bytes)
+      const puts = metrics.puts
+      now += 60000
+      await projection.refresh()
+      await projection.save(true)
+      expect(metrics.puts).toBe(puts)
+      expect(metrics.rows).toBe(rows)
+    }
+    expect(sizes[0]).toBe(sizes[1])
+  } finally {
+    backing.getReducerSnapshot = checkpoint
+  }
 }
 
 /** Script a minute at both launcher cadences using the real runtime reader and
