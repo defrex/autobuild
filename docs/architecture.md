@@ -913,6 +913,22 @@ queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
+The frontend's `dispatchFrontend` checkpoint retains dashboard facts plus only
+the latest run-started fact and the sampled lease holder's start (deduplicated).
+Identity history is always partial, including normalized legacy version-4
+caches; a missing holder is resolved through the bounded per-run reduced read.
+Successful lease samples select or clear the retained holder; failed metadata
+reads preserve the last selection. Snapshot saves track cursor and effective
+retained-state changes locally: written, refused and unsupported attempts settle
+that projection and are never repeated unchanged. Ordinary dirty saves are at
+least 30 seconds apart. Transport/store failures retry without new events after
+30, 60, 120, 240, then 300 seconds (capped). Concurrent saves share one request;
+only its captured projection is acknowledged. Teardown forces a dirty save past
+the time gate, while settled state stays quiet. Equal-cursor refusal does not
+make correlation durable: restart reconstructs it through bounded holder lookup,
+and the next advancing-cursor checkpoint carries it without relaxing snapshot
+ordering. A validated, already normalized restored checkpoint starts clean.
+
 `packages/core/src/cli/dashboard/refresh.ts` owns the shared presentation read
 scheduler for both terminal paths: focused by default, independent of focus for
 local stores, and 5-second polling when unfocused for network stores,
