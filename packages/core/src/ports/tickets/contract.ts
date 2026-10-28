@@ -7,7 +7,26 @@ import type {
   TicketDraft,
   TicketSource,
   TicketUpdate,
+  TicketCriteria,
+  TicketPage,
 } from '../types'
+
+/** Shared assertion also used by negative controls for declared capabilities. */
+export async function assertTicketPage(
+  source: TicketSource,
+  criteria: TicketCriteria,
+  page: TicketPage,
+  full: Awaited<ReturnType<TicketSource['listReady']>>,
+): Promise<void> {
+  const actual = await source.listPage!(criteria, page)
+  const ordered = page.order === 'newest' ? [...full.tickets].reverse() : full.tickets
+  const offset = page.offset ?? 0
+  expect(actual).toEqual({
+    tickets: ordered.slice(offset, offset + page.limit),
+    diagnostics: full.diagnostics,
+    total: full.tickets.length,
+  })
+}
 
 /** Lifecycle names supplied by an adapter's contract fixture. */
 export interface TicketSourceContractStates {
@@ -117,6 +136,45 @@ export function describeTicketSourceContract(
   factory: TicketSourceContractFactory,
 ): void {
   describe(`TicketSource contract: ${name}`, () => {
+    test('native pages equal exhaustive listing windows when declared', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        if (!source.listPage) return
+        const first = await freshLabel(harness, 'page')
+        const second = await freshLabel(harness, 'page-intersection')
+        for (let i = 0; i < 5; i++)
+          await createTracked(
+            harness,
+            {
+              title: contractTicketTitle('page'),
+              body: CONTRACT_TICKET_BODY,
+              labels: i % 2 ? [first] : [first, second],
+            },
+            { state: i === 4 ? harness.states.completed : harness.states.ready },
+          )
+        for (const criteria of [
+          { labels: [first] },
+          { state: harness.states.ready, labels: [first] },
+          { state: harness.states.completed, labels: [first] },
+          { labels: [first, second] },
+          { labels: [await freshLabel(harness, 'missing')] },
+          { state: harness.states.ready, labels: [] },
+        ]) {
+          const full = await source.listReady(criteria)
+          for (const order of [undefined, 'oldest', 'newest'] as const)
+            for (const window of [
+              { limit: 2 },
+              { limit: 2, offset: 1 },
+              { limit: 2, offset: full.tickets.length + 1 },
+              { limit: 0 },
+            ]) {
+              const page = { ...window, ...(order ? { order } : {}) }
+              await assertTicketPage(source, criteria, page, full)
+            }
+        }
+      })
+    })
+
     test('optional integration tree metadata preserves graph invariants', async () => {
       await withTicketSource(factory, async (harness) => {
         const source = harness.source
