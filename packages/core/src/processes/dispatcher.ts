@@ -1263,9 +1263,13 @@ export class Dispatcher {
     const criteriaFingerprint = hash(readyCriteria(this.deps.config))
     const startedAt = this.deps.clock().toISOString()
     const previous = this.latestScan()
+    const expected = await this.store.getRepoTicketScanCheckpoint(this.deps.repo)
+    const anchor = previous === undefined ? undefined : hash(scanPayload(previous))
+    const lastStartedAt = expected?.anchor === anchor ? expected?.startedAt : previous?.startedAt
     const elapsed =
-      previous === undefined ? Infinity : Date.parse(startedAt) - Date.parse(previous.startedAt)
+      lastStartedAt === undefined ? Infinity : Date.parse(startedAt) - Date.parse(lastStartedAt)
     return {
+      expected,
       startedAt,
       mode,
       readinessFingerprint,
@@ -1285,22 +1289,36 @@ export class Dispatcher {
     report: TickReport,
   ): Promise<void> {
     await this.store.ensureRepo(this.deps.repo)
-    await this.store.appendRepo(this.deps.repo, {
-      actor: DISPATCHER,
-      type: 'dispatcher.ticket-scan-completed',
-      payload: {
-        startedAt: checkpoint.startedAt,
-        mode: checkpoint.mode,
-        readinessFingerprint: checkpoint.readinessFingerprint,
-        criteriaFingerprint: checkpoint.criteriaFingerprint,
-        queued: report.queued,
-        invalidTickets: report.invalidTickets,
-        ticketDiagnostics: report.ticketDiagnostics.slice(0, 1000),
-        dependencyBlocked: report.dependencyBlocked,
-        dependencyDiagnostics: report.dependencyDiagnostics.slice(0, 1000),
-        creationWithheld: report.creationWithheld,
-        creationDiagnostics: report.creationDiagnostics.slice(0, 1000),
-      },
+    const payload = {
+      startedAt: checkpoint.startedAt,
+      mode: checkpoint.mode,
+      readinessFingerprint: checkpoint.readinessFingerprint,
+      criteriaFingerprint: checkpoint.criteriaFingerprint,
+      queued: report.queued,
+      invalidTickets: report.invalidTickets,
+      ticketDiagnostics: report.ticketDiagnostics.slice(0, 1000),
+      dependencyBlocked: report.dependencyBlocked,
+      dependencyDiagnostics: report.dependencyDiagnostics.slice(0, 1000),
+      creationWithheld: report.creationWithheld,
+      creationDiagnostics: report.creationDiagnostics.slice(0, 1000),
+    }
+    const previous = this.latestScan()
+    const unchanged =
+      previous !== undefined &&
+      JSON.stringify(scanPayload(previous, false)) === JSON.stringify(scanPayload(payload, false))
+    if (!unchanged) {
+      await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.ticket-scan-completed',
+        payload,
+      })
+    }
+    const recorded = unchanged ? previous! : payload
+    await this.store.compareAndSetRepoTicketScanCheckpoint(this.deps.repo, checkpoint.expected, {
+      startedAt: checkpoint.startedAt,
+      anchor: createHash('sha256')
+        .update(JSON.stringify(scanPayload(recorded)))
+        .digest('hex'),
     })
   }
 
@@ -6119,5 +6137,25 @@ export class Dispatcher {
       slug = `${base}-${n}`
     }
     return slug
+  }
+}
+
+/** Stable field order across JSON/JSONB and reduced projections; exclude only time for equality. */
+function scanPayload(
+  value: import('../events/repository').RepositoryEventWrite<'dispatcher.ticket-scan-completed'>['payload'],
+  includeTime = true,
+) {
+  return {
+    ...(includeTime ? { startedAt: value.startedAt } : {}),
+    mode: value.mode,
+    readinessFingerprint: value.readinessFingerprint,
+    criteriaFingerprint: value.criteriaFingerprint,
+    queued: value.queued,
+    invalidTickets: value.invalidTickets,
+    dependencyBlocked: value.dependencyBlocked,
+    creationWithheld: value.creationWithheld,
+    ticketDiagnostics: value.ticketDiagnostics,
+    dependencyDiagnostics: value.dependencyDiagnostics,
+    creationDiagnostics: value.creationDiagnostics,
   }
 }
