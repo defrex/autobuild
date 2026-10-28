@@ -825,6 +825,8 @@ test.skipIf(process.env.AB_CAPTURE_BROWSER_TEST !== '1')(
             expect(dialog.modal).toBe(true)
             expect(dialog.backdrop).toBe(dialog.expected)
           }
+          expect(result.height).toBe(spec.height)
+          expect(result.width).toBe(spec.width)
           confirmations++
           if (confirmations === 1) {
             await writeFile(
@@ -842,6 +844,21 @@ test.skipIf(process.env.AB_CAPTURE_BROWSER_TEST !== '1')(
                 join(scratch, 'negative-profile'),
               ),
             ).rejects.toThrow('Confirmation backdrop mismatch')
+            // The computed color stays correct, but half the backdrop is unpainted.
+            await writeFile(
+              path,
+              `${html}<style>.confirm-dialog::backdrop { clip-path: inset(50% 0 0 0) }</style>`,
+            )
+            await expect(
+              fullDocumentScreenshot(
+                chromium,
+                pathToFileURL(path).href,
+                join(scratch, 'clipped.png'),
+                spec.width,
+                spec.height,
+                join(scratch, 'clipped-profile'),
+              ),
+            ).rejects.toThrow('Undimmed confirmation pixel')
           }
         } else {
           expect(diagnostics).toEqual([])
