@@ -623,6 +623,10 @@ if (testUrl) {
 
           await migratePostgres(harness.url)
 
+          const cronIndexes =
+            await sql`SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()
+            AND indexname IN ('dispatcher_credentials_expiry', 'dispatcher_credentials_revoked')`
+          expect(cronIndexes).toHaveLength(2)
           const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
           expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
           expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
@@ -1841,3 +1845,22 @@ test.skipIf(!testUrl)(
     }
   },
 )
+
+if (testUrl)
+  test.each(['dispatcher_credentials_expiry', 'dispatcher_credentials_revoked'])(
+    'schema guard refuses missing cron index %s',
+    async (index) => {
+      const world = await schemaHarness()
+      const sql = new SQL(world.url)
+      try {
+        await migratePostgres(world.url)
+        await sql.unsafe(`DROP INDEX ${index}`)
+        await expect(assertSchema(sql)).rejects.toThrow(
+          'dispatcher credential index is missing or mismatched',
+        )
+      } finally {
+        await sql.close()
+        await world.cleanup()
+      }
+    },
+  )

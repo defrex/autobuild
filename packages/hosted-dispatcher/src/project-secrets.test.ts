@@ -24,7 +24,24 @@ test('fresh project environment, next tick mutations, key exclusion and redactio
   const dispatcher = createHostedDispatcher({
     env,
     openProjectRegistry: async () => testProjects([one, two]),
-    issueDispatcherCredential: async () => 'dispatcher-token',
+    openDispatcherCredentials: async () => ({
+      issue: async () => ({
+        token: 'dispatcher-token',
+        credential: {
+          id: 'dispatcher-id',
+          repo: '',
+          purpose: 'dispatcher',
+          createdAt: '',
+          createdBy: '',
+          lastUsedAt: null,
+          revokedAt: null,
+          expiresAt: null,
+        },
+      }),
+      deleteDispatcherCredential: async () => 1,
+      pruneDispatcherCredentials: async () => 0,
+      close: async () => {},
+    }),
     openSecrets: async () => ({
       resolveForTick: async (repo) => {
         if (fail && repo === one) throw new Error('private-refresh-state')

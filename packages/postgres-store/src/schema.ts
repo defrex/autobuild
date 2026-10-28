@@ -18,7 +18,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 21
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -890,7 +890,13 @@ export const SCHEMA_V19_CHECKSUM = new Bun.CryptoHasher('sha256')
   .digest('hex')
 export const PROJECT_ADMISSION_INDEX_DDL =
   'CREATE INDEX IF NOT EXISTS project_journal_repo_seq ON project_journal (repo, seq DESC);'
-export const SCHEMA_DDL = `${SCHEMA_V19_DDL}\n${PROJECT_ADMISSION_INDEX_DDL}`
+export const SCHEMA_V20_DDL = `${SCHEMA_V19_DDL}\n${PROJECT_ADMISSION_INDEX_DDL}`
+export const SCHEMA_V20_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V20_DDL)
+  .digest('hex')
+export const DISPATCHER_CREDENTIAL_INDEX_DDL = `CREATE INDEX IF NOT EXISTS dispatcher_credentials_expiry ON project_credentials (repo, expires_at, id) WHERE purpose = 'dispatcher';
+CREATE INDEX IF NOT EXISTS dispatcher_credentials_revoked ON project_credentials (repo, revoked_at, id) WHERE purpose = 'dispatcher';`
+export const SCHEMA_DDL = `${SCHEMA_V20_DDL}\n${DISPATCHER_CREDENTIAL_INDEX_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -1454,6 +1460,21 @@ export async function assertSchema(sql: SQL): Promise<void> {
     AND tablename = 'project_journal' AND indexname = 'project_journal_repo_seq'`
   if (!index || !String(index.indexdef).endsWith('(repo, seq DESC)'))
     throw schemaError('project admission index is missing or mismatched')
+  const indexes: { indexname: string; indexdef: string }[] =
+    await sql`SELECT indexname, indexdef FROM pg_indexes
+    WHERE schemaname = current_schema() AND tablename = 'project_credentials'
+      AND indexname IN ('dispatcher_credentials_expiry', 'dispatcher_credentials_revoked')`
+  for (const [name, column] of [
+    ['dispatcher_credentials_expiry', 'expires_at'],
+    ['dispatcher_credentials_revoked', 'revoked_at'],
+  ]) {
+    const definition = String(indexes.find((row) => row.indexname === name)?.indexdef ?? '')
+    if (
+      !definition.includes(`USING btree (repo, ${column}, id)`) ||
+      !definition.endsWith("WHERE (purpose = 'dispatcher'::text)")
+    )
+      throw schemaError('dispatcher credential index is missing or mismatched')
+  }
 }
 
 export async function assertTicketSchema(sql: SQL): Promise<void> {
@@ -1643,6 +1664,7 @@ export async function migratePostgres(
       await tx.unsafe(PROJECT_SECRETS_DDL)
       await tx.unsafe(PROJECT_LIFECYCLE_DDL)
       await tx.unsafe(PROJECT_ADMISSION_INDEX_DDL)
+      await tx.unsafe(DISPATCHER_CREDENTIAL_INDEX_DDL)
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
@@ -1695,6 +1717,8 @@ export async function migratePostgres(
           if (marker.checksum !== SCHEMA_CHECKSUM) {
             throw schemaError(`marker is incompatible: ${checksumMismatchCause(SCHEMA_VERSION)}`)
           }
+        } else if (version === 20 && marker.checksum === SCHEMA_V20_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {
           // v1 → v9: the idempotent full DDL above already applied the deltas
           // (the stream tables and the session tables); v1 databases never had

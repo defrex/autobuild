@@ -49,9 +49,13 @@ Dispatcher variables (server-only, like every secret; none reach the browser):
 - `AB_DISPATCHER_BUDGET_SECONDS`: per-invocation work budget (default 240,
   clamped 10–780); pair it with the route's `maxDuration` as described in the
   operator procedure.
-- `AB_DISPATCHER_TOKEN_TTL_SECONDS`: the TTL of the per-tick deployment
-  operator token minted for guests (default 604800 — 7 days; minimum 3600).
-  It must outlive your largest guest `timeoutSeconds` (e.g. 14400).
+- `AB_DISPATCHER_TOKEN_TTL_SECONDS`: an upper bound on stored cron credential
+  lifetime (default 604800 — 7 days; minimum 3600). Actual expiry is capped at
+  the invocation deadline plus 60 seconds. Successful and failed ticks delete
+  their exact credential; spawned builds and harvest use independent grants
+  retired by durable lifecycle facts. Each served repository prunes at most
+  100 expired/revoked dispatcher rows per tick. Legacy unexpired rows keep
+  their existing expiry and drain afterward; owner credentials are unaffected.
 - `CRON_SECRET`: the cron authorization shared secret. Unset or blank disables
   the endpoint entirely. It is never a signing input and is unrelated to
   `AB_STORE_SECRET`.
