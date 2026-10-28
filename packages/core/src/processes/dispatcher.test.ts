@@ -8316,6 +8316,139 @@ describe('durable ticket scan cadence', () => {
     return { ...h, scans: () => scans }
   }
 
+  for (const mode of ['admission', 'observation'] as const) {
+    test(`${mode}: 30 unchanged intervals stay silent and cold invocations retain cadence`, async () => {
+      let h = counted({ toml: 'ticketScanIntervalSeconds = 120' })
+      const run = () => (mode === 'observation' ? h.dispatcher.observeReady() : h.dispatcher.tick())
+      await run()
+      let total = h.scans()
+      for (let i = 0; i < 30; i++) {
+        h.clock.advance(120_000)
+        await run()
+        total++
+        const cold = counted({ store: h.store, toml: 'ticketScanIntervalSeconds = 120' })
+        cold.clock.set(h.clock().toISOString())
+        h = cold
+        h.clock.advance(60_000)
+        await run()
+        expect(h.scans()).toBe(0)
+        h.clock.advance(-60_000)
+      }
+      expect(total).toBe(31)
+      expect(
+        (await h.store.getRepoEvents(REPO)).filter(
+          (e) => e.type === 'dispatcher.ticket-scan-completed',
+        ),
+      ).toHaveLength(1)
+    })
+  }
+
+  test('every persisted outcome field records A to B to A, excluding only time and truncated diagnostics', async () => {
+    const h = counted()
+    const report = await h.dispatcher.tick()
+    const completeScan = 'completeScan'
+    const scanCheckpoint = 'scanCheckpoint'
+    const scanEvents = async () =>
+      (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      )
+    let expectedEvents = 1
+    const checkpoint = () => h.dispatcher[scanCheckpoint]('admission')
+    for (const key of [
+      'queued',
+      'invalidTickets',
+      'dependencyBlocked',
+      'creationWithheld',
+    ] as const) {
+      const changed = { ...report, [key]: report[key] + 1 }
+      await h.dispatcher[completeScan](await checkpoint(), changed)
+      await h.dispatcher[completeScan](await checkpoint(), changed)
+      expect(await scanEvents()).toHaveLength(++expectedEvents)
+      await h.dispatcher[completeScan](await checkpoint(), report)
+      expect(await scanEvents()).toHaveLength(++expectedEvents)
+    }
+    for (const key of [
+      'ticketDiagnostics',
+      'dependencyDiagnostics',
+      'creationDiagnostics',
+    ] as const) {
+      const changed = { ...report, [key]: ['exact string', 'exact string', 'second'] }
+      await h.dispatcher[completeScan](await checkpoint(), changed)
+      await h.dispatcher[completeScan](await checkpoint(), changed)
+      expect(await scanEvents()).toHaveLength(++expectedEvents)
+      await h.dispatcher[completeScan](await checkpoint(), {
+        ...changed,
+        [key]: ['second', 'exact string', 'exact string'],
+      })
+      expect(await scanEvents()).toHaveLength(++expectedEvents)
+      await h.dispatcher[completeScan](await checkpoint(), report)
+      expect(await scanEvents()).toHaveLength(++expectedEvents)
+    }
+    for (const key of ['readinessFingerprint', 'criteriaFingerprint', 'mode'] as const) {
+      const original = await checkpoint()
+      const changed = {
+        ...original,
+        [key]: key === 'mode' ? ('observation' as const) : 'b'.repeat(64),
+      }
+      await h.dispatcher[completeScan](changed, report)
+      await h.dispatcher[completeScan](changed, report)
+      expect(await scanEvents()).toHaveLength(++expectedEvents)
+      await h.dispatcher[completeScan](await checkpoint(), report)
+      expect(await scanEvents()).toHaveLength(++expectedEvents)
+    }
+    const diagnostics = Array.from({ length: 1001 }, (_, i) => String(i))
+    await h.dispatcher[completeScan](await checkpoint(), {
+      ...report,
+      ticketDiagnostics: diagnostics,
+    })
+    expect(await scanEvents()).toHaveLength(++expectedEvents)
+    diagnostics[1000] = 'outside persisted window'
+    h.clock.advance(60_000)
+    await h.dispatcher[completeScan](await checkpoint(), {
+      ...report,
+      ticketDiagnostics: diagnostics,
+    })
+    expect(await scanEvents()).toHaveLength(expectedEvents)
+  })
+
+  test('unrelated checkpoint anchors fall back to canonical measurement time', async () => {
+    const h = counted()
+    await h.dispatcher.tick()
+    const original = await h.store.getRepoTicketScanCheckpoint(REPO)
+    await h.store.compareAndSetRepoTicketScanCheckpoint(REPO, original, {
+      startedAt: new Date(h.clock().getTime() + 3600_000).toISOString(),
+      anchor: 'f'.repeat(64),
+    })
+    h.clock.advance(30_000)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(1)
+    h.clock.advance(30_000)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(2)
+  })
+
+  test('checkpoint failure remains due and stale CAS leaves the winner intact', async () => {
+    const h = counted()
+    await h.dispatcher.tick()
+    h.clock.advance(60_000)
+    const cas = h.store.compareAndSetRepoTicketScanCheckpoint.bind(h.store)
+    h.store.compareAndSetRepoTicketScanCheckpoint = async () => {
+      throw new Error('checkpoint unavailable')
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('checkpoint unavailable')
+    h.store.compareAndSetRepoTicketScanCheckpoint = cas
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(3)
+    const winner = await h.store.getRepoTicketScanCheckpoint(REPO)
+    expect(await cas(REPO, null, winner!)).toBe(false)
+    expect(await h.store.getRepoTicketScanCheckpoint(REPO)).toEqual(winner)
+    expect(
+      (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      ),
+    ).toHaveLength(1)
+  })
+
   test('first scan, exact boundary, full capacity, cached depth and per-tick actions', async () => {
     let harvests = 0
     const h = counted({

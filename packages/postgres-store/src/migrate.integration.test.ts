@@ -1841,3 +1841,27 @@ test.skipIf(!testUrl)(
     }
   },
 )
+
+test.skipIf(!testUrl)('v20 upgrade retains admission index and adds scan checkpoints', async () => {
+  const { SCHEMA_V20_CHECKSUM } = await import('./schema')
+  const world = await schemaHarness()
+  const sql = new SQL(world.url)
+  try {
+    await migratePostgres(world.url)
+    await sql`DROP TABLE repo_ticket_scan_checkpoints`
+    await sql`UPDATE ab_schema_migrations SET version = 20, checksum = ${SCHEMA_V20_CHECKSUM}`
+    await migratePostgres(world.url)
+    await assertSchema(sql)
+    const columns = await sql`SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'repo_ticket_scan_checkpoints'
+      ORDER BY ordinal_position`
+    expect(columns.map((row) => row.column_name)).toEqual(['repo', 'value'])
+    const marker =
+      await sql`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true`
+    expect(Number(marker[0].version)).toBe(SCHEMA_VERSION)
+    expect(marker[0].checksum).toBe(SCHEMA_CHECKSUM)
+  } finally {
+    await sql.close()
+    await world.cleanup()
+  }
+})

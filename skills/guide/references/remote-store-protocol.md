@@ -1331,6 +1331,56 @@ These operations never renew the lease. Repository records optionally expose
 They retain the previous completion while a new tick is open and after lease
 release. Build and session credentials cannot mutate repository ticks.
 
+### Repository ticket-scan scheduling checkpoint
+
+These required routes store advisory scan timing independently of repository
+journal facts:
+
+| Method and path | Request body | Successful response (HTTP 200) |
+| --- | --- | --- |
+| `GET /repos/:repo/ticket-scan-checkpoint` | None | Checkpoint object or `null` |
+| `POST /repos/:repo/ticket-scan-checkpoint` | `{expected: checkpoint | null, next: checkpoint}` | `{ok: boolean}` |
+
+A checkpoint is a strict object with exactly two required fields:
+
+```json
+{
+  "startedAt": "2026-10-28T12:00:00.000Z",
+  "anchor": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+`startedAt` is a valid ISO datetime string of at most 40 characters. `anchor`
+is exactly 64 lowercase hexadecimal characters. The POST body is also strict:
+unknown members, omitted fields, invalid checkpoints, or a null `next` receive
+HTTP 400 validation errors before mutation. `expected: null` means no checkpoint
+is present; it does not mean unconditional replacement.
+
+POST performs an atomic compare-and-set on the exact repository key. It replaces
+the value and returns `{ok: true}` only when the stored checkpoint equals
+`expected` in both fields (or both are absent). A stale expectation returns
+`{ok: false}` without mutation. Concurrent absent-row writers must not both win;
+the comparison and insertion are one atomic operation. An unknown repository
+returns `null` for GET and `{ok: false}` for POST, without creating a repository.
+
+Both routes use the ordinary repository authorization and project-registration
+and lifecycle gates, including release/protocol admission. Admin and matching
+project credentials may read and update; same-project delegated credentials may
+read under the ordinary repository GET rules, but build, phase, session and
+harvest delegates cannot update this checkpoint. Cross-project access is refused.
+The routes do not require or renew a repository lease.
+
+Retain at most one fixed-size checkpoint per repository, durable across server
+restarts and removed with repository deletion. Reads and CAS operations have
+bounded cost independent of journal length and read no event rows. Neither
+operation appends journal facts, advances journal high water or change position,
+or changes workflow state. The anchor identifies the canonical last journaled
+scan payload, including its recorded timestamp; the dispatcher uses checkpoint
+timing only while that anchor matches. The journal remains authoritative for
+scan outcomes, and unchanged successful scans can advance timing without a new
+scan fact. An unsupported route or invalid response is a typed remote failure;
+clients must not fall back to journal replay or a process-local timer.
+
 The optional `integrationAuditPending` digest fact is introduced on the 0.14
 release line without changing protocol identity 4. It survives build completion
 and is cleared by audit settlement. Services omit it for historical 0.12/0.13

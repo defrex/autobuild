@@ -146,3 +146,10 @@ export type {
 export { assertPublicSnapshotReducer } from './snapshots'
 
 export { readPersistedBuildDigests } from './reduced-reads'
+
+export {
+  validateScanCheckpoint,
+  sameScanCheckpoint,
+  repoTicketScanCheckpointSchema,
+  type RepoTicketScanCheckpoint,
+} from './ticket-scan-checkpoint'
