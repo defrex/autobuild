@@ -139,6 +139,7 @@ A plugin relying on a capability declares an `apiVersion` range containing its v
 - **1.5** `path` is the path in the workspace environment; set optional `localPath` only when the dispatcher can reach that same copy directly. Workspace-owned executors receive the durable provider locator as `BuildExecutionStart.workspaceRef`; local PID supervision stays host-owned.
 - **1.7** Workspace factory seams.
 - **1.8** Forge failure classification and request observers.
+- **1.9** Optional native ticket-source paging (`listPage`); older sources retain operator slicing.
 
 ## 2. Create a repository-local module
 
@@ -424,3 +425,23 @@ An adapter opts in with `integrationTree: true` and must:
 - expose kind and target in revisions
 
 Don't opt in unless the source preserves these semantics. Legacy sources get ordinary CRUD; the compatibility facade refuses metadata writes before legacy methods run, and unsupported sources should also refuse metadata at their own write boundary.
+
+## Optional ticket paging capability
+
+Native paging is an optional API 1.9 ticket-source capability:
+`listPage?(criteria: TicketCriteria, page: TicketPage): Promise<TicketPageListing>`.
+The SDK exports these types; the result is `TicketListing & { total: number }`.
+Criteria retain state, labels (AND), and assignee semantics. The page has a
+nonnegative integer `limit`, optional nonnegative integer `offset` (default 0),
+and optional `order: 'oldest' | 'newest'` (default oldest). Newest reverses the
+entire source order before offset and limit. Total counts all matches, even
+with limit zero or an offset past the end. Records, diagnostics and errors
+match the exhaustive listing. The shared `describeTicketSourceContract` suite
+automatically compares declared native paging with full-read windows.
+
+Only paged operator listings select this capability. Sources without it retain
+the full-read/reverse/slice fallback; native errors propagate. Unpaged operator
+listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
+`listReady`/`listAll`. The hosted PostgreSQL source counts matches without
+bodies and reads only the SQL-bounded window. File, Linear and the remote
+`HostedTicketSource` retain fallback; the POST list-ready protocol stays exhaustive.

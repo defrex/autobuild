@@ -371,3 +371,43 @@ test('tree service retains completed source tickets, diagnostics and invalid gra
   source.listAll = async () => ({ tickets: [{ ...node, target: node.ref.id }], diagnostics: [] })
   await expect(readTicketTree(source, 'main')).rejects.toThrow('cyclic')
 })
+
+test('native pages forward criteria and window without a full read or double slicing', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource([seed])
+  const calls: unknown[] = []
+  const native = Object.assign(source, {
+    async listPage(criteria: unknown, page: unknown) {
+      expect(this as unknown).toBe(source)
+      calls.push({ criteria, page })
+      return { tickets: [seed], diagnostics: ['native diagnostic'], total: 99 }
+    },
+  })
+  const full = source.listReady.bind(source)
+  source.listReady = async () => {
+    throw new Error('full read')
+  }
+  const page = { limit: 1, offset: 40, order: 'newest' as const }
+  const result = await listOperatorTickets({
+    store,
+    repo,
+    backend: backend(native),
+    labels: ['x'],
+    page,
+  })
+  expect(result.tickets.map((t) => t.ref.id)).toEqual([seed.ref.id])
+  expect(result.total).toBe(99)
+  expect(result.diagnostics).toEqual(['native diagnostic'])
+  expect(calls).toEqual([{ criteria: { state: 'Backlog', labels: ['x'] }, page }])
+  await expect(listOperatorTickets({ store, repo, backend: backend(native) })).rejects.toThrow(
+    'full read',
+  )
+  native.listPage = async () => {
+    throw new Error('native failure')
+  }
+  await expect(
+    listOperatorTickets({ store, repo, backend: backend(native), page: { limit: 0 } }),
+  ).rejects.toThrow('native failure')
+  source.listReady = full
+  expect((await listOperatorTickets({ store, repo, backend: backend(native) })).total).toBe(1)
+})

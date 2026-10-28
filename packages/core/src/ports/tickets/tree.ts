@@ -79,7 +79,7 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
           const ticket = await target.get(id)
           return ticket ? normalizeTicket(ticket, !!target.integrationTree) : null
         }
-      if (property === 'listReady' || property === 'listAll')
+      if (property === 'listReady' || property === 'listAll' || property === 'listPage')
         return async (...args: unknown[]) => {
           const listing = await value.apply(target, args)
           return {
