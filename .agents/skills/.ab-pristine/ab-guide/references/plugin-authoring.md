@@ -27,7 +27,7 @@ Import public types only from `@defrex/autobuild/plugin-sdk`; internal module pa
 
 All four manifest maps have production selectors. Omitted forge and workspace selectors default to builtin `github` and `git-worktree`; roles keep normal runtime inheritance.
 
-`BuildStore` and `BlobStore` contract types are exported for remote-server authors, but BuildStore is **not** an in-process manifest map: implement the language-neutral remote store protocol and run its conformance path. The optional `BuildStore.getLatestArtifactMeta` capability must return only the latest metadata in constant-size reads without loading blob content or listing revisions; omit it when unsupported (see the [remote store protocol](remote-store-protocol.md)). `TelemetrySource` is a frozen port type with no plugin registration surface in this release.
+`BuildStore` and `BlobStore` contract types are exported for remote-server authors, but BuildStore is **not** an in-process manifest map: implement the language-neutral remote store protocol and run its conformance path. The optional `BuildStore.getLatestArtifactMeta` capability must return only the latest metadata in constant-size reads without loading blob content or listing revisions; omit it when unsupported. `TelemetrySource` is a frozen port type with no plugin registration surface in this release.
 
 ### `ticket-source`
 
