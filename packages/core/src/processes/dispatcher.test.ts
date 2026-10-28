@@ -11300,3 +11300,41 @@ test('recovery diagnostics retain a confirmed claim and original error when earl
   await restarted.dispatcher.tick({ acceptNewWork: false })
   expect((await h.tickets.get('T-1'))?.state).toBe('Ready')
 })
+
+test('failed recovery batches do not starve attempts that have never been retried', async () => {
+  const h = harness({
+    tickets: Array.from({ length: 10 }, (_, i) => readyTicket(`T-${i}`, { state: 'Doing' })),
+  })
+  await h.store.ensureRepo(REPO)
+  for (let i = 0; i < 10; i++) {
+    const ticket = { source: 'fake', id: `T-${i}` }
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: {
+        attempt: `prep-${i}`,
+        ticket,
+        readyState: 'Ready',
+        claimedState: 'Doing',
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.claimed',
+      payload: { attempt: `prep-${i}`, ticket },
+    })
+  }
+  const transition = h.tickets.transition.bind(h.tickets)
+  h.tickets.transition = async (id, state) => {
+    if (Number(id.slice(2)) < 8) throw new Error('handback unavailable')
+    return transition(id, state)
+  }
+  await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('handback unavailable')
+  expect(h.tickets.transitions).toEqual([])
+  h.clock.advance(60_000)
+  await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('handback unavailable')
+  expect(h.tickets.transitions).toEqual([
+    { id: 'T-8', state: 'Ready' },
+    { id: 'T-9', state: 'Ready' },
+  ])
+})

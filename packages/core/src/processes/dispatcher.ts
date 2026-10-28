@@ -4664,7 +4664,12 @@ export class Dispatcher {
       .filter(
         (attempt) => !attempt.retryAt || Date.parse(attempt.retryAt) <= this.deps.clock().getTime(),
       )
-      .sort((a, b) => a.attempt.localeCompare(b.attempt))
+      .sort(
+        (a, b) =>
+          Date.parse(a.retryAt ?? '1970-01-01T00:00:00.000Z') -
+            Date.parse(b.retryAt ?? '1970-01-01T00:00:00.000Z') ||
+          a.attempt.localeCompare(b.attempt),
+      )
       .slice(0, 8)
     const failures: unknown[] = []
     for (const attempt of pending) {
