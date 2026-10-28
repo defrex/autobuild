@@ -23371,6 +23371,10 @@
         "incompleteIdentities": {
           "type": "50",
           "optional": false
+        },
+        "holder": {
+          "type": "15",
+          "optional": true
         }
       }
     },
