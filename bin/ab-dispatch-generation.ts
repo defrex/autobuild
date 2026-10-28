@@ -9,6 +9,7 @@ import {
 } from '../packages/core/src/cli/dispatch-launch-contract'
 import { watchDispatchParent } from '../packages/core/src/cli/dispatch-parent-watch'
 let code: number = GENERATION_EXITS.failed
+const readerMode = process.argv[2]?.startsWith('--read-') ?? false
 let presentationOwner = process.argv[2] !== '--preflight'
 try {
   const launch = consumeGenerationMarker(process.env, distributionRoot())
@@ -87,7 +88,7 @@ try {
     watch.close()
   }
 } catch (error) {
-  if (presentationOwner && ownsDispatchPresentation())
+  if (readerMode || (presentationOwner && ownsDispatchPresentation()))
     console.error(error instanceof Error ? error.message : String(error))
 }
 process.exit(code)

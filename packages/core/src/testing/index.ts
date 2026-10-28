@@ -68,6 +68,7 @@ export { ProjectCredentials } from '../cli/project-credentials'
 export { dispatchReadBudget } from './dispatch-read-budget'
 
 export {
+  catalogSkewReadBudget,
   reducedReadBudget,
   countHistoricalRows,
   type ReducedReadCosts,
