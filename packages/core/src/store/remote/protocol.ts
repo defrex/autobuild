@@ -39,7 +39,14 @@ import type { ArtifactMeta, RepositoryArtifactMeta, SessionArtifactMeta } from '
 
 // ── Errors (D6: errors as feedback over the wire) ────────────────────────────
 
-export const errorKindSchema = z.enum(['validation', 'not-found', 'auth', 'conflict', 'internal'])
+export const errorKindSchema = z.enum([
+  'validation',
+  'not-found',
+  'auth',
+  'conflict',
+  'internal',
+  'unsupported-operation',
+])
 export type ErrorKind = z.infer<typeof errorKindSchema>
 
 export const errorBodySchema = z.object({

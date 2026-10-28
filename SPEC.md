@@ -3711,6 +3711,17 @@ decide where a build's effective configuration is composed from:
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
 | Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `merge`, `upgrade` | The dispatcher's live snapshot; the build runner never interprets them. |
 
+Dispatcher lease sweeps may reuse parsed effective-config pins in a disposable
+128-entry LRU, validated on each lookup by the latest artifact metadata revision.
+Artifact-only deposits invalidate reuse independently of build events. Each
+sweep recomputes decisions from current reduced facts, live deployment settings,
+and the applicable cycle capture. Missing pins retain the existing live-config
+fallback; unreadable or invalid pins invalidate reuse and withhold decisions
+until a successful read or repair. Launch, resume and merge action boundaries
+continue reading fresh full artifacts. Restart and eviction change read volume
+only. Adapters without the optional latest-metadata capability retain full
+artifact reads; metadata lookup never lists revision history or loads blobs.
+
 A build's pipeline definition is therefore composed from the build's own
 branch: in origin mode the dispatcher reads `autobuild.toml` at the build's
 recorded base commit (or its branch head once the build has published commits)
