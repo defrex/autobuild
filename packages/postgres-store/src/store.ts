@@ -1,3 +1,9 @@
+import {
+  repoTicketScanCheckpointSchema,
+  sameScanCheckpoint,
+  validateScanCheckpoint,
+  type RepoTicketScanCheckpoint,
+} from '@defrex/autobuild/store-adapter'
 import { PROJECT_BLOB_LOCK, reserveProjectBlobs } from './project-lifecycle'
 import { hostedProjectContext } from './request-context'
 import {
@@ -731,6 +737,29 @@ export class PostgresBuildStore implements BuildStore {
   }
   async claimLease(slug: string, holder: string, ttlMs: number): Promise<boolean> {
     return this.claim('builds', slug, holder, ttlMs)
+  }
+  async getRepoTicketScanCheckpoint(repo: string): Promise<RepoTicketScanCheckpoint | null> {
+    return this.retry.run(this.sql, async (q) => {
+      const rows = await q`SELECT value FROM repo_ticket_scan_checkpoints WHERE repo=${repo}`
+      return rows[0] ? validateScanCheckpoint(json(rows[0].value)) : null
+    })
+  }
+  async compareAndSetRepoTicketScanCheckpoint(
+    repo: string,
+    expected: RepoTicketScanCheckpoint | null,
+    next: RepoTicketScanCheckpoint,
+  ): Promise<boolean> {
+    expected = validateScanCheckpoint(expected)
+    next = repoTicketScanCheckpointSchema.parse(next)
+    return this.tx(async (q) => {
+      const rows = await q`SELECT repo FROM repo_streams WHERE repo=${repo} FOR UPDATE`
+      if (!rows.length) return false
+      const current = await q`SELECT value FROM repo_ticket_scan_checkpoints WHERE repo=${repo}`
+      if (!sameScanCheckpoint(validateScanCheckpoint(json(current[0]?.value ?? null)), expected))
+        return false
+      await q`INSERT INTO repo_ticket_scan_checkpoints (repo,value) VALUES (${repo},${JSON.stringify(next)}::jsonb) ON CONFLICT(repo) DO UPDATE SET value=excluded.value`
+      return true
+    })
   }
   async beginRepoTick(repo: string, holder: string): Promise<string | null> {
     return this.tx(async (q) => {

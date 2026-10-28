@@ -711,10 +711,27 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     // A cold cron invocation reuses the durable observation; no ready listing.
     expect((await get({ authorization: 'Bearer cron-secret' })).status).toBe(200)
     expect(readyScans).toBe(observedScans)
+    // Repeated unchanged observations advance only mutable cadence, including cold calls.
+    const scanFactCount = (await journal()).filter(
+      (event) => event.type === 'dispatcher.ticket-scan-completed',
+    ).length
+    for (let i = 0; i < 3; i++) {
+      clock.advance(60_000)
+      expect((await get({ authorization: 'Bearer cron-secret' })).status).toBe(200)
+      expect(readyScans).toBe(observedScans + i + 1)
+      const afterScan = readyScans
+      clock.advance(30_000)
+      expect((await get({ authorization: 'Bearer cron-secret' })).status).toBe(200)
+      expect(readyScans).toBe(afterScan)
+      clock.advance(-30_000)
+    }
+    expect(
+      (await journal()).filter((event) => event.type === 'dispatcher.ticket-scan-completed'),
+    ).toHaveLength(scanFactCount)
     await operator.setIntake(REPO, true)
     expect((await get({ authorization: 'Bearer cron-secret' })).status).toBe(200)
     expect(ticketBackend.claims).toContain('T-3')
-    expect(readyScans).toBe(observedScans + 1)
+    expect(readyScans).toBe(observedScans + 4)
     {
       let b3Slug = ''
       await until(async () => {
