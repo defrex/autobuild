@@ -94,14 +94,27 @@ export async function persistReducerSnapshot(
   name: string,
   snapshot: ReducerSnapshot,
 ): Promise<boolean> {
-  if (store.putReducerSnapshot === undefined) return false
+  return (await persistReducerSnapshotOutcome(store, scope, name, snapshot)) === 'written'
+}
+
+export type SnapshotWriteOutcome = 'written' | 'refused' | 'unavailable' | 'unsupported'
+
+/** Preserve refusal versus transport failure for best-effort retry scheduling. */
+export async function persistReducerSnapshotOutcome(
+  store: Partial<SnapshotStore>,
+  scope: SnapshotScope,
+  name: string,
+  snapshot: ReducerSnapshot,
+): Promise<SnapshotWriteOutcome> {
+  if (store.putReducerSnapshot === undefined) return 'unsupported'
   try {
-    return await store.putReducerSnapshot(scope, catalogSnapshotName(name), {
+    const written = await store.putReducerSnapshot(scope, catalogSnapshotName(name), {
       ...snapshot,
       state: { catalogIdentity: READ_CATALOG_IDENTITY, acc: snapshot.state },
     })
+    return written ? 'written' : 'refused'
   } catch {
-    return false
+    return 'unavailable'
   }
 }
 

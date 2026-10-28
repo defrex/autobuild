@@ -142,3 +142,24 @@ describe('scoped handles', () => {
     ).rejects.toBeInstanceOf(PhaseSessionError)
   })
 })
+
+test('detailed snapshot outcomes distinguish settled refusal from retryable failure', async () => {
+  const { persistReducerSnapshotOutcome } = await import('./snapshots')
+  const scope = { kind: 'repo', repo: 'outcomes' } as const
+  const snapshot = { version: 1, cursor: 0, state: {} }
+  for (const [put, outcome] of [
+    [async () => true, 'written'],
+    [async () => false, 'refused'],
+    [
+      async () => {
+        throw new Error('offline')
+      },
+      'unavailable',
+    ],
+    [undefined, 'unsupported'],
+  ] as const) {
+    expect(
+      await persistReducerSnapshotOutcome({ putReducerSnapshot: put }, scope, 'test', snapshot),
+    ).toBe(outcome)
+  }
+})

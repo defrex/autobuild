@@ -178,3 +178,32 @@ test('frontend warm history never correlates; cold history remembers a holder on
   expect(completeness).toEqual([false, false])
   expect([bounded, full]).toEqual([0, 0])
 })
+
+test('successful lease samples select self and no holder; metadata failures preserve selection', async () => {
+  const f = await fixture()
+  const selected: (string | undefined)[] = []
+  let fail = false
+  const getRepo = f.store.getRepo.bind(f.store)
+  f.store.getRepo = async (repo) => {
+    if (fail) throw new Error('offline')
+    return getRepo(repo)
+  }
+  const resolver = new StandbyIdentityResolver(f.store, f.repo, {
+    selectHolder: (holder) => selected.push(holder),
+    allowLookup: () => true,
+    remember: (events) =>
+      expect(
+        events.every((e) => e.type === 'dispatcher.run-started' && e.payload.run === 'owner'),
+      ).toBe(true),
+  })
+  await resolver.refresh('self', undefined, f.now())
+  fail = true
+  await resolver.refresh('self', 'owner', f.now())
+  expect(selected).toEqual(['owner'])
+  fail = false
+  await f.store.releaseRepoLease(f.repo, 'owner')
+  await resolver.refresh('self', undefined, f.now())
+  await f.store.claimRepoLease(f.repo, 'self', 60000)
+  await resolver.refresh('self', undefined, f.now())
+  expect(selected).toEqual(['owner', undefined, 'self'])
+})
