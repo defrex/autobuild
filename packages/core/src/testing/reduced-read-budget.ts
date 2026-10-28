@@ -514,3 +514,117 @@ export function countHistoricalRows(costs: ReducedReadCosts, rows: unknown): num
     return repo === costs.history!.repo && seq <= costs.history!.through
   }).length
 }
+
+/** Fresh operator backends must not turn canonical build history into ticket requests. */
+export async function operatorTicketAssociationBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { getOperatorTicket, mutateOperatorTicket } = await import('../operator/tickets')
+  const legacy = 'ticket-12345678-1234-1234-1234-123456789abc'
+  const missing = 'ticket-87654321-4321-4321-4321-cba987654321'
+  const config = parseConfig('[tickets]\nsource="hosted"\nteamKey="AUT"\nreadyState="Todo"')
+  for (const size of [1, 200]) {
+    for (const withLegacy of [false, true]) {
+      let tick = 0
+      const store = new MemoryBuildStore({ clock: () => new Date(++tick * 1000) })
+      await store.ensureRepo(repo)
+      for (let i = 0; i < size; i++)
+        await store.createBuild({
+          slug: `canonical-${i}`,
+          repo,
+          ticket: { source: 'hosted', id: i === 0 ? 'ticket-1' : `OLD-${i}` },
+        })
+      if (withLegacy) {
+        for (const [slug, id] of [
+          ['missing', missing],
+          ['missing-again', missing],
+          ['alias-old', legacy],
+          ['alias-middle', legacy],
+          ['alias-new', legacy],
+        ])
+          await store.createBuild({
+            slug: slug!,
+            repo,
+            ticket: { source: 'hosted', id: id! },
+          })
+        await store.append('alias-old', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+      }
+      // Count actual public event reads, including reads made by reduced-value recovery.
+      let eventReads = 0
+      const checked = new Proxy(store, {
+        get(target, key) {
+          const value = Reflect.get(target, key, target)
+          if (key === 'getEvents' || key === 'getRepoEvents')
+            return (...args: unknown[]) => {
+              eventReads++
+              return value.apply(target, args)
+            }
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      for (const operation of ['get', 'update', 'move'] as const) {
+        // A new source and backend per call rules out cross-request caching.
+        const source = new FakeTicketSource([
+          {
+            ref: { source: 'hosted', id: 'AUT-1' },
+            revision: 'fixture',
+            title: 'Undispatched',
+            body: '',
+            state: 'Triage',
+            labels: [],
+            resolved: false,
+            blockedBy: [],
+          },
+        ])
+        Object.defineProperty(source, 'name', { value: 'hosted' })
+        const get = source.get.bind(source)
+        const calls: string[] = []
+        source.get = async (id) => {
+          calls.push(id)
+          return get(id === legacy ? 'AUT-1' : id)
+        }
+        const backend = {
+          contextFor: async () => ({
+            repo,
+            tickets: config.tickets,
+            teamKey: 'AUT',
+          }),
+          sourceFor: () => source,
+          statesFor: () => ['Triage', 'Todo'],
+        }
+        const detail =
+          operation === 'get'
+            ? await getOperatorTicket({
+                store: checked,
+                repo,
+                backend,
+                id: 'AUT-1',
+              })
+            : await mutateOperatorTicket({
+                store: checked,
+                repo,
+                backend,
+                operation:
+                  operation === 'update'
+                    ? {
+                        kind: 'update',
+                        id: 'AUT-1',
+                        patch: { title: 'Updated' },
+                      }
+                    : { kind: 'move', id: 'AUT-1', state: 'Todo' },
+              })
+        expect(detail.build?.slug ?? null).toBe(withLegacy ? 'alias-new' : null)
+        expect(calls.filter((id) => id !== 'AUT-1').sort()).toEqual(
+          withLegacy ? [missing, legacy].sort() : [],
+        )
+        expect(calls.filter((id) => id === 'AUT-1')).toHaveLength(
+          operation === 'get' ? 1 : operation === 'update' ? 3 : 2,
+        )
+        expect(eventReads).toBe(0)
+      }
+    }
+  }
+}
