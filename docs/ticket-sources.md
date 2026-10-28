@@ -130,3 +130,21 @@ bun ab plugin test ticket-source acme
 ```
 
 Declare tree support only if you keep the [optional tree contract](plugin-authoring.md#optional-ticket-tree-capability) on the same port and harness: exhaustive pagination, canonical targets, revision coverage and atomic rejection.
+
+Native paging is an optional API 1.9 ticket-source capability:
+`listPage?(criteria: TicketCriteria, page: TicketPage): Promise<TicketPageListing>`.
+The SDK exports these types; the result is `TicketListing & { total: number }`.
+Criteria retain state, labels (AND), and assignee semantics. The page has a
+nonnegative integer `limit`, optional nonnegative integer `offset` (default 0),
+and optional `order: 'oldest' | 'newest'` (default oldest). Newest reverses the
+entire source order before offset and limit. Total counts all matches, even
+with limit zero or an offset past the end. Records, diagnostics and errors
+match the exhaustive listing. The shared `describeTicketSourceContract` suite
+automatically compares declared native paging with full-read windows.
+
+Only paged operator listings select this capability. Sources without it retain
+the full-read/reverse/slice fallback; native errors propagate. Unpaged operator
+listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
+`listReady`/`listAll`. The hosted PostgreSQL source counts matches without
+bodies and reads only the SQL-bounded window. File, Linear and the remote
+`HostedTicketSource` retain fallback; the POST list-ready protocol stays exhaustive.
