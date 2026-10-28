@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { SQL } from 'bun'
 import { AccessError, lockAccess, type HumanActor } from './organizations'
 import { normalizeProjectRepository } from './projects'
@@ -48,10 +49,11 @@ export class PostgresProjectDeletion implements ProjectDeletion {
     const repo = normalizeProjectRepository(raw)
     return this.sql.begin(async (transaction) => {
       const tx = transaction as SQL
+      const [registration] =
+        await tx`SELECT generation FROM project_generations WHERE repo = ${repo} FOR SHARE`
       await lockAccess(tx)
       await this.authorize(tx, actor, repo)
-      const [registration] =
-        await tx`SELECT generation FROM project_generations WHERE repo = ${repo}`
+      const [operation] = await tx`SELECT generation FROM project_deletions WHERE repo = ${repo}`
       if (!registration) throw new AccessError(404, 'unknown project')
       const [counts] = await tx`SELECT
         (SELECT count(*) FROM builds WHERE repo = ${repo}) AS builds,
@@ -60,7 +62,7 @@ export class PostgresProjectDeletion implements ProjectDeletion {
         (SELECT count(*) FROM project_secrets WHERE repo = ${repo} AND kind <> 'static') AS accounts`
       return {
         repo,
-        token: `"${registration.generation}"`,
+        token: `"${operation?.generation ?? registration.generation}"`,
         builds: Number(counts.builds),
         tickets: Number(counts.tickets),
         secrets: Number(counts.secrets),
@@ -78,6 +80,8 @@ export class PostgresProjectDeletion implements ProjectDeletion {
     const pending = await this.sql.begin(async (transaction) => {
       const tx = transaction as SQL
       await tx`SELECT pg_advisory_xact_lock(${PROJECT_LIFECYCLE_LOCK})`
+      const [current] =
+        await tx`SELECT generation FROM project_generations WHERE repo = ${repo} FOR UPDATE`
       await lockAccess(tx)
       const [audit] =
         await tx`SELECT actor FROM project_deletion_audit WHERE repo = ${repo} AND generation = ${generation}`
@@ -87,12 +91,18 @@ export class PostgresProjectDeletion implements ProjectDeletion {
         return false
       }
       await this.authorize(tx, actor, repo)
-      const [current] = await tx`SELECT generation FROM project_generations WHERE repo = ${repo}`
+      const [existing] = await tx`SELECT generation FROM project_deletions WHERE repo = ${repo}`
+      if (existing) {
+        if (existing.generation !== generation)
+          throw new AccessError(412, 'project changed; refresh deletion preview')
+        return true
+      }
       if (!current || current.generation !== generation)
         throw new AccessError(412, 'project changed; refresh deletion preview')
       await tx`INSERT INTO project_deletions (repo,generation,organization_id,actor,ts)
         VALUES (${repo},${generation},(SELECT organization_id FROM project_organizations WHERE repo = ${repo}),${actor.email},now())
         ON CONFLICT (repo) DO NOTHING`
+      await tx`UPDATE project_generations SET generation = ${randomUUID()} WHERE repo = ${repo}`
       await tx`INSERT INTO project_journal (seq,repo,action,actor,ts)
         SELECT nextval('project_journal_seq'),${repo},'removed',${actor.email},now()
         WHERE (SELECT action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1) = 'added'`
@@ -107,6 +117,7 @@ export class PostgresProjectDeletion implements ProjectDeletion {
     await this.sql.begin(async (transaction) => {
       const tx = transaction as SQL
       await tx`SELECT pg_advisory_xact_lock(${PROJECT_LIFECYCLE_LOCK})`
+      await tx`SELECT generation FROM project_generations WHERE repo = ${repo} FOR UPDATE`
       await lockAccess(tx)
       const [operation] =
         await tx`SELECT * FROM project_deletions WHERE repo = ${repo} AND generation = ${generation}`

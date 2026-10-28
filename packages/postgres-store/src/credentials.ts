@@ -1,5 +1,12 @@
-import { PROJECT_LIFECYCLE_LOCK, captureProject, admitHostedRequest } from './project-lifecycle'
-import { rememberProjectGeneration } from './request-context'
+import { AccessError } from './organizations'
+import { projectTransaction } from './request-context'
+import {
+  PROJECT_LIFECYCLE_LOCK,
+  captureProject,
+  admitHostedRequest,
+  admitProject,
+} from './project-lifecycle'
+import { hostedProjectContext } from './request-context'
 import { SQL } from 'bun'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import {
@@ -103,11 +110,13 @@ export class PostgresCredentialStore implements CredentialStore {
       throw new Error('credential expiry must be in the future')
     const id = randomBytes(16).toString('hex')
     const secret = randomBytes(32).toString('hex')
-    const credential = await this.sql.begin(async (transaction) => {
+    const credential = await projectTransaction(this.sql, async (transaction) => {
       const tx = transaction as SQL
-      await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
+      if (!hostedProjectContext())
+        await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
+      const admission = await captureProject(tx, repo)
       await admitHostedRequest(tx)
-      await captureProject(tx, repo)
+      await admitProject(tx, admission)
       return insertPreparedCredential(tx, {
         id,
         digest: hash(secret).toString('hex'),
@@ -121,14 +130,11 @@ export class PostgresCredentialStore implements CredentialStore {
   }
 
   async authenticate(token: string, now: Date): Promise<CredentialMetadata | null> {
-    return this.sql.begin(async (transaction) => {
+    return projectTransaction(this.sql, async (transaction) => {
       const tx = transaction as SQL
-      await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
       const parts = /^abp_1_([a-f0-9]{32})_([a-f0-9]{64})$/.exec(token)
       if (!parts) return null
-      const [row] = await tx`SELECT c.*, (SELECT action FROM project_journal
-      WHERE repo = c.repo ORDER BY seq DESC LIMIT 1) AS project_action
-      FROM project_credentials c WHERE id = ${parts[1]!}`
+      const [row] = await tx`SELECT c.* FROM project_credentials c WHERE id = ${parts[1]!}`
       if (
         !row ||
         !timingSafeEqual(hash(parts[2]!), Buffer.from(row.digest, 'hex')) ||
@@ -136,15 +142,18 @@ export class PostgresCredentialStore implements CredentialStore {
         (row.expires_at && new Date(row.expires_at) <= now)
       )
         return null
-      if (row.project_action !== 'added') throw new ProjectNotRegisteredError()
-      const admission = await captureProject(tx, row.repo)
-      rememberProjectGeneration(admission.repo, admission.generation)
+      const admission = await captureProject(tx, row.repo).catch((error) => {
+        if (error instanceof AccessError && error.status === 403)
+          throw new ProjectNotRegisteredError()
+        throw error
+      })
       const cutoff = new Date(now.getTime() - LAST_USE_INTERVAL_MS).toISOString()
       if (
         row.last_used_at &&
         new Date(row.last_used_at).getTime() > now.getTime() - LAST_USE_INTERVAL_MS
       )
         return metadata(row)
+      await admitProject(tx, admission)
       // Competing writers recheck the cutoff after waiting for the row lock.
       // An in-flight authentication may finish after revocation.
       const [used] = await tx`UPDATE project_credentials SET last_used_at = ${now.toISOString()}
@@ -162,8 +171,11 @@ export class PostgresCredentialStore implements CredentialStore {
   }
   async revoke(raw: string, id: string, user: string): Promise<void> {
     actor(user)
-    await this
-      .sql`UPDATE project_credentials SET revoked_at = COALESCE(revoked_at, ${new Date().toISOString()}) WHERE repo = ${normalizeProjectRepository(raw)} AND id = ${id}`
+    await projectTransaction(this.sql, async (transaction) => {
+      const tx = transaction as SQL
+      await admitHostedRequest(tx)
+      await tx`UPDATE project_credentials SET revoked_at = COALESCE(revoked_at, ${new Date().toISOString()}) WHERE repo = ${normalizeProjectRepository(raw)} AND id = ${id}`
+    })
   }
   async close(): Promise<void> {
     if (this.ownsPool) await this.sql.close()

@@ -1,4 +1,5 @@
-import { admitHostedRequest } from './project-lifecycle'
+import { projectTransaction, hostedProjectContext } from './request-context'
+import { admitHostedRequest, findProject, captureProject, admitProject } from './project-lifecycle'
 import { seedTicketStates, policyStateNames } from './ticket-states'
 import type { Exec } from './retry'
 import type { SQL } from 'bun'
@@ -13,7 +14,12 @@ export interface TicketPolicyStore {
 export class PostgresTicketPolicyStore implements TicketPolicyStore {
   constructor(private readonly sql: SQL) {}
   async get(repo: string): Promise<HostedTicketPolicy | null> {
-    const [row] = await this.sql`SELECT p.policy FROM project_ticket_policy p JOIN LATERAL
+    const admission = hostedProjectContext() ? await findProject(this.sql, repo) : undefined
+    if (admission === null) return null
+    const [row] = admission
+      ? await this.sql`SELECT policy FROM project_ticket_policy
+      WHERE repo = ${repo} AND registration = ${admission.registration!}::bigint`
+      : await this.sql`SELECT p.policy FROM project_ticket_policy p JOIN LATERAL
       (SELECT seq, action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1) r
       ON r.seq = p.registration AND r.action = 'added' WHERE p.repo = ${repo}`
     return row
@@ -24,11 +30,17 @@ export class PostgresTicketPolicyStore implements TicketPolicyStore {
   }
   async put(repo: string, policy: HostedTicketPolicy, writer: string): Promise<void> {
     const parsed = hostedTicketPolicySchema.parse(policy)
-    await this.sql.begin(async (tx) => {
+    await projectTransaction(this.sql, async (tx) => {
+      const admission = hostedProjectContext() ? await captureProject(tx, repo) : undefined
       await admitHostedRequest(tx as SQL)
-      await tx`SELECT singleton FROM project_registry_state WHERE singleton = true FOR UPDATE`
-      const [registration] =
-        await tx`SELECT seq, action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`
+      if (admission) await admitProject(tx, admission)
+      if (!admission)
+        await tx`SELECT singleton FROM project_registry_state WHERE singleton = true FOR UPDATE`
+      const registration = admission
+        ? { seq: admission.registration!, action: 'added' }
+        : (
+            await tx`SELECT seq, action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`
+          )[0]
       if (registration?.action !== 'added') throw new Error('project not registered')
       const [previous] =
         await tx`SELECT policy FROM project_ticket_policy WHERE repo = ${repo} AND registration = ${registration.seq}`

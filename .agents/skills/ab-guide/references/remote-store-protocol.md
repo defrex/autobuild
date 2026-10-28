@@ -900,7 +900,15 @@ Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one
 registered normalized repository. The service stores only a SHA-256 digest of
 the random secret, plus project, creator, creation time, last use, expiry and
 revocation metadata. It checks credential status and project registration on
-every request. Revocation takes effect on the next request without affecting
+every request. Within one HTTP invocation, registry, authentication and adapter
+operations share at most one full registration/deletion admission per repository.
+The next request always admits afresh. Reads use that admitted identity; each
+mutation transaction locks and checks its generation before writing. Deletion
+waits for an active mutation transaction, then invalidates the generation with
+the initial purge. A later mutation in the same request may receive `403 project
+not registered`; its transaction rolls back, while earlier committed operations
+remain committed. No connection or transaction is held for the whole request.
+Revocation takes effect on the next request without affecting
 other credentials. Unknown, expired or revoked credentials receive `401 auth`;
 removed projects receive `403 auth` with `project not registered` when the
 repository is established independently. Permanent project deletion removes
