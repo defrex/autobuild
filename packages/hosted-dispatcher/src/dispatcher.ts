@@ -4,7 +4,10 @@ import {
   type ProjectSecretsResolver,
   type SecretSnapshot,
 } from '@defrex/autobuild-postgres-store/project-secrets'
-import { openPostgresCredentialStoreFromEnv } from '@defrex/autobuild-postgres-store/credentials'
+import {
+  openPostgresCredentialStoreFromEnv,
+  type DispatcherCredentialStore,
+} from '@defrex/autobuild-postgres-store/credentials'
 import {
   openPostgresProjectRegistryFromEnv,
   normalizeProjectRepository,
@@ -25,9 +28,9 @@ import {
  * report, run boundary, and deposited `dispatcher-effective-config` artifact,
  * so the web dashboard's repository journal shows hosted activity exactly as
  * it shows a local one. Each project invocation issues an opaque stored
- * credential with immutable dispatcher purpose and configured expiry. It
- * grants that registered project's raw store and ticket access only. It stays
- * valid after tick return for spawned builds. Credentials never enter logs,
+ * credential with immutable dispatcher purpose and a short crash-safety expiry. It
+ * grants that registered project's raw store and ticket access only. It is
+ * live only during the tick; spawned builds use independent lifecycle-bound grants. Credentials never enter logs,
  * responses or errors.
  *
  * This surface is deliberately NOT routed through `createHostedStoreService`:
@@ -66,7 +69,7 @@ export interface HostedDispatcherConfig {
   /** Tick budget per invocation in seconds (default 240, inside Vercel's
    * 300 s default function duration). */
   budgetSeconds: number
-  /** Minted guest-token TTL in seconds (default 7 days). */
+  /** Upper bound on cron credential TTL (default 7 days); actual expiry is at most deadline plus 60 seconds. */
   tokenTtlSeconds: number
   /** The cron authorization shared secret; blank/unset disables the endpoint. */
   cronSecret?: string
@@ -218,8 +221,8 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
   )
   if (tokenTtlSeconds < MIN_TOKEN_TTL_SECONDS) {
     throw new Error(
-      `AB_DISPATCHER_TOKEN_TTL_SECONDS must be at least ${MIN_TOKEN_TTL_SECONDS} — the minted ` +
-        'credential must outlive a guest build lifetime',
+      `AB_DISPATCHER_TOKEN_TTL_SECONDS must be at least ${MIN_TOKEN_TTL_SECONDS}; ` +
+        'this is an upper bound on cron credential TTL, independent of delegated guest authority',
     )
   }
   const githubTokenOverridesMap = githubTokenOverrides(env, repositories)
@@ -256,7 +259,15 @@ export interface HostedDispatcherTickSummary {
 
 export interface HostedDispatcherOptions {
   openSecrets?: (env: HostedDispatcherEnv) => Promise<ProjectSecretsResolver>
-  issueDispatcherCredential?: (repo: string, creator: string, expiresAt: Date) => Promise<string>
+  /** Per-repository credential lifecycle; child grants are independent of these rows. */
+  openDispatcherCredentials?: (
+    env: HostedDispatcherEnv,
+  ) => Promise<
+    Pick<
+      DispatcherCredentialStore,
+      'issue' | 'deleteDispatcherCredential' | 'pruneDispatcherCredentials' | 'close'
+    >
+  >
   openProjectRegistry?: (env: HostedDispatcherEnv) => Promise<ProjectRegistryReader>
   /** Service environment; defaults to `process.env`. */
   env?: HostedDispatcherEnv
@@ -386,20 +397,6 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
         const stderr = options.stderr ?? ((line: string) => logError(`${kernelPrefix} ${line}`))
         const startedAt = Date.now()
         log(`${LOG_PREFIX} ${invocation}: ${repository} tick run=${runId}`)
-        // Stored project authority outlives the tick for spawned builds.
-        // This issuer cannot request owner/operator purpose.
-        const issue =
-          options.issueDispatcherCredential ??
-          (async (repo: string, creator: string, expiresAt: Date) => {
-            const credentials = await openPostgresCredentialStoreFromEnv(env)
-            try {
-              return (await credentials.issue(repo, creator, { purpose: 'dispatcher', expiresAt }))
-                .token
-            } finally {
-              await credentials.close()
-            }
-          })
-        let token: string
         let snapshot: SecretSnapshot
         let resolver: ProjectSecretsResolver | undefined
         let resolutionFailed = false
@@ -435,51 +432,55 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             .filter(Boolean)
             .sort((a, b) => b.length - a.length)
             .reduce((text, value) => text.replaceAll(value, '[redacted]'), line)
+        let lifecycle:
+          | Awaited<ReturnType<NonNullable<HostedDispatcherOptions['openDispatcherCredentials']>>>
+          | undefined
+        let issued: { token: string; credential: { id: string } } | undefined
+        let failure: string | undefined
+        // Even markSupplied failures retire the exact issued row. Pool closure is
+        // independent of deletion success and never depends on lease ownership.
         try {
-          token = await issue(
-            repository,
-            `system:${runId}`,
-            new Date(clock().getTime() + config.tokenTtlSeconds * 1000),
-          )
-        } catch (error) {
-          const message = redact(error instanceof Error ? error.message : String(error))
-          repositories.push({ repository, outcome: 'failed', runId, error: message })
-          logError(
-            `${LOG_PREFIX} ${invocation}: ${repository} credential issuance failed: ${redact(errorDetail(error))}`,
-          )
-          continue
-        }
-        const childEnv: Record<string, string | undefined> = {
-          ...env,
-          ...snapshot.env,
-          AB_STORE: config.origin,
-          AB_TOKEN: token,
-          ...(resolutionFailed
-            ? {
-                AB_PROJECT_SECRETS_FAILED: '1',
-                AB_PROJECT_SECRETS_UNAVAILABLE: JSON.stringify(snapshot.unavailable ?? []),
-              }
-            : {}),
-        }
-        delete childEnv.AB_PROJECT_SECRETS_KEY
-        // A Vercel Function receives the deployment's OIDC token as a request
-        // header, not as VERCEL_OIDC_TOKEN; hand it to the kernel under that
-        // name so the Sandbox SDK authenticates as the deployment. An explicit
-        // environment token keeps precedence.
-        if (!childEnv.VERCEL_OIDC_TOKEN && credentials.oidcToken) {
-          childEnv.VERCEL_OIDC_TOKEN = credentials.oidcToken
-        }
-        // Per-repository forge identity: both variables are set to the
-        // override so no reader (`githubTokenFromEnv` prefers GITHUB_TOKEN,
-        // the publication path and init-validation accept either) can straddle
-        // the override and the shared credential within one tick. Repositories
-        // without an override keep the shared credential untouched.
-        const forgeOverride = config.githubTokenOverrides.get(repository)
-        if (forgeOverride !== undefined) {
-          childEnv.GITHUB_TOKEN = forgeOverride
-          childEnv.GH_TOKEN = forgeOverride
-        }
-        try {
+          lifecycle = await (
+            options.openDispatcherCredentials ?? openPostgresCredentialStoreFromEnv
+          )(env)
+          await lifecycle.pruneDispatcherCredentials(repository, clock())
+          issued = await lifecycle.issue(repository, `system:${runId}`, {
+            purpose: 'dispatcher',
+            expiresAt: new Date(
+              Math.min(clock().getTime() + config.tokenTtlSeconds * 1000, deadlineAt + 60_000),
+            ),
+          })
+          const token = issued.token
+          const childEnv: Record<string, string | undefined> = {
+            ...env,
+            ...snapshot.env,
+            AB_STORE: config.origin,
+            AB_TOKEN: token,
+            ...(resolutionFailed
+              ? {
+                  AB_PROJECT_SECRETS_FAILED: '1',
+                  AB_PROJECT_SECRETS_UNAVAILABLE: JSON.stringify(snapshot.unavailable ?? []),
+                }
+              : {}),
+          }
+          delete childEnv.AB_PROJECT_SECRETS_KEY
+          // A Vercel Function receives the deployment's OIDC token as a request
+          // header, not as VERCEL_OIDC_TOKEN; hand it to the kernel under that
+          // name so the Sandbox SDK authenticates as the deployment. An explicit
+          // environment token keeps precedence.
+          if (!childEnv.VERCEL_OIDC_TOKEN && credentials.oidcToken) {
+            childEnv.VERCEL_OIDC_TOKEN = credentials.oidcToken
+          }
+          // Per-repository forge identity: both variables are set to the
+          // override so no reader (`githubTokenFromEnv` prefers GITHUB_TOKEN,
+          // the publication path and init-validation accept either) can straddle
+          // the override and the shared credential within one tick. Repositories
+          // without an override keep the shared credential untouched.
+          const forgeOverride = config.githubTokenOverrides.get(repository)
+          if (forgeOverride !== undefined) {
+            childEnv.GITHUB_TOKEN = forgeOverride
+            childEnv.GH_TOKEN = forgeOverride
+          }
           await resolver!.markSupplied(snapshot)
           await dispatch({
             // `targetRepo` here is a caller-facing identity token, not a
@@ -493,23 +494,51 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             plain: true,
             env: childEnv,
             exec: spawnExec,
-            stdout: (line) => stdout(redact(line)),
-            stderr: (line) => stderr(redact(line)),
+            stdout: (line) => stdout(redact(line).replaceAll(token, '[redacted]')),
+            stderr: (line) => stderr(redact(line).replaceAll(token, '[redacted]')),
             kernelRunId: runId,
             deadlineAt,
           })
-          if (!resolutionFailed) repositories.push({ repository, outcome: 'ticked', runId })
+        } catch (error) {
+          failure = redact(error instanceof Error ? error.message : String(error))
+          // Explicit token redaction also covers errors from injected dispatchers.
+          if (issued) failure = failure.replaceAll(issued.token, '[redacted]')
+          let detail = redact(errorDetail(error))
+          if (issued) detail = detail.replaceAll(issued.token, '[redacted]')
+          logError(`${LOG_PREFIX} ${invocation}: ${repository} failed run=${runId}: ${detail}`)
+        } finally {
+          try {
+            if (issued)
+              await lifecycle!.deleteDispatcherCredential(repository, issued.credential.id)
+          } catch {
+            const message = 'dispatcher credential cleanup failed'
+            failure = failure ? `${failure}; ${message}` : message
+            logError(`${LOG_PREFIX} ${invocation}: ${repository} ${message}`)
+          } finally {
+            try {
+              await lifecycle?.close()
+            } catch {
+              const message = 'dispatcher credential storage close failed'
+              failure = failure ? `${failure}; ${message}` : message
+              logError(`${LOG_PREFIX} ${invocation}: ${repository} ${message}`)
+            }
+          }
+        }
+        if (!resolutionFailed)
+          repositories.push({
+            repository,
+            outcome: failure ? 'failed' : 'ticked',
+            runId,
+            ...(failure ? { error: failure } : {}),
+          })
+        else if (failure) {
+          const outcome = repositories.find((entry) => entry.runId === runId)!
+          outcome.error = `${outcome.error}; ${failure}`
+        }
+        if (!failure)
           log(
             `${LOG_PREFIX} ${invocation}: ${repository} ticked run=${runId} ms=${Date.now() - startedAt}`,
           )
-        } catch (error) {
-          const message = redact(error instanceof Error ? error.message : String(error))
-          if (!resolutionFailed)
-            repositories.push({ repository, outcome: 'failed', runId, error: message })
-          logError(
-            `${LOG_PREFIX} ${invocation}: ${repository} failed run=${runId} ms=${Date.now() - startedAt}: ${redact(errorDetail(error))}`,
-          )
-        }
       }
       const counts = { ticked: 0, failed: 0, skipped: 0 }
       for (const entry of repositories) counts[entry.outcome] += 1

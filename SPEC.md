@@ -1300,8 +1300,12 @@ tokens are rejected with migration guidance. An explicit versioned owner-only
 break-glass admin is the sole machine cross-project exception. Internal signed
 owner delegation is short-lived, repository-bound and operator-only. The hosted
 dispatcher issues stored credentials with immutable dispatcher purpose (raw
-store and tickets only) per invocation and keeps them valid through configured
-expiry. Already issued delegated grants do not depend on that parent expiry.
+store and tickets only) per repository invocation. It deletes each credential on
+completion, including failures. Crash-safety expiry is the earlier of the configured
+TTL upper bound and the invocation deadline plus 60 seconds. Each served tick
+prunes at most 100 expired or revoked dispatcher rows using indexed probes;
+unexpired legacy rows retain their recorded expiry before eventual pruning.
+Already issued delegated grants do not depend on the parent row or its expiry.
 Owner-issued project credentials attribute operator writes to their recorded
 creator. Agents never receive the dispatcher's project credential. Delegated
 reads retain access to same-project repository state; build mutations target only

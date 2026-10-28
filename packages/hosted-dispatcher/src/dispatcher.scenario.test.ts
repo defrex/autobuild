@@ -71,7 +71,6 @@ import type {
   TicketSource,
   WorkspaceProvider,
   WorkspaceProvisionResult,
-  BuildStore,
 } from '@defrex/autobuild/plugin-sdk'
 import { OperatorApiClient } from '@defrex/autobuild-hosted-store-service/operator-api'
 import { mintToken, RemoteBuildStore } from '@defrex/autobuild/remote-store'
@@ -227,7 +226,6 @@ interface GuestRun {
 class GuestExecution implements BuildExecution {
   constructor(
     private readonly runs: Map<string, GuestRun>,
-    private readonly store: BuildStore,
     private readonly forge: Forge,
     private readonly runtimes: RuntimeRegistry,
     private readonly ids: IdSource,
@@ -236,7 +234,9 @@ class GuestExecution implements BuildExecution {
     private readonly guestRemote: string,
   ) {}
 
-  async start(input: BuildExecutionStart): Promise<BuildExecutionHandle> {
+  async start(input: BuildExecutionStart, auth?: { token: string }): Promise<BuildExecutionHandle> {
+    if (!auth) throw new Error('guest requires delegated launch authority')
+    const store = new RemoteBuildStore({ url: input.storeRef, token: auth.token })
     const commandId = `cmd-${input.instance}`
     const entry: GuestRun = {
       slug: input.slug,
@@ -245,16 +245,16 @@ class GuestExecution implements BuildExecution {
     }
     const run = (async () => {
       try {
-        const record = await this.store.getBuild(input.slug)
-        const events = await this.store.getEvents(input.slug)
+        const record = await store.getBuild(input.slug)
+        const events = await store.getEvents(input.slug)
         const workspace = selectOpenWorkspace(events)
-        const artifact = await this.store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+        const artifact = await store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
         if (record === null || workspace === null || artifact === null) {
           throw new Error('guest launch state missing')
         }
         await prepareWorkspace(workspace.path, input.slug, this.guestRemote)
         const runner = new BuildRunner({
-          store: this.store.scopeBuild(input.slug),
+          store: store.scopeBuild(input.slug),
           config: parseEffectiveBuildConfig(artifact),
           runtimes: this.runtimes,
           workspacePath: workspace.path,
@@ -266,12 +266,12 @@ class GuestExecution implements BuildExecution {
           clock: this.clock,
           instance: input.instance,
           host: 'hosted-integration',
-          sessionEnv: this.sessionEnv,
+          sessionEnv: { ...this.sessionEnv, AB_TOKEN: auth.token },
           opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
         })
         await runner.run()
       } catch (error) {
-        await this.store
+        await store
           .putArtifact(
             input.slug,
             diagnosticArtifact({
@@ -357,8 +357,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     'https://github.com/acme/two',
   ])
   const credentials = testCredentials(credentialRegistry, storeEnv.AB_STORE_SECRET, clock).store
-  const issueDispatcherCredential = async (repo: string, creator: string, expiresAt: Date) =>
-    (await credentials.issue(repo, creator, { purpose: 'dispatcher', expiresAt })).token
+  const openDispatcherCredentials = async () => credentials
   const service = createHostedStoreService({
     openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     openCredentials: async () => credentials,
@@ -496,7 +495,6 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     expect(opts.env!.GH_TOKEN).toBe('override-forge-token')
     const guestExecution = new GuestExecution(
       guestRuns,
-      new RemoteBuildStore({ url: opts.env!.AB_STORE!, token: opts.env!.AB_TOKEN }),
       fakeForge,
       guestRuntimes,
       ids,
@@ -544,7 +542,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
 
   const endpoint = createDispatcherEndpoint({
     openSecrets: emptySecrets,
-    issueDispatcherCredential,
+    openDispatcherCredentials,
     openProjectRegistry: async () => credentialRegistry,
     env: {
       ...storeEnv,
@@ -816,7 +814,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     }) as Clock
     const boundedEndpoint = createDispatcherEndpoint({
       openSecrets: emptySecrets,
-      issueDispatcherCredential,
+      openDispatcherCredentials,
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: {
@@ -858,7 +856,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     )
     const secondEndpoint = createDispatcherEndpoint({
       openSecrets: emptySecrets,
-      issueDispatcherCredential,
+      openDispatcherCredentials,
       openProjectRegistry: async () => credentialRegistry,
       env: {
         ...storeEnv,
@@ -888,12 +886,59 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     expect(crossBuild!.slug).not.toBe(b1Slug)
     expect(crossBuild!.branch).toBe(`ab/${crossBuild!.slug}`)
     await waitForBuildEvent(crossBuild!.slug, 'finalize.completed', 'second project finalize')
-    const projectA = new RemoteBuildStore({ url: serviceUrl, token: mintedTokens[0]! })
+    // Fresh cron endpoint/kernel instances share persistent credential state.
+    // Hide ready tickets for an otherwise empty registered project.
+    const previousReady = ticketBackend.listReady
+    ticketBackend.listReady = async () => ({ tickets: [], diagnostics: [] })
+    try {
+      const idleRepo = 'https://github.com/acme/one'
+      for (let tick = 0; tick < 100; tick++) {
+        const idle = createDispatcherEndpoint({
+          openSecrets: emptySecrets,
+          openDispatcherCredentials,
+          openProjectRegistry: async () => credentialRegistry,
+          env: {
+            ...storeEnv,
+            AB_DISPATCHER_ORIGIN: serviceUrl,
+            AB_DISPATCHER_REPOSITORIES: idleRepo,
+            CRON_SECRET: 'cron-secret',
+            GITHUB_TOKEN: 'override-forge-token',
+            GH_TOKEN: 'override-forge-token',
+          },
+          clock,
+          log: () => {},
+          logError: () => {},
+          dispatch: async (opts) => {
+            expect(await credentials.list(idleRepo)).toHaveLength(1)
+            await dispatch(opts)
+          },
+        })
+        const response = await idle.fetch(
+          new Request(`${serviceUrl}/api/dispatch`, {
+            headers: { authorization: 'Bearer cron-secret' },
+          }),
+        )
+        expect(((await response.json()) as Body).repositories[0]!.outcome).toBe('ticked')
+        expect(await credentials.list(idleRepo)).toHaveLength(0)
+      }
+    } finally {
+      ticketBackend.listReady = previousReady
+    }
+    for (const token of mintedTokens)
+      expect(await credentials.authenticate(token, clock())).toBeNull()
+    const inspection = await credentials.issue(REPO, 'scenario owner')
+    const projectA = new RemoteBuildStore({ url: serviceUrl, token: inspection.token })
     expect(await projectA.getBuild('add-rate-limiting')).toBeNull()
     expect(await projectA.getBuild(crossBuild!.slug)).toBeNull()
     expect(await projectA.getBuild('absent-base')).toBeNull()
     expect((await projectA.listBuilds()).every((record) => record.repo === REPO)).toBe(true)
-    const dispatcherOperator = new OperatorApiClient({ url: serviceUrl, token: mintedTokens[0]! })
+    const isolatedDispatcher = await credentials.issue(REPO, 'purpose check', {
+      purpose: 'dispatcher',
+    })
+    const dispatcherOperator = new OperatorApiClient({
+      url: serviceUrl,
+      token: isolatedDispatcher.token,
+    })
     await expect(dispatcherOperator.repositoryStatus(REPO)).rejects.toThrow('dispatcher credential')
 
     // ── deployment's own AB_STORE/AB_TOKEN. ────────────────────────────────
