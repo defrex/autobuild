@@ -57,6 +57,7 @@ export async function reducedReadBudget(opts: {
   costs: ReducedReadCosts
   fresh: () => Promise<BuildStore>
   storeRef?: string
+  seedScanHistory?: (repo: string, count: number) => Promise<void>
 }) {
   const { store, costs } = opts
   await store.ensureRepo(repo)
@@ -119,6 +120,47 @@ export async function reducedReadBudget(opts: {
     costs.events = 0
     costs.metadata = 0
     costs.bytes = 0
+  }
+  if (opts.seedScanHistory) {
+    for (const size of [100, 100_000]) {
+      const scanRepo = `/scan-budget-${size}`
+      await store.ensureRepo(scanRepo)
+      await opts.seedScanHistory(scanRepo, size)
+      // Explicit fixture warming; subsequent invocations must use canonical reduced values.
+      await readRepositoryFacts(store, scanRepo)
+      let now = 0
+      const observe = async (backing: BuildStore) =>
+        new Dispatcher({
+          store: backing,
+          repo: scanRepo,
+          config,
+          tickets: new FakeTicketSource([]),
+          workspaces: new FakeWorkspaceProvider({ root: '/budget-workspaces', mode: 'logical' }),
+          forge: new FakeForge(),
+          ids: sequentialIds(),
+          clock: () => new Date(now),
+          exec,
+          launchRunner: async () => 'scheduled',
+        }).observeReady()
+      await observe(store)
+      const highWater = await store.getRepoHighWater(scanRepo)
+      reset()
+      await observe(store)
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(100)
+      now += 60_000
+      reset()
+      await observe(await opts.fresh())
+      expect(await store.getRepoHighWater(scanRepo)).toBe(highWater)
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(100)
+      now += 30_000
+      reset()
+      await observe(await opts.fresh())
+      expect(await store.getRepoHighWater(scanRepo)).toBe(highWater)
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(100)
+    }
   }
   let repositoryBytes: number | undefined
   for (const length of [32, 256]) {
@@ -189,16 +231,17 @@ export async function reducedReadBudget(opts: {
     expect(costs.events).toBe(0)
     expect(costs.metadata).toBeLessThan(100)
 
-    const dispatcher = () =>
+    let scanTime = 1000
+    const dispatcher = (backing = cold) =>
       new Dispatcher({
-        store: cold,
+        store: backing,
         repo,
         config,
         tickets: new FakeTicketSource([]),
         workspaces: new FakeWorkspaceProvider({ root: '/budget-workspaces', mode: 'logical' }),
         forge: new FakeForge(),
         ids: sequentialIds(),
-        clock: () => new Date(1000),
+        clock: () => new Date(scanTime),
         exec,
         launchRunner: async () => 'scheduled',
       })
@@ -217,6 +260,23 @@ export async function reducedReadBudget(opts: {
     expect(costs.events).toBe(0)
     expect(costs.metadata).toBeLessThan(400)
     expect(costs.bytes).toBeLessThan(1_000_000)
+
+    // A scheduled unchanged observation advances cadence without journal growth.
+    await dispatcher().observeReady()
+    const highWater = await cold.getRepoHighWater(repo)
+    scanTime += 60_000
+    reset()
+    await dispatcher().observeReady()
+    expect(await cold.getRepoHighWater(repo)).toEqual(highWater)
+    expect(costs.events).toBe(0)
+    expect(costs.metadata).toBeLessThan(400)
+    const freshScanStore = await opts.fresh()
+    reset()
+    scanTime += 30_000
+    await dispatcher(freshScanStore).observeReady()
+    expect(await freshScanStore.getRepoHighWater(repo)).toEqual(highWater)
+    expect(costs.events).toBe(0)
+    expect(costs.metadata).toBeLessThan(400)
 
     // A fresh watch must suppress historical gate attention despite armed
     // consent at registration, including its first event-bearing poll.

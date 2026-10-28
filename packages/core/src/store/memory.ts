@@ -1,4 +1,10 @@
 import {
+  repoTicketScanCheckpointSchema,
+  sameScanCheckpoint,
+  validateScanCheckpoint,
+  type RepoTicketScanCheckpoint,
+} from './ticket-scan-checkpoint'
+import {
   operatorIdentitySchema,
   OPERATOR_PRESENCE_TTL_MS,
   type OperatorIdentity,
@@ -137,6 +143,7 @@ interface Lease {
 }
 
 interface RepoState {
+  scanCheckpoint?: RepoTicketScanCheckpoint
   tick?: RepoTickObservation
   record: {
     repo: string
@@ -1118,6 +1125,21 @@ export class MemoryBuildStore implements BuildStore {
     return structuredClone(latest.meta)
   }
 
+  async getRepoTicketScanCheckpoint(repo: string): Promise<RepoTicketScanCheckpoint | null> {
+    return structuredClone(this.repos.get(repo)?.scanCheckpoint ?? null)
+  }
+  async compareAndSetRepoTicketScanCheckpoint(
+    repo: string,
+    expected: RepoTicketScanCheckpoint | null,
+    next: RepoTicketScanCheckpoint,
+  ): Promise<boolean> {
+    expected = validateScanCheckpoint(expected)
+    next = repoTicketScanCheckpointSchema.parse(next)
+    const state = this.repos.get(repo)
+    if (!state || !sameScanCheckpoint(state.scanCheckpoint ?? null, expected)) return false
+    state.scanCheckpoint = structuredClone(next)
+    return true
+  }
   async beginRepoTick(repo: string, holder: string): Promise<string | null> {
     const state = this.repoState(repo)
     if (

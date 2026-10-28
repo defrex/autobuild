@@ -1,3 +1,5 @@
+import type { RepoTicketScanCheckpoint } from './ticket-scan-checkpoint'
+export type { RepoTicketScanCheckpoint } from './ticket-scan-checkpoint'
 import type { OperatorIdentity, OperatorPresence } from './operator-presence'
 export type { OperatorIdentity, OperatorPresence } from './operator-presence'
 import type { ReducerValueRequest, ReducerValue } from './reducer-values'
@@ -546,6 +548,15 @@ export interface BuildStore {
     kind: string,
     name: string,
   ): Promise<TicketAssetMeta | null>
+  /** Advisory scan cadence only; exact-key reads never create a repository.
+   * CAS returns false on a stale expected value or unknown repository and never
+   * advances journal high water or repository change position. */
+  getRepoTicketScanCheckpoint(repo: string): Promise<RepoTicketScanCheckpoint | null>
+  compareAndSetRepoTicketScanCheckpoint(
+    repo: string,
+    expected: RepoTicketScanCheckpoint | null,
+    next: RepoTicketScanCheckpoint,
+  ): Promise<boolean>
   /** Fenced by the unexpired repository lease. Null means authority was lost.
    * Finish validates all boundaries before atomically depositing them and telemetry.
    * Neither method renews the lease. */

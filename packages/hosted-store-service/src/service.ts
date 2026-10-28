@@ -226,6 +226,8 @@ const storeResourceRoutes = new Set([
   // The journal's high-water mark (AUT-647), the dispatcher view's cursor:
   // served inside the repo-existence gate like `GET state-events`.
   'GET high-water',
+  'GET ticket-scan-checkpoint',
+  'POST ticket-scan-checkpoint',
   'POST tick/begin',
   'POST tick/finish',
   'POST node-writer/claim',
