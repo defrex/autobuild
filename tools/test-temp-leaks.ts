@@ -88,6 +88,7 @@ export async function suiteCommands(mode: string, args: string[]): Promise<strin
           new Bun.Glob('packages/*/src').scanSync({ cwd: checkoutRoot, onlyFiles: false }),
         ).sort(),
         'tools',
+        'scripts',
         'bin',
         'packages/hosted-store-service/app',
         ...args,

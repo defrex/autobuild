@@ -396,4 +396,6 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       .filter((type) => type !== 'target.distance')
       .at(-1),
   ).toBe('code-review.started')
-}, 30_000)
+  // Two full captures took 82.2s on the 4-vCPU sandbox with verification suites
+  // and diagnostic checks overlapping; retain headroom without reducing evidence.
+}, 120_000)
