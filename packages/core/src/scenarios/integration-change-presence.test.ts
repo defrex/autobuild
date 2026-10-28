@@ -14,9 +14,10 @@ for (const scenario of [
   'descendant-restack',
   'root-restack',
 ] as const) {
-  // The extra real-Git node-root build/landing took 6.12s in the 4-vCPU
-  // sandbox alongside the unit suite; retain all ancestry assertions.
-  const timeout = scenario === 'node-root' ? 15_000 : 5_000
+  // Real-Git presence/restack cases hit 5s in the 4-vCPU sandbox unit run;
+  // measured sibling at 5.47s and node-root at 7.01s alongside the suite.
+  // Retain all ancestry assertions with explicit headroom for this group.
+  const timeout = 15_000
   test(
     `real Git blocker presence: ${scenario}`,
     async () => {
