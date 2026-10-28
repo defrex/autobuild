@@ -344,6 +344,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
           released?: boolean
         }
       } catch (error) {
+        if (signal) break
         readerFailures.report('active', error)
         // A broken target may not even load its reader. Use the known cached
         // predecessor's reader with the same journal/run query identity.
@@ -366,6 +367,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
               '--read-upgrade',
             )
           } catch (error) {
+            if (signal) break
             readerFailures.report('predecessor', error)
             await new Promise<void>((resolve) => setTimeout(resolve, 100))
             continue
