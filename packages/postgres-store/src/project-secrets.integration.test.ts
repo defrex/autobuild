@@ -2,7 +2,11 @@ import { chatgptStateSchema } from '@defrex/autobuild/project-secrets'
 import { expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import { migratePostgres } from './schema'
-import { PostgresProjectSecrets, type RefreshKind } from './project-secrets'
+import {
+  PostgresProjectSecrets,
+  StaticSecretConflictError,
+  type RefreshKind,
+} from './project-secrets'
 import { PostgresProjectRegistry } from './projects'
 const testURL = process.env.AB_POSTGRES_TEST_URL
 const live = testURL ? test : test.skip
@@ -848,4 +852,67 @@ live(
         expect(metadata).not.toContain(value)
       }
     }),
+)
+
+live('browser writes are atomic static-only mutations and preserve refreshing registrations', () =>
+  fixture(async (sql, _url, projects) => {
+    const kinds = new Map<string, RefreshKind>([
+      [
+        'chatgpt-subscription',
+        {
+          validateState: () => true,
+          refresh: async () => {
+            throw Error('unused')
+          },
+        },
+      ],
+    ])
+    const store = new PostgresProjectSecrets(sql, projects, () => key, kinds)
+    await store.setStaticOnly(repo, 'TOKEN', 'first', 'browser')
+    await store.setStaticOnly(repo, 'TOKEN', 'second', 'browser-two')
+    expect((await store.resolveForObservation(repo)).env.TOKEN).toBe('second')
+    const payload = {
+      accessToken: 'provider-token',
+      expiresAt: Date.now() + 3600000,
+      state: { marker: 'provider-state' },
+    }
+    await store.setPayload(repo, 'TOKEN', 'chatgpt-subscription', payload, 'cli')
+    for (const status of ['ready', 'refreshing', 'failed']) {
+      await sql`UPDATE project_secrets SET status=${status} WHERE repo=${repo} AND name='TOKEN'`
+      const before = JSON.stringify(await sql`SELECT * FROM project_secrets`)
+      const audit = JSON.stringify(await sql`SELECT * FROM project_secret_audit ORDER BY id`)
+      await expect(store.setStaticOnly(repo, 'TOKEN', 'pasted', 'browser')).rejects.toThrow(
+        'Refreshing credentials',
+      )
+      expect(JSON.stringify(await sql`SELECT * FROM project_secrets`)).toBe(before)
+      expect(JSON.stringify(await sql`SELECT * FROM project_secret_audit ORDER BY id`)).toBe(audit)
+    }
+    // A CLI registration that holds the shared lock wins before the browser checks kind.
+    await store.set(repo, 'TOKEN', 'static', 'cli')
+    let unlock!: () => void, locked!: () => void
+    const held = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    const release = new Promise<void>((resolve) => {
+      unlock = resolve
+    })
+    const registration = sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`project-secrets:${repo}`},0))`
+      locked()
+      await release
+      await tx`UPDATE project_secrets SET kind='chatgpt-subscription' WHERE repo=${repo} AND name='TOKEN'`
+    })
+    await held
+    const write = store.setStaticOnly(repo, 'TOKEN', 'pasted', 'browser')
+    const outcome = write.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    unlock()
+    await registration
+    expect(await outcome).toBeInstanceOf(StaticSecretConflictError)
+    // The unrestricted CLI operation retains its existing replacement semantics.
+    await store.set(repo, 'TOKEN', 'cli-static', 'cli')
+    expect((await store.list(repo))[0]?.kind).toBe('static')
+  }),
 )

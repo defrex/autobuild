@@ -2,12 +2,12 @@
 version: 1
 slug: "app-dashboard-dashboardclient-tsx"
 primary_target: "app/dashboard/DashboardClient.tsx"
-related_targets: ["app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/sign-in/page.tsx","app/connect/Connection.tsx","app/connect/page.tsx","app/layout.tsx","app/globals.css","app/members/MembersClient.tsx","app/members/MembersView.tsx","app/organizations/OrganizationsClient.tsx","app/organizations/OrganizationsView.tsx","app/projects/ProjectsClient.tsx","app/projects/ProjectsView.tsx","app/access/Frame.tsx","app/access/AccountMenu.tsx"]
+related_targets: ["app/settings/SettingsClient.tsx","app/settings/SettingsView.tsx","app/settings/page.tsx","app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/sign-in/page.tsx","app/connect/Connection.tsx","app/connect/page.tsx","app/layout.tsx","app/globals.css","app/members/MembersClient.tsx","app/members/MembersView.tsx","app/organizations/OrganizationsClient.tsx","app/organizations/OrganizationsView.tsx","app/projects/ProjectsClient.tsx","app/projects/ProjectsView.tsx","app/access/Frame.tsx","app/access/AccountMenu.tsx"]
 ---
 
 # Operator web app
 
-Scope: the whole operator web app (shell and tabs, Active builds, the Triage, Queue and Done ticket lists, build and ticket pages, sign-in, connect, and the organization pages: Members, Organizations, Projects). Mode: Operate.
+Scope: the whole operator web app (shell and tabs, Active builds, the Triage, Queue and Done ticket lists, Settings project secrets and account slots, build and ticket pages, sign-in, connect, and the organization pages: Members, Organizations, Projects). Mode: Operate.
 
 Audience and job: anyone who builds (engineers, product managers, designers), glancing from a second monitor or a phone, often with teammates in the same organization. On Builds, one question: does anything need me? Signals in priority order: BLOCKED on a human, FAILED or unhealthy, PR READY or MERGED. Then act on one row, answer an escalation, or inspect a trail. The organization pages are visited rarely and read, not glanced: add a person by email, see who is PENDING, know who can reach which projects.
 
@@ -25,8 +25,10 @@ OWN-WORLD: Calm ground. Hues only as state: green done or running, amber in prog
 
 STORY: Glance, find the red word, act on one row, leave. Visit Members rarely; leave sure who can see what.
 
-FIRST VIEWPORT: Active: project selector left, account menu right; tab line with Triage, Queue, Active, Done left and repository controls right; ruled rows of blue id, sans ticket title, mono slug, status word right, steps beneath; a blocked row shows its red question over an ANSWER sign-off box.
+FIRST VIEWPORT: Active: project selector left, account menu right; tab line with Triage, Queue, Active, Done, Settings left and repository controls right; ruled rows of blue id, sans ticket title, mono slug, status word right, steps beneath; a blocked row shows its red question over an ANSWER sign-off box.
 
 FORM: user-steered hybrid of grounded candidate 5 and pick 1 on the terminal palette; seed key c4eff9b1.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+
+Settings extends the existing world: ruled metadata rows, transient write-only password entry, account credential readiness and shared removal confirmation. Any project member or super user may edit; ChatGPT renewal remains in the CLI.
