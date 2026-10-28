@@ -1,3 +1,4 @@
+import { projectTransaction } from './request-context'
 import { admitHostedRequest } from './project-lifecycle'
 import { SQL } from 'bun'
 import { randomUUID, createHmac } from 'node:crypto'
@@ -197,7 +198,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     if (!actor.trim()) throw new ProjectSecretError('invalid-secret')
     this.validatePayload(kind, payload)
     const repo = await this.registered(raw)
-    await this.sql.begin(async (tx) => {
+    await projectTransaction(this.sql, async (tx) => {
       await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, repo)
       if (staticOnly) {
@@ -238,7 +239,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     validateSecretName(name)
     if (!actor.trim()) throw new ProjectSecretError('invalid-secret')
     const repo = await this.registered(raw)
-    await this.sql.begin(async (tx) => {
+    await projectTransaction(this.sql, async (tx) => {
       await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, repo)
       await this.cipher(tx as SQL)
@@ -247,7 +248,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     })
   }
   private async read(repo: string): Promise<{ rows: Row[]; payloads: SecretPayload[] }> {
-    return this.sql.begin(async (tx) => {
+    return projectTransaction(this.sql, async (tx) => {
       await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, repo)
       const rows: Row[] = await tx`SELECT * FROM project_secrets WHERE repo=${repo} ORDER BY name`
@@ -306,7 +307,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
         const attempt = randomUUID(),
           until = Math.min(deadline, this.now() + 60_000)
         // An uncertain claim commit is never followed by HTTP: propagate safely.
-        const claimed: Row[] = await this.sql.begin(async (tx) => {
+        const claimed: Row[] = await projectTransaction(this.sql, async (tx) => {
           await admitHostedRequest(tx as SQL)
           await this.lock(tx as SQL, repo)
           return tx`UPDATE project_secrets SET status='refreshing',revision=revision+1,attempt_id=${attempt},attempt_deadline=${new Date(until).toISOString()}
@@ -335,7 +336,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
             if (result.expiresAt <= this.now() || this.now() >= until)
               throw new ProjectSecretError('secret-unavailable')
             // Commit rotated material before returning to resolution. Never repeat HTTP.
-            await this.sql.begin(async (tx) => {
+            await projectTransaction(this.sql, async (tx) => {
               await admitHostedRequest(tx as SQL)
               await this.lock(tx as SQL, repo)
               const cipher = await this.cipher(tx as SQL)
@@ -410,7 +411,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     return snapshot
   }
   private async fail(r: Row, code: string) {
-    await this.sql.begin(async (tx) => {
+    await projectTransaction(this.sql, async (tx) => {
       await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, r.repo)
       await tx`UPDATE project_secrets SET status='failed',failure_code=${code},revision=revision+1
@@ -419,7 +420,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
   }
 
   private async current(snapshot: SecretSnapshot, supplied: boolean): Promise<boolean> {
-    return this.sql.begin(async (tx) => {
+    return projectTransaction(this.sql, async (tx) => {
       await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, snapshot.repo)
       const rows: Row[] =

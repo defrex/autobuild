@@ -1817,3 +1817,27 @@ if (testUrl)
       await world.cleanup()
     }
   })
+
+test.skipIf(!testUrl)(
+  'fresh and v19-upgraded schemas deliver the bounded project admission index',
+  async () => {
+    const { SCHEMA_V19_CHECKSUM } = await import('./schema')
+    const world = await schemaHarness()
+    const sql = new SQL(world.url)
+    try {
+      await migratePostgres(world.url)
+      const index = () =>
+        sql`SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'project_journal_repo_seq'`
+      expect(String((await index())[0].indexdef)).toEndWith('(repo, seq DESC)')
+      await sql`DROP INDEX project_journal_repo_seq`
+      await expect(assertSchema(sql)).rejects.toThrow('project admission index')
+      await sql`UPDATE ab_schema_migrations SET version = 19, checksum = ${SCHEMA_V19_CHECKSUM}`
+      await migratePostgres(world.url)
+      expect(String((await index())[0].indexdef)).toEndWith('(repo, seq DESC)')
+      await assertSchema(sql)
+    } finally {
+      await sql.close()
+      await world.cleanup()
+    }
+  },
+)

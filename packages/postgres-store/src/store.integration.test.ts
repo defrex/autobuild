@@ -793,7 +793,7 @@ if (testUrl)
         Reflect.set(reader, 'putSnapshot', originalPut)
         expect(await reader.getReducerValue(scope, request)).toEqual(winner)
         await sql`UPDATE reducer_snapshots SET state='{"corrupt":true}'::jsonb WHERE reducer=${key}`
-        const originalRun = Reflect.get(reader, 'run').bind(reader)
+        const originalRun = Reflect.get(reader, 'tx').bind(reader)
         let releaseRepair!: () => void
         let enteredRepair!: () => void
         const repairStarted = new Promise<void>((resolve) => {
@@ -802,7 +802,7 @@ if (testUrl)
         const repairGate = new Promise<void>((resolve) => {
           releaseRepair = resolve
         })
-        Reflect.set(reader, 'run', (body: (q: unknown) => Promise<unknown>) =>
+        Reflect.set(reader, 'tx', (body: (q: unknown) => Promise<unknown>) =>
           originalRun((q: unknown) =>
             body(
               new Proxy(q as object, {
@@ -831,7 +831,7 @@ if (testUrl)
         releaseRepair()
         expect((await staleRepair).cursor).toBe(3003)
         expect(repairedWinner.cursor).toBe(3004)
-        Reflect.set(reader, 'run', originalRun)
+        Reflect.set(reader, 'tx', originalRun)
         expect(await reader.getReducerValue(scope, request)).toEqual(repairedWinner)
       }
       for (const run of ['parameter-a', 'parameter-b']) {

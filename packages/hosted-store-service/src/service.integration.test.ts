@@ -1151,7 +1151,13 @@ if (testUrl)
   test('persisted consumer reads have flat SQL row cost through the real hosted stack', async () => {
     const { reducedReadBudget } = await import('@defrex/autobuild/testing')
     const database = await isolatedDatabase()
-    const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+    const { countSql, projectQueryCounts } = await import('./testing/count-sql')
+    const { AsyncLocalStorage } = await import('node:async_hooks')
+    const invocationStatements = new AsyncLocalStorage<string[]>()
+    const pool = new SQL(database.url)
+    const counted = countSql(pool, () => invocationStatements.getStore() ?? [])
+    const backing = new PostgresBuildStore(counted, { blobs: new MemoryBlobStore() })
+    const projects = new PostgresProjectRegistry(counted)
     const costs = countStoreRows(backing)
     const secret = crypto.randomUUID()
     const service = createHostedStoreService({
@@ -1165,6 +1171,7 @@ if (testUrl)
         AB_S3_SECRET_ACCESS_KEY: 'injected',
       },
       openStore: async () => backing,
+      openProjectRegistry: async () => projects,
     })
     const token = mintToken(secret, {
       version: 1,
@@ -1172,8 +1179,14 @@ if (testUrl)
       exp: Date.now() + 3600_000,
     })
     const url = 'http://hosted-budget.test'
-    const fetchFn: typeof fetch = ((input: string | URL | Request, init?: RequestInit) =>
-      service.fetch(new Request(input, init))) as typeof fetch
+    const fetchFn = ((input: string | URL | Request, init?: RequestInit) =>
+      invocationStatements.run([], async () => {
+        const response = await service.fetch(new Request(input, init))
+        expect(projectQueryCounts(invocationStatements.getStore()!).admissions).toBeLessThanOrEqual(
+          1,
+        )
+        return response
+      })) as typeof fetch
     const fresh = async () => new RemoteBuildStore({ url, token, fetchFn })
     try {
       const fixtureSql = new SQL(database.url)
@@ -1426,7 +1439,8 @@ if (testUrl)
             (s) =>
               /^SELECT/i.test(s) &&
               !s.includes('pg_advisory_xact_lock') &&
-              !s.includes('SELECT g.generation'),
+              !s.includes('SELECT g.generation') &&
+              !/FROM project_generations/.test(s),
           ),
         ).toHaveLength(1)
         expect(statements.filter((s) => /^UPDATE/i.test(s))).toHaveLength(updates)
@@ -1590,4 +1604,162 @@ if (testUrl)
       await database.cleanup()
     }
   },
+)
+
+;(testUrl ? test : test.skip)(
+  'one admission spans authentication and arbitrarily many store operations, on a single-connection pool',
+  async () => {
+    const { PostgresCredentialStore } = await import('@defrex/autobuild-postgres-store/credentials')
+    const { PostgresTicketDatabase } = await import('@defrex/autobuild-postgres-store')
+    const { PostgresTicketPolicyStore } = await import(
+      '@defrex/autobuild-postgres-store/ticket-policy'
+    )
+    const { PostgresTicketGrantStore } = await import(
+      '@defrex/autobuild-postgres-store/ticket-grants'
+    )
+    const { countSql, projectQueryCounts } = await import('./testing/count-sql')
+    const { withHostedProjectContext } = await import(
+      '@defrex/autobuild-postgres-store/request-context'
+    )
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url, { max: 1 })
+    const statements: string[] = []
+    const counted = countSql(sql, statements)
+    const projects = new PostgresProjectRegistry(counted)
+    const credentials = new PostgresCredentialStore(counted, projects)
+    const grants = new PostgresTicketGrantStore(counted)
+    const tickets = new PostgresTicketDatabase(counted)
+    const policies = new PostgresTicketPolicyStore(counted)
+    const backing = new PostgresBuildStore(counted, { blobs: new MemoryBlobStore() })
+    const repo = 'https://github.com/acme/admission-budget'
+    try {
+      await projects.add(repo, 'owner')
+      const issued = await credentials.issue(repo, 'owner')
+      await backing.ensureRepo(repo)
+      const { verify, finalize, ...root } = parseConfig('[tickets]\nsource="hosted"\nteamKey="BUD"')
+      const configArtifact = await backing.putRepoArtifact(repo, {
+        kind: 'dispatcher-effective-config',
+        content: JSON.stringify({
+          ...root,
+          verify: { steps: verify.steps },
+          finalize: { steps: finalize.steps },
+        }),
+      })
+      await backing.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'budget-run',
+          pid: 1,
+          roleWarnings: [],
+          effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
+        },
+      })
+      let now = new Date()
+      await credentials.authenticate(issued.token, now) // warm the bounded last-use write
+      const grant = await grants.issue(repo, 'execution', 'runner', null, now)
+      for (const operations of [1, 12]) {
+        // A fresh service cannot rely on a process cache for the admission bound.
+        const store = new Proxy(backing, {
+          get(target, key) {
+            if (key === 'getRepo')
+              return async (repository: string) => {
+                for (let n = 0; n < operations; n++) {
+                  expect(await projects.has(repository)).toBe(true)
+                  await backing.getRepoChangePosition(repository)
+                  await backing.listBuildsForRepo(repository)
+                }
+                return backing.getRepo(repository)
+              }
+            const value = Reflect.get(target, key)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        })
+        const service = createHostedStoreService({
+          env: {
+            AB_STORE_SECRET: 'budget',
+            AB_POSTGRES_URL: database.url,
+            AB_BLOB_BACKEND: 's3',
+            AB_S3_BUCKET: 'injected',
+            AB_S3_REGION: 'injected',
+            AB_S3_ACCESS_KEY_ID: 'injected',
+            AB_S3_SECRET_ACCESS_KEY: 'injected',
+          },
+          clock: () => now,
+          openStore: async () => store,
+          openProjectRegistry: async () => projects,
+          openCredentials: async () => credentials,
+          openTicketDatabase: async () => tickets,
+          openTicketGrants: async () => grants,
+          openTicketPolicy: async () => policies,
+        })
+        const remote = new RemoteBuildStore({
+          url: 'http://budget.test',
+          token: issued.token,
+          fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
+            service.fetch(new Request(input, init))) as typeof fetch,
+        })
+        statements.length = 0
+        expect(await remote.getRepo(repo)).not.toBeNull()
+        expect(projectQueryCounts(statements).admissions).toBe(1)
+        expect(projectQueryCounts(statements).lifecycleLocks).toBe(0)
+        expect(projectQueryCounts(statements).boundaries).toBe(0)
+        now = new Date(now.getTime() + 61_000)
+        statements.length = 0
+        expect(await remote.getRepo(repo)).not.toBeNull()
+        expect(projectQueryCounts(statements).admissions).toBe(1)
+        expect(projectQueryCounts(statements).lifecycleLocks).toBe(0)
+        expect(projectQueryCounts(statements).boundaries).toBe(1) // due credential bookkeeping only
+        statements.length = 0
+        await remote.putRepoArtifact(repo, { kind: 'budget', content: 'bytes' })
+        expect(projectQueryCounts(statements).admissions).toBe(1)
+        expect(projectQueryCounts(statements).lifecycleLocks).toBe(0)
+        expect(projectQueryCounts(statements).boundaries).toBe(2) // reservation and publication
+        statements.length = 0
+        const ticketClient = new HostedTicketSource({
+          url: 'http://budget.test',
+          token: issued.token,
+          repo,
+          teamKey: 'BUD',
+          fetchFn: (input, init) => service.fetch(new Request(input, init)),
+        })
+        await ticketClient.listStates()
+        expect(projectQueryCounts(statements).admissions).toBe(1)
+        expect(projectQueryCounts(statements).lifecycleLocks).toBe(0)
+        expect(projectQueryCounts(statements).boundaries).toBeGreaterThan(0)
+        // Grant auth, registry and ticket/store transactions share the same scope.
+        statements.length = 0
+        await withHostedProjectContext(async () => {
+          expect(await grants.authenticate(grant.token, now)).not.toBeNull()
+          for (let n = 0; n < operations; n++) {
+            expect(await projects.has(repo)).toBe(true)
+            await backing.ensureRepo(repo)
+            await policies.get(repo)
+            await tickets
+              .source({
+                repo,
+                teamKey: 'BUD',
+                lifecycle: { triage: 'Inbox', ready: 'Ready', doing: 'Active', done: 'Done' },
+              })
+              .get('BUD-1')
+          }
+        })
+        expect(projectQueryCounts(statements).admissions).toBe(1)
+        expect(projectQueryCounts(statements).lifecycleLocks).toBe(0)
+        expect(projectQueryCounts(statements).boundaries).toBe(operations * 2)
+      }
+      await projects.remove(repo, 'owner')
+      statements.length = 0
+      await withHostedProjectContext(async () => {
+        expect(await projects.has(repo)).toBe(false)
+        expect(await grants.authenticate(grant.token, now)).toBeNull()
+        expect(await projects.has(repo)).toBe(false)
+      })
+      expect(projectQueryCounts(statements).admissions).toBe(1)
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  },
+  15_000,
 )

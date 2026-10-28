@@ -206,6 +206,9 @@ export class PostgresConnectionStore implements ConnectionStore {
       throw new ConnectionError(404, 'unknown connection')
     return this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
+      const [candidate] = await tx`SELECT repo FROM project_connections WHERE code = ${code}`
+      if (candidate)
+        await tx`SELECT generation FROM project_generations WHERE repo = ${candidate.repo} FOR UPDATE`
       await lockAccess(tx as SQL)
       const [row] = await tx`SELECT * FROM project_connections WHERE code = ${code} FOR UPDATE`
       if (!row) throw new ConnectionError(404, 'unknown connection')

@@ -256,3 +256,59 @@ describe('attemptExec', () => {
     expect(String(calls[0]?.strings?.raw?.[0])).toBe(`SELECT * FROM builds${marker}`)
   })
 })
+
+test('hosted retries reacquire generation per transaction attempt; reads never acquire it', async () => {
+  const { AsyncLocalStorage } = await import('node:async_hooks')
+  const outsideRequest = AsyncLocalStorage.snapshot()
+  const { PlanRetryRunner } = await import('./retry')
+  const { withHostedProjectContext, rememberProjectGeneration } = await import('./request-context')
+  const { admitHostedRequest } = await import('./project-lifecycle')
+  let boundaries = 0
+  let attempts = 0
+  let poisoned = true
+  const pool = (() => {
+    throw new Error('pool query forbidden')
+  }) as unknown as SQL
+  pool.begin = (async (body: (tx: SQL) => Promise<unknown>) => {
+    attempts++
+    const tx = (async (parts: TemplateStringsArray) => {
+      const text = parts.join('')
+      if (/FROM project_generations/.test(text)) {
+        boundaries++
+        return [{ generation: 'g' }]
+      }
+      if (poisoned) {
+        poisoned = false
+        throw new SQL.PostgresError('cached plan must not change result type', {
+          code: 'ERR_POSTGRES_SERVER_ERROR',
+          errno: '0A000',
+        })
+      }
+      return []
+    }) as unknown as SQL
+    // Simulate a transaction pool that dispatches outside the caller's ALS.
+    return outsideRequest(() => body(tx))
+  }) as SQL['begin']
+  const runner = new PlanRetryRunner()
+  await withHostedProjectContext(async () => {
+    rememberProjectGeneration('repo', 'g')
+    await runner.tx(pool, async (q) => {
+      await q`UPDATE data SET value = 1`
+    })
+    expect(attempts).toBe(2)
+    expect(boundaries).toBe(2)
+    await runner.run(pool, async (q) => {
+      await q`SELECT value FROM data`
+    })
+    expect(boundaries).toBe(2)
+  })
+  // A helper reusing the same raw transaction identity cannot multiply checks.
+  await pool.begin(async (tx) => {
+    await withHostedProjectContext(async () => {
+      rememberProjectGeneration('repo', 'g')
+      await admitHostedRequest(tx as SQL)
+      await admitHostedRequest(tx as SQL)
+    })
+  })
+  expect(boundaries).toBe(3)
+})

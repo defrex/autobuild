@@ -62,6 +62,15 @@ test.skipIf(!url)(
       'provider unavailable',
     )
     expect(await f.registry.has(repo)).toBe(false)
+    const [rotated] = await f.sql`SELECT generation FROM project_generations WHERE repo = ${repo}`
+    expect(`"${rotated.generation}"`).not.toBe(preview.token)
+    expect((await lifecycle.preview(f.actor, repo)).token).toBe(preview.token)
+    const { admitProject } = await import('./project-lifecycle')
+    await expect(
+      f.sql.begin(async (tx) => {
+        await admitProject(tx as SQL, { repo, generation: preview.token.slice(1, -1) })
+      }),
+    ).rejects.toThrow('project not registered')
     await expect(f.registry.add(repo, f.actor.email)).rejects.toThrow('unfinished')
     expect((await f.sql`SELECT * FROM project_deletion_blobs WHERE repo = ${repo}`).length).toBe(1)
     f.setFailure(false)
@@ -609,5 +618,88 @@ test.skipIf(!url)(
     await lifecycle.delete(f.actor, repo, (await lifecycle.preview(f.actor, repo)).token)
     expect(batches).toEqual([['exclusive']])
     expect([...f.objects].sort()).toEqual(['legacy-asset', 'legacy-event'])
+  },
+)
+
+test.skipIf(!url)(
+  'deletion invalidates an admitted request at the next mutation, including blob publication',
+  async () => {
+    const { withHostedProjectContext } = await import('./request-context')
+    const { captureProject, admitProject, reserveProjectBlobs } = await import(
+      './project-lifecycle'
+    )
+    const f = await fixture()
+    await f.registry.add(repo, f.actor.email)
+    const lifecycle = new PostgresProjectDeletion(f.sql, f.maintenance)
+    const preview = await lifecycle.preview(f.actor, repo)
+    await withHostedProjectContext(async () => {
+      const admission = await captureProject(f.sql, repo)
+      await f.sql.begin(async (tx) => {
+        await admitProject(tx as SQL, admission)
+        await tx`INSERT INTO repo_streams (repo,created_at,updated_at) VALUES (${repo},now(),now())`
+      })
+      await reserveProjectBlobs(f.sql, admission, ['unpublished'])
+      f.objects.add('unpublished')
+      await lifecycle.delete(f.actor, repo, preview.token)
+      expect(f.objects.has('unpublished')).toBe(false)
+      // Request admission remains cached; only a fresh transaction may authorize writes.
+      expect(await captureProject(f.sql, repo)).toEqual(admission)
+      await expect(
+        f.sql.begin(async (tx) => {
+          await admitProject(tx as SQL, admission)
+          await tx`INSERT INTO repo_streams (repo,created_at,updated_at) VALUES (${repo},now(),now())`
+        }),
+      ).rejects.toThrow('project not registered')
+      expect(await f.sql`SELECT 1 FROM repo_streams WHERE repo = ${repo}`).toHaveLength(0)
+    })
+    await withHostedProjectContext(async () => {
+      await expect(captureProject(f.sql, repo)).rejects.toThrow('project not registered')
+    })
+  },
+)
+
+test.skipIf(!url)(
+  'generation locks last through commit; queued deletion does not block another project',
+  async () => {
+    const { captureProject, admitProject } = await import('./project-lifecycle')
+    const f = await fixture()
+    await f.registry.add(repo, f.actor.email)
+    await f.registry.add(other, f.actor.email)
+    const lifecycle = new PostgresProjectDeletion(f.sql, f.maintenance)
+    const preview = await lifecycle.preview(f.actor, repo)
+    const admission = await captureProject(f.sql, repo)
+    const otherAdmission = await captureProject(f.sql, other)
+    const locked = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const mutation = f.sql.begin(async (tx) => {
+      await admitProject(tx as SQL, admission)
+      locked.resolve()
+      await release.promise
+      await tx`INSERT INTO repo_streams (repo,created_at,updated_at) VALUES (${repo},now(),now())`
+    })
+    await locked.promise
+    const deletion = lifecycle.delete(f.actor, repo, preview.token)
+    try {
+      // Observe PostgreSQL's durable lock wait, not elapsed time.
+      for (;;) {
+        const [waiting] = await f.sql`SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+        AND query LIKE 'SELECT generation FROM project_generations%FOR UPDATE%'`
+        if (waiting) break
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      expect(
+        await f.sql`SELECT generation FROM project_generations WHERE repo = ${other}`,
+      ).toHaveLength(1)
+      await f.sql.begin(async (tx) => {
+        await admitProject(tx as SQL, otherAdmission)
+        await tx`INSERT INTO repo_streams (repo,created_at,updated_at) VALUES (${other},now(),now())`
+      })
+    } finally {
+      release.resolve()
+      await mutation
+      await deletion
+    }
+    expect(await f.sql`SELECT 1 FROM repo_streams WHERE repo = ${repo}`).toHaveLength(0)
+    expect(await f.sql`SELECT 1 FROM repo_streams WHERE repo = ${other}`).toHaveLength(1)
   },
 )
