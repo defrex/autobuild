@@ -81,7 +81,10 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # Cheap gates precede independent suites: unit needs no database, build probes
 # use isolated temporary directories, and integration alone uses PostgreSQL on
 # 5432 (its deploy rehearsal uses a unique schema, temporary consumer and
-# ephemeral ports).
+# ephemeral ports). Integration runs in its own stage after unit and build: on
+# the 4-vCPU sandbox, running all three at once pushed tests a few milliseconds
+# past their 5 s default in both suites (2026-10-28). Integration takes about
+# 5 minutes, so serializing it costs little wall-clock and nothing in compute.
 # All deterministic checks precede agents. Keep ui-tui separate from ui-app:
 # both write .ab/dashboard-frames, including ui-app's capture-parity recapture.
 # ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames and docs'
@@ -91,7 +94,8 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # reports here; cheap gates already run before the long suites.
 steps = [
   ["lint", "types"],
-  ["unit", "build", "integration"],
+  ["unit", "build"],
+  "integration",
   "ui-tui",
   ["ui-app", "ui-website", "docs"],
 ]
