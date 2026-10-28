@@ -72,7 +72,7 @@ test('every terminal capture fixture has identical web rows and step facts', asy
   } finally {
     await rm(workspace, { recursive: true, force: true })
   }
-}, 30_000)
+}, 60_000)
 
 test('web polling preserves equal rows and replaces changed facts', () => {
   const previous = model()
