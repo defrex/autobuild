@@ -28,6 +28,8 @@ import {
 } from './dispatch-runtime-use'
 import {
   DISPATCH_GENERATION_ENV,
+  DISPATCH_CONDITIONAL_ENV,
+  conditionalUpgradeClient,
   DISPATCH_LAUNCH_VERSION,
   DISPATCH_OVERLAP_VERSION,
   GENERATION_SIGNALS,
@@ -224,6 +226,24 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
     ])
     return generationReaderResult(code, output, error)
   }
+  const readConditional = conditionalUpgradeClient()
+  const fallbackConditional = conditionalUpgradeClient()
+  const upgradeReader = (record: Pick<Child, 'runtime' | 'env'>, fallback = false) => {
+    const identity = JSON.stringify([
+      record.runtime.root,
+      record.env[DISPATCH_GENERATION_ENV],
+      argv,
+    ])
+    return (fallback ? fallbackConditional : readConditional)(identity, (condition) =>
+      reader(
+        {
+          ...record,
+          env: { ...record.env, [DISPATCH_CONDITIONAL_ENV]: JSON.stringify(condition) },
+        },
+        '--read-upgrade',
+      ),
+    )
+  }
   let active: Child | undefined
   let pending: { record: Child; correlation: string } | undefined
   let recovery:
@@ -328,21 +348,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
         released?: boolean
       }
       try {
-        projection = (await reader(active, '--read-upgrade')) as {
-          version: number
-          handoff: {
-            root: string
-            cacheId: string
-            run: string
-            lineage: string
-            correlation: string
-          } | null
-          takeover: boolean
-          journal?: { storeRef: string; repo: string }
-          successor?: string
-          accepted?: boolean
-          released?: boolean
-        }
+        projection = await upgradeReader(active)
       } catch (error) {
         if (signal) break
         readerFailures.report('active', error)
@@ -355,16 +361,17 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
               ...healthy.launch,
               runtimeRoot: healthy.runtime.root,
               run: active.launch.run,
+              journal: active.launch.journal,
               predecessor: undefined,
               rollback: undefined,
               recovery: undefined,
             }
-            projection = await reader(
+            projection = await upgradeReader(
               {
                 runtime: healthy.runtime,
                 env: { ...healthy.env, [DISPATCH_GENERATION_ENV]: JSON.stringify(query) },
               },
-              '--read-upgrade',
+              true,
             )
           } catch (error) {
             if (signal) break
