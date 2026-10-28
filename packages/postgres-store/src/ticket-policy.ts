@@ -1,6 +1,6 @@
 import { projectTransaction, hostedProjectContext } from './request-context'
 import { admitHostedRequest, findProject, captureProject, admitProject } from './project-lifecycle'
-import { seedTicketStates, policyStateNames } from './ticket-states'
+import { seedTicketStates, policyStateNames, lockTicketStates } from './ticket-states'
 import type { Exec } from './retry'
 import type { SQL } from 'bun'
 import { hostedTicketPolicySchema, type HostedTicketPolicy } from '@defrex/autobuild/hosted-tickets'
@@ -42,6 +42,7 @@ export class PostgresTicketPolicyStore implements TicketPolicyStore {
             await tx`SELECT seq, action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`
           )[0]
       if (registration?.action !== 'added') throw new Error('project not registered')
+      await lockTicketStates(tx as unknown as Exec, repo)
       const [previous] =
         await tx`SELECT policy FROM project_ticket_policy WHERE repo = ${repo} AND registration = ${registration.seq}`
       const old = previous
