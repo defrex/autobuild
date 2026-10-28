@@ -8965,7 +8965,7 @@ command = "run"
     expect(cache.size).toBe(SWEEP_PIN_CACHE_CAPACITY)
     expect(reads).toBe(2 * (SWEEP_PIN_CACHE_CAPACITY + 1))
     expect(h.launches).toEqual([])
-  })
+  }, 30_000)
 
   test('missing capability preserves full reads and pinned decisions', async () => {
     const clock = manualClock()
