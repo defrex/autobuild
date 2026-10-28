@@ -1,3 +1,7 @@
+import { withHostedProjectContext } from '@defrex/autobuild-postgres-store/request-context'
+import { openPostgresProjectSecretsFromEnv } from '@defrex/autobuild-postgres-store/project-secrets'
+import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
+import { createWebProjectSecretsHandler } from './project-secrets'
 import { openPostgresProjectDeletionFromEnv } from '@defrex/autobuild-postgres-store/project-deletion'
 import { humanAccess } from './access'
 import { createOrganizationHandler } from './organizations'
@@ -18,6 +22,8 @@ export function hostedService() {
   return service
 }
 
+let secrets: ReturnType<typeof openPostgresProjectSecretsFromEnv> | undefined
+let settingsStore: ReturnType<typeof openPostgresBuildStoreFromEnv> | undefined
 let deletion: ReturnType<typeof openPostgresProjectDeletionFromEnv> | undefined
 let gateway: ReturnType<typeof createWebGateway> | undefined
 export function webGateway() {
@@ -36,14 +42,47 @@ export function webGateway() {
       })),
     getSession: (headers) => webAuth().api.getSession({ headers }),
   })
+  const projectSecrets = createWebProjectSecretsHandler({
+    access: humanAccess,
+    projects: hostedService().projects,
+    baseURL: parseWebAuthEnv(process.env).baseURL,
+    getSession: (headers) => webAuth().api.getSession({ headers }),
+    secrets: () =>
+      (secrets ??= openPostgresProjectSecretsFromEnv(process.env).catch((error) => {
+        secrets = undefined
+        throw error
+      })),
+    store: () =>
+      (settingsStore ??= openPostgresBuildStoreFromEnv(process.env).catch((error) => {
+        settingsStore = undefined
+        throw error
+      })),
+  })
   return {
-    fetch: (request: Request) => {
-      const path = new URL(request.url).pathname
-      return /^\/api\/web\/(orgs(?:\/|$)|projects\/(?:unassigned|deletions?)(?:\/|$))/.test(path)
-        ? management(request)
-        : gateway!.fetch(request)
-    },
+    fetch: (request: Request) =>
+      routeWebRequest(request, {
+        projectSecrets,
+        management,
+        operator: (request) => gateway!.fetch(request),
+      }),
   }
+}
+
+/** Browser secrets have session authority and never enter the machine gateway. */
+export function routeWebRequest(
+  request: Request,
+  handlers: {
+    projectSecrets: (request: Request) => Promise<Response>
+    management: (request: Request) => Promise<Response>
+    operator: (request: Request) => Promise<Response>
+  },
+) {
+  const path = new URL(request.url).pathname
+  if (/^\/api\/web\/repos\/[^/]+\/secrets(?:\/|$)/.test(path))
+    return withHostedProjectContext(() => handlers.projectSecrets(request))
+  return /^\/api\/web\/(orgs(?:\/|$)|projects\/(?:unassigned|deletions?)(?:\/|$))/.test(path)
+    ? handlers.management(request)
+    : handlers.operator(request)
 }
 
 let mcp: ReturnType<typeof createMcpEndpoint> | undefined
