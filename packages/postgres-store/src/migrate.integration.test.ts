@@ -1852,7 +1852,9 @@ test.skipIf(!testUrl)('v20 upgrade retains admission index and adds scan checkpo
     await sql`UPDATE ab_schema_migrations SET version = 20, checksum = ${SCHEMA_V20_CHECKSUM}`
     await migratePostgres(world.url)
     await assertSchema(sql)
-    const columns = await sql`SELECT column_name FROM information_schema.columns
+    const columns = await sql<
+      { column_name: string }[]
+    >`SELECT column_name FROM information_schema.columns
       WHERE table_schema = current_schema() AND table_name = 'repo_ticket_scan_checkpoints'
       ORDER BY ordinal_position`
     expect(columns.map((row) => row.column_name)).toEqual(['repo', 'value'])
