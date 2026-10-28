@@ -1,3 +1,4 @@
+import { ticketPreparationReducer } from './ticket-preparation'
 import { ticketMigrationsReducer } from './ticket-migrations'
 import { dispatchUpgradeReducer } from './dispatch-upgrade'
 import {
@@ -481,6 +482,7 @@ import { dispatchStatusReducer } from './dispatch-status'
  * correlations outside it use the explicitly parameterized cache. */
 export const RECENT_DISPATCH_RUN_LIMIT = 16
 export interface RepositoryReadAcc {
+  preparation: ReturnType<typeof ticketPreparationReducer.initial>
   compatibility: CompatibilityState
   presence: Record<
     string,
@@ -534,6 +536,7 @@ export const repositoryReadFactsReducer = defineReducer({
     4 +
     ticketMigrationsReducer.version +
     dispatchUpgradeReducer.version +
+    ticketPreparationReducer.version +
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     forgeHealthReducer.version +
@@ -548,6 +551,7 @@ export const repositoryReadFactsReducer = defineReducer({
   initial: (): RepositoryReadAcc => ({
     compatibility: initialCompatibility(),
     presence: {},
+    preparation: ticketPreparationReducer.initial(),
     upgrades: dispatchUpgradeReducer.initial(),
     recentRuns: [],
     openHarvest: openHarvestExecutionsReducer.initial(),
@@ -573,6 +577,7 @@ export const repositoryReadFactsReducer = defineReducer({
     publications: [],
   }),
   fold(acc: RepositoryReadAcc, events: readonly RepositoryEvent[]) {
+    acc.preparation = ticketPreparationReducer.advance(acc.preparation, events)
     advanceCompatibility(acc.compatibility, events)
     acc.upgrades = dispatchUpgradeReducer.advance(acc.upgrades, events)
     acc.attention = repositoryAttentionReducer.advance(acc.attention, events)
@@ -683,6 +688,7 @@ export const repositoryReadFactsReducer = defineReducer({
   finish: (acc: RepositoryReadAcc) => ({
     compatibility: structuredClone(acc.compatibility),
     presence: structuredClone(acc.presence),
+    preparation: ticketPreparationReducer.finish(acc.preparation),
     upgrades: dispatchUpgradeReducer.finish(acc.upgrades),
     harvestFailures: structuredClone(acc.harvestFailures),
     harvestVerdicts: structuredClone(acc.harvestVerdicts),
