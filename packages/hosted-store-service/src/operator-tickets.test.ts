@@ -199,3 +199,28 @@ test('operator writes forward expected revisions for update, move, block and unb
   })
   expect(moved.ticket.state).toBe('Done')
 })
+
+test('HTTP listing selects native paging and preserves the native total', async () => {
+  const source = new FakeTicketSource([], { createState: 'Backlog' })
+  Object.assign(source, {
+    async listPage(criteria: unknown, page: unknown) {
+      expect(criteria).toEqual({ state: 'Backlog', labels: ['web'] })
+      expect(page).toEqual({ limit: 0, offset: 9, order: 'newest' })
+      return { tickets: [], diagnostics: ['native'], total: 55 }
+    },
+  })
+  source.listReady = async () => {
+    throw new Error('exhaustive read forbidden')
+  }
+  const client = await setup(source)
+  expect(
+    await client.listTickets(repo, {
+      labels: ['web'],
+      page: { limit: 0, offset: 9, order: 'newest' },
+    }),
+  ).toMatchObject({
+    tickets: [],
+    diagnostics: ['native'],
+    total: 55,
+  })
+})
