@@ -1188,7 +1188,9 @@ if (testUrl)
       await backing.close()
       await database.cleanup()
     }
-  })
+    // Measured 17.2s on the 4-vCPU sandbox while unit/integration and diagnostic
+    // checks overlapped; preserve the full hosted SQL budget with explicit headroom.
+  }, 30_000)
 
 ;(testUrl ? test : test.skip)(
   'repository HTTP operations read repo_streams once, including compound and polling reads',

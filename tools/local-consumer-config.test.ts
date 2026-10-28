@@ -72,14 +72,16 @@ test('remote rollout preserves this repository pipeline on the hosted ticket tra
 
   expect(config.commands).toMatchObject({
     setup: 'bun install',
-    lint: 'bun run check',
-    typecheck: 'bun run typecheck',
-    test: 'bun run test',
+    lint: './scripts/verify-bun.sh bun run check',
+    typecheck: './scripts/verify-bun.sh bun run typecheck',
+    test: './scripts/verify-bun.sh bun run test',
   })
-  expect(config.commands.build).toBe('bun run check:build')
+  expect(config.commands.build).toBe('./scripts/verify-bun.sh bun run check:build')
   const testIntegration = config.commands['test-integration']
-  expect(testIntegration).toContain('AB_POSTGRES_TEST_URL')
-  expect(testIntegration).toContain('bun run test:integration')
+  expect(testIntegration).toBe(
+    "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' ./scripts/verify-bun.sh bun run test:integration",
+  )
+  await access(join(REPO_ROOT, 'scripts/verify-bun.sh'), constants.X_OK)
   expect(config.verify.steps).toEqual([
     'lint',
     'types',
