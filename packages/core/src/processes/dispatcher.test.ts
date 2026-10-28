@@ -1,3 +1,4 @@
+import { parkedSweepReadBudget } from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { GitHubForge } from '../ports/forge/github'
@@ -44,6 +45,7 @@ import { manualClock } from '../testing/fixed'
 import { withFailingRepoAppend } from '../testing/store-failures'
 import {
   Dispatcher,
+  SWEEP_PIN_CACHE_CAPACITY,
   analyzeDependencies,
   defaultProposalState,
   defaultTriageState,
@@ -8815,6 +8817,269 @@ command = "run"
       content: effectiveBuildConfigContent(config),
     })
   }
+  test('parked sweep body-read experiment', async () => {
+    const h = harness()
+    let reads = 0
+    let bytes = 0
+    const getArtifact = h.store.getArtifact.bind(h.store)
+    h.store.getArtifact = async (...args) => {
+      const result = await getArtifact(...args)
+      if (args[1] === BUILD_EFFECTIVE_CONFIG_ARTIFACT) {
+        reads++
+        bytes += result?.content.byteLength ?? 0
+      }
+      return result
+    }
+    for (let index = 0; index < 3; index++) {
+      const slug = await seedAwaitingPr(h, `parked-${index}`)
+      await pin(h, slug, pipeline('verify', ''))
+    }
+    h.clock.advance(120_000)
+    for (let tick = 0; tick < 4; tick++) {
+      await h.dispatcher.tick({ acceptNewWork: false })
+    }
+    console.log('parked sweep experiment', { builds: 3, sweeps: 4, reads, bytes })
+    expect(h.launches).toEqual([])
+    expect(reads).toBe(3)
+  })
+  test('parked sweep read budget stays bounded at 100 and 100,000 events', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const h = harness({ store, clock })
+    const slugs = []
+    for (let n = 0; n < 3; n++) {
+      const slug = await seedAwaitingPr(h, `budget-${n}`)
+      slugs.push(slug)
+      await pin(h, slug, pipeline('verify', ''))
+    }
+    await parkedSweepReadBudget({
+      store,
+      slugs,
+      dispatcher: () => harness({ store, clock }).dispatcher,
+      pin: (slug) => pin(h, slug, pipeline('verify', '')),
+      advance: () => clock.advance(120_000),
+    })
+  }, 30_000)
+
+  for (const table of ['verify', 'finalize'] as const) {
+    for (const change of ['add', 'remove', 'rename'] as const) {
+      test(`warm sweep sees artifact-only ${table} ${change}, including after restart`, async () => {
+        const live = pipeline(table, 'live-only')
+        const h = harness({ getConfig: () => live })
+        const slug = await seedAwaitingPr(h)
+        const original = change === 'add' ? '' : 'original'
+        await pin(h, slug, pipeline(table, original))
+        if (original !== '') {
+          if (table === 'verify') {
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'verify.started',
+              payload: { step: original, attempt: 1 },
+            })
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'verify.completed',
+              payload: { step: original, attempt: 1, pass: true },
+            })
+          } else {
+            await h.store.append(slug, {
+              actor: KERNEL,
+              type: 'finalize.step-completed',
+              payload: { step: original, ok: true },
+            })
+          }
+        }
+        h.clock.advance(120_000)
+        await h.dispatcher.tick({ acceptNewWork: false })
+        await h.dispatcher.tick({ acceptNewWork: false })
+        expect(h.launches).toEqual([])
+        await pin(h, slug, pipeline(table, change === 'remove' ? '' : 'new-step'))
+        h.clock.advance(120_000)
+        const restarted = harness({ store: h.store, clock: h.clock, getConfig: () => live })
+        await h.dispatcher.tick({ acceptNewWork: false })
+        await restarted.dispatcher.tick({ acceptNewWork: false })
+        expect(h.launches).toEqual(change === 'remove' ? [] : [slug])
+        expect(restarted.launches).toEqual(change === 'remove' ? [] : [slug])
+      })
+    }
+  }
+
+  test('metadata failures invalidate warm entries and retry; malformed revisions repair afresh', async () => {
+    let brokenMeta = false
+    let repairs = 0
+    let repairWorks = false
+    const clock = manualClock()
+    const backing = new MemoryBuildStore({ clock })
+    const store = new Proxy(backing, {
+      get(target, key) {
+        if (key === 'getLatestArtifactMeta')
+          return async (slug: string, kind: string) => {
+            if (brokenMeta) throw new Error('metadata outage')
+            return target.getLatestArtifactMeta(slug, kind)
+          }
+        const value = Reflect.get(target, key)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const h = harness({
+      store,
+      clock,
+      repairBuildConfig: async (slug) => {
+        repairs++
+        if (!repairWorks) throw new Error('repair outage')
+        await pin(h, slug, pipeline('verify', 'repaired'))
+      },
+    })
+    const slug = await seedAwaitingPr(h)
+    await pin(h, slug, pipeline('verify', ''))
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    brokenMeta = true
+    const failed = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(failed.blockedDiagnostics.join()).toContain('metadata outage')
+    expect(h.launches).toEqual([])
+    expect(Reflect.get(h.dispatcher, 'sweepPins').size).toBe(0)
+    brokenMeta = false
+    await h.store.putArtifact(slug, { kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT, content: '{}' })
+    h.clock.advance(120_000)
+    const malformed = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(malformed.blockedDiagnostics.join()).toContain('repair outage')
+    expect(Reflect.get(h.dispatcher, 'sweepPins').size).toBe(0)
+    repairWorks = true
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(repairs).toBe(2)
+    expect(h.launches).toEqual([slug])
+  })
+
+  for (const work of ['abort', 'resume', 'conflict'] as const) {
+    test(`warm parked sweep still delivers ${work} work`, async () => {
+      const h = harness()
+      const slug = await seedAwaitingPr(h)
+      await pin(h, slug, pipeline('verify', ''))
+      h.clock.advance(120_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(h.launches).toEqual([])
+      if (work === 'resume') {
+        await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+        await h.store.append(slug, {
+          actor: humanActor('operator'),
+          type: 'build.resume-requested',
+          payload: {},
+        })
+      } else if (work === 'abort') {
+        await h.store.append(slug, {
+          actor: humanActor('operator'),
+          type: 'build.abort-requested',
+          payload: { reason: 'stop' },
+        })
+      } else {
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'pr.conflicted',
+          payload: { baseSha: BASE_SHA },
+        })
+      }
+      h.clock.advance(120_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(h.launches).toEqual([slug])
+    })
+  }
+
+  test('a racing full read caches its actual revision and retries body failures', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    await pin(h, slug, pipeline('verify', ''))
+    const get = h.store.getArtifact.bind(h.store)
+    let race = true
+    let brokenBody = false
+    h.store.getArtifact = async (...args) => {
+      if (args[1] === BUILD_EFFECTIVE_CONFIG_ARTIFACT) {
+        if (brokenBody) throw new Error('body outage')
+        if (race) {
+          race = false
+          await pin(h, slug, pipeline('verify', ''))
+        }
+      }
+      return get(...args)
+    }
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const cache: Map<string, { revision: number }> = Reflect.get(h.dispatcher, 'sweepPins')
+    expect(cache.get(slug)?.revision).toBe(1)
+    await pin(h, slug, pipeline('verify', 'new-step'))
+    h.clock.advance(120_000)
+    brokenBody = true
+    const failed = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(failed.blockedDiagnostics.join()).toContain('body outage')
+    expect(cache.has(slug)).toBe(false)
+    expect(h.launches).toEqual([])
+    brokenBody = false
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('missing metadata drops a warm pin and preserves live fallback', async () => {
+    const h = harness({ getConfig: () => pipeline('verify', 'live-only') })
+    const slug = await seedAwaitingPr(h)
+    await pin(h, slug, pipeline('verify', ''))
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.launches).toEqual([])
+    h.store.getLatestArtifactMeta = async () => null
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(Reflect.get(h.dispatcher, 'sweepPins').size).toBe(0)
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('LRU retention is bounded and evicted pins reread without changing decisions', async () => {
+    const h = harness()
+    let reads = 0
+    const get = h.store.getArtifact.bind(h.store)
+    h.store.getArtifact = async (...args) => {
+      if (args[1] === BUILD_EFFECTIVE_CONFIG_ARTIFACT) reads++
+      return get(...args)
+    }
+    for (let n = 0; n <= SWEEP_PIN_CACHE_CAPACITY; n++) {
+      const slug = await seedAwaitingPr(h, `pressure-${n.toString().padStart(3, '0')}`)
+      await pin(h, slug, pipeline('verify', ''))
+    }
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const cache: Map<string, unknown> = Reflect.get(h.dispatcher, 'sweepPins')
+    expect(cache.size).toBe(SWEEP_PIN_CACHE_CAPACITY)
+    expect(cache.has('pressure-000')).toBe(false)
+    expect(reads).toBe(SWEEP_PIN_CACHE_CAPACITY + 1)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(cache.size).toBe(SWEEP_PIN_CACHE_CAPACITY)
+    expect(reads).toBe(2 * (SWEEP_PIN_CACHE_CAPACITY + 1))
+    expect(h.launches).toEqual([])
+  }, 30_000)
+
+  test('missing capability preserves full reads and pinned decisions', async () => {
+    const clock = manualClock()
+    const backing = new MemoryBuildStore({ clock })
+    let reads = 0
+    const store = new Proxy(backing, {
+      get(target, key) {
+        if (key === 'getLatestArtifactMeta') return undefined
+        if (key === 'getArtifact')
+          return async (...args: Parameters<BuildStore['getArtifact']>) => {
+            if (args[1] === BUILD_EFFECTIVE_CONFIG_ARTIFACT) reads++
+            return target.getArtifact(...args)
+          }
+        const value = Reflect.get(target, key)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const h = harness({ store, clock, getConfig: () => pipeline('verify', 'live-only') })
+    const slug = await seedAwaitingPr(h)
+    await pin(h, slug, pipeline('verify', ''))
+    h.clock.advance(120_000)
+    for (let n = 0; n < 3; n++) await h.dispatcher.tick({ acceptNewWork: false })
+    expect(reads).toBe(3)
+    expect(h.launches).toEqual([])
+  })
+
   for (const table of ['verify', 'finalize'] as const) {
     for (const change of ['add', 'remove', 'rename']) {
       test(`${table} ${change}: merge and replacement launches follow the pin`, async () => {
