@@ -892,3 +892,32 @@ test('harvest provider evidence retains configured indexes after native alternat
     }),
   ).toThrow('distinct configured targets')
 })
+
+test('preparation facts require dispatcher authority and bounded diagnostic text', () => {
+  const payload = {
+    attempt: 'prep',
+    ticket: { source: 'fake', id: 'T-1' },
+    stage: 'assets',
+    claimed: true,
+    handback: 'Ready',
+    error: 'offline',
+  }
+  expect(
+    validateRepositoryEventWrite({ actor: DISPATCHER, type: 'ticket-preparation.failed', payload })
+      .payload,
+  ).toEqual(payload)
+  expect(() =>
+    validateRepositoryEventWrite({
+      actor: humanActor('operator'),
+      type: 'ticket-preparation.failed',
+      payload,
+    }),
+  ).toThrow('may not emit')
+  expect(() =>
+    validateRepositoryEventWrite({
+      actor: DISPATCHER,
+      type: 'ticket-preparation.failed',
+      payload: { ...payload, error: 'x'.repeat(4001) },
+    }),
+  ).toThrow('invalid payload')
+})

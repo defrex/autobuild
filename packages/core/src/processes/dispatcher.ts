@@ -1,3 +1,4 @@
+import type { TicketPreparation } from '../kernel/ticket-preparation'
 import { sampleTargetDistance } from '../kernel/target-distance'
 import { capturedBuildConfig } from './verify-cycle-config'
 import { publicationRetryGate } from '../kernel/publication-retry'
@@ -371,9 +372,9 @@ export interface TickReport {
   abandoned: number
   /** Janitor: queued builds explicitly discarded and returned to Ready. */
   discarded: number
-  /** Janitor failures contained to individual builds during this pass. */
+  /** Contained build janitor and ticket-preparation recovery failures this pass. */
   janitorFailed: number
-  /** One actionable line per contained janitor failure, attributed by slug. */
+  /** One actionable line per contained failure, attributed by build or attempt. */
   janitorDiagnostics: string[]
   /** Ordinary-tick recovery completed an interrupted post-creation dispatch. */
   recovered: number
@@ -990,6 +991,8 @@ export class Dispatcher {
     // durable fact drives it, so a second dispatcher polling the same
     // repository converges the same state.
     if (this.outOfBudget(opts)) return report
+    await this.recoverTicketPreparations(report, opts)
+    if (this.outOfBudget(opts)) return report
     await this.janitor(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     await this.recoverDispatches(report, launched, paused, opts)
@@ -1212,7 +1215,17 @@ export class Dispatcher {
       }
       const activeTicketIds = await this.activeTicketIdentities(refs, listing.tickets)
       report.queued = listing.tickets.filter(
-        (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
+        (ticket) =>
+          !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`) &&
+          !Object.values(this.store.repositoryFacts().preparation).some((attempt) => {
+            const ref = resolveTicketRef(
+              this.store.repositoryFacts().ticketMigrations,
+              attempt.ticket,
+              this.deps.tickets.name,
+              attempt.slug ?? attempt.attempt,
+            )
+            return ref.source === ticket.ref.source && ref.id === ticket.ref.id
+          }),
       ).length
       report.invalidTickets = listing.diagnostics.length
       report.ticketDiagnostics = [...listing.diagnostics]
@@ -4644,6 +4657,145 @@ export class Dispatcher {
     }
   }
 
+  /** Retry a fixed batch under the same repository ownership as intake.
+   * No provider calls for parked deadlines; no history or orphan scans. */
+  private async recoverTicketPreparations(report: TickReport, opts: TickOpts): Promise<void> {
+    const pending = Object.values(this.store.repositoryFacts().preparation)
+      .filter(
+        (attempt) => !attempt.retryAt || Date.parse(attempt.retryAt) <= this.deps.clock().getTime(),
+      )
+      .sort(
+        (a, b) =>
+          Date.parse(a.retryAt ?? '1970-01-01T00:00:00.000Z') -
+            Date.parse(b.retryAt ?? '1970-01-01T00:00:00.000Z') ||
+          a.attempt.localeCompare(b.attempt),
+      )
+      .slice(0, 8)
+    const failures: unknown[] = []
+    for (const attempt of pending) {
+      if (this.outOfBudget(opts)) break
+      try {
+        await this.recoverTicketPreparation(attempt)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    for (const error of failures) {
+      report.janitorFailed += 1
+      report.janitorDiagnostics.push(String(error))
+    }
+  }
+
+  private async preparationResolved(
+    attempt: TicketPreparation,
+    outcome: 'lost-claim' | 'handed-back' | 'bounced' | 'owned' | 'abandoned',
+    reason?: string,
+  ): Promise<void> {
+    await this.store.appendRepo(this.deps.repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: {
+        attempt: attempt.attempt,
+        ticket: attempt.ticket,
+        outcome,
+        ...(reason ? { reason: reason.slice(0, 4000) } : {}),
+      },
+    })
+  }
+
+  private async recoverTicketPreparation(attempt: TicketPreparation): Promise<void> {
+    try {
+      // A rejected create can have committed. Unavailable or conflicting readback
+      // is never absence and must not authorize a ticket transition.
+      if (attempt.slug) {
+        const record = await this.store.getBuild(attempt.slug)
+        if (record) {
+          const created = (await this.store.buildFacts(attempt.slug)).created
+          if (
+            record.repo !== this.deps.repo ||
+            record.ticket?.source !== attempt.ticket.source ||
+            record.ticket?.id !== attempt.ticket.id ||
+            created?.payload.repo !== this.deps.repo ||
+            created.payload.ticket?.source !== attempt.ticket.source ||
+            created.payload.ticket?.id !== attempt.ticket.id
+          )
+            return await this.preparationResolved(
+              attempt,
+              'abandoned',
+              `Conflicting build ownership at ${attempt.slug}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
+            )
+          await this.preparationResolved(attempt, 'owned')
+          return
+        }
+      }
+      const ref = resolveTicketRef(
+        this.store.repositoryFacts().ticketMigrations,
+        attempt.ticket,
+        this.deps.tickets.name,
+        attempt.slug ?? attempt.attempt,
+      )
+      const ticket = await this.deps.tickets.get(ref.id)
+      if (!ticket)
+        return await this.preparationResolved(
+          attempt,
+          'abandoned',
+          'Ticket no longer exists; ticket unchanged.',
+        )
+      if (ticket.state === undefined)
+        return await this.preparationResolved(
+          attempt,
+          'abandoned',
+          'Ticket state is unavailable; ticket unchanged. Inspect the provider record before manually retrying.',
+        )
+      const state = (value: string) => value.toLowerCase()
+      const handback = attempt.handback ?? attempt.readyState
+      if (state(ticket.state) === state(handback)) {
+        await this.preparationResolved(
+          attempt,
+          handback === attempt.readyState ? 'handed-back' : 'bounced',
+        )
+        return
+      }
+      if (!attempt.claimed || state(ticket.state) !== state(attempt.claimedState))
+        return await this.preparationResolved(
+          attempt,
+          'abandoned',
+          `Uncertain claim or externally changed ticket state ${ticket.state}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
+        )
+      await this.deps.tickets.transition(ref.id, handback)
+      await this.preparationResolved(
+        attempt,
+        handback === attempt.readyState ? 'handed-back' : 'bounced',
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      try {
+        await this.store.appendRepo(this.deps.repo, {
+          actor: DISPATCHER,
+          type: 'ticket-preparation.recovery-failed',
+          payload: {
+            attempt: attempt.attempt,
+            ticket: attempt.ticket,
+            claimed: attempt.claimed,
+            handback: attempt.handback ?? attempt.readyState,
+            ...(attempt.error ? { preparationError: attempt.error } : {}),
+            error: message.slice(0, 4000) || 'unknown recovery failure',
+            retryAt: new Date(this.deps.clock().getTime() + 30_000).toISOString(),
+          },
+        })
+      } catch (diagnosticError) {
+        throw new AggregateError(
+          [error, diagnosticError],
+          `ticket preparation recovery failed: ${message}; diagnostic append failed: ${String(diagnosticError)}`,
+        )
+      }
+      throw new Error(
+        `ticket preparation recovery failed: ${message}; original preparation failure: ${attempt.error ?? 'unfinished durable preparation'}`,
+        { cause: error },
+      )
+    }
+  }
+
   // ── e. Dispatch (SPEC §12, §6.3) ───────────────────────────────────────────
 
   private async dispatch(
@@ -4696,7 +4848,17 @@ export class Dispatcher {
       ]),
     )
     const ready = listing.tickets.filter(
-      (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
+      (ticket) =>
+        !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`) &&
+        !Object.values(this.store.repositoryFacts().preparation).some((attempt) => {
+          const ref = resolveTicketRef(
+            this.store.repositoryFacts().ticketMigrations,
+            attempt.ticket,
+            this.deps.tickets.name,
+            attempt.slug ?? attempt.attempt,
+          )
+          return ref.source === ticket.ref.source && ref.id === ticket.ref.id
+        }),
     )
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
@@ -4926,70 +5088,156 @@ export class Dispatcher {
           continue
         }
       }
-      // Claim-before-launch (§12): losing the claim means another dispatcher
-      // (or an earlier tick) owns this ticket.
-      if (!(await tickets.claim(ticket.ref.id))) {
-        report.claimRaces += 1
-        report.queued -= 1
-        continue
-      }
-
-      // Freeze the ticket's assets at the claim (SPEC §6.3): sampled before the
-      // spec-authoring interval so edits made during it are never pinned.
-      const assets = await preparePinnedAssets(tickets, store, this.deps.repo, ticket.ref.id)
-
-      // Quality gate (§6.3): import a conforming ticket body as the spec;
-      // author one for thin-but-groomed tickets; otherwise bounce.
-      let body = ticket.body
-      let conformance = specConformance(body)
-      let authoredSession: string | undefined
-      if (!conformance.conforms && this.deps.authorSpec) {
-        const authored = await this.deps.authorSpec(ticket)
-        if (authored !== null) {
-          conformance = specConformance(authored)
-          if (conformance.conforms) {
-            body = authored
-            authoredSession = this.deps.ids('s')
-          }
-        }
-      }
-      if (!conformance.conforms) {
-        await this.bounce(ticket, conformance.missing)
-        report.bounced += 1
-        report.queued -= 1
-        continue
-      }
-
-      const baseSlug = await this.chooseSlugBase(ticket.title, body)
-      const slug = await this.uniqueSlug(baseSlug)
-      const branch = `${ticket.kind === 'node' ? 'ab-node' : 'ab'}/${slug}`
-      const repoOrigin = await this.resolveRepoOriginOnce()
-      const createdSeed = {
-        ...(ticket.kind === 'node' ? { kind: ticket.kind } : {}),
-        ...(target !== undefined ? { target: target.target, baseBranch: target.branch } : {}),
-        ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
-        // Claim-time provenance: the newest durable default fact that agrees
-        // with the launch sample, recorded on `build.created` so the fan-out's
-        // seq comparison sees the claim as already answering that fact — and
-        // so a newer opposite fact (an interleaved toggle) stays strictly
-        // ahead of it and reconciles this build on the next tick (f_b851c0e8).
-        ...(autoMergeSeedFact !== undefined ? { autoMergeDefaultSeq: autoMergeSeedFact.seq } : {}),
-        assets,
-      }
-      // `build.created` rides with the record so the pinned assets and the
-      // record exist together or not at all.
-      const record = await store.createBuild({
-        slug,
-        repo: this.deps.repo,
+      const attempt: TicketPreparation = {
+        attempt: this.deps.ids('prep'),
         ticket: ticket.ref,
-        branch,
-        ...(repoOrigin !== undefined ? { repoOrigin } : {}),
-        created: {
-          actor: DISPATCHER,
-          type: 'build.created',
-          payload: this.buildCreatedPayload(ticket.ref, this.deps.repo, createdSeed),
+        readyState: config.tickets.readyState,
+        claimedState: ticketLifecycle(config.tickets).doing,
+        claimed: false,
+      }
+      await store.ensureRepo(this.deps.repo)
+      await store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'ticket-preparation.intended',
+        payload: {
+          attempt: attempt.attempt,
+          ticket: attempt.ticket,
+          readyState: attempt.readyState,
+          claimedState: attempt.claimedState,
         },
       })
+      let stage = 'claim'
+      let established = false
+      let record: BuildRecord
+      let body = ticket.body
+      let authoredSession: string | undefined
+      let createdSeed: Parameters<Dispatcher['buildCreatedPayload']>[2]
+      try {
+        if (!(await tickets.claim(ticket.ref.id))) {
+          await this.preparationResolved(attempt, 'lost-claim')
+          report.claimRaces += 1
+          report.queued -= 1
+          continue
+        }
+        attempt.claimed = true
+        stage = 'claim-confirmation'
+        await store.appendRepo(this.deps.repo, {
+          actor: DISPATCHER,
+          type: 'ticket-preparation.claimed',
+          payload: { attempt: attempt.attempt, ticket: attempt.ticket },
+        })
+        stage = 'assets'
+        // Freeze the ticket's assets at the claim (SPEC §6.3): sampled before the
+        // spec-authoring interval so edits made during it are never pinned.
+        const assets = await preparePinnedAssets(tickets, store, this.deps.repo, ticket.ref.id)
+
+        // Quality gate (§6.3): import a conforming ticket body as the spec;
+        // author one for thin-but-groomed tickets; otherwise bounce.
+        stage = 'spec'
+        let conformance = specConformance(body)
+        if (!conformance.conforms && this.deps.authorSpec) {
+          const authored = await this.deps.authorSpec(ticket)
+          if (authored !== null) {
+            conformance = specConformance(authored)
+            if (conformance.conforms) {
+              body = authored
+              authoredSession = this.deps.ids('s')
+            }
+          }
+        }
+        if (!conformance.conforms) {
+          attempt.handback = this.triageState()
+          await store.appendRepo(this.deps.repo, {
+            actor: DISPATCHER,
+            type: 'ticket-preparation.handback-selected',
+            payload: { attempt: attempt.attempt, ticket: attempt.ticket, state: attempt.handback },
+          })
+          stage = 'bounce'
+          await this.bounce(ticket, conformance.missing)
+          await this.preparationResolved(attempt, 'bounced')
+          report.bounced += 1
+          report.queued -= 1
+          continue
+        }
+
+        stage = 'naming'
+        const baseSlug = await this.chooseSlugBase(ticket.title, body)
+        const slug = await this.uniqueSlug(baseSlug)
+        const branch = `${ticket.kind === 'node' ? 'ab-node' : 'ab'}/${slug}`
+        const repoOrigin = await this.resolveRepoOriginOnce()
+        createdSeed = {
+          ...(ticket.kind === 'node' ? { kind: ticket.kind } : {}),
+          ...(target !== undefined ? { target: target.target, baseBranch: target.branch } : {}),
+          ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
+          // Claim-time provenance: the newest durable default fact that agrees
+          // with the launch sample, recorded on `build.created` so the fan-out's
+          // seq comparison sees the claim as already answering that fact — and
+          // so a newer opposite fact (an interleaved toggle) stays strictly
+          // ahead of it and reconciles this build on the next tick (f_b851c0e8).
+          ...(autoMergeSeedFact !== undefined
+            ? { autoMergeDefaultSeq: autoMergeSeedFact.seq }
+            : {}),
+          assets,
+        }
+        // `build.created` rides with the record so the pinned assets and the
+        // record exist together or not at all.
+        stage = 'creation-identity'
+        attempt.slug = slug
+        await store.appendRepo(this.deps.repo, {
+          actor: DISPATCHER,
+          type: 'ticket-preparation.creation-selected',
+          payload: { attempt: attempt.attempt, ticket: attempt.ticket, slug },
+        })
+        stage = 'create-build'
+        record = await store.createBuild({
+          slug,
+          repo: this.deps.repo,
+          ticket: ticket.ref,
+          branch,
+          ...(repoOrigin !== undefined ? { repoOrigin } : {}),
+          created: {
+            actor: DISPATCHER,
+            type: 'build.created',
+            payload: this.buildCreatedPayload(ticket.ref, this.deps.repo, createdSeed),
+          },
+        })
+        established = true
+        await this.preparationResolved(attempt, 'owned')
+      } catch (error) {
+        // Settlement and completion errors after successful creation cannot
+        // release the claim. A later tick settles the retained creation identity.
+        if (established) throw error
+        const errors: unknown[] = [error]
+        attempt.error =
+          (error instanceof Error ? error.message : String(error)).slice(0, 4000) ||
+          'unknown preparation failure'
+        attempt.stage = stage
+        try {
+          await store.appendRepo(this.deps.repo, {
+            actor: DISPATCHER,
+            type: 'ticket-preparation.failed',
+            payload: {
+              attempt: attempt.attempt,
+              ticket: attempt.ticket,
+              stage,
+              claimed: attempt.claimed,
+              handback: attempt.handback ?? attempt.readyState,
+              error: attempt.error,
+            },
+          })
+        } catch (diagnosticError) {
+          errors.push(diagnosticError)
+        }
+        try {
+          await this.recoverTicketPreparation(attempt)
+        } catch (recoveryError) {
+          errors.push(recoveryError)
+        }
+        throw new AggregateError(
+          errors,
+          `ticket preparation failed (${stage}): ${errors.map(String).join('; ')}`,
+        )
+      }
       report.queued -= 1
       if (ticket.kind !== 'node') capacity -= 1
       const outcome = await this.attemptDispatchCompletion(record, launched, report, {
