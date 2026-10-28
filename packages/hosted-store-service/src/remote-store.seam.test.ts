@@ -1372,7 +1372,28 @@ test('hosted frontend read budget stays flat across thousands of journal events'
   const backing = new MemoryBuildStore()
   const server = startStoreServer({ store: backing })
   try {
-    await dispatchReadBudget(new RemoteBuildStore({ url: server.url }), backing)
+    const normalizedBodies: { bytes: number; status: number; written: boolean }[] = []
+    const fetchFn = (async (input, init) => {
+      const response = await fetch(input, init)
+      if (init?.method === 'PUT' && typeof init.body === 'string') {
+        const body = JSON.parse(init.body)
+        if (body.state?.acc?.holder === 'old-0') {
+          expect(body.state.acc.retained).toHaveLength(2)
+          expect(body.state.catalogIdentity).toBeString()
+          normalizedBodies.push({
+            bytes: Buffer.byteLength(init.body),
+            status: response.status,
+            written: (await response.clone().json()).written,
+          })
+        }
+      }
+      return response
+    }) as typeof fetch
+    await dispatchReadBudget(new RemoteBuildStore({ url: server.url, fetchFn }), backing)
+    expect(normalizedBodies).toHaveLength(2)
+    expect(normalizedBodies[0]).toEqual(normalizedBodies[1])
+    expect(normalizedBodies[0]?.status).toBe(200)
+    expect(normalizedBodies[0]?.written).toBe(false)
   } finally {
     server.stop()
   }

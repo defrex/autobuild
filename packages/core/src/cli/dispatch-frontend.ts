@@ -169,6 +169,7 @@ export class DispatchFrontend {
     this.clock = opts.clock ?? systemClock
     this.repositoryFeed = new DispatchRepositoryFeed(this.reader, opts.repo, this.clock)
     this.standbyResolver = new StandbyIdentityResolver(this.reader, opts.repo, {
+      selectHolder: (holder) => this.repositoryFeed.selectHolder(holder),
       allowLookup: () => this.repositoryFeed.incompleteIdentities,
       remember: (events, complete) => this.repositoryFeed.remember(events, complete),
     })
