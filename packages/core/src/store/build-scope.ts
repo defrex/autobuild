@@ -328,6 +328,14 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     beginRepoTick(repo: string) {
       return Promise.reject(new BuildScopeError(scope, 'beginRepoTick', repo))
     },
+    getRepoTicketScanCheckpoint(repo: string) {
+      return Promise.reject(new BuildScopeError(scope, 'getRepoTicketScanCheckpoint', repo))
+    },
+    compareAndSetRepoTicketScanCheckpoint(repo: string) {
+      return Promise.reject(
+        new BuildScopeError(scope, 'compareAndSetRepoTicketScanCheckpoint', repo),
+      )
+    },
     finishRepoTick(repo: string) {
       return Promise.reject(new BuildScopeError(scope, 'finishRepoTick', repo))
     },
