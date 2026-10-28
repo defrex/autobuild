@@ -1777,6 +1777,13 @@ of recorded observation occurrences not yet claimed by a Harvest snapshot
 against `policy.harvestThreshold`. The Store-only interactive frontend refreshes
 that display value directly from the BuildStore; a failed refresh retains the
 last successful count, shows a diagnostic, and appends no transport event.
+The frontend checkpoints dashboard facts, the latest run start and the sampled
+lease holder's start; identity history stays partial and missing holders use a
+bounded per-run lookup. Unchanged written/refused checkpoints are not uploaded
+again. Dirty saves run at most once per 30 seconds; transient failures retry
+without new events after 30, 60, 120, 240, then 300 seconds (capped). Teardown
+forces only dirty state. An equal-cursor refusal leaves correlation recoverable
+by bounded lookup on restart; a later advancing checkpoint persists it.
 Non-interactive dispatch performs no frontend-only sampling, and the separate
 drift trigger is not displayed. An indented controls line follows for
 `intake ON`/`intake OFF` and `harvest ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while

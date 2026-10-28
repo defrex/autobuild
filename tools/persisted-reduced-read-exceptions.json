@@ -654,5 +654,9 @@
   "packages/core/src/cli/dashboard/model.ts::buildDashboardFromProjected::reduce": {
     "kind": "reduction",
     "reason": "Pure presentation/reference overload for caller-supplied repository event arrays; production current-state callers use persisted RepositoryReadFacts.upgrades."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/selectHolder::advance": {
+    "kind": "reduction",
+    "reason": "Frontend-only pruning of the already consumed incremental projection on a lease sample; performs no store reads or journal reconstruction."
   }
 }

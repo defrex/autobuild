@@ -42,6 +42,7 @@ export class StandbyIdentityResolver {
     private readonly store: BuildStore,
     private readonly repo: string,
     private readonly history?: {
+      selectHolder?: (holder: string | undefined) => void
       allowLookup: () => boolean
       remember: (events: RepositoryEvent[], complete: boolean) => void
     },
@@ -64,7 +65,7 @@ export class StandbyIdentityResolver {
         const facts = (await readDispatcherRunFacts(this.store, this.repo, holder)).value
         this.ingest(facts.start ? [facts.start] : [])
         const complete = false // This lookup correlates one holder, not the complete journal.
-        this.history?.remember([...this.starts.values()], complete)
+        this.history?.remember(facts.start ? [facts.start] : [], complete)
       } catch {
         // Identity is best effort; the sampled holder id remains sufficient.
       }
@@ -90,8 +91,12 @@ export class StandbyIdentityResolver {
       return yieldedHolder
     }
     this.failed = false
+    const previousHolder = this.record?.lease?.holder
     this.record = record
     const holder = record?.lease?.holder
+    this.history?.selectHolder?.(holder)
+    const start = holder === undefined ? undefined : this.starts.get(holder)
+    if (start && previousHolder !== holder) this.history?.remember([start], false)
     if (holder !== undefined && holder !== run) await this.correlate(holder)
     return this.current(run, yieldedHolder, now)
   }
