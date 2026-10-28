@@ -1,4 +1,4 @@
-import type { ProjectSettings } from '../../src/web/project-secrets'
+import type { ProjectSettings } from '@defrex/autobuild-hosted-store-service/operator-api'
 import { WebOperatorError } from '../dashboard/api'
 
 export interface SettingsState {

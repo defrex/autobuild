@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { SECRET_NAME_EXPLANATION, validateSecretName } from '@defrex/autobuild/secret-name'
-import type { ProjectSettings } from '../../src/web/project-secrets'
+import type { ProjectSettings } from '@defrex/autobuild-hosted-store-service/operator-api'
 import { ConfirmDialog } from '../dashboard/ConfirmDialog'
 
 export interface SettingsViewProps {

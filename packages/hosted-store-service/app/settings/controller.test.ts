@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { settingsController, type SettingsState } from './controller'
-import type { ProjectSettings } from '../../src/web/project-secrets'
+import type { ProjectSettings } from '@defrex/autobuild-hosted-store-service/operator-api'
 const empty: ProjectSettings = { secrets: [], accounts: [], configuration: 'available' }
 function deferred<T>() {
   let resolve!: (value: T) => void

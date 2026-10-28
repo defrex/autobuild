@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SettingsView } from './SettingsView'
-import type { ProjectSettings } from '../../src/web/project-secrets'
+import type { ProjectSettings } from '@defrex/autobuild-hosted-store-service/operator-api'
 const data: ProjectSettings = {
   configuration: 'available',
   accounts: [
