@@ -21,6 +21,102 @@ export function screenshotBytes(data: unknown, width: number, height: number): B
   return png
 }
 
+/** Runs in Chromium after the final reload; uses the production backdrop rule. */
+export async function prepareConfirmationDialogs() {
+  const dialogs = [...document.querySelectorAll<HTMLDialogElement>('dialog.confirm-dialog[open]')]
+  for (const dialog of dialogs) {
+    if (!dialog.matches(':modal')) {
+      dialog.close()
+      dialog.showModal()
+    }
+  }
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  )
+  const probe = document.createElement('span')
+  document.body.append(probe)
+  try {
+    const normalize = (color: string) => {
+      probe.style.backgroundColor = color
+      return getComputedStyle(probe).backgroundColor
+    }
+    return dialogs.map((dialog) => {
+      const ground = getComputedStyle(dialog).getPropertyValue('--ground').trim()
+      const expected = normalize(`color-mix(in srgb, ${ground} 72%, transparent)`)
+      const backdrop = normalize(getComputedStyle(dialog, '::backdrop').backgroundColor)
+      // Compare browser-resolved channels and alpha, independent of CSS serialization.
+      const pixel = (color: string) => {
+        const canvas = document.createElement('canvas')
+        canvas.width = canvas.height = 1
+        const context = canvas.getContext('2d')!
+        context.fillStyle = color
+        context.fillRect(0, 0, 1, 1)
+        return [...context.getImageData(0, 0, 1, 1).data]
+      }
+      const actualPixel = pixel(backdrop)
+      if (!dialog.open || !dialog.matches(':modal')) throw Error('Confirmation is not modal')
+      if (!actualPixel[3] || JSON.stringify(actualPixel) !== JSON.stringify(pixel(expected)))
+        throw Error(`Confirmation backdrop mismatch: ${backdrop}; expected ${expected}`)
+      return { modal: true, backdrop, expected }
+    })
+  } finally {
+    probe.remove()
+  }
+}
+
+export const confirmationPreparationExpression = `(${prepareConfirmationDialogs.toString()})()`
+
+/** Browser-side pixel regression: every pixel outside the modal receives its backdrop. */
+export async function assertConfirmationPixels(actual: string, undimmed: string) {
+  const decode = async (data: string) => {
+    const image = new Image()
+    image.src = `data:image/png;base64,${data}`
+    await image.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = image.width
+    canvas.height = image.height
+    const context = canvas.getContext('2d')!
+    context.drawImage(image, 0, 0)
+    return {
+      width: image.width,
+      height: image.height,
+      pixels: context.getImageData(0, 0, image.width, image.height).data,
+    }
+  }
+  const [painted, baseline] = await Promise.all([decode(actual), decode(undimmed)])
+  const dialogs = [...document.querySelectorAll<HTMLDialogElement>('dialog.confirm-dialog:modal')]
+  if (dialogs.length !== 1) throw Error('Pixel assertion requires one visible confirmation')
+  const dialog = dialogs[0]!
+  const rect = dialog.getBoundingClientRect()
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 1
+  const context = canvas.getContext('2d')!
+  context.fillStyle = getComputedStyle(dialog, '::backdrop').backgroundColor
+  context.fillRect(0, 0, 1, 1)
+  const color = context.getImageData(0, 0, 1, 1).data
+  const alpha = color[3]! / 255
+  for (let y = 0; y < painted.height; y++) {
+    for (let x = 0; x < painted.width; x++) {
+      // Chromium paints the native autofocus ring up to 5px outside the border.
+      if (
+        x >= Math.floor(rect.left) - 6 &&
+        x <= Math.ceil(rect.right) + 6 &&
+        y >= Math.floor(rect.top) - 6 &&
+        y <= Math.ceil(rect.bottom) + 6
+      )
+        continue
+      const offset = (y * painted.width + x) * 4
+      for (let channel = 0; channel < 3; channel++) {
+        const expected = color[channel]! * alpha + baseline.pixels[offset + channel]! * (1 - alpha)
+        if (Math.abs(painted.pixels[offset + channel]! - expected) > 3)
+          throw Error(
+            `Undimmed confirmation pixel at ${x},${y}: actual ${painted.pixels[offset + channel]}, expected ${expected}, baseline ${baseline.pixels[offset + channel]}, backdrop ${[...color]}, dialog ${JSON.stringify(rect)}`,
+          )
+      }
+    }
+  }
+}
+
 type Reply = {
   result?: { value?: unknown }
   exceptionDetails?: unknown
@@ -204,16 +300,44 @@ export async function fullDocumentScreenshot(
         `(async () => { await document.fonts.ready; for (const face of ['ANSI sans', 'ANSI mono']) { const loaded = await document.fonts.load('16px "' + face + '"'); if (!loaded.length || loaded.some(f => f.status !== 'loaded')) throw Error('Missing packaged font: ' + face); } await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); return true; })()`,
       )
     }
+    const confirmations = (await evaluate(confirmationPreparationExpression)) as unknown[]
     const metrics = await send('Page.getLayoutMetrics')
-    const clip = documentClip(width, height, metrics.cssContentSize?.height)
+    // Confirmation frames are viewport captures because modals are viewport presentations.
+    const clip = documentClip(
+      width,
+      height,
+      confirmations.length ? height : metrics.cssContentSize?.height,
+    )
     const shot = await send('Page.captureScreenshot', {
       format: 'png',
       fromSurface: true,
-      captureBeyondViewport: true,
+      captureBeyondViewport: confirmations.length === 0,
       clip,
     })
-    await writeFile(pngPath, screenshotBytes(shot.data, width, clip.height))
-    return { width, height: clip.height }
+    const png = screenshotBytes(shot.data, width, clip.height)
+    if (confirmations.length) {
+      // Compare the actual pixels with the same modal over an undimmed page.
+      await evaluate(
+        `(() => { const style = document.createElement('style'); style.id = 'capture-transparent-backdrop'; style.textContent = 'dialog.confirm-dialog::backdrop { background: transparent !important }'; document.head.append(style); })()`,
+      )
+      let undimmed: Reply
+      try {
+        undimmed = await send('Page.captureScreenshot', {
+          format: 'png',
+          fromSurface: true,
+          captureBeyondViewport: false,
+          clip,
+        })
+      } finally {
+        await evaluate(`document.getElementById('capture-transparent-backdrop').remove()`)
+      }
+      screenshotBytes(undimmed.data, width, height)
+      await evaluate(
+        `(${assertConfirmationPixels.toString()})(${JSON.stringify(shot.data)}, ${JSON.stringify(undimmed.data)})`,
+      )
+    }
+    await writeFile(pngPath, png)
+    return { width, height: clip.height, confirmations }
   } finally {
     protocol?.close()
     socket?.close()

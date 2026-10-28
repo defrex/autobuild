@@ -1358,7 +1358,7 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     'over the scripted dispatch models from',
     '`tools/dashboard-capture.ts` (`headline-happy-wide` and `mixed-wide`), the real',
     '`packages/hosted-store-service/app/globals.css`, and the packaged Atkinson Hyperlegible Next and JetBrains Mono files bound through FONT_FILES.',
-    'Captures include the full document, which may exceed the initial viewport. Nothing here is a golden image:',
+    'Non-confirmation captures include the full document, which may exceed the initial viewport. Confirmation frames use the declared viewport because modals are viewport presentations. Nothing here is a golden image:',
     'judge whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
     'The wide rest/hover pair uses one model so row coordinates can be compared.',
@@ -1379,7 +1379,7 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     '- [ ] Title-first rows retain ticket, slug, status, all facts and steps. Current teal, done green, provisional amber, pending slack; timing is quiet.',
     '- [ ] Escalations show the complete red question, explanation, one answer composer, and full-bleed phone treatment with full-width primary answer.',
     '- [ ] Merge consent is amber on ground with Merge/Hold. No optimistic success or unconfirmed abort.',
-    '- [ ] The tab line leads with Triage, Queue, Active, Done and Settings and marks the current tab; abort confirms in the square confirmation dialog with a red primary and ghost Cancel.',
+    '- [ ] The tab line leads with Triage, Queue, Active, Done and Settings and marks the current tab; confirmations are viewport captures promoted to native modals over the visible 72% ground backdrop; abort uses a square dialog with a red primary and ghost Cancel.',
     '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
     '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',
     '',
@@ -1416,7 +1416,7 @@ export async function captureWebDashboardFrames(
   }
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
-  const userDataDir = await mkdtemp(join(tmpdir(), 'ab-web-capture-chromium-'))
+  const userDataDir = await mkdtemp(join(outputDir, 'chromium-'))
   try {
     const frames: WebDashboardFrame[] = []
     for (const spec of WEB_FRAME_SPECS) {
@@ -1436,7 +1436,8 @@ export async function captureWebDashboardFrames(
       frames.push({
         id: frameName(spec),
         ground: spec.ground,
-        ...dimensions,
+        width: dimensions.width,
+        height: dimensions.height,
         htmlPath,
         pngPath,
       })
