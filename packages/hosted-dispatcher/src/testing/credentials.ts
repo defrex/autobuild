@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type {
   CredentialMetadata,
-  CredentialStore,
+  DispatcherCredentialStore,
 } from '@defrex/autobuild-postgres-store/credentials'
 import { ProjectNotRegisteredError } from '@defrex/autobuild-postgres-store/credentials'
 import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
@@ -14,7 +14,7 @@ export function testCredentials(
 ) {
   const rows = new Map<string, { digest: string; meta: CredentialMetadata }>()
   const hash = (token: string) => createHash('sha256').update(token).digest('hex')
-  const store: CredentialStore = {
+  const store: DispatcherCredentialStore = {
     async issue(repo, user, options = {}) {
       if (!(await projects.has(repo))) throw new ProjectNotRegisteredError()
       if (!user.trim()) throw new Error('credential creator must be nonblank')
@@ -55,6 +55,28 @@ export function testCredentials(
     async revoke(repo, id, _user) {
       const row = rows.get(id)
       if (row?.meta.repo === repo) row.meta.revokedAt ??= clock().toISOString()
+    },
+    async deleteDispatcherCredential(repo, id) {
+      const row = rows.get(id)
+      if (row?.meta.repo !== repo || row.meta.purpose !== 'dispatcher') return 0
+      rows.delete(id)
+      return 1
+    },
+    async pruneDispatcherCredentials(repo, now) {
+      let count = 0
+      for (const [id, { meta }] of rows) {
+        if (count === 100) break
+        if (
+          meta.repo === repo &&
+          meta.purpose === 'dispatcher' &&
+          ((meta.expiresAt && Date.parse(meta.expiresAt) <= now.getTime()) ||
+            (meta.revokedAt && Date.parse(meta.revokedAt) <= now.getTime()))
+        ) {
+          rows.delete(id)
+          count++
+        }
+      }
+      return count
     },
     async close() {},
   }
