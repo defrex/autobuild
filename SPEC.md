@@ -418,6 +418,28 @@ files, including development configs, remain exactly as installed.
   It also owns observation back-pressure: settling
   outstanding recoverable harvest runs takes priority over starting new scans
   (§12). Cron-friendly.
+  Before claiming, the dispatcher journals a repository-scoped preparation intent;
+  a won claim and the exact selected creation slug are durable boundaries. Caught
+  asset-copy, spec-authoring, naming, and build-creation failures return the ticket
+  to configured Ready; a nonconforming spec goes to configured Triage. Recovery
+  checks the exact selected build first: a matching record and atomic
+  `build.created` retain ownership even if creation threw after committing.
+  Unavailable or conflicting readback never authorizes release or a replacement
+  build. Pending attempts retain the original failure, latest recovery error and
+  retry deadline in the canonical repository reduced value; resolved attempts
+  leave that value. Under repository ownership, each tick admits at most eight
+  due recovery attempts, before intake and independently of capacity or intake
+  settings, with a 30-second durable retry delay after recovery failure. Unresolved
+  ticket identities remain withheld. An uncertain claim outcome or unrelated
+  external ticket state, missing ticket/state, or conflicting slug ownership terminates
+  automatic recovery with an `abandoned` resolution and diagnostic reason. The
+  ticket is left unchanged; an operator can leave it finished or cancelled, or
+  inspect ownership and explicitly return it to Ready for another attempt. These
+  cases stop provider polling and diagnostic appends. Recovery failures are
+  reported without preventing janitor, lease sweep, or other dispatch recovery.
+  This is not general process
+  crash recovery. Confirmed Ready/Triage transitions settle idempotently, so a
+  failed bounce comment does not return an invalid ticket to Ready.
 - **harvest-runner** — one staged repository workflow (`scan → synthesize ⇄
   review → file`) under a repository lease; not a build and not a phase.
 - **ingesters** — other outer-loop processes turning signals into proposals (§12).
@@ -684,6 +706,9 @@ pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan`.
+
+Caught preparation failures before an established build follow the durable
+claim recovery contract in §5; incomplete hosted snapshots never launch a build.
 
 **Ticket assets are frozen with the spec.** Claiming a ticket pins the
 ticket's current assets (§7.1.3) into the build the same way the spec becomes

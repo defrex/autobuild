@@ -1084,6 +1084,34 @@ A claim freezes the ticket's current assets into the build (SPEC §6.3):
 reducer projects them, `getPinnedTicketAsset` reads them back by pinned revision,
 and `ab context` writes them under `$AB_CONTEXT_DIR/assets/`.
 
+`kernel/ticket-preparation.ts` projects unfinished `ticket-preparation.*` facts
+through `repositoryReadFacts`; `processes/dispatcher.ts` retries them under the
+existing repository ownership before intake. This pre-record recovery differs
+from `dispatch.failed`, which completes an already established build.
+
+Before claiming, the dispatcher journals a repository-scoped preparation intent;
+a won claim and the exact selected creation slug are durable boundaries. Caught
+asset-copy, spec-authoring, naming, and build-creation failures return the ticket
+to configured Ready; a nonconforming spec goes to configured Triage. Recovery
+checks the exact selected build first: a matching record and atomic
+`build.created` retain ownership even if creation threw after committing.
+Unavailable or conflicting readback never authorizes release or a replacement
+build. Pending attempts retain the original failure, latest recovery error and
+retry deadline in the canonical repository reduced value; resolved attempts
+leave that value. Under repository ownership, each tick admits at most eight
+due recovery attempts, before intake and independently of capacity or intake
+settings, with a 30-second durable retry delay after recovery failure. Unresolved
+ticket identities remain withheld. An uncertain claim outcome or unrelated
+external ticket state, missing ticket/state, or conflicting slug ownership terminates
+automatic recovery with an `abandoned` resolution and diagnostic reason. The
+ticket is left unchanged; an operator can leave it finished or cancelled, or
+inspect ownership and explicitly return it to Ready for another attempt. These
+cases stop provider polling and diagnostic appends. Recovery failures are
+reported without preventing janitor, lease sweep, or other dispatch recovery.
+This is not general process
+crash recovery. Confirmed Ready/Triage transitions settle idempotently, so a
+failed bounce comment does not return an invalid ticket to Ready.
+
 For hosted tickets, `store/ticket-asset-snapshots.ts` copies exact revisions
 into chunked immutable repository artifacts in the build store before pinning.
 Reads use explicit manifest/chunk revisions without a ticket connection. Old

@@ -6,6 +6,7 @@
 import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import {
+  ticketPreparationEventPayloadSchemas,
   changePresenceEventPayloadSchemas,
   ticketSourceHealthEventPayloadSchemas,
   dispatcherSettingEventPayloadSchemas,
@@ -37,6 +38,7 @@ export const DISPATCH_HANDOFF_EVENT_TYPES = [
  * setting types are enumerated because they share one schema group with the
  * run-correlated `dispatcher.config-reloaded`. */
 export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
+  ...Object.keys(ticketPreparationEventPayloadSchemas),
   'tickets.migration-recorded',
   ...DISPATCH_HANDOFF_EVENT_TYPES,
   'dispatcher.forge-degraded',
@@ -123,7 +125,7 @@ export interface RepositoryStateEventsAcc {
 }
 
 /** Bump when `RepositoryStateEventsAcc` or its fold changes. */
-export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 6
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 7
 
 const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
   STATE_TYPES.has(event.type) ||
@@ -171,7 +173,7 @@ export interface JournalViewAcc {
 }
 
 /** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 7
+export const JOURNAL_VIEW_REDUCER_VERSION = 8
 
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {
