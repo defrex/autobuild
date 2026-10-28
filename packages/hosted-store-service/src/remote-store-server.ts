@@ -65,6 +65,7 @@ import {
   type StreamScope,
 } from '@defrex/autobuild/plugin-sdk'
 import {
+  artifactMetaWireSchema,
   finishRepoTickBodySchema,
   appendStreamBodySchema,
   closeStreamBodySchema,
@@ -1190,6 +1191,19 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           contentBase64: encodeBase64(artifact.content),
         })
       }
+      case 'GET artifact-meta': {
+        const kind = url.searchParams.get('kind')
+        if (kind === null || kind.trim() === '') {
+          throw new RequestError(400, 'validation', 'query parameter "kind" is required')
+        }
+        if (!store.getLatestArtifactMeta) {
+          return fail(501, 'unsupported-operation', 'latest artifact metadata is unsupported')
+        }
+        return json(
+          200,
+          artifactMetaWireSchema.nullable().parse(await store.getLatestArtifactMeta(slug, kind)),
+        )
+      }
       case 'GET artifact-list': {
         const kind = url.searchParams.get('kind') ?? undefined
         return json(200, await store.listArtifacts(slug, kind))
@@ -1441,6 +1455,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         'POST artifacts',
         'GET artifacts',
         'GET artifact-list',
+        'GET artifact-meta',
         'POST tick/begin',
         'POST tick/finish',
         'POST lease/claim',

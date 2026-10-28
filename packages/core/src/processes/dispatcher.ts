@@ -1,3 +1,4 @@
+import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import { sampleTargetDistance } from '../kernel/target-distance'
 import { capturedBuildConfig } from './verify-cycle-config'
 import { publicationRetryGate } from '../kernel/publication-retry'
@@ -687,6 +688,8 @@ export function heldByRepositoryPause(state: BuildState, paused: boolean): boole
   return paused && state.status === 'queued'
 }
 
+export const SWEEP_PIN_CACHE_CAPACITY = 128
+
 export class Dispatcher {
   // Only scheduling is cached. Eligibility facts still come from durable state,
   // and each admitted verification/publication samples the source this pass.
@@ -779,28 +782,72 @@ export class Dispatcher {
     })
   }
 
+  // Disposable parsed pins only. Current facts, live policy and cycle captures
+  // are recomputed on every decision; action boundaries never use this cache.
+  private readonly sweepPins = new Map<string, { revision: number; config: Config }>()
+
   /** Read at each decision boundary: artifact revisions are independent of events. */
   private async decideBuild(
     slug: string,
     state: Parameters<typeof decideNextFromFacts>[0],
     log: Parameters<typeof decideNextFromFacts>[1],
     report: TickReport,
+    sweep = false,
   ): Promise<ReturnType<typeof decideNextFromFacts> | undefined> {
     let revision: number | undefined
     try {
-      let artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
-      if (artifact === null) return decideNextFromFacts(state, log, this.deps.config)
-      revision = artifact.meta.revision
-      let pinned: Config
-      try {
-        pinned = parseEffectiveBuildConfig(artifact)
-      } catch (error) {
-        if (this.deps.repairBuildConfig === undefined) throw error
-        await this.deps.repairBuildConfig(slug)
-        artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
-        if (artifact === null) throw new Error('configuration repair deposited no pipeline')
+      let pinned: Config | undefined
+      let cacheable = false
+      if (sweep && this.store.getLatestArtifactMeta) {
+        try {
+          const meta = await this.store.getLatestArtifactMeta(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+          if (meta === null) {
+            this.sweepPins.delete(slug)
+            return decideNextFromFacts(state, log, this.deps.config)
+          }
+          revision = meta.revision
+          cacheable = true
+          const cached = this.sweepPins.get(slug)
+          if (cached?.revision === revision) {
+            pinned = cached.config
+            // Map insertion order is the deterministic LRU order.
+            this.sweepPins.delete(slug)
+            this.sweepPins.set(slug, cached)
+          } else {
+            this.sweepPins.delete(slug)
+          }
+        } catch (error) {
+          if (!(error instanceof ArtifactMetaUnsupportedError)) throw error
+          this.sweepPins.delete(slug)
+        }
+      }
+      if (pinned === undefined) {
+        let artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+        if (artifact === null) {
+          this.sweepPins.delete(slug)
+          return decideNextFromFacts(state, log, this.deps.config)
+        }
         revision = artifact.meta.revision
-        pinned = parseEffectiveBuildConfig(artifact)
+        try {
+          pinned = parseEffectiveBuildConfig(artifact)
+        } catch (error) {
+          this.sweepPins.delete(slug)
+          if (this.deps.repairBuildConfig === undefined) throw error
+          await this.deps.repairBuildConfig(slug)
+          artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+          if (artifact === null) throw new Error('configuration repair deposited no pipeline')
+          revision = artifact.meta.revision
+          pinned = parseEffectiveBuildConfig(artifact)
+        }
+        if (cacheable) {
+          // A concurrent deposit may have advanced the revision after the probe:
+          // label the bytes with the full response's revision, never the probe's.
+          this.sweepPins.delete(slug)
+          this.sweepPins.set(slug, { revision, config: pinned })
+          if (this.sweepPins.size > SWEEP_PIN_CACHE_CAPACITY) {
+            this.sweepPins.delete(this.sweepPins.keys().next().value!)
+          }
+        }
       }
       return decideNextFromFacts(
         state,
@@ -813,6 +860,7 @@ export class Dispatcher {
         ),
       )
     } catch (error) {
+      this.sweepPins.delete(slug)
       report.blockedDiagnostics.push(
         `build ${slug} pipeline${revision === undefined ? '' : ` revision ${revision}`} unavailable: pipeline decisions withheld; next tick retries. Restore readable build-branch configuration or use a compatible dispatcher version. ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
       )
@@ -4531,7 +4579,7 @@ export class Dispatcher {
           throw error
         }
       }
-      const decision = await this.decideBuild(record.slug, state, facts.log, report)
+      const decision = await this.decideBuild(record.slug, state, facts.log, report, true)
       if (decision === undefined) continue
       if (state.status === 'done' || state.status === 'aborted') continue
       if (
