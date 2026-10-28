@@ -142,7 +142,7 @@ Fields use mono values, well background, 1.5px rule outlines and 4px 10px paddin
 
 A ruled masthead pairs the project identity, which is the project picker when more than one project is reachable, with an account trigger. Both menus are opaque, square lists outlined in slack gray; the account menu carries account actions and the System / Light / Dark theme choices. It has no shadow.
 
-Under the masthead, one ruled line carries the view tabs on the left and the repository controls on the right (repository PAUSED when held, intake, harvest, pause all, resume all). The tabs are Triage, Queue, Active and Done: semibold sans words in slack, with mono counts for Triage and Queue tickets and active/limit builds for Active; Done has no count. The current tab turns ink with its bar on the rule. A build or ticket page keeps its owning tab marked, which is the way back; pages carry no back link. Active is the home page.
+Under the masthead, one ruled line carries the view tabs on the left and the repository controls on the right (repository PAUSED when held, intake, harvest, pause all, resume all). The tabs are Triage, Queue, Active, Done and Settings: semibold sans words in slack, with mono counts for Triage and Queue tickets and active/limit builds for Active; Done has no count. The current tab turns ink with its bar on the rule. A build or ticket page keeps its owning tab marked, which is the way back; pages carry no back link. Active is the home page.
 
 ### Build rows, progress and detail
 
@@ -186,3 +186,21 @@ Projects also linked for organization owners, and Organizations and Projects in 
 - Don’t add shadows, gradients, pills, icon sets or emoji.
 - Don’t replace the build or ticket page with a drawer, modal or in-place expansion; the confirmation dialog is the only modal.
 - Don’t invent page numbers or decide a new app title; both remain human decisions.
+
+### Project Settings
+
+Settings follows Done as the fifth tab, with no count, extending the tab line's
+ink current state and 2px bar. It extends the Flowing Document rule with ruled
+secret rows: mono name and kind, owner, set time, fingerprint, last-supplied
+time and explicit ready, refreshing or failed state. Warnings use plain words.
+Account rows show name, kind, credential slot and ready, missing or unavailable;
+missing uses red ink and a word. No recorded dispatcher run has explicit copy.
+
+Square well fields accept a name and a write-only password with autocomplete
+off. Static secrets offer replacement; refreshing credentials show CLI sign-in
+guidance. Values clear on acknowledged writes and never refill from reads.
+Controls use disabled slack while pending and red refusals; rows reflect only
+acknowledged durable state. Removal uses the shared confirmation dialog, naming
+the secret and the loss of the credential at the next observation. Phone
+forms stack, and identities, metadata and commands wrap. These rules extend
+the existing fields, disabled-slack, durable-state and confirmation rules.
