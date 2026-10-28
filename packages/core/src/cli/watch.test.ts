@@ -3460,3 +3460,38 @@ test('a termination before resumed watch initialization withdraws the cursor reg
   expect(await store.listOperatorPresence(REPO)).toEqual([])
   expect(resumed.err).toEqual([])
 })
+
+test('startup reduced-read incompatibility remains legible without history reconstruction', async () => {
+  const { ReducerValueIncompatibilityError } = await import('../store/remote/compatibility')
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  const error = new ReducerValueIncompatibilityError(
+    'buildReadFacts',
+    { kind: 'build', slug: 'b1' },
+    1,
+    2,
+    'reducer version mismatch',
+  )
+  let reduced = 0,
+    history = 0
+  const incompatible = new Proxy(store, {
+    get(target, key) {
+      if (key === 'getReducerValue')
+        return async () => {
+          reduced++
+          throw error
+        }
+      if (key === 'getEvents' || key === 'getRepoEvents')
+        return async () => {
+          history++
+          return []
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const h = harness(store, { openStore: () => incompatible })
+  await expect(abWatch({ ...h.base, timeout: '1' })).rejects.toThrow(error.message)
+  expect(reduced).toBe(1)
+  expect(history).toBe(0)
+})

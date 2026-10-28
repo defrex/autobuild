@@ -14,6 +14,7 @@ import {
 } from '@defrex/autobuild/testing'
 import {
   RemoteBuildStore,
+  ReducerValueIncompatibilityError,
   mintToken,
   CATALOG_IDENTITY_HEADER,
   AUTOBUILD_VERSION_HEADER,
@@ -104,7 +105,7 @@ test('released strict parsers accept three-field build/repository answers throug
 })
 
 for (const identity of [READ_CATALOG_IDENTITY, null, 'malformed', 'f'.repeat(64)]) {
-  test(`hosted client uses its catalog for header ${identity?.slice(0, 10) ?? 'absent'}`, async () => {
+  test(`hosted client uses the server answer for header ${identity?.slice(0, 10) ?? 'absent'}`, async () => {
     const store = await fixture()
     const server = createStoreServer({ store, secret })
     let rawReads = 0
@@ -116,7 +117,7 @@ for (const identity of [READ_CATALOG_IDENTITY, null, 'malformed', 'f'.repeat(64)
         const body = await response.json()
         if (identity === null) response.headers.delete(CATALOG_IDENTITY_HEADER)
         else response.headers.set(CATALOG_IDENTITY_HEADER, identity)
-        // Structurally valid values from another catalog cannot be accepted.
+        // A distinctive server answer must survive catalog skew.
         if (identity !== READ_CATALOG_IDENTITY) {
           if (body.value.state) body.value.state.compatibility.decisiveFacts = 0
           if (body.value.compatibility) body.value.compatibility.decisiveFacts = 0
@@ -129,9 +130,13 @@ for (const identity of [READ_CATALOG_IDENTITY, null, 'malformed', 'f'.repeat(64)
       return response
     }) as typeof fetch
     const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
-    expect((await readBuildFacts(client, 'mixed')).value.state.compatibility.decisiveFacts).toBe(1)
-    expect((await readRepositoryFacts(client, 'repo')).value.compatibility.decisiveFacts).toBe(1)
-    expect(rawReads).toBe(identity === READ_CATALOG_IDENTITY ? 0 : 2)
+    expect((await readBuildFacts(client, 'mixed')).value.state.compatibility.decisiveFacts).toBe(
+      identity === READ_CATALOG_IDENTITY ? 1 : 0,
+    )
+    expect((await readRepositoryFacts(client, 'repo')).value.compatibility.decisiveFacts).toBe(
+      identity === READ_CATALOG_IDENTITY ? 1 : 0,
+    )
+    expect(rawReads).toBe(0)
     expect((await client.getEvents('mixed'))[1]!.payload as unknown).toEqual(newerFact(2).payload)
     expect((await client.getEvents('mixed'))[1]!.compatibility).toEqual(newerFact(2).compatibility)
     expect((await client.getEvents('mixed'))[0]!.payload as unknown).toHaveProperty('future', {
@@ -160,7 +165,7 @@ test('a backend without identity is never labelled with the service catalog', as
   releasedParser.parse(await response.json())
 })
 
-test('a newer reducer version replays only the frozen response cursor, without remote cache writes', async () => {
+test('a newer reducer version fails without raw reads', async () => {
   const store = await fixture()
   const server = createStoreServer({ store, secret })
   const calls: string[] = []
@@ -178,12 +183,10 @@ test('a newer reducer version replays only the frozen response cursor, without r
     })
   }) as typeof fetch
   const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
-  const result = await readBuildFacts(client, 'mixed')
-  expect(result.cursor).toBe(2)
-  expect(result.value.state.compatibility.unknownFacts).toBe(1)
-  expect(result.value.state.compatibility.decisiveFacts).toBe(1)
-  expect(calls).toEqual(['POST /builds/mixed/reducer-values', 'GET /builds/mixed/events'])
-  expect((await store.getEvents('mixed')).at(-1)!.seq).toBe(3)
+  await expect(readBuildFacts(client, 'mixed')).rejects.toBeInstanceOf(
+    ReducerValueIncompatibilityError,
+  )
+  expect(calls).toEqual(['POST /builds/mixed/reducer-values'])
 })
 
 test('the client rejects unsupported writes before a newer service sees them', async () => {
@@ -201,7 +204,7 @@ test('the client rejects unsupported writes before a newer service sees them', a
   expect(requests).toBe(0)
 })
 
-test('seed, digest, parameterized and repository selectors all replay with absent catalog identity', async () => {
+test('seed, digest, parameterized and repository selectors accept server values with absent catalog identity', async () => {
   const store = await fixture()
   const server = createStoreServer({ store, secret })
   let rawReads = 0
@@ -219,46 +222,51 @@ test('seed, digest, parameterized and repository selectors all replay with absen
       ...(reducer === 'phaseFailures' ? { args: { phase: 'plan', round: 1 } } : {}),
     }
     const scope = { kind: 'build', slug: 'mixed' } as const
-    expect(await client.getReducerValue(scope, request)).toEqual(
-      await store.getReducerValue(scope, request),
-    )
+    expect(await client.getReducerValue(scope, request)).toEqual({
+      ...(await store.getReducerValue(scope, request)),
+      catalogIdentity: undefined,
+    })
   }
   expect(
     await client.getReducerValue(
       { kind: 'repo', repo: 'repo' },
       { reducer: 'repositoryAttention' },
     ),
-  ).toEqual(
-    await store.getReducerValue({ kind: 'repo', repo: 'repo' }, { reducer: 'repositoryAttention' }),
-  )
-  expect(rawReads).toBe(4)
+  ).toEqual({
+    ...(await store.getReducerValue(
+      { kind: 'repo', repo: 'repo' },
+      { reducer: 'repositoryAttention' },
+    )),
+    catalogIdentity: undefined,
+  })
+  expect(rawReads).toBe(0)
   expect(
     (await client.getRepoBuildDigests('repo')).get('mixed')!.compatibility!.decisiveFacts,
   ).toBe(1)
 })
 
 for (const corruption of ['known-field', 'missing-sequence']) {
-  test(`local replay surfaces genuine ${corruption} corruption`, async () => {
+  test(`invalid server answer diagnoses ${corruption} corruption`, async () => {
     const store = await fixture()
     const server = createStoreServer({ store, secret })
     const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
       const request = new Request(url, init)
       const response = await server.fetch(request)
       response.headers.delete(CATALOG_IDENTITY_HEADER)
-      if (!request.url.includes('/events?')) return response
-      const events = await response.json()
-      if (corruption === 'known-field') events[0].payload.ticket.id = 123
-      else events.shift()
-      return new Response(JSON.stringify(events), { status: 200, headers: response.headers })
+      if (!request.url.endsWith('/reducer-values')) return response
+      const body = await response.json()
+      if (corruption === 'known-field') body.value.state.compatibility = 123
+      else delete body.cursor
+      return new Response(JSON.stringify(body), { status: 200, headers: response.headers })
     }) as typeof fetch
     const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
     await expect(readBuildFacts(client, 'mixed')).rejects.toThrow(
-      corruption === 'missing-sequence' ? 'noncontiguous reducer log' : 'Invalid input',
+      'incompatible reducer buildReadFacts',
     )
   })
 }
 
-test('a supported hosted reader clears a prior catalog deferral at an identical reducer version', async () => {
+test('a supported hosted reader preserves the server catalog deferral at an identical reducer version', async () => {
   const store = new MemoryBuildStore()
   await store.createBuild(sampleBuildInput('mixed', { repo: 'repo' }))
   await store.append('mixed', buildCreatedWrite())
@@ -276,11 +284,12 @@ test('a supported hosted reader clears a prior catalog deferral at an identical 
     // A frozen older catalog could not interpret pause-requested. Its cached
     // reduction has a valid local shape and the same reducer integer.
     body.value.state.compatibility = {
+      ...body.value.state.compatibility,
       unknownFacts: 1,
       decisiveFacts: 1,
       lastSeq: 2,
       decisiveBoundary: 2,
-      types: ['build.pause-requested'],
+      decisiveTypes: ['build.pause-requested'],
       writerVersions: [AUTOBUILD_VERSION],
       legacyVersionUnavailable: false,
     }
@@ -289,8 +298,8 @@ test('a supported hosted reader clears a prior catalog deferral at an identical 
   }) as typeof fetch
   const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
   const facts = (await readBuildFacts(client, 'mixed')).value
-  expect(facts.state.compatibility.unknownFacts).toBe(0)
-  expect(facts.state.compatibility.decisiveFacts).toBe(0)
+  expect(facts.state.compatibility.unknownFacts).toBe(1)
+  expect(facts.state.compatibility.decisiveFacts).toBe(1)
   expect(facts.state.pendingCommands).toHaveLength(1)
 })
 
@@ -369,7 +378,7 @@ for (const scope of [
   { kind: 'build', slug: 'mixed' },
   { kind: 'repo', repo: 'repo' },
 ] as const) {
-  test(`mismatched ${scope.kind} reads transfer only the delta and isolate returned values`, async () => {
+  test(`mismatched ${scope.kind} reads accept server answers and isolate returned values`, async () => {
     const store = await fixture()
     const server = createStoreServer({ store, secret })
     const transfers: { since: number; count: number }[] = []
@@ -404,19 +413,18 @@ for (const scope of [
         : { ...newerFact(nextSeq), build: undefined, repo: 'repo' },
     )
     const next = await client.getReducerValue(scope, request)
-    expect(next).toEqual(await store.getReducerValue(scope, request))
-    expect(transfers).toEqual([
-      { since: 0, count: first.cursor },
-      { since: first.cursor, count: 1 },
-    ])
+    expect(next).toEqual({
+      ...(await store.getReducerValue(scope, request)),
+      catalogIdentity: 'f'.repeat(64),
+    })
+    expect(transfers).toEqual([])
     expect(await client.getReducerValue(scope, request)).toEqual(next)
-    expect(transfers).toHaveLength(2)
     // A caller's alias cannot poison the retained incremental accumulator.
     expect(next.cursor).toBe(nextSeq)
   })
 }
 
-test('mismatched parameterized reads retain independent argument accumulators', async () => {
+test('mismatched parameterized reads accept independent argument answers', async () => {
   const store = await fixture()
   const server = createStoreServer({ store, secret })
   const cursors: number[] = []
@@ -432,14 +440,15 @@ test('mismatched parameterized reads retain independent argument accumulators', 
   const scope = { kind: 'build', slug: 'mixed' } as const
   for (const round of [1, 2, 1, 2]) {
     const request = { reducer: 'phaseFailures', args: { phase: 'plan', round } }
-    expect(await client.getReducerValue(scope, request)).toEqual(
-      await store.getReducerValue(scope, request),
-    )
+    expect(await client.getReducerValue(scope, request)).toEqual({
+      ...(await store.getReducerValue(scope, request)),
+      catalogIdentity: undefined,
+    })
   }
-  expect(cursors).toEqual([0, 0])
+  expect(cursors).toEqual([])
 })
 
-test('concurrent mismatched reads keep their response cursors without regressing the accumulator', async () => {
+test('concurrent mismatched reads keep their response cursors without cursor substitution', async () => {
   const store = await fixture()
   const server = createStoreServer({ store, secret })
   let release!: () => void
@@ -484,5 +493,90 @@ test('concurrent mismatched reads keep their response cursors without regressing
       .compatibility.unknownFacts,
   ).toBe(2)
   expect(await client.getReducerValue(scope, request)).toEqual(newer)
-  expect(cursors).toEqual([0, 2, 0])
+  expect(cursors).toEqual([])
 })
+
+for (const length of [100, 10_000]) {
+  test(`fresh catalog-skew clients read zero history rows at ${length} events`, async () => {
+    const { catalogSkewReadBudget } = await import('@defrex/autobuild/testing')
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('repo')
+    await store.createBuild({ slug: 'mixed', repo: 'repo' })
+    for (let i = 0; i < length; i++) {
+      await store.append('mixed', { actor: { kind: 'kernel' }, type: 'build.paused', payload: {} })
+      await store.appendRepo('repo', {
+        actor: { kind: 'human', user: 'test' },
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+    }
+    for (let i = 0; i < (length === 100 ? 1 : 20); i++)
+      await store.createBuild({ slug: `extra-${i}`, repo: 'repo' })
+    // Instrument both public history filtering and private reducer slice reads.
+    let rows = 0
+    for (const key of ['builds', 'repos']) {
+      const states = Reflect.get(store, key) as Map<string, { events: unknown[] }>
+      for (const state of states.values()) {
+        for (const method of ['slice', 'filter'] as const) {
+          const original = state.events[method].bind(state.events)
+          Object.defineProperty(state.events, method, {
+            value: (...args: unknown[]) => {
+              const result = Reflect.apply(original, state.events, args) as unknown[]
+              rows += result.length
+              return result
+            },
+          })
+        }
+      }
+    }
+    const server = createStoreServer({ store, secret })
+    let raw = 0,
+      batches = 0,
+      named = 0,
+      discovery = 0
+    const fetchFn = (async (url, init) => {
+      const request = new Request(url, init)
+      const path = new URL(request.url).pathname
+      if (path.endsWith('/events')) raw++
+      if (path.endsWith('/build-digests')) batches++
+      if (path.endsWith('/reducer-values')) named++
+      if (path === '/builds') discovery++
+      const response = await server.fetch(request)
+      response.headers.set(CATALOG_IDENTITY_HEADER, 'foreign')
+      return response
+    }) as typeof fetch
+    await catalogSkewReadBudget({
+      backing: store,
+      fresh: () => new RemoteBuildStore({ url: 'https://test', token, fetchFn }),
+      repo: 'repo',
+      slug: 'mixed',
+      reset: () => {
+        rows = 0
+      },
+      eventRows: () => rows,
+    })
+    expect({ raw, batches, named, discovery }).toEqual({
+      raw: 0,
+      batches: 3,
+      named: 9,
+      discovery: 0,
+    })
+    for (const invalid of ['version', 'value']) {
+      const brokenFetch = (async (url, init) => {
+        const response = await fetchFn(url, init)
+        const body = await response.json()
+        if (invalid === 'version') body.version++
+        else body.value = null
+        return Response.json(body, { headers: response.headers })
+      }) as typeof fetch
+      const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn: brokenFetch })
+      await expect(
+        client.getReducerValue({ kind: 'repo', repo: 'repo' }, { reducer: 'dispatchUpgrade' }),
+      ).rejects.toBeInstanceOf(ReducerValueIncompatibilityError)
+      expect(rows).toBe(0)
+      expect(raw).toBe(0)
+    }
+    await store.getEvents('mixed')
+    expect(rows).toBe(length)
+  })
+}
