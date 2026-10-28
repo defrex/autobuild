@@ -225,8 +225,19 @@ The distinctions that change an administrator's answer:
   launcher that snapshots the invoking installation and its installed production
   dependencies offline into `.autobuild/runtime/`. The generation's frontend,
   kernel, later local runners and agent PATH CLI execute from that immutable
-  root. The launcher owns no Store/lease and uses only the versioned v1 process
-  contract. Automatic upgrades default on: the kernel checks immediately and every
+  root. The launcher owns no Store/lease and uses the versioned v1 process
+  contract with an optional independently versioned conditional `--read-upgrade`
+  environment extension. Its current successful answer and pre-read repository
+  change position are scoped to the exact reader runtime, journal, run, lineage
+  and recovery context. An unchanged runtime helper makes one position request,
+  with zero metadata/reducer/event reads; it revalidates target cache identity
+  and rollback retention locally on every check. Full refresh samples position
+  before projection reads, so concurrent appends invalidate the following check.
+  Errors discard conditional state; unloadable targets retain the healthy
+  predecessor reader fallback with the active query. Old peers still exchange
+  full v1 answers. Polling remains 1 second idle / 250 ms pending, and cached
+  answers still drive pending actions, child exits and recovery expiry.
+  Automatic upgrades default on: the kernel checks immediately and every
   60 seconds, resolving a declared Autobuild dependency and Bun lock from the same
   authoritative base-branch commit. Unpinned repositories reread the original
   installation pathname, retained across handoffs. Launching from a source root

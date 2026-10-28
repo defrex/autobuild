@@ -168,3 +168,195 @@ export function validRecoveryContext(launch: GenerationLaunch): boolean {
     !launch.recovery
   )
 }
+
+/** Optional runtime-reader extension; independent of launch/overlap v1. */
+export const DISPATCH_CONDITIONAL_VERSION = 1
+export const DISPATCH_CONDITIONAL_ENV = 'AB_DISPATCH_CONDITIONAL_UPGRADE'
+export interface UpgradeGuards {
+  handoff: import('../kernel/dispatch-upgrade').Handoff | null
+  rollbackRecorded: boolean
+  failedRoot: string | null
+}
+export interface UpgradeProjection {
+  version: 1
+  handoff: import('../kernel/dispatch-upgrade').Handoff | null
+  takeover: boolean
+  journal?: GenerationLaunch['journal']
+  rollbackVersion?: 1
+  rollbackRetained?: boolean
+  takeoverAt?: string
+  takeoverPayload?: unknown
+  completed?: boolean
+  accepted?: boolean
+  successor?: string
+  released?: boolean
+}
+export interface UpgradeCondition {
+  version: 1
+  identity: string
+  position?: string
+  guards?: UpgradeGuards
+}
+export type ConditionalUpgradeResult =
+  | {
+      conditionalVersion: 1
+      kind: 'full'
+      identity: string
+      position?: string
+      guards?: UpgradeGuards
+      projection: UpgradeProjection
+    }
+  | {
+      conditionalVersion: 1
+      kind: 'unchanged'
+      identity: string
+      position: string
+      handoff: UpgradeProjection['handoff']
+      rollbackRetained: boolean
+    }
+
+export function validChangePosition(value: unknown): value is string {
+  return typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value)
+}
+function validHandoff(value: unknown): boolean {
+  if (value === null) return true
+  if (!value || typeof value !== 'object') return false
+  const h = value as UpgradeGuards['handoff'] & {}
+  return (
+    ['root', 'cacheId', 'run', 'lineage', 'correlation'].every(
+      (key) => typeof (h as unknown as Record<string, unknown>)[key] === 'string',
+    ) &&
+    isAbsolute(h.root) &&
+    [h.from, h.to].every(
+      (runtime) =>
+        runtime &&
+        typeof runtime.version === 'string' &&
+        typeof runtime.commit === 'string' &&
+        runtime.source &&
+        ['source', 'package'].includes(runtime.source.kind) &&
+        typeof runtime.source.location === 'string',
+    ) &&
+    !!h.target &&
+    ['installed', 'source', 'pinned'].includes(h.target.mode) &&
+    typeof h.target.key === 'string' &&
+    typeof h.target.source === 'string'
+  )
+}
+function validUpgradeProjection(value: unknown): value is UpgradeProjection {
+  if (!value || typeof value !== 'object') return false
+  const p = value as UpgradeProjection
+  return (
+    p.version === 1 &&
+    validHandoff(p.handoff) &&
+    typeof p.takeover === 'boolean' &&
+    ['rollbackRetained', 'completed', 'accepted', 'released'].every((key) => {
+      const flag = (p as unknown as Record<string, unknown>)[key]
+      return flag === undefined || typeof flag === 'boolean'
+    }) &&
+    (p.rollbackVersion === undefined || p.rollbackVersion === 1) &&
+    (p.takeoverAt === undefined || typeof p.takeoverAt === 'string') &&
+    (p.successor === undefined || typeof p.successor === 'string') &&
+    (p.journal === undefined ||
+      (!!p.journal && typeof p.journal.storeRef === 'string' && typeof p.journal.repo === 'string'))
+  )
+}
+export function validUpgradeGuards(value: unknown): value is UpgradeGuards {
+  if (!value || typeof value !== 'object') return false
+  const v = value as UpgradeGuards
+  return (
+    validHandoff(v.handoff) &&
+    typeof v.rollbackRecorded === 'boolean' &&
+    (v.failedRoot === null || (typeof v.failedRoot === 'string' && isAbsolute(v.failedRoot))) &&
+    (v.rollbackRecorded || v.failedRoot === null)
+  )
+}
+export function consumeUpgradeCondition(
+  env: Record<string, string | undefined>,
+): UpgradeCondition | undefined {
+  const raw = env[DISPATCH_CONDITIONAL_ENV]
+  delete env[DISPATCH_CONDITIONAL_ENV]
+  if (raw === undefined) return undefined
+  const v = JSON.parse(raw) as UpgradeCondition
+  if (
+    v?.version !== 1 ||
+    typeof v.identity !== 'string' ||
+    !v.identity ||
+    (v.position === undefined
+      ? v.guards !== undefined
+      : !validChangePosition(v.position) || !validUpgradeGuards(v.guards))
+  )
+    throw new Error('invalid conditional upgrade request')
+  return v
+}
+
+/** One cache per reader/query. A helper still runs on every call, so a broken
+ * successor can never be hidden by its last successful projection. */
+export function conditionalUpgradeClient() {
+  let cache:
+    | { identity: string; position: string; guards: UpgradeGuards; projection: UpgradeProjection }
+    | undefined
+  return async (
+    identity: string,
+    read: (request: UpgradeCondition) => Promise<unknown>,
+  ): Promise<UpgradeProjection> => {
+    if (cache?.identity !== identity) cache = undefined
+    try {
+      const request: UpgradeCondition = {
+        version: 1,
+        identity,
+        ...(cache ? { position: cache.position, guards: cache.guards } : {}),
+      }
+      const raw = await read(request)
+      if (!raw || typeof raw !== 'object') throw new Error('invalid upgrade reader response')
+      const result = raw as ConditionalUpgradeResult
+      if (!('conditionalVersion' in raw)) {
+        cache = undefined
+        const legacy = raw as UpgradeProjection
+        if (!validUpgradeProjection(legacy))
+          throw new Error('invalid legacy upgrade reader response')
+        return legacy
+      }
+      if (result.conditionalVersion !== 1 || result.identity !== identity)
+        throw new Error('incompatible conditional upgrade reader')
+      if (result.kind === 'unchanged') {
+        if (
+          !cache ||
+          result.position !== cache.position ||
+          !validHandoff(result.handoff) ||
+          typeof result.rollbackRetained !== 'boolean' ||
+          (result.handoff !== null &&
+            JSON.stringify(result.handoff) !== JSON.stringify(cache.guards.handoff)) ||
+          (result.rollbackRetained && !cache.guards.rollbackRecorded)
+        )
+          throw new Error('invalid unchanged upgrade response')
+        cache.projection = {
+          ...cache.projection,
+          handoff: result.handoff,
+          rollbackRetained: result.rollbackRetained,
+        }
+        return cache.projection
+      }
+      if (
+        result.kind !== 'full' ||
+        !validUpgradeProjection(result.projection) ||
+        (result.position === undefined
+          ? result.guards !== undefined
+          : !validChangePosition(result.position) || !validUpgradeGuards(result.guards))
+      )
+        throw new Error('invalid full upgrade response')
+      cache =
+        result.position !== undefined && result.guards
+          ? {
+              identity,
+              position: result.position,
+              guards: result.guards,
+              projection: result.projection,
+            }
+          : undefined
+      return result.projection
+    } catch (error) {
+      cache = undefined
+      throw error
+    }
+  }
+}

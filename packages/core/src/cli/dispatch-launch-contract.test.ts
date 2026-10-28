@@ -151,3 +151,82 @@ test('rollback capability is independent of v1 and validates owned cache paths a
   ])
     expect(validRecoveryContext({ ...launch, ...changed } as typeof launch)).toBe(false)
 })
+
+test('conditional reader negotiates independently and consumes its one-shot environment', async () => {
+  const { consumeUpgradeCondition, DISPATCH_CONDITIONAL_ENV, conditionalUpgradeClient } =
+    await import('./dispatch-launch-contract')
+  const env = { [DISPATCH_CONDITIONAL_ENV]: JSON.stringify({ version: 1, identity: 'reader' }) }
+  expect(consumeUpgradeCondition(env)).toEqual({ version: 1, identity: 'reader' })
+  expect(env[DISPATCH_CONDITIONAL_ENV]).toBeUndefined()
+  for (const value of [
+    null,
+    { version: 2 },
+    { version: 1, identity: 'r', position: 0 },
+    { version: 1, identity: 'r', position: '0' },
+  ]) {
+    expect(() =>
+      consumeUpgradeCondition({ [DISPATCH_CONDITIONAL_ENV]: JSON.stringify(value) }),
+    ).toThrow()
+  }
+  // Old runtime ignores the request; no unsupported-capability retry is needed.
+  const client = conditionalUpgradeClient()
+  for (let i = 0; i < 3; i++)
+    expect(
+      await client('old', async (request) => {
+        expect(request.position).toBeUndefined()
+        return { version: 1, handoff: null, takeover: false }
+      }),
+    ).toEqual({ version: 1, handoff: null, takeover: false })
+})
+
+test('conditional cache validates positions, identities, errors and malformed replies', async () => {
+  const { conditionalUpgradeClient } = await import('./dispatch-launch-contract')
+  const guards = { handoff: null, rollbackRecorded: false, failedRoot: null }
+  const client = conditionalUpgradeClient()
+  for (const position of ['0', '90071992547409931234567890']) {
+    await client('a', async () => ({
+      conditionalVersion: 1,
+      identity: 'a',
+      kind: 'full',
+      position,
+      guards,
+      projection: { version: 1, handoff: null, takeover: true },
+    }))
+    expect(
+      (
+        await client('a', async (request) => {
+          expect(request.position).toBe(position)
+          return {
+            conditionalVersion: 1,
+            identity: 'a',
+            kind: 'unchanged',
+            position,
+            handoff: null,
+            rollbackRetained: false,
+          }
+        })
+      ).takeover,
+    ).toBe(true)
+  }
+  await expect(client('a', async () => ({ conditionalVersion: 2 }))).rejects.toThrow()
+  await expect(
+    client('a', async (request) => {
+      expect(request.position).toBeUndefined()
+      throw new Error('offline')
+    }),
+  ).rejects.toThrow('offline')
+  await client('b', async (request) => {
+    expect(request.position).toBeUndefined()
+    return { version: 1, handoff: null, takeover: false }
+  })
+  await expect(
+    client('b', async () => ({
+      conditionalVersion: 1,
+      identity: 'b',
+      kind: 'unchanged',
+      position: '0',
+      handoff: null,
+      rollbackRetained: false,
+    })),
+  ).rejects.toThrow()
+})

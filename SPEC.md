@@ -241,6 +241,21 @@ The versioned v1 launch contract consists of argv, a consumed one-shot
 `AB_DISPATCH_GENERATION` marker, graceful signals and exit reasons `stopped`,
 `handoff`, `failed`. Public invocations discard inherited markers. No private
 operational channel exists; work outcomes still come only from durable state.
+The runtime-owned `--read-upgrade` reader supports an optional independently
+versioned conditional environment exchange, preserving full v1 answers for old
+peers. The launcher retains only its current successful answer and pre-read
+repository change position per exact reader/runtime, journal, run, lineage and
+recovery query. Each unchanged check makes one change-position request and reads
+zero metadata, reducer values or event rows, regardless of journal length or a
+fresh helper process. Full refresh samples the position before the projection;
+a concurrent append therefore invalidates the next check. Unchanged checks
+revalidate cached target identity and rollback retention locally, without
+manufacturing durable facts. Errors discard conditional state; an unloadable
+target still uses the healthy predecessor reader with the active query. The
+launcher retains its filesystem/process-only boundary and polling cadence of
+1 second idle or 250 ms pending, processing child exits and pending actions on
+cached answers too. Legacy peers remain functional with full reads.
+
 The launcher observes presentation stop/continue liveness so Ctrl-Z returns the
 shell prompt and `fg` resumes only the presentation; the kernel keeps running.
 Terminal restoration by the launcher is a fallback for abnormal termination,
