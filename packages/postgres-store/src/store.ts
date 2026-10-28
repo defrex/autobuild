@@ -657,6 +657,17 @@ export class PostgresBuildStore implements BuildStore {
     return content ? { meta: this.artifactMeta(row), content } : null
   }
 
+  async getLatestArtifactMeta(slug: string, kind: string): Promise<ArtifactMeta | null> {
+    if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
+    // The (build, kind, revision) primary key supports this reverse LIMIT 1 scan.
+    const rows: Row[] = await this.run(
+      (q) =>
+        q`SELECT build, kind, revision, blob_ref, metadata, created_at FROM artifacts
+        WHERE build = ${slug} AND kind = ${kind} ORDER BY revision DESC LIMIT 1`,
+    )
+    return rows[0] ? this.artifactMeta(rows[0]) : null
+  }
+
   async listArtifacts(slug: string, kind?: string): Promise<ArtifactMeta[]> {
     if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
     const rows: Row[] = await this.run((q) =>

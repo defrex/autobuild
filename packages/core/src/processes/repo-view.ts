@@ -495,6 +495,9 @@ export class RepoViewStore implements BuildStore {
   getArtifact(slug: string, kind: string, rev?: number): Promise<Artifact | null> {
     return this.backing.getArtifact(slug, kind, rev)
   }
+  get getLatestArtifactMeta(): BuildStore['getLatestArtifactMeta'] {
+    return this.backing.getLatestArtifactMeta?.bind(this.backing)
+  }
   listArtifacts(slug: string, kind?: string): Promise<ArtifactMeta[]> {
     return this.backing.listArtifacts(slug, kind)
   }

@@ -550,3 +550,105 @@ export async function catalogSkewReadBudget(opts: {
   }
   expect(opts.eventRows()).toBe(0)
 }
+
+/** Real parked ticks, with array-result instrumentation beneath MemoryBuildStore's
+ * public and private reducer reads. History is seeded and projections warmed
+ * outside the measured interval; fresh dispatchers retain no pin cache. */
+export async function parkedSweepReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  slugs: string[]
+  dispatcher: () => Dispatcher
+  pin: (slug: string) => Promise<void>
+  advance: () => void
+}) {
+  const { store, slugs } = opts
+  const kind = 'build-runner-effective-config'
+  const metrics = { meta: 0, bodies: 0, bytes: 0, historicalRows: 0 }
+  const meta = store.getLatestArtifactMeta.bind(store)
+  const get = store.getArtifact.bind(store)
+  const pinBlobs = new Set(
+    await Promise.all(slugs.map(async (slug) => (await get(slug, kind))!.meta.blobRef)),
+  )
+  const pinBytes = (await get(slugs[0]!, kind))!.content.byteLength
+  let blobReads = 0
+  const getBlob = store.blobs.get.bind(store.blobs)
+  store.blobs.get = async (ref) => {
+    if (pinBlobs.has(ref)) blobReads++
+    return getBlob(ref)
+  }
+  store.getLatestArtifactMeta = async (...args) => {
+    if (args[1] === kind) metrics.meta++
+    return meta(...args)
+  }
+  store.getArtifact = async (...args) => {
+    const result = await get(...args)
+    if (args[1] === kind) {
+      metrics.bodies++
+      metrics.bytes += result?.content.byteLength ?? 0
+    }
+    return result
+  }
+  const reset = () => {
+    metrics.meta = metrics.bodies = metrics.bytes = metrics.historicalRows = blobReads = 0
+  }
+  let seeded = 0
+  for (const length of [100, 100_000]) {
+    for (; seeded < length; seeded++) {
+      await store.append(slugs[0]!, {
+        actor: humanActor('budget'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+    }
+    // Instrument returned event rows, including getReducerValue's private
+    // snapshot-tail reads (instrumenting getEvents alone would miss these).
+    const build = Reflect.get(store, 'builds').get(slugs[0]!)
+    const events = build.events as import('../events/catalog').AbEvent[]
+    const historyTail = events.at(-1)!.seq
+    const slice = Array.prototype.slice
+    events.slice = function (start?: number, end?: number) {
+      const result = slice.call(this, start, end) as typeof events
+      metrics.historicalRows += result.filter((event) => event.seq <= historyTail).length
+      return result
+    }
+    opts.advance()
+    await opts.dispatcher().tick({ acceptNewWork: false }) // warm durable projections
+    const dispatcher = opts.dispatcher()
+    reset()
+    for (let tick = 0; tick < 4; tick++) {
+      await dispatcher.tick({ acceptNewWork: false })
+    }
+    expect(metrics).toEqual({
+      meta: slugs.length * 4,
+      bodies: slugs.length,
+      bytes: pinBytes * slugs.length,
+      historicalRows: 0,
+    })
+    expect(blobReads).toBe(slugs.length)
+    const coldBytes = metrics.bytes
+    await opts.pin(slugs[0]!)
+    opts.advance()
+    reset()
+    await dispatcher.tick({ acceptNewWork: false })
+    expect(metrics.meta).toBe(slugs.length)
+    expect(metrics.bodies).toBe(1)
+    expect(blobReads).toBe(1)
+    expect(metrics.historicalRows).toBe(0)
+    reset()
+    await opts.dispatcher().tick({ acceptNewWork: false })
+    expect(metrics.bodies).toBe(slugs.length)
+    expect(blobReads).toBe(slugs.length)
+    expect(metrics.historicalRows).toBe(0)
+    console.log('parked sweep read budget', {
+      history: length,
+      builds: slugs.length,
+      sweeps: 4,
+      coldBodies: slugs.length,
+      coldBytes,
+      warmBodies: 0,
+      metadata: slugs.length * 4,
+      historicalRows: metrics.historicalRows,
+    })
+    Reflect.deleteProperty(events, 'slice')
+  }
+}

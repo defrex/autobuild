@@ -76,6 +76,30 @@ if (testUrl) {
   })
 
   describe('PostgreSQL durability and concurrency', () => {
+    test('latest artifact metadata never reads blob content', async () => {
+      const database = await isolatedDatabase()
+      const blobs = new MemoryBlobStore()
+      let reads = 0
+      const get = blobs.get.bind(blobs)
+      blobs.get = async (ref) => {
+        reads++
+        return get(ref)
+      }
+      const store = await openPostgresBuildStore(database.url, blobs)
+      try {
+        await store.createBuild(sampleBuildInput('meta-only'))
+        const meta = await store.putArtifact('meta-only', { kind: 'pin', content: 'content' })
+        expect(await store.getLatestArtifactMeta('meta-only', 'pin')).toEqual(meta)
+        expect(await store.getLatestArtifactMeta('meta-only', 'absent')).toBeNull()
+        expect(reads).toBe(0)
+        await store.getArtifact('meta-only', 'pin')
+        expect(reads).toBe(1)
+      } finally {
+        await store.close()
+        await database.cleanup()
+      }
+    })
+
     test('concurrent repository ensures create one absent row and return the winning record', async () => {
       const database = await isolatedDatabase()
       // Each independent contender needs one connection, not a default pool.

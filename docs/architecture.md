@@ -597,6 +597,17 @@ and workspace adapter fields stay pinned; changed values are durable restart
 notices rather than partial adapter swaps. `--once` retains static startup
 configuration.
 
+Lease sweeps in `processes/dispatcher.ts` retain at most 128 parsed build
+effective-config pins in deterministic LRU order. Each sweep probes
+`BuildStore.getLatestArtifactMeta` (one latest metadata row, no blob or revision
+listing) before reuse; artifact-only revision changes force a full reread.
+Current facts, live deployment settings and cycle captures are composed afresh.
+Errors invalidate reuse and retain diagnostic/refusal and repair behavior.
+Launch, resume and merge boundaries still read fresh artifacts. Restart,
+eviction and adapters lacking metadata support preserve decisions with full
+reads. Remote clients remember explicit unsupported-route/operation responses
+per client and fall back to full artifact reads, never event replay.
+
 `config/pipeline-source.ts` strictly reads the runner's execution checkout.
 `processes/verify-cycle-config.ts` deposits immutable cycle config and checks
 build-owned identity and source ancestry at settled stage boundaries. Typed

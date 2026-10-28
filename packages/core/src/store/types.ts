@@ -394,6 +394,8 @@ export interface BuildStore {
   putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta>
   /** Latest revision when `rev` is omitted; null if kind (or rev) absent. */
   getArtifact(slug: string, kind: string, rev?: number): Promise<Artifact | null>
+  /** Latest metadata only: constant-size lookup, without loading blob content. */
+  getLatestArtifactMeta?(slug: string, kind: string): Promise<ArtifactMeta | null>
   listArtifacts(slug: string, kind?: string): Promise<ArtifactMeta[]>
 
   /**
