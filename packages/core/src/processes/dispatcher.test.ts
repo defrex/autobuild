@@ -10875,3 +10875,564 @@ test('observation-only ticks repair active account policies without claims, resu
   expect(report.dispatched).toBe(0)
   expect((await h.store.listBuilds()).map((b) => b.slug).sort()).toEqual(['active', 'waiting'])
 })
+
+describe('Dispatcher failed ticket preparation recovery', () => {
+  for (const seam of ['list', 'get', 'deposit-first', 'deposit-later'] as const) {
+    test(`${seam} failure hands back and retry creates one complete hosted snapshot`, async () => {
+      const remote = new MemoryBuildStore()
+      await remote.ensureRepo(REPO)
+      for (const name of ['a.png', 'b.png'])
+        await remote.putTicketAsset(REPO, 'T-1', {
+          kind: 'mock',
+          name,
+          layout: 'file',
+          entries: [{ type: 'file', path: name, content: new TextEncoder().encode(name) }],
+        })
+      let broken = true
+      const h = harness({
+        tickets: [readyTicket('T-1')],
+        wrapTickets: (source) =>
+          Object.assign(source, {
+            assets: {
+              listTicketAssets: async (...args: Parameters<BuildStore['listTicketAssets']>) => {
+                if (broken && seam === 'list') throw new Error('asset list unavailable')
+                return remote.listTicketAssets(...args)
+              },
+              getTicketAsset: async (...args: Parameters<BuildStore['getTicketAsset']>) => {
+                if (broken && seam === 'get') throw new Error('asset bytes unavailable')
+                return remote.getTicketAsset(...args)
+              },
+            },
+          }),
+      })
+      const put = h.store.putRepoArtifact.bind(h.store)
+      let deposits = 0
+      h.store.putRepoArtifact = async (...args) => {
+        if (args[1].kind.startsWith('ticket-snapshot-')) {
+          deposits++
+          if (
+            broken &&
+            deposits === (seam === 'deposit-first' ? 1 : seam === 'deposit-later' ? 3 : -1)
+          )
+            throw new Error('snapshot deposit unavailable')
+        }
+        return put(...args)
+      }
+      await expect(h.dispatcher.tick()).rejects.toThrow('unavailable')
+      expect(await h.store.listBuilds()).toEqual([])
+      expect((await h.tickets.get('T-1'))?.state).toBe('Ready')
+      broken = false
+      await h.dispatcher.tick()
+      expect((await h.store.listBuilds()).map((b) => b.slug)).toEqual(['add-rate-limiting'])
+      for (const name of ['a.png', 'b.png']) {
+        const asset = await h.store.getPinnedTicketAsset('add-rate-limiting', 'mock', name)
+        const entry = asset?.entries[0]
+        expect(entry?.type === 'file' && new TextDecoder().decode(entry.content)).toBe(name)
+      }
+      expect(await readPreparation(h.store)).toEqual({})
+    })
+  }
+
+  async function readPreparation(store: BuildStore) {
+    const { readRepositoryFacts } = await import('../store/reduced-reads')
+    return (await readRepositoryFacts(store, REPO)).value.preparation
+  }
+
+  test('failed handback survives restart and respects its durable deadline with intake disabled', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1', { body: 'thin' })],
+      authorSpec: async () => {
+        throw new Error('author unavailable')
+      },
+    })
+    const transition = h.tickets.transition.bind(h.tickets)
+    let broken = true
+    let calls = 0
+    h.tickets.transition = async (...args) => {
+      calls++
+      if (broken) throw new Error('transition unavailable')
+      return transition(...args)
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('author unavailable')
+    const pending = Object.values(await readPreparation(h.store))
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.recoveryError).toContain('transition unavailable')
+    const restarted = harness({ store: h.store, clock: h.clock, wrapTickets: () => h.tickets })
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(1)
+    broken = false
+    h.clock.advance(30_000)
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect((await h.tickets.get('T-1'))?.state).toBe('Ready')
+    expect(await readPreparation(h.store)).toEqual({})
+    const retry = harness({
+      store: h.store,
+      clock: h.clock,
+      wrapTickets: () => h.tickets,
+      authorSpec: async () => CONFORMING_BODY,
+    })
+    await retry.dispatcher.tick()
+    await retry.dispatcher.tick()
+    expect(await h.store.listBuilds()).toHaveLength(1)
+  })
+
+  for (const afterCommit of [false, true]) {
+    test(`createBuild rejection ${afterCommit ? 'after' : 'before'} commit preserves unique ownership`, async () => {
+      const h = harness({ tickets: [readyTicket('T-1')] })
+      const asset = (content: string) => ({
+        kind: 'mock',
+        name: 'pin.txt',
+        layout: 'file' as const,
+        entries: [
+          { type: 'file' as const, path: 'pin.txt', content: new TextEncoder().encode(content) },
+        ],
+      })
+      await h.store.putTicketAsset(REPO, 'T-1', asset('original'))
+      const create = h.store.createBuild.bind(h.store)
+      h.store.createBuild = async (input) => {
+        if (afterCommit) await create(input)
+        throw new Error('creation acknowledgement lost')
+      }
+      await expect(h.dispatcher.tick()).rejects.toThrow('creation acknowledgement lost')
+      expect(h.tickets.transitions).toEqual(afterCommit ? [] : [{ id: 'T-1', state: 'Ready' }])
+      h.store.createBuild = create
+      await h.store.putTicketAsset(REPO, 'T-1', asset('replacement'))
+      await h.dispatcher.tick()
+      expect(await h.store.listBuilds()).toHaveLength(1)
+      expect(h.launches).toEqual(['add-rate-limiting'])
+      const pinned = await h.store.getPinnedTicketAsset('add-rate-limiting', 'mock', 'pin.txt')
+      const entry = pinned?.entries[0]
+      expect(entry?.type === 'file' && new TextDecoder().decode(entry.content)).toBe(
+        afterCommit ? 'original' : 'replacement',
+      )
+      expect(await readPreparation(h.store)).toEqual({})
+    })
+  }
+
+  test('unavailable creation readback withholds intake until exact ownership is proven', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    const create = h.store.createBuild.bind(h.store)
+    const get = h.store.getBuild.bind(h.store)
+    let unavailable = false
+    h.store.createBuild = async (input) => {
+      const result = await create(input)
+      unavailable = true
+      throw new Error(`lost acknowledgement for ${result.slug}`)
+    }
+    h.store.getBuild = async (slug) => {
+      if (unavailable) throw new Error('readback offline')
+      return get(slug)
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('readback offline')
+    expect(h.tickets.transitions).toEqual([])
+    expect(Object.values(await readPreparation(h.store))).toHaveLength(1)
+    unavailable = false
+    h.store.createBuild = create
+    h.clock.advance(30_000)
+    await h.dispatcher.tick()
+    expect(await h.store.listBuilds()).toHaveLength(1)
+    expect(h.tickets.claims).toEqual(['T-1'])
+    expect(h.tickets.transitions).toEqual([])
+  })
+
+  for (const seam of [
+    'intent',
+    'claim-confirmation',
+    'creation-identity',
+    'diagnostic',
+    'settlement',
+    'handback-ack',
+    'bounce-comment',
+  ] as const) {
+    test(`journal and transition failure at ${seam} does not strand or incorrectly release the ticket`, async () => {
+      const h = harness({
+        tickets: [readyTicket('T-1', { body: 'thin' })],
+        authorSpec: async () => {
+          if (['diagnostic', 'handback-ack'].includes(seam)) throw new Error('author unavailable')
+          return seam === 'bounce-comment' ? null : CONFORMING_BODY
+        },
+      })
+      const append = h.store.appendRepo.bind(h.store)
+      const eventTypes: Partial<Record<string, string>> = {
+        intent: 'ticket-preparation.intended',
+        'claim-confirmation': 'ticket-preparation.claimed',
+        'creation-identity': 'ticket-preparation.creation-selected',
+        diagnostic: 'ticket-preparation.failed',
+        settlement: 'ticket-preparation.resolved',
+      }
+      const event = eventTypes[seam]
+      let injected = false
+      h.store.appendRepo = async (...args) => {
+        if (!injected && args[1].type === event) {
+          injected = true
+          throw new Error('journal unavailable')
+        }
+        return append(...args)
+      }
+      if (seam === 'handback-ack') {
+        const transition = h.tickets.transition.bind(h.tickets)
+        h.tickets.transition = async (...args) => {
+          await transition(...args)
+          throw new Error('transition acknowledgement lost')
+        }
+      }
+      if (seam === 'bounce-comment')
+        h.tickets.comment = async () => {
+          throw new Error('comment unavailable')
+        }
+      await expect(h.dispatcher.tick()).rejects.toThrow()
+      if (seam === 'intent') expect(h.tickets.claims).toEqual([])
+      else if (seam === 'settlement') {
+        expect(await h.store.listBuilds()).toHaveLength(1)
+        expect(h.tickets.transitions).toEqual([])
+      } else
+        expect((await h.tickets.get('T-1'))?.state).toBe(
+          seam === 'bounce-comment' ? 'Triage' : 'Ready',
+        )
+      h.clock.advance(30_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(await readPreparation(h.store)).toEqual({})
+    })
+  }
+})
+
+test('preparation recovery runs at full capacity, retains unrelated state, and bounds its batch', async () => {
+  const h = harness({
+    tickets: Array.from({ length: 10 }, (_, i) => readyTicket(`T-${i}`, { state: 'Doing' })),
+  })
+  await h.store.ensureRepo(REPO)
+  await seedBuild(h, { slug: 'occupies-capacity', attached: true })
+  for (let i = 0; i < 10; i++) {
+    const ticket = { source: 'fake', id: `T-${i}` }
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: { attempt: `prep-${i}`, ticket, readyState: 'Ready', claimedState: 'Doing' },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.claimed',
+      payload: { attempt: `prep-${i}`, ticket },
+    })
+  }
+  let calls = 0
+  const get = h.tickets.get.bind(h.tickets)
+  h.tickets.get = async (...args) => {
+    calls++
+    return get(...args)
+  }
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(h.tickets.transitions).toHaveLength(8)
+  expect(calls).toBe(8)
+  await h.tickets.transition('T-8', 'Review')
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect((await get('T-8'))?.state).toBe('Review')
+  expect((await get('T-9'))?.state).toBe('Ready')
+  expect(
+    (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
+      .preparation,
+  ).toEqual({})
+  h.clock.advance(86_400_000)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(calls).toBe(10)
+})
+
+for (const type of [
+  'ticket-preparation.creation-selected',
+  'ticket-preparation.resolved',
+] as const) {
+  test(`post-commit ${type} rejection recovers without releasing an owned claim`, async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    const append = h.store.appendRepo.bind(h.store)
+    let failed = false
+    h.store.appendRepo = async (...args) => {
+      const result = await append(...args)
+      if (!failed && args[1].type === type) {
+        failed = true
+        throw new Error('append acknowledgement lost')
+      }
+      return result
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('append acknowledgement lost')
+    const owned = type === 'ticket-preparation.resolved'
+    expect(await h.store.listBuilds()).toHaveLength(owned ? 1 : 0)
+    expect(h.tickets.transitions).toHaveLength(owned ? 0 : 1)
+    await h.dispatcher.tick()
+    expect(await h.store.listBuilds()).toHaveLength(1)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(h.tickets.transitions).toHaveLength(owned ? 0 : 1)
+  })
+}
+
+test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-row quiet ticks', async () => {
+  const { seedPreparationHistory, memoryRepositoryReadCounter } = await import(
+    '../testing/reduced-read-budget'
+  )
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  const { RemoteBuildStore } = await import('../store/remote/client')
+  let previousBytes: number | undefined
+  for (const length of [100, 100_000]) {
+    const store = new RowCountingStore({ clock: manualClock() })
+    await seedPreparationHistory(store, REPO, length)
+    const counter = memoryRepositoryReadCounter(store, REPO)
+    const facts = await readRepositoryFacts(store, REPO)
+    expect(Object.keys(facts.value.preparation)).toEqual(['pending'])
+    expect(counter.rows).toBe(length + 2)
+    counter.reset()
+    const bytes = JSON.stringify(facts.value.preparation).length
+    if (previousBytes !== undefined) expect(bytes).toBe(previousBytes)
+    previousBytes = bytes
+    store.drainRows()
+    const calls: string[] = []
+    for (let i = 0; i < 2; i++) {
+      const remote = new RemoteBuildStore({
+        url: 'https://budget.test',
+        fetchFn: (async (url, init) => {
+          calls.push(String(url))
+          const request = JSON.parse(String(init?.body))
+          const { catalogIdentity: _, ...answer } = await store.getReducerValue(
+            { kind: 'repo', repo: REPO },
+            request,
+          )
+          return Response.json(answer)
+        }) as typeof fetch,
+      })
+      expect((await readRepositoryFacts(remote, REPO, true)).value.preparation).toEqual(
+        facts.value.preparation,
+      )
+    }
+    expect(calls).toEqual(
+      Array(2).fill('https://budget.test/repos/%2Frepos%2Forigin/reducer-values'),
+    )
+    const h = harness({ store })
+    h.tickets.get = async () => {
+      throw new Error('parked recovery must not read tickets')
+    }
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(0)
+    expect(counter.rows).toBe(0)
+  }
+}, 30_000)
+
+test('failed diagnostic deposits retain earlier durable claim evidence for later recovery', async () => {
+  const h = harness({
+    tickets: [readyTicket('T-1', { body: 'thin' })],
+    authorSpec: async () => {
+      throw new Error('original author failure')
+    },
+  })
+  const append = h.store.appendRepo.bind(h.store)
+  const transition = h.tickets.transition.bind(h.tickets)
+  h.store.appendRepo = async (...args) => {
+    if (['ticket-preparation.failed', 'ticket-preparation.recovery-failed'].includes(args[1].type))
+      throw new Error('diagnostic store unavailable')
+    return append(...args)
+  }
+  h.tickets.transition = async () => {
+    throw new Error('handback unavailable')
+  }
+  await expect(h.dispatcher.tick()).rejects.toThrow('original author failure')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  expect(
+    Object.values((await readRepositoryFacts(h.store, REPO)).value.preparation)[0]?.claimed,
+  ).toBe(true)
+  h.store.appendRepo = append
+  h.tickets.transition = transition
+  const restarted = harness({ store: h.store, clock: h.clock, wrapTickets: () => h.tickets })
+  await restarted.dispatcher.tick({ acceptNewWork: false })
+  expect((await h.tickets.get('T-1'))?.state).toBe('Ready')
+  expect((await readRepositoryFacts(h.store, REPO)).value.preparation).toEqual({})
+})
+
+test('failed handback settlement recognizes Ready without transitioning a second time', async () => {
+  const h = harness({
+    tickets: [readyTicket('T-1', { body: 'thin' })],
+    authorSpec: async () => {
+      throw new Error('author unavailable')
+    },
+  })
+  const append = h.store.appendRepo.bind(h.store)
+  let fail = true
+  h.store.appendRepo = async (...args) => {
+    if (fail && args[1].type === 'ticket-preparation.resolved') {
+      fail = false
+      throw new Error('settlement unavailable')
+    }
+    return append(...args)
+  }
+  await expect(h.dispatcher.tick()).rejects.toThrow('settlement unavailable')
+  expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Ready' }])
+  h.clock.advance(30_000)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Ready' }])
+})
+
+test('an intended claim without confirmation cannot release a ticket in Doing', async () => {
+  const h = harness({ tickets: [readyTicket('T-1', { state: 'Doing' })] })
+  await h.store.ensureRepo(REPO)
+  await h.store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'ticket-preparation.intended',
+    payload: {
+      attempt: 'uncertain',
+      ticket: { source: 'fake', id: 'T-1' },
+      readyState: 'Ready',
+      claimedState: 'Doing',
+    },
+  })
+  let recoveryReads = 0
+  const get = h.tickets.get.bind(h.tickets)
+  h.tickets.get = async (id) => {
+    recoveryReads++
+    return get(id)
+  }
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(
+    (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
+      .preparation,
+  ).toEqual({})
+  h.clock.advance(86_400_000)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(recoveryReads).toBe(1)
+  const resolution = (await h.store.getRepoEvents(REPO)).find(
+    (e) => e.type === 'ticket-preparation.resolved',
+  )
+  expect(resolution?.payload).toMatchObject({ outcome: 'abandoned' })
+  expect(h.tickets.transitions).toEqual([])
+  expect(h.tickets.claims).toEqual([])
+})
+
+test('recovery diagnostics retain a confirmed claim and original error when earlier appends fail', async () => {
+  const h = harness({ tickets: [readyTicket('T-1')] })
+  const append = h.store.appendRepo.bind(h.store)
+  const transition = h.tickets.transition.bind(h.tickets)
+  h.store.appendRepo = async (...args) => {
+    if (['ticket-preparation.claimed', 'ticket-preparation.failed'].includes(args[1].type))
+      throw new Error('claim journal unavailable')
+    return append(...args)
+  }
+  h.tickets.transition = async () => {
+    throw new Error('handback unavailable')
+  }
+  await expect(h.dispatcher.tick()).rejects.toThrow('claim journal unavailable')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  const pending = Object.values((await readRepositoryFacts(h.store, REPO)).value.preparation)
+  expect(pending[0]).toMatchObject({
+    claimed: true,
+    error: 'claim journal unavailable',
+    recoveryError: 'handback unavailable',
+  })
+  h.store.appendRepo = append
+  h.tickets.transition = transition
+  h.clock.advance(30_000)
+  const restarted = harness({ store: h.store, clock: h.clock, wrapTickets: () => h.tickets })
+  await restarted.dispatcher.tick({ acceptNewWork: false })
+  expect((await h.tickets.get('T-1'))?.state).toBe('Ready')
+})
+
+test('failed recovery batches do not starve attempts that have never been retried', async () => {
+  const h = harness({
+    tickets: Array.from({ length: 10 }, (_, i) => readyTicket(`T-${i}`, { state: 'Doing' })),
+  })
+  await h.store.ensureRepo(REPO)
+  for (let i = 0; i < 10; i++) {
+    const ticket = { source: 'fake', id: `T-${i}` }
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: {
+        attempt: `prep-${i}`,
+        ticket,
+        readyState: 'Ready',
+        claimedState: 'Doing',
+      },
+    })
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.claimed',
+      payload: { attempt: `prep-${i}`, ticket },
+    })
+  }
+  const transition = h.tickets.transition.bind(h.tickets)
+  h.tickets.transition = async (id, state) => {
+    if (Number(id.slice(2)) < 8) throw new Error('handback unavailable')
+    return transition(id, state)
+  }
+  expect(
+    (await h.dispatcher.tick({ acceptNewWork: false })).janitorDiagnostics.join(' '),
+  ).toContain('handback unavailable')
+  expect(h.tickets.transitions).toEqual([])
+  h.clock.advance(60_000)
+  expect(
+    (await h.dispatcher.tick({ acceptNewWork: false })).janitorDiagnostics.join(' '),
+  ).toContain('handback unavailable')
+  expect(h.tickets.transitions).toEqual([
+    { id: 'T-8', state: 'Ready' },
+    { id: 'T-9', state: 'Ready' },
+  ])
+})
+
+test('recovery diagnostics preserve Triage when bounce and primary diagnostic deposits fail', async () => {
+  const h = harness({ tickets: [readyTicket('T-1', { body: 'invalid spec' })] })
+  const append = h.store.appendRepo.bind(h.store)
+  const transition = h.tickets.transition.bind(h.tickets)
+  h.store.appendRepo = async (...args) => {
+    if (
+      ['ticket-preparation.handback-selected', 'ticket-preparation.failed'].includes(args[1].type)
+    )
+      throw new Error('bounce journal unavailable')
+    return append(...args)
+  }
+  h.tickets.transition = async () => {
+    throw new Error('transition unavailable')
+  }
+  await expect(h.dispatcher.tick()).rejects.toThrow('bounce journal unavailable')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  expect(
+    Object.values((await readRepositoryFacts(h.store, REPO)).value.preparation)[0]?.handback,
+  ).toBe('Triage')
+  h.store.appendRepo = append
+  h.tickets.transition = transition
+  h.clock.advance(30_000)
+  const restarted = harness({ store: h.store, clock: h.clock, wrapTickets: () => h.tickets })
+  await restarted.dispatcher.tick({ acceptNewWork: false })
+  expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
+})
+
+test('failed preparation readback does not block sibling janitor or lease recovery', async () => {
+  const h = harness({ tickets: [readyTicket('T-stuck', { state: 'Doing' })] })
+  await h.store.ensureRepo(REPO)
+  const merged = await seedBuild(h, {
+    slug: 'preparation-merged-sibling',
+    pr: { ...PR, number: 93 },
+  })
+  const stale = await seedBuild(h, { slug: 'preparation-stale-sibling' })
+  h.forge.setPrState(93, { state: 'merged', sha: 'squash-sibling' })
+  await h.store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'ticket-preparation.intended',
+    payload: {
+      attempt: 'stuck',
+      ticket: { source: 'fake', id: 'T-stuck' },
+      readyState: 'Ready',
+      claimedState: 'Doing',
+    },
+  })
+  h.tickets.get = async () => {
+    throw new Error('provider unavailable')
+  }
+  const report = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(report.janitorFailed).toBe(1)
+  expect(report.janitorDiagnostics.join(' ')).toContain('provider unavailable')
+  expect(report.merged).toBe(1)
+  expect(report.swept).toBe(1)
+  expect(reduceBuild(await h.store.getEvents(merged)).status).toBe('done')
+  expect(h.launches).toContain(stale)
+  expect(
+    Object.keys(
+      (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
+        .preparation,
+    ),
+  ).toEqual(['stuck'])
+})
