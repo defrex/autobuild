@@ -36,7 +36,13 @@ export interface SecretSnapshot {
   unavailable?: string[]
   versions: { name: string; generation: string; revision: string }[]
 }
+export class StaticSecretConflictError extends Error {
+  constructor() {
+    super('Refreshing credentials must be renewed with ab accounts login')
+  }
+}
 export interface ProjectSecretsManagement {
+  setStaticOnly?(repo: string, name: string, value: string, actor: string): Promise<void>
   list(repo: string): Promise<ProjectSecretMetadata[]>
   set(repo: string, name: string, value: string, actor: string): Promise<void>
   chatgptHost?(repo: string): Promise<string>
@@ -134,6 +140,10 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     validateSecretValue(value)
     return this.setPayload(repo, name, 'static', { value }, actor)
   }
+  async setStaticOnly(repo: string, name: string, value: string, actor: string): Promise<void> {
+    validateSecretValue(value)
+    return this.setPayload(repo, name, 'static', { value }, actor, true)
+  }
   async chatgptHost(raw: string): Promise<string> {
     const repo = await this.registered(raw)
     const key = this.key()
@@ -181,6 +191,7 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     kind: string,
     payload: SecretPayload,
     actor: string,
+    staticOnly = false,
   ): Promise<void> {
     validateSecretName(name)
     if (!actor.trim()) throw new ProjectSecretError('invalid-secret')
@@ -189,6 +200,11 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
     await this.sql.begin(async (tx) => {
       await admitHostedRequest(tx as SQL)
       await this.lock(tx as SQL, repo)
+      if (staticOnly) {
+        const [existing] =
+          await tx`SELECT kind FROM project_secrets WHERE repo=${repo} AND name=${name}`
+        if (existing && existing.kind !== 'static') throw new StaticSecretConflictError()
+      }
       const cipher = await this.cipher(tx as SQL, true)
       const encrypted = cipher.encrypt(context(repo, name, kind), payload)
       await tx`INSERT INTO project_secrets (repo,name,kind,owner,set_at,fingerprint,payload,generation,revision,status)

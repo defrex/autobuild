@@ -1,3 +1,4 @@
+import type { ProjectSettings } from '@defrex/autobuild-hosted-store-service/operator-api'
 import type {
   OperatorAnswerRequest,
   OperatorApiClient,
@@ -94,3 +95,10 @@ export const harvest = (
   repo: string,
   body: { action: 'toggle-gate' } | { action: 'run'; run: string },
 ) => webRequest(repo, 'harvest/control', { method: 'POST', body: JSON.stringify(body) })
+
+/** Browser secrets use the cookie session, never a project machine credential. */
+export const projectSettings = (repo: string) => webRequest<ProjectSettings>(repo, 'secrets')
+export const setProjectSecret = (repo: string, name: string, value: string) =>
+  webRequest(repo, 'secrets/set', { method: 'POST', body: JSON.stringify({ name, value }) })
+export const removeProjectSecret = (repo: string, name: string) =>
+  webRequest(repo, 'secrets/remove', { method: 'POST', body: JSON.stringify({ name }) })

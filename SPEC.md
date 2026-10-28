@@ -4197,8 +4197,16 @@ earliest refresh time use a ten-minute pre-expiry margin. Failed or uncertain
 refresh attempts prevent supply. A refresh window shorter than five minutes plus a one-minute
 margin emits typed advisory metadata, never invalidates a valid credential and
 never causes revocation. The public
-CLI writes static values or typed ChatGPT registrations; a web settings screen
-is separate work. See the project-secrets section of the remote-store protocol.
+CLI writes static values or typed ChatGPT registrations. The fifth web tab,
+Settings, lets any project organization member or super user inspect metadata
+and account credential slots, set static values, and remove secrets. Browser
+writes use the unexpired cookie session and fresh project membership, attribute
+the normalized signed-in email, and require same-origin JSON. Browser replacement
+atomically refuses non-static credentials; renewing those stays in
+`ab accounts login <account> --project`. Password fields are transient and clear
+on acknowledgment; reads never refill them. Removal requires the shared
+confirmation dialog. Secret management remains available without recorded
+dispatcher configuration. See the project-secrets section of the remote-store protocol.
 
 ### Named billing accounts
 

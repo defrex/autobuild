@@ -126,7 +126,7 @@ appended to the same log.
 
 Confirmed capabilities of the web app today:
 
-- **Tabs.** Triage, Queue, Active and Done, with ticket counts for Triage and
+- **Tabs.** Triage, Queue, Active, Done and Settings, with ticket counts for Triage and
   Queue and active/limit for Active. Repository controls sit at the right of
   the same line: repository paused, toggles for intake and the harvest gate,
   plus Pause all and Resume all. Lists page as the reader scrolls.
@@ -140,6 +140,7 @@ Confirmed capabilities of the web app today:
 - **Tickets (Triage, Queue, Done).** Rows with id, title, labels, dependencies
   and an excerpt. Each ticket has its own page with its body and comments, any
   related build, and its moves: Enqueue or Ice from Triage, Dequeue from Queue.
+- **Settings.** Every project member and super user can manage write-only project secrets and inspect account credential slots. Refreshing ChatGPT credentials are renewed through the CLI.
 - **Sign-in page.** Provider buttons and an access-refused message.
 
 In progress (integration node file-103): organizations, super users, and an
@@ -149,7 +150,7 @@ Constraints future work must preserve:
 
 - The dashboard shows acknowledged durable state. Settings and controls are
   never optimistically rendered.
-- Destructive intent is a second step. Abort, member removal, project moves and project deletion
+- Destructive intent is a second step. Abort, member removal, project moves, project deletion and secret removal
   confirm in a modal dialog before writing; a first interaction never writes
   destructive intent. Discard applies only to queued
   builds and returns the ticket to Ready; abort returns work to Triage. The
@@ -157,7 +158,7 @@ Constraints future work must preserve:
 - Every control and answer is an event in the log. The UI cannot add actions
   the event vocabulary lacks and cannot infer outcomes from agent output.
 - The browser talks only to same-origin web routes backed by the strict, typed
-  operator API. No credentials reach the client.
+  operator API. Secret reads never return credentials. Operators may enter a value transiently for write-only same-origin submission; it is cleared after acknowledgment.
 - The dashboard is product code that ships to every user. It must not encode
   this repository's specifics: its tracker, its verify steps, its capture
   evidence.

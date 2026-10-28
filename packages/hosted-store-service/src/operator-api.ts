@@ -41,3 +41,4 @@ export type {
   OperatorTicketPage,
   OperatorTicketQueue,
 } from '@defrex/autobuild/operator'
+export type { ProjectSettings } from './web/project-secrets'

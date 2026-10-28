@@ -16,6 +16,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "paths": {
+      "@defrex/autobuild/secret-name": ["./packages/core/src/secret-name.ts"],
       "@defrex/autobuild/project-secrets": ["./packages/core/src/project-secrets.ts"],
       "@defrex/autobuild/connection": ["./packages/core/src/connection.ts"],
       "@defrex/autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"],
