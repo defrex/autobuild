@@ -14,6 +14,9 @@ import type {
   TicketCreateOptions,
   TicketDraft,
   TicketListing,
+  TicketCriteria,
+  TicketPage,
+  TicketPageListing,
   TicketSource,
   TicketUpdate,
   TicketStateInfo,
@@ -184,7 +187,8 @@ export class PostgresTicketSource implements TicketSource {
         ? {}
         : {
             target: String(
-              (await this.require(executor, String(row.target_id), 'target')).readable_id,
+              row.target_readable_id ??
+                (await this.require(executor, String(row.target_id), 'target')).readable_id,
             ),
           }),
       title,
@@ -250,6 +254,39 @@ export class PostgresTicketSource implements TicketSource {
       next = ancestor.target_id == null ? null : String(ancestor.target_id)
     }
     return target
+  }
+
+  async listPage(criteria: TicketCriteria, page: TicketPage): Promise<TicketPageListing> {
+    const offset = page.offset ?? 0
+    if (!Number.isInteger(page.limit) || page.limit < 0 || !Number.isInteger(offset) || offset < 0)
+      throw new Error('ticket page limit and offset must be nonnegative integers')
+    const labels = criteria.labels ?? []
+    return this.retry.tx(this.sql, async (q) => {
+      await seedTicketStates(q, this.repo, this.configured)
+      const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
+      const counts: Row[] = await q`SELECT count(*)::text AS total FROM ab_tickets
+        WHERE repo = ${this.repo} AND (${state}::text IS NULL OR state = ${state})
+          AND labels @> ${q.array(labels, 'text')}`
+      const total = Number(counts[0]!.total)
+      if (page.limit === 0) return { tickets: [], diagnostics: [], total }
+      const rows: Row[] =
+        page.order === 'newest'
+          ? await q`SELECT ab_tickets.*, revision::text AS revision,
+          (SELECT t.readable_id FROM ab_tickets t WHERE t.repo = ab_tickets.repo AND t.id = ab_tickets.target_id) AS target_readable_id,
+          ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers
+          FROM ab_tickets WHERE repo = ${this.repo}
+          AND (${state}::text IS NULL OR state = ${state}) AND labels @> ${q.array(labels, 'text')}
+          ORDER BY created_at DESC, id DESC LIMIT ${page.limit} OFFSET ${offset}`
+          : await q`SELECT ab_tickets.*, revision::text AS revision,
+          (SELECT t.readable_id FROM ab_tickets t WHERE t.repo = ab_tickets.repo AND t.id = ab_tickets.target_id) AS target_readable_id,
+          ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers
+          FROM ab_tickets WHERE repo = ${this.repo}
+          AND (${state}::text IS NULL OR state = ${state}) AND labels @> ${q.array(labels, 'text')}
+          ORDER BY created_at, id LIMIT ${page.limit} OFFSET ${offset}`
+      const tickets: Ticket[] = []
+      for (const row of rows) tickets.push(await this.record(q, row))
+      return { tickets, diagnostics: [], total }
+    })
   }
 
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
