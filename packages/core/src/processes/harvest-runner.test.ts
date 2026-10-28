@@ -13,10 +13,11 @@ import {
   artifactRef,
   harvestProposalKey,
   makeHarvestScanPacket,
+  reconcileHarvestLedger,
   scanUnclaimedObservations,
 } from './harvest'
 import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../ports/runner/fake'
-import type { SessionStreamEmitter } from '../ports/types'
+import type { TicketSource, SessionStreamEmitter } from '../ports/types'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
@@ -3116,120 +3117,383 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
   })
 })
 
-test('resuming an approved join canonicalizes a legacy ledger target without changing its proposal key', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-alias-join-'))
-  const store = new MemoryBuildStore({ clock: steppingClock() })
-  const tickets = new FakeTicketSource([
+for (const source of ['linear', 'hosted'] as const) {
+  const cases = [
     {
-      revision: '1',
-      ref: { source: 'fake', id: 'ENG-1' },
-      title: 'Existing',
-      body: 'Body',
-      state: 'Triage',
-      resolved: false,
-      labels: [],
+      name: 'unresolved',
+      lifecycle: 'unresolved',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
     },
-  ])
-  const get = tickets.get.bind(tickets)
-  tickets.get = (id) => get(id === 'ticket-legacy' || id === 'eng-1' ? 'ENG-1' : id)
-  try {
-    await seedObservation(store, 'alias-origin', 'same defect')
-    const scan = await scanUnclaimedObservations(store, '/repo')
-    const run = 'h_alias_join'
-    const packet = {
-      repo: '/repo',
-      run,
-      observations: scan.observations,
-      ledger: [
+    {
+      name: 'became resolved',
+      lifecycle: 'resolved',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'still resolved',
+      lifecycle: 'resolved',
+      scanLifecycle: 'resolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'provider error',
+      lifecycle: 'error',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'deleted',
+      lifecycle: 'missing',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'reopened',
+      lifecycle: 'unresolved',
+      scanLifecycle: 'resolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'missing at scan',
+      lifecycle: 'missing',
+      scanLifecycle: 'missing',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'fresh retry',
+      lifecycle: 'missing',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'mixed reopened join and create',
+      lifecycle: 'unresolved',
+      scanLifecycle: 'resolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'duplicate missing refs',
+      lifecycle: 'missing',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+    },
+    {
+      name: 'foreign',
+      lifecycle: 'unresolved',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['ENG-1'],
+      foreign: true,
+    },
+    {
+      name: 'exact non-hosted identity',
+      lifecycle: 'unresolved',
+      scanLifecycle: 'unresolved',
+      ledger: 'ENG-1',
+      joins: ['eng-1'],
+    },
+    ...(source === 'hosted'
+      ? [
+          {
+            name: 'legacy to canonical',
+            lifecycle: 'unresolved',
+            scanLifecycle: 'unresolved',
+            ledger: 'ticket-legacy',
+            joins: ['ENG-1'],
+          },
+          {
+            name: 'canonical to repeated aliases',
+            lifecycle: 'unresolved',
+            scanLifecycle: 'unresolved',
+            ledger: 'ENG-1',
+            joins: ['ticket-legacy', 'eng-1', 'ticket-legacy'],
+          },
+          {
+            name: 'missing alias',
+            lifecycle: 'missing',
+            scanLifecycle: 'unresolved',
+            ledger: 'ticket-legacy',
+            joins: ['ticket-legacy'],
+          },
+          {
+            name: 'unknown alias',
+            lifecycle: 'unresolved',
+            scanLifecycle: 'unresolved',
+            ledger: 'ENG-1',
+            joins: ['unknown'],
+          },
+        ]
+      : []),
+  ]
+  for (const scenario of cases) {
+    test(`filing lookup budget ${source} ${scenario.name}`, async () => {
+      let lifecycle = scenario.scanLifecycle
+      const mixed = scenario.name === 'mixed reopened join and create'
+      const refSource = scenario.foreign ? 'foreign' : source
+      const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-alias-join-'))
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      const backing = new FakeTicketSource([
         {
-          proposalKey: 'immutable-old-key',
-          ticket: { source: 'fake', id: 'ticket-legacy' },
-          exists: true,
+          revision: '1',
+          ref: { source: 'fake', id: 'ENG-1' },
+          title: 'Existing',
+          body: 'Body',
+          state: 'Triage',
           resolved: false,
+          labels: [],
         },
-      ],
-    }
-    await store.appendRepoWithArtifacts(
-      '/repo',
-      [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
-      (deposited) => ({
-        actor: KERNEL,
-        type: 'harvest.started',
-        payload: {
+      ])
+      const gets: string[] = []
+      const dependencies: string[][] = []
+      const tickets: TicketSource = {
+        name: source,
+        get: async (id) => {
+          gets.push(id)
+          if (lifecycle === 'error') throw new Error('provider unavailable')
+          const ticket =
+            lifecycle === 'missing'
+              ? null
+              : await backing.get(id === 'ticket-legacy' || id === 'eng-1' ? 'ENG-1' : id)
+          return ticket
+            ? { ...ticket, ref: { source, id: ticket.ref.id }, resolved: lifecycle === 'resolved' }
+            : null
+        },
+        dependencyStates: async (ids) => {
+          dependencies.push([...ids])
+          return ids.map((id) => ({
+            id,
+            exists: lifecycle !== 'missing',
+            resolved: lifecycle === 'resolved',
+            blockedBy: [],
+          }))
+        },
+        listReady: async (criteria) => {
+          const listing = await backing.listReady(criteria)
+          return {
+            ...listing,
+            tickets: listing.tickets.map((ticket) => ({
+              ...ticket,
+              ref: { source, id: ticket.ref.id },
+            })),
+          }
+        },
+        claim: (id) => backing.claim(id),
+        comment: (id, body) => backing.comment(id, body),
+        transition: (id, state) => backing.transition(id, state),
+        create: async (draft, opts) => {
+          const ticket = await backing.create(draft, opts)
+          return { ...ticket, ref: { source, id: ticket.ref.id } }
+        },
+        update: (id, patch) => backing.update(id, patch),
+        addBlocker: (id, blocker) => backing.addBlocker(id, blocker),
+        removeBlocker: (id, blocker) => backing.removeBlocker(id, blocker),
+      }
+      try {
+        for (let i = 0; i < scenario.joins.length + (mixed ? 1 : 0); i++) {
+          await seedObservation(store, `alias-origin-${i}`, 'same defect')
+        }
+        const scan = await scanUnclaimedObservations(store, '/repo')
+        const scanState = reduceHarvest([])
+        scanState.ledger.push({
+          occurrence: scan.observations[0]!.occurrence,
+          action: 'joined',
+          proposalKey: 'immutable-old-key',
+          ticket: { source: refSource, id: scenario.ledger },
+          reason: 'same',
+          run: 'prior',
+          seq: 1,
+        })
+        const scanned = await reconcileHarvestLedger(scanState, tickets)
+        expect(dependencies).toEqual([scenario.foreign ? [] : [scenario.ledger]])
+        expect(gets).toEqual(scenario.foreign || lifecycle === 'missing' ? [] : [scenario.ledger])
+        expect(scanned[0]).toMatchObject({
+          exists: !scenario.foreign && lifecycle !== 'missing',
+          resolved: !scenario.foreign && lifecycle === 'resolved',
+          ticket: {
+            source: refSource,
+            id: scenario.foreign || lifecycle === 'missing' ? scenario.ledger : 'ENG-1',
+          },
+        })
+        lifecycle = scenario.lifecycle
+        gets.length = 0
+        dependencies.length = 0
+        const run = 'h_alias_join'
+        const packet = {
+          repo: '/repo',
           run,
-          observations: scan.observations.map((o) => o.occurrence),
-          scan: artifactRef(deposited[0]!),
-        },
-      }),
-    )
-    const proposal = {
-      action: 'join',
-      ticket: { source: 'fake', id: 'eng-1' },
-      reason: 'Same defect',
-      observations: scan.observations.map((o) => o.occurrence),
-    }
-    await store.appendRepoWithArtifacts(
-      '/repo',
-      [{ kind: 'harvest-proposals', content: JSON.stringify({ proposals: [proposal] }) }],
-      (deposited) => ({
-        actor: agentActor('harvest', 's'),
-        type: 'harvest.proposals.submitted',
-        payload: { run, round: 1, artifact: artifactRef(deposited[0]!) },
-      }),
-    )
-    await store.appendRepoWithArtifacts(
-      '/repo',
-      [{ kind: 'harvest-review', content: 'approved' }],
-      (deposited) => ({
-        actor: agentActor('harvest-review', 'r'),
-        type: 'harvest.review.verdict',
-        payload: {
-          run,
-          round: 1,
-          verdict: 'approve',
-          findings: [],
-          artifact: artifactRef(deposited[0]!),
-        },
-      }),
-    )
-    const before = await store.getRepoEvents('/repo')
-    const runner = new HarvestRunner({
-      store,
-      tickets,
-      config: config(1),
-      runtimes: {
-        scripted: {
-          runner: new ScriptedAgentRunner({
-            script: () => {
-              throw new Error('approved file must resume without agents')
+          observations: scan.observations,
+          ledger: [
+            {
+              proposalKey: 'immutable-old-key',
+              ticket: { source: refSource, id: scenario.ledger },
+              exists: scenario.scanLifecycle !== 'missing',
+              resolved: scenario.scanLifecycle === 'resolved',
+            },
+          ],
+        }
+        if (scenario.name === 'duplicate missing refs') {
+          packet.ledger.push({ ...packet.ledger[0]!, proposalKey: 'second-key' })
+        }
+        await store.appendRepoWithArtifacts(
+          '/repo',
+          [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+          (deposited) => ({
+            actor: KERNEL,
+            type: 'harvest.started',
+            payload: {
+              run,
+              observations: scan.observations.map((o) => o.occurrence),
+              scan: artifactRef(deposited[0]!),
             },
           }),
-          servesModels: [''],
-        },
-      },
-      repo: '/repo',
-      workspacePath: workspace,
-      ids: sequentialIds(),
-      uuids: randomUuids(),
-      clock: steppingClock(),
-      instance: 'alias-join',
-      opts: { heartbeatMs: 100_000 },
+        )
+        const proposals = scenario.joins.map((id, index) => ({
+          action: 'join',
+          ticket: { source: refSource, id },
+          reason: 'Same defect',
+          observations: [scan.observations[index]!.occurrence],
+        }))
+        await store.appendRepoWithArtifacts(
+          '/repo',
+          [
+            {
+              kind: 'harvest-proposals',
+              content: JSON.stringify({
+                proposals: [
+                  ...proposals,
+                  ...(mixed
+                    ? proposalSet([scan.observations.at(-1)!], 'Unrelated new defect').proposals
+                    : []),
+                ],
+              }),
+            },
+          ],
+          (deposited) => ({
+            actor: agentActor('harvest', 's'),
+            type: 'harvest.proposals.submitted',
+            payload: { run, round: 1, artifact: artifactRef(deposited[0]!) },
+          }),
+        )
+        await store.appendRepoWithArtifacts(
+          '/repo',
+          [{ kind: 'harvest-review', content: 'approved' }],
+          (deposited) => ({
+            actor: agentActor('harvest-review', 'r'),
+            type: 'harvest.review.verdict',
+            payload: {
+              run,
+              round: 1,
+              verdict: 'approve',
+              findings: [],
+              artifact: artifactRef(deposited[0]!),
+            },
+          }),
+        )
+        const before = await store.getRepoEvents('/repo')
+        const runner = new HarvestRunner({
+          store,
+          tickets,
+          config: config(1),
+          runtimes: {
+            scripted: {
+              runner: new ScriptedAgentRunner({
+                script: () => {
+                  throw new Error('approved file must resume without agents')
+                },
+              }),
+              servesModels: [''],
+            },
+          },
+          repo: '/repo',
+          workspacePath: workspace,
+          ids: sequentialIds(),
+          uuids: randomUuids(),
+          clock: steppingClock(),
+          instance: 'alias-join',
+          opts: { heartbeatMs: 100_000 },
+        })
+        const result = await runner.run()
+        const expectedGets = scenario.foreign ? [] : [scenario.ledger]
+        if (source === 'hosted' && !scenario.foreign) {
+          for (const id of scenario.joins) {
+            if (!expectedGets.includes(id) && !(lifecycle !== 'missing' && id === 'ENG-1'))
+              expectedGets.push(id)
+            if (lifecycle !== 'unresolved' || id === 'unknown') break
+          }
+        }
+        expect(gets).toEqual(expectedGets)
+        expect(dependencies).toEqual([])
+        const eligible =
+          lifecycle === 'unresolved' &&
+          !scenario.foreign &&
+          !scenario.joins.includes('unknown') &&
+          (source === 'hosted' || scenario.joins.every((id) => id === scenario.ledger))
+        const after = await store.getRepoEvents('/repo')
+        if (!eligible) {
+          expect(result.outcome).toBe('failed')
+          expect(after.some((e) => e.type === 'harvest.completed')).toBe(false)
+          expect(after.some((e) => e.type === 'harvest.proposal.filed')).toBe(false)
+          if (scenario.name === 'fresh retry') {
+            lifecycle = 'unresolved'
+            gets.length = 0
+            expect(await runner.run()).toMatchObject({ outcome: 'completed', launch: 'resumed' })
+            expect(gets).toEqual(['ENG-1'])
+            const retried = (await store.getRepoEvents('/repo')).find(
+              (e) => e.type === 'harvest.completed',
+            )
+            if (retried?.type !== 'harvest.completed') throw new Error('missing retry completion')
+            expect(retried.payload.dispositions[0]).toMatchObject({
+              action: 'joined',
+              proposalKey: 'immutable-old-key',
+              ticket: { source, id: 'ENG-1' },
+            })
+          }
+          return
+        }
+        expect(result).toMatchObject({ outcome: 'completed', launch: 'resumed' })
+        expect(after.slice(0, before.length)).toEqual(before)
+        const completed = after.find((e) => e.type === 'harvest.completed')
+        if (completed?.type !== 'harvest.completed') throw new Error('missing completion')
+        expect(completed.payload.dispositions[0]).toMatchObject({
+          action: 'joined',
+          proposalKey: 'immutable-old-key',
+          ticket: { id: 'ENG-1' },
+        })
+        const report = await store.getRepoArtifact(
+          '/repo',
+          completed.payload.report.kind,
+          completed.payload.report.rev,
+        )
+        if (!report) throw new Error('missing filing report')
+        expect(JSON.parse(new TextDecoder().decode(report.content)).proposals[0]).toMatchObject({
+          action: 'joined',
+          proposalKey: 'immutable-old-key',
+          ticket: { source, id: 'ENG-1' },
+        })
+        expect((await tickets.listReady({})).tickets).toHaveLength(mixed ? 2 : 1)
+        if (mixed) {
+          expect(completed.payload.dispositions).toHaveLength(2)
+          expect(completed.payload.dispositions[1]).toMatchObject({ action: 'filed' })
+          expect(after.filter((e) => e.type === 'harvest.proposal.filed')).toHaveLength(1)
+        }
+      } finally {
+        await rm(workspace, { recursive: true, force: true })
+      }
     })
-    expect(await runner.run()).toMatchObject({ outcome: 'completed', launch: 'resumed' })
-    const after = await store.getRepoEvents('/repo')
-    expect(after.slice(0, before.length)).toEqual(before)
-    const completed = after.find((e) => e.type === 'harvest.completed')
-    if (completed?.type !== 'harvest.completed') throw new Error('missing completion')
-    expect(completed.payload.dispositions[0]).toMatchObject({
-      action: 'joined',
-      proposalKey: 'immutable-old-key',
-      ticket: { id: 'ENG-1' },
-    })
-    expect((await tickets.listReady({})).tickets).toHaveLength(1)
-  } finally {
-    await rm(workspace, { recursive: true, force: true })
   }
-})
+}
 
 describe('local harvest native suspension', () => {
   for (const step of ['synthesize', 'review', 'continue'] as const) {
