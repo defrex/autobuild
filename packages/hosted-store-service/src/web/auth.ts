@@ -41,6 +41,9 @@ function mcpPluginOptions(
       useJWTPlugin: true,
       allowDynamicClientRegistration: true,
       metadata: { jwks_uri: `${config.baseURL}/api/auth/jwks` },
+      // Each refresh rotates the refresh token with a fresh expiry, so a
+      // connector stays signed in while it is used at least once a month.
+      refreshTokenExpiresIn: 60 * 60 * 24 * 30,
       ...(options?.accessTokenExpiresIn !== undefined
         ? { accessTokenExpiresIn: options.accessTokenExpiresIn }
         : {}),
@@ -58,9 +61,11 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
     baseURL: config.baseURL,
     trustedOrigins: [config.baseURL],
     advanced: { useSecureCookies: config.secureCookies },
+    // Sliding: a session used at least once a month stays signed in. Access
+    // is re-checked on every request, so revocation does not wait on expiry.
     session: {
-      expiresIn: 60 * 60 * 12,
-      updateAge: 60 * 30,
+      expiresIn: 60 * 60 * 24 * 30,
+      updateAge: 60 * 60 * 24,
     },
     account: {
       updateAccountOnSignIn: true,
