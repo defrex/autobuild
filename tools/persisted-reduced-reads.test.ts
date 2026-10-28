@@ -18,7 +18,9 @@ test('production current reductions use persisted reads; every exception has a l
     }
   }
   expect(checkReadBoundaries(boundaries, exceptions as Record<string, ReadException>)).toEqual([])
-})
+  // Full-tree TypeScript parsing exceeded 5s alongside unit/build/integration
+  // in the 4-vCPU sandbox (1.90s focused); keep the complete source audit.
+}, 15_000)
 
 for (const [label, source] of Object.entries({
   alias: `import { reduceBuild as project } from './kernel/reducer'; export async function view(store) { const rows = await store.getEvents('b'); return project(rows) }`,
