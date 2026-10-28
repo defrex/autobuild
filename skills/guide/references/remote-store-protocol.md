@@ -372,8 +372,16 @@ finished JSON answer is returned, with no accumulator or raw-log bundle. `cursor
 is the authoritative prefix included in the answer, not a guarantee to include
 appends concurrent with the request. Every call checks durable progress and
 persisted state; parallel instances may safely advance the same checkpoint.
-Snapshots are disposable caches: deletion, corruption, wrong versions and
-unreadable cache storage cause replay. Log read failures remain errors.
+Server-owned snapshots are disposable caches: deletion, corruption, wrong versions
+and unreadable cache storage cause server-side replay. Log read failures remain errors.
+The server answer is canonical for remote clients, regardless of missing, malformed
+or different `x-autobuild-catalog-identity` headers. The strict body stays exactly
+`{version, cursor, value}`. A reducer version mismatch, invalid envelope or invalid
+finished value raises `ReducerValueIncompatibilityError`, naming the reducer,
+client/server versions and validation detail. Clients never reconstruct named
+answers from raw events. Repository build-digest batches are likewise canonical:
+one repo-scoped GET returns the batch without client build discovery or per-build
+reducer requests. This does not change the explicit snapshot or event APIs.
 
 The executable catalog is `kernel/reducer-registry.ts`. All requests reject
 unknown names, excluded reducers, wrong scopes and invalid/extra arguments with

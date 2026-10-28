@@ -1,3 +1,4 @@
+import { ReducerValueIncompatibilityError } from '../store/remote/compatibility'
 import { WatchLifetime } from './watch-lifetime'
 import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -1038,7 +1039,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               if (!stop) checkPersistence()
             } else attentionInitialized = true
             return true
-          } catch {
+          } catch (error) {
+            if (error instanceof ReducerValueIncompatibilityError) throw error
             return false
           }
         }
