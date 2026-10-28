@@ -810,7 +810,7 @@ if (testUrl)
       const ordered =
         await database.sql`SELECT readable_id FROM ab_tickets WHERE repo = 'one' ORDER BY created_at, id`
       expect((await source.listAll()).tickets.map((t) => t.ref.id)).toEqual(
-        ordered.map((r) => String(r.readable_id)),
+        ordered.map((r: { readable_id: string }) => String(r.readable_id)),
       )
       for (const labels of [['page'], ['page', 'second']])
         for (const order of ['oldest', 'newest'] as const) {

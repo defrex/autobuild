@@ -314,7 +314,7 @@ test('hosted retries reacquire generation per transaction attempt; reads never a
 })
 
 test('ticket listings have a fixed statement budget regardless of target cardinality', async () => {
-  const { ticketListReadBudget } = await import('../../core/src/testing/dispatch-read-budget')
+  const { ticketListReadBudget } = await import('@defrex/autobuild/testing')
   const { PostgresTicketSource } = await import('./tickets')
   const { PlanRetryRunner } = await import('./retry')
   const lifecycle = { triage: 'Inbox', ready: 'Ready', doing: 'Doing', done: 'Done' }
@@ -351,7 +351,7 @@ test('ticket listings have a fixed statement budget regardless of target cardina
     const q = Object.assign((parts: TemplateStringsArray) => execute(parts.join('?')), {
       unsafe: (query: string) => execute(query),
       array: (values: unknown[]) => values,
-    }) as import('./retry').Exec
+    }) as unknown as import('./retry').Exec
     class RecordingRunner extends PlanRetryRunner {
       override tx<T>(_pool: SQL, body: (q: import('./retry').Exec) => Promise<T>): Promise<T> {
         return body(q)
