@@ -973,9 +973,13 @@ project; phase CLI scoped handles still constrain build and session access.
 Authenticated raw writes cannot claim a delegated `via`. Owner-project
 credentials also use their recorded creator for operator writes. Dispatcher
 credentials have an immutable server-side purpose: raw store and tickets only,
-never operator controls. Dispatcher-purpose credentials may expire at a configured TTL without
-revocation at tick return. Spawned builds receive independent delegated grants. Shared content-addressed blobs
-remain deduplicated; this is resource authorization, not blob partitioning.
+never operator controls. Each hosted cron repository tick deletes its exact issued
+dispatcher-purpose credential row on success or failure. Its crash-safety expiry
+is the earlier of the configured token TTL and the invocation deadline plus
+60 seconds. Spawned builds receive independent delegated grants whose authority
+continues according to their durable lifecycle after the parent row is deleted
+or expires. Shared content-addressed blobs remain deduplicated; this is resource
+authorization, not blob partitioning.
 
 
 ### Delegated build and harvest credentials

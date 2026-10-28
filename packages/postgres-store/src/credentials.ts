@@ -41,6 +41,11 @@ export interface CredentialStore extends CredentialReader {
   revoke(repo: string, id: string, user: string): Promise<void>
   close(): Promise<void>
 }
+/** Internal cron lifecycle operations; never exposed through credential HTTP routes. */
+export interface DispatcherCredentialStore extends CredentialStore {
+  deleteDispatcherCredential(repo: string, id: string): Promise<number>
+  pruneDispatcherCredentials(repo: string, now: Date): Promise<number>
+}
 export class ProjectNotRegisteredError extends Error {
   constructor() {
     super('project not registered')
@@ -88,7 +93,7 @@ export async function insertPreparedCredential(
     VALUES (${input.id}, ${input.digest}, ${repo}, ${input.now.toISOString()}, ${by}, ${input.purpose ?? 'project-owner'}, ${input.expiresAt?.toISOString() ?? null}) RETURNING *`
   return metadata(row)
 }
-export class PostgresCredentialStore implements CredentialStore {
+export class PostgresCredentialStore implements DispatcherCredentialStore {
   constructor(
     private readonly sql: SQL,
     private readonly projects: ProjectRegistryReader,
@@ -177,13 +182,50 @@ export class PostgresCredentialStore implements CredentialStore {
       await tx`UPDATE project_credentials SET revoked_at = COALESCE(revoked_at, ${new Date().toISOString()}) WHERE repo = ${normalizeProjectRepository(raw)} AND id = ${id}`
     })
   }
+  private async mutateDispatcher(
+    raw: string,
+    mutate: (tx: SQL, repo: string) => Promise<number>,
+  ): Promise<number> {
+    const repo = normalizeProjectRepository(raw)
+    return this.sql.begin(async (transaction) => {
+      const tx = transaction as SQL
+      await tx`SELECT pg_advisory_xact_lock_shared(${PROJECT_LIFECYCLE_LOCK})`
+      await admitHostedRequest(tx)
+      await captureProject(tx, repo)
+      return mutate(tx, repo)
+    })
+  }
+  async deleteDispatcherCredential(raw: string, id: string): Promise<number> {
+    return this.mutateDispatcher(raw, async (tx, repo) => {
+      const rows = await tx`DELETE FROM project_credentials
+        WHERE repo = ${repo} AND id = ${id} AND purpose = 'dispatcher' RETURNING id`
+      return rows.length
+    })
+  }
+  async pruneDispatcherCredentials(raw: string, now: Date): Promise<number> {
+    const cutoff = now.toISOString()
+    return this.mutateDispatcher(raw, async (tx, repo) => {
+      // Separate ordered index probes avoid an OR scan over the credential backlog.
+      const expired = await tx`WITH candidates AS (
+        SELECT id FROM project_credentials WHERE repo = ${repo} AND purpose = 'dispatcher'
+          AND expires_at <= ${cutoff} ORDER BY expires_at, id LIMIT 100
+      ) DELETE FROM project_credentials c USING candidates d WHERE c.id = d.id RETURNING c.id`
+      const remaining = 100 - expired.length
+      if (!remaining) return expired.length
+      const revoked = await tx`WITH candidates AS (
+        SELECT id FROM project_credentials WHERE repo = ${repo} AND purpose = 'dispatcher'
+          AND revoked_at <= ${cutoff} ORDER BY revoked_at, id LIMIT ${remaining}
+      ) DELETE FROM project_credentials c USING candidates d WHERE c.id = d.id RETURNING c.id`
+      return expired.length + revoked.length
+    })
+  }
   async close(): Promise<void> {
     if (this.ownsPool) await this.sql.close()
   }
 }
 export async function openPostgresCredentialStoreFromEnv(
   env: PostgresEnv,
-): Promise<CredentialStore> {
+): Promise<DispatcherCredentialStore> {
   const sql = new SQL(resolvePostgresUrl(env))
   try {
     await assertSchema(sql)
