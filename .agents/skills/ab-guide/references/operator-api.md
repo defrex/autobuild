@@ -314,6 +314,12 @@ configuration. Queue, detail, state discovery and mutations work before any buil
 or dispatcher run; detail reports a null matching build. Ticket policy publication
 never creates synthetic build or repository history.
 
+Ticket detail and mutation results prefer exact normalized ticket ids when associating
+a build. If no exact match exists, only legacy hosted `ticket-<uuid>` storage
+references require optional alias resolution, once per distinct reference. Readable
+historical ids require no ticket lookup. Failed optional alias resolution does not
+fail ticket detail or a completed mutation; matches already resolved remain eligible.
+
 Ticket results include kind (default work) and optional same-source node target.
 Metadata-only patches are accepted. Target validation and demotion guards apply
 to CLI, HTTP and MCP alike; unsupported sources refuse even explicit defaults
