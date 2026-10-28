@@ -1374,7 +1374,7 @@ test('invalid digest batch fails schema validation without discovery fallback', 
     fetchFn: (async () => {
       calls++
       return Response.json([{ slug: 123 }])
-    }) as typeof fetch,
+    }) as unknown as typeof fetch,
   })
   await expect(client.getRepoBuildDigests('repo')).rejects.toThrow()
   expect(calls).toBe(1)
