@@ -763,7 +763,8 @@ export const ticketPreparationEventPayloadSchemas = {
   }),
   'ticket-preparation.resolved': z.strictObject({
     ...preparationIdentity,
-    outcome: z.enum(['lost-claim', 'handed-back', 'bounced', 'owned']),
+    outcome: z.enum(['lost-claim', 'handed-back', 'bounced', 'owned', 'abandoned']),
+    reason: z.string().min(1).max(4000).optional(),
   }),
 }
 

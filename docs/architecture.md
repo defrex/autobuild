@@ -1075,7 +1075,13 @@ leave that value. Under repository ownership, each tick admits at most eight
 due recovery attempts, before intake and independently of capacity or intake
 settings, with a 30-second durable retry delay after recovery failure. Unresolved
 ticket identities remain withheld. An uncertain claim outcome or unrelated
-external ticket state stays actionable uncertainty; this is not general process
+external ticket state, missing ticket/state, or conflicting slug ownership terminates
+automatic recovery with an `abandoned` resolution and diagnostic reason. The
+ticket is left unchanged; an operator can leave it finished or cancelled, or
+inspect ownership and explicitly return it to Ready for another attempt. These
+cases stop provider polling and diagnostic appends. Recovery failures are
+reported without preventing janitor, lease sweep, or other dispatch recovery.
+This is not general process
 crash recovery. Confirmed Ready/Triage transitions settle idempotently, so a
 failed bounce comment does not return an invalid ticket to Ready.
 

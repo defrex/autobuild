@@ -11125,9 +11125,16 @@ test('preparation recovery runs at full capacity, retains unrelated state, and b
   expect(h.tickets.transitions).toHaveLength(8)
   expect(calls).toBe(8)
   await h.tickets.transition('T-8', 'Review')
-  await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('externally changed')
+  await h.dispatcher.tick({ acceptNewWork: false })
   expect((await get('T-8'))?.state).toBe('Review')
   expect((await get('T-9'))?.state).toBe('Ready')
+  expect(
+    (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
+      .preparation,
+  ).toEqual({})
+  h.clock.advance(86_400_000)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(calls).toBe(10)
 })
 
 for (const type of [
@@ -11274,7 +11281,24 @@ test('an intended claim without confirmation cannot release a ticket in Doing', 
       claimedState: 'Doing',
     },
   })
-  await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('uncertain claim')
+  let recoveryReads = 0
+  const get = h.tickets.get.bind(h.tickets)
+  h.tickets.get = async (id) => {
+    recoveryReads++
+    return get(id)
+  }
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(
+    (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
+      .preparation,
+  ).toEqual({})
+  h.clock.advance(86_400_000)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(recoveryReads).toBe(1)
+  const resolution = (await h.store.getRepoEvents(REPO)).find(
+    (e) => e.type === 'ticket-preparation.resolved',
+  )
+  expect(resolution?.payload).toMatchObject({ outcome: 'abandoned' })
   expect(h.tickets.transitions).toEqual([])
   expect(h.tickets.claims).toEqual([])
 })
@@ -11335,10 +11359,14 @@ test('failed recovery batches do not starve attempts that have never been retrie
     if (Number(id.slice(2)) < 8) throw new Error('handback unavailable')
     return transition(id, state)
   }
-  await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('handback unavailable')
+  expect(
+    (await h.dispatcher.tick({ acceptNewWork: false })).janitorDiagnostics.join(' '),
+  ).toContain('handback unavailable')
   expect(h.tickets.transitions).toEqual([])
   h.clock.advance(60_000)
-  await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('handback unavailable')
+  expect(
+    (await h.dispatcher.tick({ acceptNewWork: false })).janitorDiagnostics.join(' '),
+  ).toContain('handback unavailable')
   expect(h.tickets.transitions).toEqual([
     { id: 'T-8', state: 'Ready' },
     { id: 'T-9', state: 'Ready' },
@@ -11370,4 +11398,41 @@ test('recovery diagnostics preserve Triage when bounce and primary diagnostic de
   const restarted = harness({ store: h.store, clock: h.clock, wrapTickets: () => h.tickets })
   await restarted.dispatcher.tick({ acceptNewWork: false })
   expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
+})
+
+test('failed preparation readback does not block sibling janitor or lease recovery', async () => {
+  const h = harness({ tickets: [readyTicket('T-stuck', { state: 'Doing' })] })
+  await h.store.ensureRepo(REPO)
+  const merged = await seedBuild(h, {
+    slug: 'preparation-merged-sibling',
+    pr: { ...PR, number: 93 },
+  })
+  const stale = await seedBuild(h, { slug: 'preparation-stale-sibling' })
+  h.forge.setPrState(93, { state: 'merged', sha: 'squash-sibling' })
+  await h.store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'ticket-preparation.intended',
+    payload: {
+      attempt: 'stuck',
+      ticket: { source: 'fake', id: 'T-stuck' },
+      readyState: 'Ready',
+      claimedState: 'Doing',
+    },
+  })
+  h.tickets.get = async () => {
+    throw new Error('provider unavailable')
+  }
+  const report = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(report.janitorFailed).toBe(1)
+  expect(report.janitorDiagnostics.join(' ')).toContain('provider unavailable')
+  expect(report.merged).toBe(1)
+  expect(report.swept).toBe(1)
+  expect(reduceBuild(await h.store.getEvents(merged)).status).toBe('done')
+  expect(h.launches).toContain(stale)
+  expect(
+    Object.keys(
+      (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
+        .preparation,
+    ),
+  ).toEqual(['stuck'])
 })

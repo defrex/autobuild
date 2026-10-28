@@ -372,9 +372,9 @@ export interface TickReport {
   abandoned: number
   /** Janitor: queued builds explicitly discarded and returned to Ready. */
   discarded: number
-  /** Janitor failures contained to individual builds during this pass. */
+  /** Contained build janitor and ticket-preparation recovery failures this pass. */
   janitorFailed: number
-  /** One actionable line per contained janitor failure, attributed by slug. */
+  /** One actionable line per contained failure, attributed by build or attempt. */
   janitorDiagnostics: string[]
   /** Ordinary-tick recovery completed an interrupted post-creation dispatch. */
   recovered: number
@@ -991,7 +991,7 @@ export class Dispatcher {
     // durable fact drives it, so a second dispatcher polling the same
     // repository converges the same state.
     if (this.outOfBudget(opts)) return report
-    await this.recoverTicketPreparations(opts)
+    await this.recoverTicketPreparations(report, opts)
     if (this.outOfBudget(opts)) return report
     await this.janitor(report, launched, opts)
     if (this.outOfBudget(opts)) return report
@@ -4659,7 +4659,7 @@ export class Dispatcher {
 
   /** Retry a fixed batch under the same repository ownership as intake.
    * No provider calls for parked deadlines; no history or orphan scans. */
-  private async recoverTicketPreparations(opts: TickOpts): Promise<void> {
+  private async recoverTicketPreparations(report: TickReport, opts: TickOpts): Promise<void> {
     const pending = Object.values(this.store.repositoryFacts().preparation)
       .filter(
         (attempt) => !attempt.retryAt || Date.parse(attempt.retryAt) <= this.deps.clock().getTime(),
@@ -4680,21 +4680,26 @@ export class Dispatcher {
         failures.push(error)
       }
     }
-    if (failures.length > 0)
-      throw new AggregateError(
-        failures,
-        `ticket preparation recovery failed: ${failures.map(String).join('; ')}`,
-      )
+    for (const error of failures) {
+      report.janitorFailed += 1
+      report.janitorDiagnostics.push(String(error))
+    }
   }
 
   private async preparationResolved(
     attempt: TicketPreparation,
-    outcome: 'lost-claim' | 'handed-back' | 'bounced' | 'owned',
+    outcome: 'lost-claim' | 'handed-back' | 'bounced' | 'owned' | 'abandoned',
+    reason?: string,
   ): Promise<void> {
     await this.store.appendRepo(this.deps.repo, {
       actor: DISPATCHER,
       type: 'ticket-preparation.resolved',
-      payload: { attempt: attempt.attempt, ticket: attempt.ticket, outcome },
+      payload: {
+        attempt: attempt.attempt,
+        ticket: attempt.ticket,
+        outcome,
+        ...(reason ? { reason: reason.slice(0, 4000) } : {}),
+      },
     })
   }
 
@@ -4714,8 +4719,10 @@ export class Dispatcher {
             created.payload.ticket?.source !== attempt.ticket.source ||
             created.payload.ticket?.id !== attempt.ticket.id
           )
-            throw new Error(
-              `preparation ${attempt.attempt}: conflicting build ownership at ${attempt.slug}`,
+            return await this.preparationResolved(
+              attempt,
+              'abandoned',
+              `Conflicting build ownership at ${attempt.slug}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
             )
           await this.preparationResolved(attempt, 'owned')
           return
@@ -4728,8 +4735,18 @@ export class Dispatcher {
         attempt.slug ?? attempt.attempt,
       )
       const ticket = await this.deps.tickets.get(ref.id)
-      if (!ticket || ticket.state === undefined)
-        throw new Error(`preparation ${attempt.attempt}: ticket state is unavailable`)
+      if (!ticket)
+        return await this.preparationResolved(
+          attempt,
+          'abandoned',
+          'Ticket no longer exists; ticket unchanged.',
+        )
+      if (ticket.state === undefined)
+        return await this.preparationResolved(
+          attempt,
+          'abandoned',
+          'Ticket state is unavailable; ticket unchanged. Inspect the provider record before manually retrying.',
+        )
       const state = (value: string) => value.toLowerCase()
       const handback = attempt.handback ?? attempt.readyState
       if (state(ticket.state) === state(handback)) {
@@ -4740,8 +4757,10 @@ export class Dispatcher {
         return
       }
       if (!attempt.claimed || state(ticket.state) !== state(attempt.claimedState))
-        throw new Error(
-          `preparation ${attempt.attempt}: uncertain claim or externally changed ticket state ${ticket.state}`,
+        return await this.preparationResolved(
+          attempt,
+          'abandoned',
+          `Uncertain claim or externally changed ticket state ${ticket.state}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
         )
       await this.deps.tickets.transition(ref.id, handback)
       await this.preparationResolved(
