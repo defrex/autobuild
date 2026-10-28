@@ -484,3 +484,5 @@ keys. It removes stored versions and delete markers as well as current objects;
 permission or retention failures leave deletion pending. Vercel Blob cleanup uses
 the same store identity, token and prefixed pathname as uploads. Missing objects
 are successful cleanup; provider errors never count as completed deletion.
+
+Paged ticket listings use the source's optional native `listPage(criteria, page)` capability when present, otherwise read the full listing and reverse/slice it. Native errors propagate. PostgreSQL counts matches without bodies and reads only the requested window. Zero limits and offsets past the end still report the full matching total. Unpaged listings remain exhaustive; the wire payload is the same for both paths.

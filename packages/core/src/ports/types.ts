@@ -91,6 +91,25 @@ export interface Ticket {
   blockedBy?: string[]
 }
 
+export interface TicketCriteria {
+  labels?: string[]
+  state?: string
+  /** `me` (the API key's owner) or a user's email; only sources that can honour it
+   * accept it — others reject `[tickets].readyAssignee` at config parse. */
+  assignee?: string
+}
+
+export interface TicketPage {
+  limit: number
+  offset?: number
+  order?: 'oldest' | 'newest'
+}
+
+export interface TicketPageListing extends TicketListing {
+  /** Matching count before ordering and slicing. No operator-specific limit cap. */
+  total: number
+}
+
 /** A partial source scan. Diagnostics name source records that were excluded
  * from eligibility; infrastructure failures and source-wide invariants still
  * reject `listReady` rather than appearing here. */
@@ -215,13 +234,13 @@ export interface TicketSource {
   /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus
    * actionable diagnostics for individual source records excluded as invalid.
    * Fatal source failures and invariants still reject the call. */
-  listReady(criteria: {
-    labels?: string[]
-    state?: string
-    /** `me` (the API key's owner) or a user's email; only sources that can honour it
-     * accept it — others reject `[tickets].readyAssignee` at config parse. */
-    assignee?: string
-  }): Promise<TicketListing>
+  listReady(criteria: TicketCriteria): Promise<TicketListing>
+  /** Optional native window, equivalent to listReady then reverse/slice.
+   * Defaults: offset 0, order oldest. Arguments are nonnegative integers;
+   * zero limit returns no tickets with the full matching total. Diagnostics
+   * and failures match listReady; a failure must not trigger a full-read fallback.
+   * listReady and listAll remain exhaustive. */
+  listPage?(criteria: TicketCriteria, page: TicketPage): Promise<TicketPageListing>
   get(id: string): Promise<Ticket | null>
   /** Claim-before-launch (§12): acquires nonterminal work and returns true.
    * Returns false for an unknown, already-claimed/contested, or terminal ticket.
