@@ -3022,6 +3022,30 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('artifacts', () => {
+      test('optional latest metadata follows artifact-only revisions without mutation', async () => {
+        await withStore(factory, undefined, async (store) => {
+          if (!store.getLatestArtifactMeta) return
+          await store.createBuild(sampleBuildInput('latest-meta'))
+          expect(await store.getLatestArtifactMeta('latest-meta', 'pin')).toBeNull()
+          for (let revision = 0; revision < 3; revision++) {
+            const meta = await store.putArtifact('latest-meta', {
+              kind: 'pin',
+              content: `revision ${revision}`,
+              metadata: { nested: { revision } },
+            })
+            expect(await store.getLatestArtifactMeta('latest-meta', 'pin')).toEqual(meta)
+            expect((await store.getArtifact('latest-meta', 'pin'))?.meta).toEqual(meta)
+            const copy = (await store.getLatestArtifactMeta('latest-meta', 'pin'))!
+            copy.metadata.nested = 'changed'
+            expect(await store.getLatestArtifactMeta('latest-meta', 'pin')).toEqual(meta)
+          }
+          expect(await store.getEvents('latest-meta')).toEqual([])
+          await expect(store.getLatestArtifactMeta('unknown', 'pin')).rejects.toThrow(
+            'unknown build',
+          )
+        })
+      })
+
       test('revisions are 0-based per kind (§6.3): first deposit rev 0, next rev 1', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('revs'))

@@ -601,6 +601,10 @@ export class MemoryBuildStore implements BuildStore {
     return { meta: structuredClone(meta), content }
   }
 
+  async getLatestArtifactMeta(slug: string, kind: string): Promise<ArtifactMeta | null> {
+    return structuredClone(this.state(slug).artifacts.get(kind)?.at(-1) ?? null)
+  }
+
   async listArtifacts(slug: string, kind?: string): Promise<ArtifactMeta[]> {
     const state = this.state(slug)
     const all = [...state.artifacts.values()].flat()
