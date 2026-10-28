@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { abDispatch } from '../cli/dispatch'
+import { createTerminalModeController } from '../cli/terminal-restore'
 import { randomUuids } from '../ids'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import { Dispatcher } from '../processes/dispatcher'
@@ -192,6 +193,7 @@ export async function reducedReadBudget(opts: {
       expect(costs.metadata).toBeLessThan(operations * 20)
     }
     await coldDispatchOnceBudget(store, cold, length, costs)
+    await coldDispatchOnceBudget(store, cold, length, costs, true)
     reset()
     const view = new RepoViewStore(cold, { repo })
     await view.refresh()
@@ -395,15 +397,19 @@ export async function reducedReadBudget(opts: {
   }
 }
 
-/** Exercise the real outer DispatchLoop with a new invocation identity. Only
- * shared values are warmed: no parameterized run value may hide a cold replay. */
+/** Exercise the real outer DispatchLoop with a new invocation identity, either
+ * once or for cold and warmed interactive ticks. Only shared values are warmed:
+ * no parameterized run value may hide a cold replay. */
 async function coldDispatchOnceBudget(
   store: BuildStore,
   cold: BuildStore,
   length: number,
   costs: ReducedReadCosts,
+  interactive = false,
 ) {
-  const onceRepo = 'https://github.com/budget/cold-once'
+  const onceRepo = interactive
+    ? 'https://github.com/budget/interactive-ticks'
+    : 'https://github.com/budget/cold-once'
   await store.ensureRepo(onceRepo)
   for (let i = 0; i < length; i++)
     await store.appendRepo(onceRepo, {
@@ -428,11 +434,46 @@ steps = []
 steps = []
 `,
     )
+    const acquisitions = { facts: 0, digests: 0 }
+    const stop = new AbortController()
+    let ticks = 0
+    let ticketScanWrites = 0
+    let tickAcquisitions = { facts: 0, digests: 0 }
     const checked = new Proxy(cold, {
       get(target, key) {
+        if (interactive && key === 'beginRepoTick')
+          return async (...args: Parameters<BuildStore['beginRepoTick']>) => {
+            // Drain startup presentation before opening the kernel window.
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            // Startup is outside the tick call budget, but must obey the same
+            // no-history-replay rule after the prepared boundary.
+            expect(costs.historicalEvents).toBe(0)
+            acquisitions.facts = acquisitions.digests = ticketScanWrites = 0
+            costs.events = costs.historicalEvents = 0
+            return target.beginRepoTick(...args)
+          }
+        if (interactive && key === 'finishRepoTick')
+          return (...args: Parameters<BuildStore['finishRepoTick']>) => {
+            // Close the kernel window before the independent dashboard poll.
+            tickAcquisitions = { ...acquisitions, facts: acquisitions.facts - ticketScanWrites }
+            return target.finishRepoTick(...args)
+          }
+        if (interactive && key === 'appendRepo')
+          return (...args: Parameters<BuildStore['appendRepo']>) => {
+            // Cold readiness publishes a scan and refreshes its committed facts;
+            // this is separate from acquiring the shared tick inputs.
+            if (args[1].type === 'dispatcher.ticket-scan-completed') ticketScanWrites++
+            return target.appendRepo(...args)
+          }
+        if (key === 'getRepoBuildDigests')
+          return (...args: Parameters<BuildStore['getRepoBuildDigests']>) => {
+            acquisitions.digests++
+            return target.getRepoBuildDigests(...args)
+          }
         if (key === 'getReducerValue')
           return (...args: Parameters<BuildStore['getReducerValue']>) => {
             expect(['dispatcherRunFacts', 'openTick']).not.toContain(args[1].reducer)
+            if (args[1].reducer === 'repositoryReadFacts') acquisitions.facts++
             return target.getReducerValue(...args)
           }
         const value = Reflect.get(target, key, target)
@@ -459,8 +500,37 @@ steps = []
             },
       stdout: () => {},
       stderr: () => {},
-      once: true,
-      plain: true,
+      once: !interactive,
+      plain: !interactive,
+      signal: stop.signal,
+      terminal: interactive
+        ? {
+            columns: 100,
+            rows: 24,
+            interactive: true,
+            write: () => {},
+            modes: createTerminalModeController(
+              () => {},
+              () => {},
+            ),
+          }
+        : undefined,
+      sleep: async () => {
+        // Drain the asynchronous launch gate before closing each tick window.
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(tickAcquisitions).toEqual({ facts: 1, digests: 1 })
+        expect(costs.historicalEvents).toBe(0)
+        expect(costs.events).toBeLessThanOrEqual(32)
+        // Prepare the newly written tick-completed tail, then prove an
+        // unchanged read acquires zero rows.
+        await readRepositoryFacts(cold, onceRepo)
+        await readBuildDigests(cold, onceRepo)
+        const rows = costs.events
+        await readRepositoryFacts(cold, onceRepo)
+        await readBuildDigests(cold, onceRepo)
+        expect(costs.events).toBe(rows)
+        if (++ticks === 2) stop.abort()
+      },
       kernelRunId: run,
       storeRef: '/budget',
       wire: () => ({
@@ -485,6 +555,7 @@ steps = []
         clock: () => new Date(1000),
       }),
     })
+    if (interactive) expect(ticks).toBe(2)
     const finished = (await readRepositoryFacts(checked, onceRepo)).value.recentRuns.find(
       ([id]) => id === run,
     )?.[1]

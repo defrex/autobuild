@@ -229,16 +229,12 @@ export function collectUnclaimedObservations(input: {
   return { observations, merges, state }
 }
 
-/** The unclaimed-observation count from build digests and the repository
- * journal alone (AUT-487): the same reduce/claim/count the store-reading scan
- * performs, with no per-build history reads. The operator query consumes this
- * directly, and the terminal dashboards consume it through
- * `sampleUnclaimedObservationCount` (AUT-524), while `scanUnclaimedObservations`
- * keeps the full-scan shape its remaining callers depend on (the harvest
- * runner's packet scan — the only source of observation payloads — and its
- * gate re-confirmation; the dispatcher's harvest-launch gate itself evaluates
- * from digests, AUT-521). Occurrences are keyed `{build, seq}`; payload ids
- * are not assumed globally unique. */
+/** Count unclaimed occurrences from already reduced build digests and harvest
+ * facts, without backing reads. The operator query and interactive dispatcher
+ * tick consume this directly; the tick reuses its shared refreshed view.
+ * The Store-only terminal frontend owns a separate refresh.
+ * Occurrences are keyed by {build, seq}, never by payload id.
+ * The harvest runner's scan still supplies full observation payloads. */
 export function unclaimedObservationCount(input: {
   digests: Map<string, BuildDigest>
   harvestEvents: RepositoryEvent[] | HarvestState
@@ -275,12 +271,11 @@ export async function readRepoEventsIfRecorded(
   return (await store.getRepo(repo)) === null ? [] : store.getRepoStateEvents(repo)
 }
 
-/** The terminal dashboards' observation-pressure sample (AUT-487): build
- * digests plus the repository journal, reduced to the unclaimed-observation
- * count. Store traffic is flat in the finished-build count — one journal read
- * plus one repo-scoped digest read, plus the journal-record probe inside
- * `readRepoEventsIfRecorded`. Its missing-record treatment (AUT-524) is the
- * shared helper's, above. */
+/** Store-reading count helper: one repository-record probe, one canonical
+ * repository-facts request when recorded, and one repository-scoped digest
+ * request. No journal replay or writes. An absent record supplies empty harvest
+ * facts. Dispatcher ticks use unclaimedObservationCount with their shared view
+ * instead, avoiding these additional acquisitions. */
 export async function sampleUnclaimedObservationCount(
   store: BuildStore,
   repo: string,
