@@ -775,3 +775,84 @@ test('report uses actual image dimensions and packaged font bindings', async () 
   expect(text).not.toContain('locally installed')
   expect(text).not.toContain('DejaVu')
 })
+
+// Required alongside capture verification: AB_CAPTURE_BROWSER_TEST=1 bun test <this file>.
+// Ordinary unit runs retain their browser-independent contract.
+test.skipIf(process.env.AB_CAPTURE_BROWSER_TEST !== '1')(
+  'real Chromium promotes every rendered confirmation and rejects a missing backdrop',
+  async () => {
+    const { mkdir, mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises')
+    const { resolve, join } = await import('node:path')
+    const { pathToFileURL } = await import('node:url')
+    const { fullDocumentScreenshot, confirmationPreparationExpression } = await import(
+      './full-document'
+    )
+    const chromium = chromiumBinary()
+    if (!chromium) throw Error('Browser regression requires Chromium')
+    await mkdir('.ab', { recursive: true })
+    const scratch = await mkdtemp(resolve('.ab/confirmation-test-'))
+    const assets = {
+      css: await readFile('packages/hosted-store-service/app/globals.css', 'utf8'),
+      fontCss: fontFaceCss(),
+    }
+    let confirmations = 0
+    let plain = false
+    try {
+      for (const spec of WEB_FRAME_SPECS) {
+        const html = await renderWebFrame(spec, models(), assets)
+        const hasConfirmation = /<dialog[^>]*class="confirm-dialog"[^>]*open/.test(html)
+        if (!hasConfirmation && plain) continue
+        const path = join(scratch, 'frame.html')
+        // Prepare twice in-page to prove idempotence, then again at the capture seam.
+        const repeated = `<script>addEventListener('load', async () => { await ${confirmationPreparationExpression}; await ${confirmationPreparationExpression}; document.documentElement.dataset.prepared = 'true' })</script>`
+        await writeFile(path, html + repeated)
+        const result = await fullDocumentScreenshot(
+          chromium,
+          pathToFileURL(path).href,
+          join(scratch, 'frame.png'),
+          spec.width,
+          spec.height,
+          join(scratch, `profile-${confirmations}-${plain}`),
+        )
+        const diagnostics = result.confirmations as {
+          modal: boolean
+          backdrop: string
+          expected: string
+        }[]
+        if (hasConfirmation) {
+          expect(diagnostics.length).toBeGreaterThan(0)
+          for (const dialog of diagnostics) {
+            expect(dialog.modal).toBe(true)
+            expect(dialog.backdrop).toBe(dialog.expected)
+          }
+          confirmations++
+          if (confirmations === 1) {
+            await writeFile(
+              path,
+              html +
+                '<style>.confirm-dialog::backdrop { background: transparent !important }</style>',
+            )
+            await expect(
+              fullDocumentScreenshot(
+                chromium,
+                pathToFileURL(path).href,
+                join(scratch, 'negative.png'),
+                spec.width,
+                spec.height,
+                join(scratch, 'negative-profile'),
+              ),
+            ).rejects.toThrow('Confirmation backdrop mismatch')
+          }
+        } else {
+          expect(diagnostics).toEqual([])
+          plain = true
+        }
+      }
+      expect(confirmations).toBeGreaterThan(0)
+      expect(plain).toBe(true)
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
+  },
+  600_000,
+)

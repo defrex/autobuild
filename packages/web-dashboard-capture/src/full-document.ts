@@ -21,6 +21,51 @@ export function screenshotBytes(data: unknown, width: number, height: number): B
   return png
 }
 
+/** Runs in Chromium after the final reload; uses the production backdrop rule. */
+export async function prepareConfirmationDialogs() {
+  const dialogs = [...document.querySelectorAll<HTMLDialogElement>('dialog.confirm-dialog[open]')]
+  for (const dialog of dialogs) {
+    if (!dialog.matches(':modal')) {
+      dialog.close()
+      dialog.showModal()
+    }
+  }
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  )
+  const probe = document.createElement('span')
+  document.body.append(probe)
+  try {
+    const normalize = (color: string) => {
+      probe.style.backgroundColor = color
+      return getComputedStyle(probe).backgroundColor
+    }
+    return dialogs.map((dialog) => {
+      const ground = getComputedStyle(dialog).getPropertyValue('--ground').trim()
+      const expected = normalize(`color-mix(in srgb, ${ground} 72%, transparent)`)
+      const backdrop = normalize(getComputedStyle(dialog, '::backdrop').backgroundColor)
+      // Compare browser-resolved channels and alpha, independent of CSS serialization.
+      const pixel = (color: string) => {
+        const canvas = document.createElement('canvas')
+        canvas.width = canvas.height = 1
+        const context = canvas.getContext('2d')!
+        context.fillStyle = color
+        context.fillRect(0, 0, 1, 1)
+        return [...context.getImageData(0, 0, 1, 1).data]
+      }
+      const actualPixel = pixel(backdrop)
+      if (!dialog.open || !dialog.matches(':modal')) throw Error('Confirmation is not modal')
+      if (!actualPixel[3] || JSON.stringify(actualPixel) !== JSON.stringify(pixel(expected)))
+        throw Error(`Confirmation backdrop mismatch: ${backdrop}; expected ${expected}`)
+      return { modal: true, backdrop, expected }
+    })
+  } finally {
+    probe.remove()
+  }
+}
+
+export const confirmationPreparationExpression = `(${prepareConfirmationDialogs.toString()})()`
+
 type Reply = {
   result?: { value?: unknown }
   exceptionDetails?: unknown
@@ -204,6 +249,7 @@ export async function fullDocumentScreenshot(
         `(async () => { await document.fonts.ready; for (const face of ['ANSI sans', 'ANSI mono']) { const loaded = await document.fonts.load('16px "' + face + '"'); if (!loaded.length || loaded.some(f => f.status !== 'loaded')) throw Error('Missing packaged font: ' + face); } await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); return true; })()`,
       )
     }
+    const confirmations = await evaluate(confirmationPreparationExpression)
     const metrics = await send('Page.getLayoutMetrics')
     const clip = documentClip(width, height, metrics.cssContentSize?.height)
     const shot = await send('Page.captureScreenshot', {
@@ -213,7 +259,7 @@ export async function fullDocumentScreenshot(
       clip,
     })
     await writeFile(pngPath, screenshotBytes(shot.data, width, clip.height))
-    return { width, height: clip.height }
+    return { width, height: clip.height, confirmations }
   } finally {
     protocol?.close()
     socket?.close()
