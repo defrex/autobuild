@@ -7697,6 +7697,10 @@
         "preparationError": {
           "type": "4",
           "optional": true
+        },
+        "handback": {
+          "type": "4",
+          "optional": true
         }
       }
     },

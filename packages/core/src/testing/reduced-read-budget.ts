@@ -589,3 +589,32 @@ export async function seedPreparationHistory(store: BuildStore, repo: string, fa
     },
   })
 }
+
+/** Count the memory adapter's private reducer-storage event slices, in addition
+ * to public history reads. This deliberately observes storage, not a selector. */
+export function memoryRepositoryReadCounter(
+  store: import('../store/memory').MemoryBuildStore,
+  repo: string,
+) {
+  const repositories = Reflect.get(store, 'repos') as Map<string, { events: unknown[] }>
+  const events = repositories.get(repo)?.events
+  if (!events) throw new Error(`missing read-budget repository ${repo}`)
+  const slice = events.slice.bind(events)
+  let rows = 0
+  Object.defineProperty(events, 'slice', {
+    configurable: true,
+    value: (start?: number, end?: number) => {
+      const selected = slice(start, end)
+      rows += selected.length
+      return selected
+    },
+  })
+  return {
+    get rows() {
+      return rows
+    },
+    reset() {
+      rows = 0
+    },
+  }
+}

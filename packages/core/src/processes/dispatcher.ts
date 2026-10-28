@@ -4758,6 +4758,7 @@ export class Dispatcher {
             attempt: attempt.attempt,
             ticket: attempt.ticket,
             claimed: attempt.claimed,
+            handback: attempt.handback ?? attempt.readyState,
             ...(attempt.error ? { preparationError: attempt.error } : {}),
             error: message.slice(0, 4000) || 'unknown recovery failure',
             retryAt: new Date(this.deps.clock().getTime() + 30_000).toISOString(),

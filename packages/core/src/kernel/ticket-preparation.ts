@@ -51,6 +51,7 @@ export const ticketPreparationReducer = defineReducer<
           break
         case 'ticket-preparation.recovery-failed':
           held.claimed ||= event.payload.claimed ?? false
+          if (event.payload.handback) held.handback = event.payload.handback
           if (event.payload.preparationError) held.error ??= event.payload.preparationError
           held.recoveryError = event.payload.error
           held.retryAt = event.payload.retryAt

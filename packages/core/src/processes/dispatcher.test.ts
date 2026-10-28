@@ -11158,15 +11158,20 @@ for (const type of [
 }
 
 test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-row quiet ticks', async () => {
-  const { seedPreparationHistory } = await import('../testing/reduced-read-budget')
+  const { seedPreparationHistory, memoryRepositoryReadCounter } = await import(
+    '../testing/reduced-read-budget'
+  )
   const { readRepositoryFacts } = await import('../store/reduced-reads')
   const { RemoteBuildStore } = await import('../store/remote/client')
   let previousBytes: number | undefined
   for (const length of [100, 100_000]) {
     const store = new RowCountingStore({ clock: manualClock() })
     await seedPreparationHistory(store, REPO, length)
+    const counter = memoryRepositoryReadCounter(store, REPO)
     const facts = await readRepositoryFacts(store, REPO)
     expect(Object.keys(facts.value.preparation)).toEqual(['pending'])
+    expect(counter.rows).toBe(length + 2)
+    counter.reset()
     const bytes = JSON.stringify(facts.value.preparation).length
     if (previousBytes !== undefined) expect(bytes).toBe(previousBytes)
     previousBytes = bytes
@@ -11199,6 +11204,7 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
     await h.dispatcher.tick({ acceptNewWork: false })
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drainRows()).toBe(0)
+    expect(counter.rows).toBe(0)
   }
 }, 30_000)
 
@@ -11337,4 +11343,31 @@ test('failed recovery batches do not starve attempts that have never been retrie
     { id: 'T-8', state: 'Ready' },
     { id: 'T-9', state: 'Ready' },
   ])
+})
+
+test('recovery diagnostics preserve Triage when bounce and primary diagnostic deposits fail', async () => {
+  const h = harness({ tickets: [readyTicket('T-1', { body: 'invalid spec' })] })
+  const append = h.store.appendRepo.bind(h.store)
+  const transition = h.tickets.transition.bind(h.tickets)
+  h.store.appendRepo = async (...args) => {
+    if (
+      ['ticket-preparation.handback-selected', 'ticket-preparation.failed'].includes(args[1].type)
+    )
+      throw new Error('bounce journal unavailable')
+    return append(...args)
+  }
+  h.tickets.transition = async () => {
+    throw new Error('transition unavailable')
+  }
+  await expect(h.dispatcher.tick()).rejects.toThrow('bounce journal unavailable')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  expect(
+    Object.values((await readRepositoryFacts(h.store, REPO)).value.preparation)[0]?.handback,
+  ).toBe('Triage')
+  h.store.appendRepo = append
+  h.tickets.transition = transition
+  h.clock.advance(30_000)
+  const restarted = harness({ store: h.store, clock: h.clock, wrapTickets: () => h.tickets })
+  await restarted.dispatcher.tick({ acceptNewWork: false })
+  expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
 })

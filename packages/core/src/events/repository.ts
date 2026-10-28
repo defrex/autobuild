@@ -753,6 +753,7 @@ export const ticketPreparationEventPayloadSchemas = {
     ...preparationIdentity,
     claimed: z.boolean().optional(),
     preparationError: z.string().min(1).max(4000).optional(),
+    handback: z.string().min(1).optional(),
     error: z.string().min(1).max(4000),
     retryAt: z.string().datetime(),
   }),
