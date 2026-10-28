@@ -115,6 +115,47 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 
 Only `verify:*` and `finalize:*` are configurable extension points. Agents interact with build state only through the typed `ab` CLI; never infer outcomes from agent stdout. Git pushes and forge operations are kernel-side plumbing.
 
+## Store read cost is a correctness property
+
+Flooding the database with reads is this project's most frequently recurring
+production failure. Each wave fixed the surface that was flooding, and the
+next wave came from a surface or an interaction nobody had budgeted:
+
+- September 2026: web dashboard polls replayed the journal, about $2k of
+  Neon egress.
+- AUT-749: the interactive dashboard re-read the run tail every 500 ms.
+- AUT-775: an unscoped `GET /builds` ran on every poll.
+- AUT-1011: an older client rejected the server's reduced value and replayed
+  the whole journal on every hot-upgrade probe, about 150 GB/day from one
+  idle project.
+
+Every change is held to these rules:
+
+- **Recurring work has bounded cost.** Anything that runs per poll, tick,
+  request, invocation, or process start must cost the same at 100 events and
+  at 100,000, and must read zero event rows while nothing changes. A read whose
+  cost grows with log length, build count, or project count is a bug, however
+  fast it is today.
+- **Full-log reads are for explicit history requests only.** Reading a build
+  or repository log from the start is acceptable when an operator asked for
+  history. It is never acceptable as a cold start, a fallback, a recovery path,
+  or a cache miss on a recurring path.
+- **The server's reduced value is canonical.** A remote client never rebuilds
+  a value from the event log that the server already answered. When client
+  and server cannot agree, the read fails with a typed error; it never falls
+  back to downloading events.
+- **Account for fresh processes and many projects.** A per-process cache does
+  nothing for a process spawned on every poll. Multiply idle cost by hundreds
+  of hosted projects, each pinned to its own release against a server deployed
+  from main.
+
+Plans name every recurring read they add or change, with its cost per
+occurrence and how often it occurs. Plan and code reviewers treat an unbounded
+recurring read, or a client-side reconstruction of server state, as a blocking
+finding. Prove the bound by extending the existing in-memory read-budget
+harnesses in `packages/core/src/testing/`, not with new suites, Postgres, or
+long-running processes: every test runs on every build forever.
+
 ## The orchestrator is an external agent
 
 The orchestrator files tickets, watches builds, unblocks them, and drives
