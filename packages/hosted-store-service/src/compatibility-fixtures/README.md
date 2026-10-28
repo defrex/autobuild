@@ -63,3 +63,9 @@ without modifying package versions, and rejects invented 1.0/protocol-5/6 peers.
 Protocol 5 was unreleased. Older 0.x fixtures remain for their existing explicit
 historical seam tests; they are outside the 1.x service's supported window and
 are not claimed as admitted clients.
+
+The 1.2 preparation retains published v1.1.x clients on protocol 6. The
+remote store protocol identity is unchanged from v1.1.0
+(8d98e5255ad9b191c3215c7def930c57f9ec4bbc) to the 1.2 line, so the current
+decoders are the v1.1 wire contract and no separate fixture is frozen yet.
+Freeze v1.1 decoders here when a later line changes protocol 6.

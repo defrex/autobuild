@@ -80,6 +80,8 @@ export function compatibilityAdvice(
 export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = {
   // v1.0.x shipped protocol 4; protocol 5+ requires the next minor line.
   '1.0': '4',
+  // v1.1.x shipped protocol 6; retain it when this line becomes historical.
+  '1.1': '6',
   '0.9': '3',
   '0.10': '3',
   '0.11': '3',
