@@ -464,6 +464,20 @@ The runtime-owned `dispatch-handoff.ts` reader lets the filesystem-only launcher
 supervise overlapping generations without owning Store or config decisions.
 A runtime-owned repository-record projection binds the journal transport before
 initial spawn and across handoffs, including when later config edits are invalid.
+The optional conditional `--read-upgrade` environment extension in
+`dispatch-launch-contract.ts` is versioned independently of launch/overlap v1.
+The launcher caches only the current successful projection, guard inputs and
+pre-read position for each exact runtime/journal/run/lineage/recovery query.
+`dispatch-handoff.ts` checks `getRepoChangePosition` before any metadata or
+reducer reads on a bound query: unchanged helpers make one request and read zero
+event rows, including with cold process/store facades. Changed helpers share one
+store handle and attach the earlier position, so concurrent appends invalidate
+the following check. Durable handoff selection is separate from local target
+identity and rollback-retention guards, which run on every check. Errors clear
+conditional state; a separate predecessor-reader cache uses the active run's
+journal context when the target cannot load. Old peers keep full v1 responses.
+Polling stays at 1 second idle / 250 ms pending, and cached projections still
+pass through ordinary child-exit, pending-preflight and recovery handling.
 `dispatch-frontend.ts` acknowledges terminal release only after joining input
 and rendering. The old kernel releases repository authority but retains local
 execution supervision until completion or the hot policy deadline. Build-log
