@@ -256,7 +256,53 @@ function corpora(): unknown[][] {
     ts: '2026-10-24T00:00:00Z',
     ...event,
   }))
+  const preparationTicket = { source: 'fake', id: 'T-1' }
+  const preparationCorpus = [
+    {
+      type: 'ticket-preparation.intended',
+      payload: {
+        attempt: 'prep-1',
+        ticket: preparationTicket,
+        readyState: 'Ready',
+        claimedState: 'Doing',
+      },
+    },
+    {
+      type: 'ticket-preparation.claimed',
+      payload: { attempt: 'prep-1', ticket: preparationTicket },
+    },
+    {
+      type: 'ticket-preparation.creation-selected',
+      payload: { attempt: 'prep-1', ticket: preparationTicket, slug: 'build' },
+    },
+    {
+      type: 'ticket-preparation.failed',
+      payload: {
+        attempt: 'prep-1',
+        ticket: preparationTicket,
+        stage: 'create-build',
+        claimed: true,
+        handback: 'Ready',
+        error: 'offline',
+      },
+    },
+    {
+      type: 'ticket-preparation.recovery-failed',
+      payload: {
+        attempt: 'prep-1',
+        ticket: preparationTicket,
+        error: 'readback offline',
+        retryAt: '2026-10-24T00:00:30.000Z',
+      },
+    },
+  ].map((event, index) => ({
+    seq: index + 1,
+    ts: '2026-10-24T00:00:00.000Z',
+    actor: { kind: 'dispatcher' },
+    ...event,
+  }))
   return [
+    preparationCorpus,
     verifyStageCorpus,
     rollbackCorpus.slice(0, 1),
     rollbackCorpus,
@@ -528,7 +574,7 @@ describe('reducer registry', () => {
         "harvestDelegation": 2,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,
-        "journalView": 7,
+        "journalView": 8,
         "lastExecutionOutcome": 2,
         "leafRestack": 5,
         "logIndex": 6,
@@ -549,8 +595,8 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 31,
-        "repositoryStateEvents": 6,
+        "repositoryReadFacts": 32,
+        "repositoryStateEvents": 7,
         "sandboxStates": 1,
         "session": 1,
         "setupStreak": 1,
@@ -558,6 +604,7 @@ describe('reducer registry', () => {
         "summaryRequests": 1,
         "terminalGuard": 3,
         "ticketMigrations": 1,
+        "ticketPreparation": 1,
         "ticketSourceHealth": 2,
         "verifyDiffBase": 2,
         "verifyDiffBaseValue": 2,

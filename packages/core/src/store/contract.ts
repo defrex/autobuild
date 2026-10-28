@@ -2251,6 +2251,34 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         ]
       }
 
+      test('unfinished preparation survives run turnover in canonical reduced state and resolution removes it', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/preparation'
+          await store.ensureRepo(repo)
+          const ticket = { source: 'fake', id: 'T-1' }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'ticket-preparation.intended',
+            payload: { attempt: 'prep', ticket, readyState: 'Ready', claimedState: 'Doing' },
+          })
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'ticket-preparation.claimed',
+            payload: { attempt: 'prep', ticket },
+          })
+          for (const write of noopInvocation('next-run')) await store.appendRepo(repo, write)
+          expect((await readRepositoryFacts(store, repo)).value.preparation.prep?.claimed).toBe(
+            true,
+          )
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'ticket-preparation.resolved',
+            payload: { attempt: 'prep', ticket, outcome: 'handed-back' },
+          })
+          expect((await readRepositoryFacts(store, repo)).value.preparation).toEqual({})
+        })
+      })
+
       test('ticket migrations survive run turnover and stay repository scoped', async () => {
         await withStore(factory, undefined, async (store) => {
           const repo = 'acme/migration'
