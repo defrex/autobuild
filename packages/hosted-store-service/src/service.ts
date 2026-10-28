@@ -613,7 +613,6 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                   ? { proposalState: context.tickets.proposalState }
                   : {}),
               })
-          if (!options.sourceFor) await source.listStates!()
           if (source.assets) return source
           const store = await authorityStore()
           return Object.assign(source, {

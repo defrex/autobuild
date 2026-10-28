@@ -1300,6 +1300,14 @@ explicit ticket URL. Project registration and ticket policy publication through
 `ab connect --tickets URL` work before dispatch. Policy is a durable per-registration
 record, outside BuildStore events/artifacts; legacy uploaded configuration remains
 a compatibility fallback. Hosted lifecycle defaults are triage/ready/doing/done.
+Hosted state initialization checks only the distinct configured role names through
+an indexed project/name lookup. Already-present names require no state mutation
+lock or writes. Missing names are rechecked under the project advisory lock and
+inserted in the same transaction. Custom-state creation and policy publication
+always take that lock; publication reads the previous policy under it and retains
+former role names atomically. Ordinary service requests do not eagerly list state
+counts; explicit state listings and legacy policy materialization still do.
+
 Independent harvest uses revocable, expiring, service-bound ticket grants with
 read/create runner authority and read-only child authority. Build state and harvest
 journals remain exclusively in the selected BuildStore.
