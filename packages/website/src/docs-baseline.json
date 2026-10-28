@@ -102,7 +102,7 @@
     "title": "Intake and harvest",
     "group": "concepts",
     "description": "Turn outside signals and agent observations into reviewed proposals for your operator agent to triage and groom.",
-    "textHash": "773a0cb26311c8efb756a6a86dd3ce2bb457e7c956ac0654273fe4002e604da1",
+    "textHash": "2f73989f20ce1504451617c5d0627256bb1d5b72c1fd8299726a686380bb329c",
     "headings": [
       "Sources carry proposals",
       "Observations become reviewed tickets",

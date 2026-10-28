@@ -29,6 +29,8 @@ ab observe --kind followup --files src/retry.ts "Retry budget ignores jitter"
 
 Observation harvest, a shipped repository workflow rather than a build phase, collects observations, synthesizes and reviews proposals, and files approved tickets.
 
+Proposals can join an existing ticket in the harvest ledger. The ledger facts shown during synthesis and review are scan-time context; at filing, each approved join is checked against fresh ticket existence and resolution in the selected source. Only existing, unresolved ledger targets from that source can be joined. Missing or resolved targets require suppression, and approval does not override this fresh check.
+
 A run starts after `[policy].harvestThreshold` new unclaimed observations (default 5), or once `[policy].harvestMaxDrift` other builds (default 3) have merged since the oldest one (`0` disables drift).
 
 

@@ -152,7 +152,11 @@ repository-scoped workflow: deterministic `scan`, agent `synthesize`
 ⇄ fresh adversarial `review`, then deterministic `file`. Only approved
 spec-standard proposals are created, in `[tickets].proposalState` — the triage
 state unless this repository has named another one. The scan context exposes
-existence and resolution for each distinct observation-origin ticket. At filing,
+existence and resolution for each distinct observation-origin ticket. Ledger
+lifecycle is also scan-time context: filing refreshes existence and resolution
+before allowing a join. Each same-source ledger ticket uses one fresh lookup;
+hosted alias resolution shares that response. Missing, resolved, and foreign-source
+ledger tickets cannot be joined. At filing,
 matching-source origins are refreshed and every still-existing unresolved one
 is unioned with the agent-declared `blockedBy` ids; missing, resolved, foreign,
 and absent origins are dropped. Filing records declared and origin-derived
