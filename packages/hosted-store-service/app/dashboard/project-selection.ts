@@ -25,9 +25,9 @@ export function buildLink(repo: string, slug: string, query = ''): string {
 }
 
 /** The operator's top-level views: ticket lifecycle tabs around the active builds. */
-export type ViewTab = 'triage' | 'queue' | 'active' | 'done'
-export type TicketTab = Exclude<ViewTab, 'active'>
-export const VIEW_TABS: readonly ViewTab[] = ['triage', 'queue', 'active', 'done']
+export type ViewTab = 'triage' | 'queue' | 'active' | 'done' | 'settings'
+export type TicketTab = 'triage' | 'queue' | 'done'
+export const VIEW_TABS: readonly ViewTab[] = ['triage', 'queue', 'active', 'done', 'settings']
 
 export function tabLink(repo: string, tab: ViewTab, query = ''): string {
   return withProject(tab === 'active' ? '/' : `/${tab}`, repo, query)

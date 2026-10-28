@@ -1531,7 +1531,7 @@ absent; review and commit that change yourself. An existing different URL
 must be changed explicitly before connecting. Reconnecting replaces the saved
 credential only after approval and revokes the previous credential.
 
-Connected project members can manage write-only project secrets with
+Connected project members can manage write-only project secrets in the web **Settings** tab (also available to super users), or with
 `ab secrets list [--json]`, `ab secrets set NAME` and `ab secrets remove NAME`.
 Set reads hidden terminal input or redirected stdin; values never appear in
 arguments or responses. These sessionless commands use the saved owner
