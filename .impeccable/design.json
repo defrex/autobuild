@@ -362,7 +362,17 @@
         "name": "wide",
         "value": "1280px"
       }
-    ]
+    ],
+    "projectSettings": {
+      "tabs": [
+        "Triage",
+        "Queue",
+        "Active",
+        "Done",
+        "Settings"
+      ],
+      "rules": "Settings has no count. Flowing Document ruled metadata rows, square well write-only password fields with autocomplete off and clear on acknowledgment, disabled slack, red refusals, explicit account readiness, and shared confirmation dialog for removal. Phone fields stack and commands wrap."
+    }
   },
   "components": [
     {
@@ -407,8 +417,8 @@
     {
       "name": "Tab line",
       "kind": "nav",
-      "description": "View tabs left with counts, repository controls right, on one structural rule; the current tab carries an ink bar.",
-      "html": "<div class=\"ds-tabline\"><nav aria-label=\"Views\"><a>Triage <b>30</b></a><a aria-current=\"page\">Active <b>5/6</b></a><a>Done</a></nav><span>intake <b>ON</b></span></div>",
+      "description": "Triage, Queue, Active, Done and Settings left; Done and Settings have no count. Repository controls sit right on one structural rule; the current tab carries an ink bar.",
+      "html": "<div class=\"ds-tabline\"><nav aria-label=\"Views\"><a>Triage <b>30</b></a><a>Queue <b>2</b></a><a aria-current=\"page\">Active <b>5/6</b></a><a>Done</a><a>Settings</a></nav><span>intake <b>ON</b></span></div>",
       "css": ".ds-tabline{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:0 20px;border-bottom:1px solid var(--rule,#dfe2e8);color:var(--ink,#1a1d24)}.ds-tabline nav{display:flex;gap:24px}.ds-tabline a{padding:10px 0 8px;margin-bottom:-1px;border-bottom:2px solid transparent;color:var(--slack,#5f6571);font-weight:600}.ds-tabline a[aria-current]{color:var(--ink,#1a1d24);border-bottom-color:var(--ink,#1a1d24)}.ds-tabline b{font-family:var(--mono,\"JetBrains Mono\",monospace);font-weight:400}"
     },
     {
@@ -436,13 +446,13 @@
       "name": "Confirmation dialog",
       "kind": "custom",
       "description": "The one modal: names what a destructive action takes away, red primary confirm then ghost Cancel, over a translucent ground backdrop.",
-      "html": "<div class=\"ds-confirm\"><strong>Remove operator@example.com?</strong><p>They lose this organization\u2019s grant on their next request.</p><button class=\"ds-confirm-go\">Remove</button> <button class=\"ds-confirm-cancel\">Cancel</button></div>",
+      "html": "<div class=\"ds-confirm\"><strong>Remove operator@example.com?</strong><p>They lose this organization’s grant on their next request.</p><button class=\"ds-confirm-go\">Remove</button> <button class=\"ds-confirm-cancel\">Cancel</button></div>",
       "css": ".ds-confirm{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;max-width:56ch;padding:20px 22px;border:1.5px solid var(--slack,#5f6571);background:var(--ground,#fbfbfc);color:var(--ink,#1a1d24)}.ds-confirm p{margin:12px 0;color:var(--slack,#5f6571)}.ds-confirm button{font:inherit;font-weight:600;border:1.5px solid transparent;border-radius:0;padding:3px 12px;background:transparent;color:var(--slack,#5f6571)}.ds-confirm .ds-confirm-go{color:var(--ground,#fbfbfc);background:var(--red,#d32b33);border-color:var(--red,#d32b33)}.ds-confirm button:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}"
     }
   ],
   "narrative": {
     "northStar": "ANSI",
-    "overview": "ANSI keeps the terminal\u2019s functional color and precise machine values while giving people readable titles and plain-language help. The visual register is calm, direct and practical: glance, find the state that needs attention, act on one row, leave.\n\nBoth grounds are first-class. Structure comes from type, spacing and rules rather than decorative surfaces. The recorded world applies to the operator web app, not the terminal dashboard or marketing website.",
+    "overview": "ANSI keeps the terminal’s functional color and precise machine values while giving people readable titles and plain-language help. The visual register is calm, direct and practical: glance, find the state that needs attention, act on one row, leave.\n\nBoth grounds are first-class. Structure comes from type, spacing and rules rather than decorative surfaces. The recorded world applies to the operator web app, not the terminal dashboard or marketing website.",
     "keyCharacteristics": [
       "Two calm grounds with state-specific inks.",
       "Human language in sans; machine values in mono.",
@@ -498,10 +508,10 @@
       "Do confirm destructive actions in the confirmation dialog and show acknowledged durable state."
     ],
     "donts": [
-      "Don\u2019t place amber text on the inset well or red wash; use the plain ground.",
-      "Don\u2019t add shadows, gradients, pills, icon sets or emoji.",
-      "Don\u2019t replace the build or ticket page with a drawer, modal or in-place expansion; the confirmation dialog is the only modal.",
-      "Don\u2019t invent page numbers or decide a new app title; both remain human decisions."
+      "Don’t place amber text on the inset well or red wash; use the plain ground.",
+      "Don’t add shadows, gradients, pills, icon sets or emoji.",
+      "Don’t replace the build or ticket page with a drawer, modal or in-place expansion; the confirmation dialog is the only modal.",
+      "Don’t invent page numbers or decide a new app title; both remain human decisions."
     ]
   }
 }

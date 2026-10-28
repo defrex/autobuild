@@ -189,6 +189,7 @@ const TAB_LABEL: Record<ViewTab, string> = {
   queue: 'Queue',
   active: 'Active',
   done: 'Done',
+  settings: 'Settings',
 }
 
 /**
@@ -221,7 +222,8 @@ export function ViewTabs({
             <span className="count">{counts[tab]}</span>
           ) : (
             // Done has no count; the others hold their place until it arrives.
-            tab !== 'done' && <span className="count pending" aria-hidden="true" />
+            tab !== 'done' &&
+            tab !== 'settings' && <span className="count pending" aria-hidden="true" />
           )}
         </Link>
       ))}

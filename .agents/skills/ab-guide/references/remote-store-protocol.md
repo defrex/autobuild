@@ -1393,13 +1393,29 @@ within a published release line must keep its protocol identity.
 
 ## Project secrets (v1)
 
+The web app's **Settings** tab also manages project secrets. Its separate
+cookie-session routes are `GET /api/web/repos/<encoded repo>/secrets`,
+`POST .../secrets/set` with strict `{name,value}`, and
+`POST .../secrets/remove` with strict `{name}`. An unexpired signed-in session
+and fresh project organization membership or super-user authority authorize each
+request. Browser mutations require the configured same-origin Origin and JSON.
+The normalized signed-in email is the owner and audit actor. Reads return only
+allowlisted secret metadata and account name, kind, credentialEnv and readiness
+from recorded effective configuration; absent or unavailable configuration does
+not prevent secret management. Browser set/replace atomically refuses existing
+non-static credentials. Renew ChatGPT credentials with
+`ab accounts login <account> --project`. Values are write-only, cleared after
+acknowledgment and never returned in responses. Removal confirms in the shared
+dialog before writing. The machine routes below retain their project-owner
+credential requirement and CLI replacement semantics.
+
 Project secrets are separate from BuildStore artifacts and machine credentials.
 They are write-only: no CLI, store method, operator tool, MCP tool or web route
 returns a value, ciphertext, access token or refresh state. The only plaintext
 consumer is the hosted dispatcher's internal resolver. Local dispatchers use
 their own environment.
 
-All routes require the standard client/version headers and bearer authorization,
+The machine routes below require the standard client/version headers and bearer authorization,
 return JSON with `Cache-Control: no-store`, and require a saved `project-owner`
 credential issued through `ab connect`. The project must match the credential,
 remain registered, and its creator must still have project membership. Dispatcher,

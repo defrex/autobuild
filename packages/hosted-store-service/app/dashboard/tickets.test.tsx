@@ -27,6 +27,10 @@ test('the current tab claims the page only on its own list', () => {
   expect(list).toContain('aria-current="page"')
   expect(list).toContain('Queue<span class="count">0</span>')
   expect(list).toContain('Done</a>')
+  expect(list).toContain('Settings</a>')
+  expect(tabLink(repo, 'settings', 'theme=dark')).toBe(
+    `/settings?theme=dark&repo=${encodeURIComponent(repo)}`,
+  )
   const detail = renderToStaticMarkup(
     <ViewTabs repo={repo} current="active" page={false} counts={{}} />,
   )
