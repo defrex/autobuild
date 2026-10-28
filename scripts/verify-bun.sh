@@ -18,10 +18,11 @@ case "$prefix/" in
 esac
 selected="$prefix/node_modules/.bin/bun"
 (
-  # Atomic directory creation works on both macOS and Linux without extra tools.
-  lock="$prefix/install.lock.d"
+  # Symlink creation is exclusive on macOS and Linux. Unlike mkdir, the
+  # sandbox's uutils ln does not report success for concurrent existing paths.
+  lock="$prefix/install.lock.link"
   attempts=0
-  until mkdir "$lock" 2>/dev/null; do
+  until ln -s "$$" "$lock" 2>/dev/null; do
     attempts=$((attempts + 1))
     if (( attempts >= 300 )); then
       echo "timed out waiting for verify Bun installation lock: $lock" >&2
@@ -29,7 +30,7 @@ selected="$prefix/node_modules/.bin/bun"
     fi
     sleep 1
   done
-  trap 'rmdir "$lock"' EXIT
+  trap 'rm "$lock"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   if [[ ! -x "$selected" ]] || [[ $("$selected" --version) != "$required_version" ]]; then

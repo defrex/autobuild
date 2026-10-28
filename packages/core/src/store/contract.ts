@@ -2514,7 +2514,9 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             ),
           ).toHaveLength(520)
         })
-      })
+        // The full hosted HTTP/Postgres workload took 5.33s with unit/build/
+        // integration overlapping on 4 vCPUs (2.77s focused). Keep all 520 scans.
+      }, 15_000)
 
       test('unknown repo rejects like getRepoEvents', async () => {
         await withStore(factory, undefined, async (store) => {
