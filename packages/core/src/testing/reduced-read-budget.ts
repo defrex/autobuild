@@ -652,3 +652,71 @@ export async function parkedSweepReadBudget(opts: {
     Reflect.deleteProperty(events, 'slice')
   }
 }
+
+/** In-memory history seeding for preparation budgets; never used as a recurring read. */
+export async function seedPreparationHistory(store: BuildStore, repo: string, facts: number) {
+  await store.ensureRepo(repo)
+  for (let i = 0; i < facts / 2; i++) {
+    const ticket = { source: 'fake', id: `old-${i}` }
+    const attempt = `historical-${i}`
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: { attempt, ticket, readyState: 'Ready', claimedState: 'Doing' },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: { attempt, ticket, outcome: 'handed-back' },
+    })
+  }
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'ticket-preparation.intended',
+    payload: {
+      attempt: 'pending',
+      ticket: { source: 'fake', id: 'pending' },
+      readyState: 'Ready',
+      claimedState: 'Doing',
+    },
+  })
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'ticket-preparation.recovery-failed',
+    payload: {
+      attempt: 'pending',
+      ticket: { source: 'fake', id: 'pending' },
+      error: 'unknown claim outcome',
+      retryAt: '2099-01-01T00:00:00.000Z',
+    },
+  })
+}
+
+/** Count the memory adapter's private reducer-storage event slices, in addition
+ * to public history reads. This deliberately observes storage, not a selector. */
+export function memoryRepositoryReadCounter(
+  store: import('../store/memory').MemoryBuildStore,
+  repo: string,
+) {
+  const repositories = Reflect.get(store, 'repos') as Map<string, { events: unknown[] }>
+  const events = repositories.get(repo)?.events
+  if (!events) throw new Error(`missing read-budget repository ${repo}`)
+  const slice = events.slice.bind(events)
+  let rows = 0
+  Object.defineProperty(events, 'slice', {
+    configurable: true,
+    value: (start?: number, end?: number) => {
+      const selected = slice(start, end)
+      rows += selected.length
+      return selected
+    },
+  })
+  return {
+    get rows() {
+      return rows
+    },
+    reset() {
+      rows = 0
+    },
+  }
+}
