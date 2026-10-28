@@ -108,3 +108,19 @@ export function clientIdentityError(
   if (!advice && expected !== undefined && protocol === expected) return undefined
   return `remote store version mismatch: client Autobuild ${client ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${serviceVersion} protocol ${serviceProtocol}; ${advice ?? `supported clients ${formatClientRange(range)}; unsupported protocol identity`}`
 }
+
+/** A successful server answer cannot be represented by this client's reducer. */
+export class ReducerValueIncompatibilityError extends Error {
+  override readonly name = 'ReducerValueIncompatibilityError'
+  constructor(
+    readonly reducer: string,
+    readonly scope: import('../snapshots').SnapshotScope,
+    readonly clientVersion: number,
+    readonly serverVersion: number | undefined,
+    readonly reason: string,
+  ) {
+    super(
+      `incompatible reducer ${reducer}: client version ${clientVersion}, server version ${serverVersion ?? '(unavailable)'}; ${reason}`,
+    )
+  }
+}

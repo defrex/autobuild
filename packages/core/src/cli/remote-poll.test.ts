@@ -456,3 +456,23 @@ describe('both commands run the shared remote long-poll machinery', () => {
     })
   }
 })
+
+test('poll failure streak reports typed reducer diagnostics once and re-arms on success', async () => {
+  const { ReducerValueIncompatibilityError } = await import('../store/remote/compatibility')
+  const error = new ReducerValueIncompatibilityError(
+    'dispatchUpgrade',
+    { kind: 'repo', repo: 'repo' },
+    1,
+    2,
+    'reducer version mismatch',
+  )
+  const messages: string[] = []
+  const streak = makeFailureStreak('watch', (message) => messages.push(message))
+  streak.onFailure(error)
+  streak.onFailure(error)
+  expect(messages).toHaveLength(1)
+  expect(messages[0]).toContain(error.message)
+  streak.onSuccess()
+  streak.onFailure(error)
+  expect(messages).toHaveLength(2)
+})
