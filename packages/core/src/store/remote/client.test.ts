@@ -1308,3 +1308,74 @@ test('operator withdrawal and heartbeat propagate cancellation to HTTP', async (
     await expect(pending).rejects.toThrow('deadline')
   }
 })
+
+for (const identity of [READ_CATALOG_IDENTITY, 'foreign', null, 'malformed']) {
+  test(`canonical digest batch never discovers builds with catalog ${identity}`, async () => {
+    const calls: string[] = []
+    const client = new RemoteBuildStore({
+      url: 'https://test',
+      fetchFn: (async (url, init) => {
+        calls.push(`${init?.method} ${url}`)
+        return new Response(
+          JSON.stringify([{ slug: 'server-only', terminal: 'done', observations: [] }]),
+          {
+            headers: identity === null ? {} : { [CATALOG_IDENTITY_HEADER]: identity },
+          },
+        )
+      }) as typeof fetch,
+    })
+    expect(await client.getRepoBuildDigests('repo')).toEqual(
+      new Map([['server-only', { slug: 'server-only', terminal: 'done', observations: [] }]]),
+    )
+    expect(calls).toEqual(['GET https://test/repos/repo/build-digests'])
+  })
+}
+
+for (const change of ['newer', 'older', 'value', 'envelope'] as const) {
+  test(`unrepresentable ${change} answer fails without event or snapshot reads`, async () => {
+    const { resolveReducerValue } = await import('../reducer-values')
+    const { ReducerValueIncompatibilityError } = await import('./compatibility')
+    const scope = { kind: 'repo', repo: 'repo' } as const
+    const request = { reducer: 'dispatchUpgrade' }
+    const version = resolveReducerValue(scope, request).reducer.version
+    const calls: string[] = []
+    const body = {
+      version: version + (change === 'newer' ? 1 : change === 'older' ? -1 : 0),
+      cursor: 10,
+      value: null,
+    }
+    const client = new RemoteBuildStore({
+      url: 'https://test',
+      fetchFn: (async (url) => {
+        calls.push(String(url))
+        return Response.json(change === 'envelope' ? { version } : body)
+      }) as typeof fetch,
+    })
+    try {
+      await client.getReducerValue(scope, request)
+      throw new Error('expected incompatibility')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReducerValueIncompatibilityError)
+      const incompatible = error as InstanceType<typeof ReducerValueIncompatibilityError>
+      expect(incompatible.reducer).toBe('dispatchUpgrade')
+      expect(incompatible.clientVersion).toBe(version)
+      expect(incompatible.serverVersion).toBe(body.version)
+      expect(incompatible.message).toContain(`client version ${version}`)
+      expect(incompatible.message).toContain(`server version ${body.version}`)
+    }
+    expect(calls).toEqual(['https://test/repos/repo/reducer-values'])
+  })
+}
+
+test('invalid digest batch fails schema validation without discovery fallback', async () => {
+  let calls = 0
+  const client = new RemoteBuildStore({
+    url: 'https://test',
+    fetchFn: (async () => {
+      calls++
+      return Response.json([{ slug: 123 }])
+    }) as unknown as typeof fetch,
+  })
+  await expect(client.getRepoBuildDigests('repo')).rejects.toThrow()
+  expect(calls).toBe(1)
+})

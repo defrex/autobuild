@@ -514,3 +514,39 @@ export function countHistoricalRows(costs: ReducedReadCosts, rows: unknown): num
     return repo === costs.history!.repo && seq <= costs.history!.through
   }).length
 }
+
+/** Fresh remote processes must never turn catalog skew into history reads.
+ * Callers instrument backing storage (including private checkpoint reads). */
+export async function catalogSkewReadBudget(opts: {
+  backing: BuildStore
+  fresh: () => BuildStore
+  repo: string
+  slug: string
+  reset: () => void
+  eventRows: () => number
+}) {
+  const reads = [
+    [{ kind: 'repo', repo: opts.repo }, { reducer: 'dispatchUpgrade' }],
+    [{ kind: 'build', slug: opts.slug }, { reducer: 'buildReadFacts' }],
+    [
+      { kind: 'build', slug: opts.slug },
+      { reducer: 'phaseFailures', args: { phase: 'plan', round: 1 } },
+    ],
+  ] as const
+  const expected = []
+  for (const [scope, request] of reads)
+    expected.push(await opts.backing.getReducerValue(scope, request))
+  const batch = await opts.backing.getRepoBuildDigests(opts.repo)
+  opts.reset()
+  for (let i = 0; i < 3; i++) {
+    const client = opts.fresh()
+    for (const [index, [scope, request]] of reads.entries()) {
+      const { catalogIdentity: _, ...answer } = await client.getReducerValue(scope, request)
+      const { catalogIdentity: __, ...canonical } = expected[index]!
+      expect(answer).toEqual(canonical)
+    }
+    expect(await client.getRepoBuildDigests(opts.repo)).toEqual(batch)
+    await client.close()
+  }
+  expect(opts.eventRows()).toBe(0)
+}

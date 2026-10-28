@@ -2893,12 +2893,15 @@ read-decoder revision. Named and generic checkpoints use catalog-specific keys;
 legacy/foreign-catalog snapshots are misses and are preserved. Unrecognized
 reducer versions replay without repairing their cache. No lower-version write
 replaces a higher-version row, even at a later cursor. Corrupt caches of the
-reader's own version may be conditionally repaired. Hosted named answers require
-matching version, catalog identity and locally valid finished shape; otherwise
-the client replays raw events locally through the returned cursor without
-writing the service cache. Catalog identity travels in response header
-`x-autobuild-catalog-identity`; strict JSON bodies remain exactly
-`{version, cursor, value}`. Missing/malformed headers also trigger local replay.
+reader's own version may be conditionally repaired. Hosted named answers are canonical: the client accepts a representable finished
+value at its reducer version regardless of catalog identity. Version mismatches,
+invalid envelopes and invalid finished values fail with a typed incompatibility
+error naming the reducer and client/server versions. Remote clients never
+reconstruct named answers from event logs. Catalog identity travels in response
+header `x-autobuild-catalog-identity`; strict JSON bodies remain exactly
+`{version, cursor, value}`. Missing/malformed headers do not reject an answer.
+Repository digest batches are also canonical, with no client discovery or
+per-build fallback.
 A service omits identity for a backend without one. This guarantee excludes
 readers predating this contract and does not widen the supported client window.
 

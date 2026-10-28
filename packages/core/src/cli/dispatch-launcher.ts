@@ -35,6 +35,27 @@ import {
   generationResult,
 } from './dispatch-launch-contract'
 
+/** Preserve subprocess diagnostics; stdout belongs exclusively to projection JSON. */
+export function generationReaderResult(code: number, output: string, error: string) {
+  if (code !== 0) throw new Error(`generation journal reader failed: ${error}`)
+  return output ? JSON.parse(output) : null
+}
+
+/** At most two messages are retained: active and predecessor for this episode. */
+export function generationReaderFailures(stderr: (message: string) => void) {
+  const failures = new Map<string, string>()
+  return {
+    report(role: 'active' | 'predecessor', error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (failures.get(role) !== message) stderr(`${role} generation reader: ${message}`)
+      failures.set(role, message)
+    },
+    clear() {
+      failures.clear()
+    },
+  }
+}
+
 // Filesystem/process-only dependencies above are evaluated before installation.
 async function gitExec(cmd: string[], options: { cwd?: string }) {
   const child = Bun.spawn(cmd, { cwd: options.cwd, stdout: 'pipe', stderr: 'pipe' })
@@ -201,8 +222,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
       new Response(helper.stdout).text(),
       new Response(helper.stderr).text(),
     ])
-    if (code !== 0) throw new Error(`generation journal reader failed: ${error}`)
-    return output ? JSON.parse(output) : null
+    return generationReaderResult(code, output, error)
   }
   let active: Child | undefined
   let pending: { record: Child; correlation: string } | undefined
@@ -278,6 +298,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
       undefined,
       bootstrap.rollbackVersion === 1,
     )
+    const readerFailures = generationReaderFailures((message) => console.error(message))
     for (;;) {
       if (signal) break
       // Once recovery has expired, a failed child must retain its ordinary
@@ -322,7 +343,9 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
           accepted?: boolean
           released?: boolean
         }
-      } catch {
+      } catch (error) {
+        if (signal) break
+        readerFailures.report('active', error)
         // A broken target may not even load its reader. Use the known cached
         // predecessor's reader with the same journal/run query identity.
         const healthy = pending?.record ?? recovery?.previous
@@ -343,7 +366,9 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
               },
               '--read-upgrade',
             )
-          } catch {
+          } catch (error) {
+            if (signal) break
+            readerFailures.report('predecessor', error)
             await new Promise<void>((resolve) => setTimeout(resolve, 100))
             continue
           }
@@ -356,6 +381,7 @@ export async function launchDispatcher(argv: string[]): Promise<number> {
           continue
         }
       }
+      readerFailures.clear()
       if (active.launch.rollback && projection.rollbackRetained) {
         for (const root of [
           active.launch.rollback.failed.root,
