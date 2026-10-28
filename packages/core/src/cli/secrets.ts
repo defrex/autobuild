@@ -1,3 +1,4 @@
+import { SECRET_NAME_EXPLANATION } from '../secret-name'
 import { connectedProject } from './connect'
 import { ProjectCredentials } from './project-credentials'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -101,7 +102,13 @@ export async function abSecrets(
     (operation === 'list' ? name !== undefined : name === undefined)
   )
     throw new Error('usage: ab secrets list [--json] | set NAME | remove NAME')
-  if (name !== undefined) validateSecretName(name)
+  if (name !== undefined) {
+    try {
+      validateSecretName(name)
+    } catch {
+      throw new Error(SECRET_NAME_EXPLANATION)
+    }
+  }
   const project = await connectedProject(opts)
   if (!project.service) throw new Error('No connected build service; run ab connect <url>')
   const credential = new ProjectCredentials(opts.env).load(project.service, project.repo)

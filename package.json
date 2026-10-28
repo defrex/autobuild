@@ -94,6 +94,10 @@
     "./project-secrets": {
       "types": "./packages/core/src/project-secrets.ts",
       "import": "./packages/core/src/project-secrets.ts"
+    },
+    "./secret-name": {
+      "types": "./packages/core/src/secret-name.ts",
+      "import": "./packages/core/src/secret-name.ts"
     }
   },
   "files": [
