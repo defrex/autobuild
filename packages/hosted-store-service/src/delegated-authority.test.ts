@@ -34,12 +34,15 @@ function request(path: string, token: string, body?: unknown, method?: string) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
 }
-async function fixture() {
+async function fixture(purpose: 'project-owner' | 'dispatcher' = 'project-owner') {
   let time = Date.parse('2026-01-01T00:00:00Z')
   const clock = () => new Date(time)
   const projects = testProjects([A, B])
   const { store: credentials } = testCredentials(projects, secret, clock)
-  const project = await credentials.issue(A, 'owner', { expiresAt: new Date(time + 7 * 86400000) })
+  const project = await credentials.issue(A, 'owner', {
+    purpose,
+    expiresAt: new Date(time + 7 * 86400000),
+  })
   const store = new MemoryBuildStore({ clock })
   for (const [slug, repo] of [
     ['one', A],
@@ -139,8 +142,9 @@ test('raw HTTP reads stay project-wide, while every mutation targets the granted
   expect((await f.issue(f.token, { kind: 'build-runner', id: 'two' })).status).toBe(403)
 })
 
-test('active grants survive parent expiry and service reconstruction, then retire at exactly 60 seconds', async () => {
-  const f = await fixture()
+test('active grants survive dispatcher parent deletion, expiry and service reconstruction, then retire at exactly 60 seconds', async () => {
+  const f = await fixture('dispatcher')
+  expect(await f.credentials.deleteDispatcherCredential(A, f.project.credential.id)).toBe(1)
   f.advance(10 * 86400000)
   expect((await f.auth.authenticate(request('/builds/one', f.token))).kind).toBe('delegated')
   const reconstructed = createMachineAuth({
@@ -151,11 +155,40 @@ test('active grants survive parent expiry and service reconstruction, then retir
     clock: f.clock,
   })
   expect((await reconstructed.authenticate(request('/builds/one', f.token))).kind).toBe('delegated')
+  await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.started',
+    payload: {
+      session: 'surviving-phase',
+      role: 'implement',
+      runner: 'fake',
+      phase: 'implement',
+      round: 1,
+    },
+  })
+  const phaseResponse = await f.issue(f.token, {
+    kind: 'build-phase',
+    id: 'one',
+    session: 'surviving-phase',
+  })
+  expect(phaseResponse.status).toBe(200)
+  const phase = (await phaseResponse.json()).token
+  expect(
+    (
+      await f.server.fetch(
+        request('/builds/one/events', phase, {
+          ...sampleEventWrite(),
+          actor: { kind: 'agent', role: 'implement', session: 'surviving-phase' },
+        }),
+      )
+    ).status,
+  ).toBe(201)
   await f.store.append('one', { actor: { kind: 'kernel' }, type: 'build.aborted', payload: {} })
   f.advance(59999)
   expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(200)
   f.advance(1)
   expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(401)
+  expect((await f.server.fetch(request('/builds/one', phase))).status).toBe(401)
 })
 
 test('project removal and failed state reads fail closed', async () => {
@@ -177,8 +210,10 @@ test('project removal and failed state reads fail closed', async () => {
   expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(403)
 })
 
-test('runner attenuation requires its own recorded session; phase grants cannot delegate or attribute another session', async () => {
-  const f = await fixture()
+test('runner attenuation survives parent deletion; phase grants cannot delegate or attribute another session', async () => {
+  const f = await fixture('dispatcher')
+  expect(await f.credentials.deleteDispatcherCredential(A, f.project.credential.id)).toBe(1)
+  f.advance(8 * 86400000)
   const target = { kind: 'build-phase', id: 'one', session: 'phase-one' }
   expect((await f.issue(f.token, target)).status).toBe(404)
   await f.store.append('one', {
@@ -237,7 +272,7 @@ test('runner attenuation requires its own recorded session; phase grants cannot 
 })
 
 test('harvest grant binds run artifacts, atomic deposits, streams and adopted lease holder; recovery cannot resurrect the original grant', async () => {
-  const f = await fixture()
+  const f = await fixture('dispatcher')
   await f.store.claimRepoLease(A, 'dispatcher', 60000)
   await f.store.appendRepo(A, {
     actor: { kind: 'kernel' },
@@ -268,6 +303,7 @@ test('harvest grant binds run artifacts, atomic deposits, streams and adopted le
   const issued = await f.issue(f.project.token, target)
   expect(issued.status).toBe(200)
   const token = (await issued.json()).token
+  expect(await f.credentials.deleteDispatcherCredential(A, f.project.credential.id)).toBe(1)
   const base = `/repos/${encodeURIComponent(A)}`
   const artifact = { kind: 'harvest-proposals', contentBase64: '', metadata: { run: 'run-one' } }
   expect((await f.server.fetch(request(`${base}/artifacts`, token, artifact))).status).toBe(201)
@@ -384,7 +420,8 @@ test('harvest grant binds run artifacts, atomic deposits, streams and adopted le
       leaseHolder: 'dispatcher',
     },
   })
-  const fresh = await f.issue(f.project.token, { ...target, execution: 'execution-two' })
+  const nextTick = await f.credentials.issue(A, 'next cron', { purpose: 'dispatcher' })
+  const fresh = await f.issue(nextTick.token, { ...target, execution: 'execution-two' })
   expect(fresh.status).toBe(200)
   const replacement = (await fresh.json()).token
   expect(replacement).not.toBe(token)

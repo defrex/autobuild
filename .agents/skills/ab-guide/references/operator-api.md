@@ -15,6 +15,16 @@ every request. Revocation takes effect on the next request without affecting
 other credentials. Unknown, expired or revoked credentials receive `401 auth`;
 removed projects receive `403 auth` with `project not registered`.
 
+The hosted cron dispatcher issues a dispatcher-purpose credential per repository
+tick, then deletes that exact row on completion or failure. Its crash-safety
+expiry is capped at the invocation deadline plus 60 seconds and the configured
+`AB_DISPATCHER_TOKEN_TTL_SECONDS` upper bound. Each served tick removes at most
+100 expired or revoked dispatcher rows through indexed probes. Legacy unexpired
+rows keep their recorded expiry and are pruned afterward. Owner lifetimes are
+unchanged. Build and harvest grants are independent signed authority, governed
+by durable lifecycle facts and the existing evidence grace, not parent credential
+storage or TTL; agents never receive the cron credential.
+
 Obtain a project credential with `ab connect <instance-url>` or from the
 instance, and use `AB_TOKEN` on non-interactive clients. Interactive connection
 saves the credential outside the repository. Retired credential formats are

@@ -1036,3 +1036,66 @@ if (testUrl)
       }
     })
   }
+
+if (testUrl)
+  test('dispatcher credential deletion and bounded indexed pruning isolate project and purpose', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    try {
+      const { PostgresCredentialStore } = await import('./credentials')
+      const { PostgresProjectRegistry } = await import('./projects')
+      const projects = new PostgresProjectRegistry(sql)
+      const repo = 'https://github.com/acme/cron'
+      const other = 'https://github.com/acme/other'
+      await projects.add(repo, 'test')
+      await projects.add(other, 'test')
+      const credentials = new PostgresCredentialStore(sql, projects)
+      const owner = await credentials.issue(repo, 'owner')
+      const overlap = await credentials.issue(repo, 'overlap', { purpose: 'dispatcher' })
+      const foreign = await credentials.issue(other, 'foreign', { purpose: 'dispatcher' })
+      const exact = await credentials.issue(repo, 'tick', { purpose: 'dispatcher' })
+      expect(await credentials.deleteDispatcherCredential(repo, owner.credential.id)).toBe(0)
+      expect(await credentials.deleteDispatcherCredential(repo, foreign.credential.id)).toBe(0)
+      expect(
+        await credentials.deleteDispatcherCredential(
+          'git@github.com:acme/cron.git',
+          exact.credential.id,
+        ),
+      ).toBe(1)
+      expect(await credentials.authenticate(exact.token, new Date())).toBeNull()
+      const cutoff = new Date()
+      // Seed a historical backlog without minting 250 live secrets.
+      await sql`INSERT INTO project_credentials (id, digest, repo, created_at, created_by, purpose, expires_at, revoked_at)
+      SELECT md5(n::text), repeat('a', 64), ${repo}, ${cutoff.toISOString()}, 'legacy', 'dispatcher',
+        CASE WHEN n <= 125 THEN ${cutoff.toISOString()}::timestamptz ELSE NULL END,
+        CASE WHEN n > 125 THEN ${cutoff.toISOString()}::timestamptz ELSE NULL END
+      FROM generate_series(1,250) n`
+      // Owner and another project's expired rows must survive both sweeps.
+      await sql`UPDATE project_credentials SET expires_at = ${cutoff.toISOString()}
+      WHERE id IN (${owner.credential.id}, ${foreign.credential.id})`
+      expect(await credentials.pruneDispatcherCredentials(repo, cutoff)).toBe(100)
+      expect(await credentials.pruneDispatcherCredentials(repo, cutoff)).toBe(100)
+      expect(await credentials.pruneDispatcherCredentials(repo, cutoff)).toBe(50)
+      expect(await credentials.pruneDispatcherCredentials(repo, cutoff)).toBe(0)
+      expect((await credentials.list(repo)).map((row) => row.id).sort()).toEqual(
+        [owner.credential.id, overlap.credential.id].sort(),
+      )
+      expect(await credentials.list(other)).toHaveLength(1)
+      expect(await credentials.authenticate(overlap.token, cutoff)).not.toBeNull()
+      // Force index consideration to prove both candidate predicates have matching partial indexes.
+      await sql`SET enable_seqscan = off`
+      for (const column of ['expires_at', 'revoked_at']) {
+        const plan = await sql.unsafe(
+          `EXPLAIN SELECT id FROM project_credentials WHERE repo = '${repo}' AND purpose = 'dispatcher' AND ${column} <= now() ORDER BY ${column}, id LIMIT 100`,
+        )
+        expect(JSON.stringify(plan)).toContain(
+          column === 'expires_at'
+            ? 'dispatcher_credentials_expiry'
+            : 'dispatcher_credentials_revoked',
+        )
+      }
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  })
