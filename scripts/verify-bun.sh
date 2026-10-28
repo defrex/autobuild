@@ -18,7 +18,20 @@ case "$prefix/" in
 esac
 selected="$prefix/node_modules/.bin/bun"
 (
-  flock -x 9
+  # Atomic directory creation works on both macOS and Linux without extra tools.
+  lock="$prefix/install.lock.d"
+  attempts=0
+  until mkdir "$lock" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    if (( attempts >= 300 )); then
+      echo "timed out waiting for verify Bun installation lock: $lock" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  trap 'rmdir "$lock"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   if [[ ! -x "$selected" ]] || [[ $("$selected" --version) != "$required_version" ]]; then
     npm install --prefix "$prefix" --no-save "bun@$required_version"
   fi
@@ -26,6 +39,6 @@ selected="$prefix/node_modules/.bin/bun"
     echo 'verify Bun installation has the wrong version' >&2
     exit 1
   fi
-) 9>"$prefix/install.lock"
+)
 export PATH="$prefix/node_modules/.bin:$PATH"
 exec "$@"

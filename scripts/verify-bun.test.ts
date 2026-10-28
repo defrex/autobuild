@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -19,6 +20,8 @@ async function fixture(current = 'old', mode = 'ok') {
     await chmod(path, 0o755)
   }
   await executable(join(bin, 'bun'), `echo '${current}'`)
+  // Fail even on Linux if the wrapper accidentally regains a flock dependency.
+  await executable(join(bin, 'flock'), 'echo unexpected-flock >&2; exit 99')
   await executable(
     join(bin, 'npm'),
     `
@@ -47,13 +50,17 @@ test('matching Bun is a no-op, including PATH and cache', async () => {
   const { root, run } = await fixture(version)
   expect((await run(['bun', '--version'])).stdout.trim()).toBe(version)
   expect(await Bun.file(join(root, 'npm-args')).exists()).toBe(false)
-  expect(
-    await Bun.file(join(root, '.cache/autobuild-repository-verify-bun/install.lock')).exists(),
-  ).toBe(false)
+  expect(existsSync(join(root, '.cache/autobuild-repository-verify-bun/install.lock.d'))).toBe(
+    false,
+  )
 })
 
 test('cold installation is serialized, cached, and selects descendant Bun', async () => {
   const { root, run } = await fixture()
+  const cache = join(root, '.cache/autobuild-repository-verify-bun')
+  await mkdir(cache, { recursive: true })
+  // Caches created by the old flock wrapper have a persistent regular file.
+  await writeFile(join(cache, 'install.lock'), '')
   const results = await Promise.all([
     run(['bash', '-c', 'bun --version']),
     run(['bun', '--version']),
@@ -71,6 +78,9 @@ test('cold installation is serialized, cached, and selects descendant Bun', asyn
     `bun@${version}`,
     '',
   ])
+  expect(existsSync(join(root, '.cache/autobuild-repository-verify-bun/install.lock.d'))).toBe(
+    false,
+  )
   expect((await run(['bun', '--version'])).code).toBe(0)
   expect(await readFile(join(root, 'npm-args'), 'utf8')).toBe(args)
   const forwarded = await run([
@@ -85,9 +95,12 @@ test('cold installation is serialized, cached, and selects descendant Bun', asyn
 
 for (const mode of ['fail', 'wrong']) {
   test(`installation ${mode} never falls back`, async () => {
-    const { run } = await fixture('old', mode)
+    const { root, run } = await fixture('old', mode)
     expect((await run(['echo', 'must not execute'])).code).not.toBe(0)
     expect((await run(['echo', 'must not execute'])).stdout).not.toContain('must not execute')
+    expect(existsSync(join(root, '.cache/autobuild-repository-verify-bun/install.lock.d'))).toBe(
+      false,
+    )
   })
 }
 test('empty invocation is rejected', async () => {
