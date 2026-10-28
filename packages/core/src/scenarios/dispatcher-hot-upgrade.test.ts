@@ -643,6 +643,8 @@ for (const scenario of ['immediate', 'phases', 'legacy', 'expired-reader'])
     await writeFile(
       entry,
       bytes
+        // Legacy peers ignore the optional conditional request and return full v1.
+        .replace('{ condition }', scenario === 'legacy' ? '{}' : '{ condition }')
         .replace(
           "  if (process.argv[2] === '--read-upgrade') {",
           `  if (process.argv[2] === '--read-upgrade' && (${broken} || (${expiredReader} && await Bun.file(${JSON.stringify(crashGate)}).exists()))) throw new Error('broken reader');\n  if (process.argv[2] === '--read-upgrade') {`,

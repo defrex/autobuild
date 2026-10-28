@@ -321,3 +321,45 @@ test('launcher reader preserves helper incompatibility through active and predec
   failed('active')
   expect(messages).toHaveLength(3)
 })
+
+test('reader errors stay visible while predecessor conditional state remains scoped to the active query', async () => {
+  const { conditionalUpgradeClient } = await import('./dispatch-launch-contract')
+  const active = conditionalUpgradeClient(),
+    predecessor = conditionalUpgradeClient()
+  const guards = { handoff: null, rollbackRecorded: false, failedRoot: null }
+  let attempts = 0
+  for (let i = 0; i < 3; i++) {
+    await expect(
+      active('broken-new-run', async () => {
+        attempts++
+        throw new Error('unloadable')
+      }),
+    ).rejects.toThrow('unloadable')
+    const answer = await predecessor('old-reader/new-run', async (request) =>
+      request.position === undefined
+        ? {
+            conditionalVersion: 1,
+            kind: 'full',
+            identity: request.identity,
+            position: '42',
+            guards,
+            projection: { version: 1, handoff: null, takeover: true, accepted: true },
+          }
+        : {
+            conditionalVersion: 1,
+            kind: 'unchanged',
+            identity: request.identity,
+            position: '42',
+            handoff: null,
+            rollbackRetained: false,
+          },
+    )
+    expect(answer.takeover).toBe(true)
+    expect(answer.accepted).toBe(true)
+  }
+  expect(attempts).toBe(3)
+  await predecessor('old-reader/recovery-run', async (request) => {
+    expect(request.position).toBeUndefined()
+    return { version: 1, handoff: null, takeover: false }
+  })
+})
