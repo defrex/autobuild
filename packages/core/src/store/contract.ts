@@ -417,6 +417,46 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         }
       })
     })
+    test('ticket scan checkpoint CAS is isolated, validated and does not invalidate journal reads', async () => {
+      await withStore(factory, {}, async (store) => {
+        const repo = 'scan-checkpoint'
+        const a = { startedAt: '2026-01-01T00:00:00.000Z', anchor: 'a'.repeat(64) }
+        const b = { ...a, startedAt: '2026-01-01T00:01:00.000Z' }
+        expect(await store.getRepoTicketScanCheckpoint(repo)).toBeNull()
+        expect(await store.getRepo(repo)).toBeNull()
+        expect(await store.compareAndSetRepoTicketScanCheckpoint(repo, null, a)).toBe(false)
+        await store.ensureRepo(repo)
+        const record = await store.getRepo(repo)
+        const highWater = await store.getRepoHighWater(repo)
+        const position = await store.getRepoChangePosition(repo)
+        expect(await store.compareAndSetRepoTicketScanCheckpoint(repo, null, a)).toBe(true)
+        expect(await store.compareAndSetRepoTicketScanCheckpoint(repo, null, b)).toBe(false)
+        expect(await store.compareAndSetRepoTicketScanCheckpoint(repo, a, b)).toBe(true)
+        expect(await store.compareAndSetRepoTicketScanCheckpoint(repo, a, a)).toBe(false)
+        expect(await store.getRepoTicketScanCheckpoint(repo)).toEqual(b)
+        expect(await store.getRepoTicketScanCheckpoint('other')).toBeNull()
+        await expect(
+          store.compareAndSetRepoTicketScanCheckpoint(repo, b, { ...a, anchor: 'invalid' }),
+        ).rejects.toThrow()
+        await expect(
+          store.compareAndSetRepoTicketScanCheckpoint(repo, { ...a, startedAt: 'bad' }, b),
+        ).rejects.toThrow()
+        expect(await store.getRepo(repo)).toEqual(record)
+        expect(await store.getRepoHighWater(repo)).toEqual(highWater)
+        expect(await store.getRepoChangePosition(repo)).toEqual(position)
+        await store.ensureRepo('scan-race')
+        const winners = await Promise.all([
+          store.compareAndSetRepoTicketScanCheckpoint('scan-race', null, a),
+          store.compareAndSetRepoTicketScanCheckpoint('scan-race', null, b),
+        ])
+        expect(winners.filter(Boolean)).toHaveLength(1)
+        expect(await store.getRepoTicketScanCheckpoint('scan-race')).toEqual(winners[0] ? a : b)
+        await expect(
+          store.compareAndSetRepoTicketScanCheckpoint(repo, b, null as never),
+        ).rejects.toThrow()
+      })
+    })
+
     describe('builds', () => {
       test('parent rejection deduplication survives persisted payload and snapshot key order', async () => {
         await withStore(factory, undefined, async (store) => {

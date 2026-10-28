@@ -425,6 +425,16 @@ one scan interval plus one tick when capacity permits. Observation while intake
 is off shares the cadence; an observation measurement cannot suppress a fresh
 admission scan when intake is enabled.
 
+Successful scans with unchanged outcomes append no
+`dispatcher.ticket-scan-completed` event. Equality includes mode, readiness and
+criteria fingerprints, all counts and the persisted diagnostic arrays (bounded
+to 1,000 entries each), excluding only `startedAt`. A single mutable scheduling
+checkpoint per repository preserves cadence across cold invocations; its anchor
+must match the entire canonical journal measurement. The recorded measurement's
+`startedAt` marks when that outcome was recorded, not the latest successful poll.
+The checkpoint carries no queue or workflow authority and changes no journal or
+repository change position.
+
 ### Root scalars
 
 Root scalars must appear before the first TOML table; TOML otherwise nests them
