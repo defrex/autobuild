@@ -1112,7 +1112,7 @@ export class PostgresBuildStore implements BuildStore {
   async getScanCadence(repo: string): Promise<ScanCadence | null> {
     return this.run(async (q) => {
       const [row] = await q`SELECT value FROM scan_cadence WHERE repo=${repo}`
-      return row ? (scanCadenceSchema.safeParse(json(row.value)).data ?? null) : null
+      return row ? (scanCadenceSchema.safeParse(row.value).data ?? null) : null
     })
   }
   async putScanCadence(

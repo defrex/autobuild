@@ -93,6 +93,15 @@ if (testUrl) {
         try {
           expect(await second.getScanCadence('cadence')).toEqual(cadence)
           expect(await second.getRepoEvents('cadence')).toEqual([])
+          const sql = new SQL(database.url)
+          try {
+            await sql`UPDATE scan_cadence SET value=to_jsonb(${'broken'}::text) WHERE repo='cadence'`
+            expect(await second.getScanCadence('cadence')).toBeNull()
+            await second.putScanCadence('cadence', cadence)
+            expect(await second.getScanCadence('cadence')).toEqual(cadence)
+          } finally {
+            await sql.close()
+          }
         } finally {
           await second.close()
         }
