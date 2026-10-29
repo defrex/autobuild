@@ -960,3 +960,101 @@ export async function nodePollingReadBudget(opts: {
     baseline = costs
   }
 }
+
+/** Expired sampled owners resolve once through exact persisted run values. */
+export async function stoppedOwnerWatchReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { manualClock } = await import('./fixed')
+  let previousBytes: number | undefined
+  for (const length of [100, 100_000]) {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(repo)
+    for (let i = 0; i < length; i++)
+      await store.appendRepo(repo, {
+        actor: humanActor('human'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    const start = async (run: string) => {
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 1,
+          roleWarnings: [],
+          effectiveConfig: { kind: 'config', rev: 0 },
+        },
+      })
+      await store.claimRepoLease(repo, run, 3000)
+    }
+    const stop = async (run: string) => {
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-stopped',
+        payload: { run, outcome: 'normal' },
+      })
+      await store.releaseRepoLease(repo, run)
+    }
+    await start('A')
+    await readRepositoryFacts(store, repo)
+    await readRepositoryAttention(store, repo)
+    await readDispatcherRunFacts(store, repo, 'A')
+    await readDispatcherRunFacts(store, repo, 'missing')
+    const counter = memoryRepositoryReadCounter(store, repo)
+    let tick = 0
+    let quietCalls = 0
+    const output: string[] = []
+    await abWatch({
+      targetRepo: repo,
+      env: {},
+      exec,
+      storeRef: '/budget',
+      openStore: () => store,
+      repository: true,
+      json: true,
+      timeout: '8',
+      now: clock,
+      stdout: (line) => output.push(line),
+      stderr: (line) => {
+        throw new Error(line)
+      },
+      delay: async () => {
+        clock.advance(1000)
+        tick++
+        if (tick === 1) {
+          await stop('A')
+          await start('B')
+        }
+        if (tick === 2) {
+          await stop('B')
+          await start('C')
+        }
+        if (tick === 6) {
+          counter.reset()
+          quietCalls = counter.reducedCalls
+        }
+      },
+    })
+    expect(
+      output
+        .map((line) => JSON.parse(line))
+        .filter((r) => r.observation)
+        .map((r) => r.observation.run),
+    ).toEqual(['C'])
+    expect(counter.rows).toBe(0)
+    expect(counter.reducedCalls - quietCalls).toBeLessThan(20)
+    await readDispatcherRunFacts(store, repo, 'missing')
+    counter.reset()
+    // Fresh reads, including a missing run, never reconstruct journal history.
+    const values = await Promise.all(
+      ['A', 'B', 'missing'].map((run) => readDispatcherRunFacts(store, repo, run)),
+    )
+    const bytes = Buffer.byteLength(JSON.stringify(values.map((value) => value.value)))
+    expect(counter.rows).toBe(0)
+    expect(counter.reducedCalls).toBe(4)
+    if (previousBytes !== undefined) expect(bytes).toBeLessThan(previousBytes + 100)
+    previousBytes = bytes
+  }
+}

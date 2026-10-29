@@ -3495,3 +3495,124 @@ test('startup reduced-read incompatibility remains legible without history recon
   expect(reduced).toBe(1)
   expect(history).toBe(0)
 })
+
+for (const operator of [false, true]) {
+  for (const remote of [false, true]) {
+    test(`short hosted runs retire hidden stopped owners (operator=${operator}, remote=${remote})`, async () => {
+      const clock = manualClock()
+      const store = new MemoryBuildStore({ clock })
+      await store.ensureRepo(REPO)
+      const start = async (run: string) => {
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run,
+            pid: 42,
+            host: 'host',
+            roleWarnings: [],
+            effectiveConfig: { kind: 'config', rev: 0 },
+          },
+        })
+        await store.claimRepoLease(REPO, run, 3000)
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-completed',
+          payload: {
+            run,
+            queued: 0,
+            counters: noopTickCounters(),
+            janitorDiagnostics: [],
+            ticketDiagnostics: [],
+            creationDiagnostics: [],
+            dependencyDiagnostics: [],
+          },
+        })
+      }
+      const finish = async (run: string) => {
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-stopped',
+          payload: { run, outcome: 'normal' },
+        })
+        await store.releaseRepoLease(REPO, run)
+      }
+      await start('A')
+      let tick = 0
+      const h = harness(store, {
+        operator,
+        now: clock,
+        delay: async () => {
+          clock.advance(1000)
+          if (++tick === 1) {
+            await finish('A')
+            await start('B')
+          }
+          if (tick === 2) {
+            await finish('B')
+            await start('C')
+          }
+        },
+      })
+      await abWatch({
+        ...h.base,
+        repository: !operator,
+        storeRef: remote ? 'https://store.example.test' : undefined,
+        timeout: '8',
+      })
+      expect(h.err).toEqual([])
+      const losses = h.out
+        .map((line) => JSON.parse(line))
+        .filter((r) => r.observation?.type === 'dispatcher.lost')
+      expect(losses.map((r) => r.observation.run)).toEqual(['C'])
+      expect(losses[0].observation.pid).toBe(42)
+      const resumed = harness(store, {
+        operator,
+        now: clock,
+        delay: async () => {
+          clock.advance(1000)
+        },
+      })
+      await abWatch({
+        ...resumed.base,
+        repository: !operator,
+        storeRef: remote ? 'https://store.example.test' : undefined,
+        since: losses[0].cursor,
+        timeout: '2',
+      })
+      expect(
+        resumed.out
+          .map((line) => JSON.parse(line))
+          .filter((r) => r.observation?.type === 'dispatcher.lost'),
+      ).toEqual([])
+    })
+  }
+}
+
+for (const outcome of ['normal', 'abnormal'] as const) {
+  test(`retained expired lease with ${outcome} stop never reports loss`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    await store.claimRepoLease(REPO, 'stopped', 1000)
+    let tick = 0
+    const h = harness(store, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+        if (++tick === 1)
+          await store.appendRepo(REPO, {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-stopped',
+            payload: { run: 'stopped', outcome },
+          })
+      },
+    })
+    await abWatch({ ...h.base, repository: true, timeout: '4' })
+    const records = h.out.map((line) => JSON.parse(line))
+    expect(records.filter((r) => r.observation?.type === 'dispatcher.lost')).toEqual([])
+    expect(records.filter((r) => r.event?.type === 'dispatcher.run-stopped')).toHaveLength(
+      outcome === 'abnormal' ? 1 : 0,
+    )
+  })
+}
