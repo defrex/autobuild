@@ -11950,3 +11950,188 @@ test.each([10, 1000])(
     ).toHaveLength(3)
   },
 )
+
+for (const storeLagMs of [0, 200])
+  test(`node checkpoint growth across active and idle periods with ${storeLagMs}ms store lag`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock: () => new Date(clock().getTime() - storeLagMs) })
+    const h = harness({ clock, store, tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const node = (await h.store.listBuilds())[0]!
+    const count = async () =>
+      (await h.store.getEvents(node.slug)).filter((e) => e.type === 'node.poll-checked').length
+    let checks = 0
+    const compare = h.forge.compareBranches.bind(h.forge)
+    h.forge.compareBranches = async (...args) => {
+      checks++
+      return compare(...args)
+    }
+    const tick = () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false })
+    const before = await count()
+    for (let i = 0; i < 59; i++) {
+      h.clock.advance(10_000)
+      await tick()
+    }
+    const active = (await count()) - before
+    const activeChecks = checks
+    for (let i = 0; i < 37; i++) {
+      h.clock.advance(10_000)
+      await tick()
+    }
+    expect(active).toBe(0)
+    expect(activeChecks).toBe(177)
+    expect((await count()) - before - active).toBe(4)
+    expect(checks - activeChecks).toBe(12)
+    for (let i = 0; i < 3; i++) {
+      await h.store.append(node.slug, {
+        actor: humanActor('test'),
+        type: 'build.hold-requested',
+        payload: {},
+      })
+      await tick()
+    }
+    expect((await count()) - before - active).toBe(7)
+  })
+
+test('fresh node polling has bounded reads at 100 and 100000 events', async () => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const node = (await h.store.listBuilds())[0]!
+  const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
+  await nodePollingReadBudget({
+    store: h.store as MemoryBuildStore,
+    slug: node.slug,
+    advance: (ms) => h.clock.advance(ms),
+    tick: () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+}, 30_000)
+
+for (const failure of ['throw', 'contend'] as const)
+  for (const boundary of [false, true])
+    test(`node checkpoint ${failure} retries durably at ${boundary ? 'idle boundary' : 'initial anchor'}`, async () => {
+      const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+      h.forge.remoteBranches.set('main', BASE_SHA)
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds())[0]!
+      await h.dispatcher.tick({ acceptNewWork: false })
+      if (boundary) h.clock.advance(600_000)
+      else {
+        // A new activity epoch requires a fresh anchor.
+        await h.store.append(node.slug, {
+          actor: humanActor('test'),
+          type: 'build.hold-requested',
+          payload: {},
+        })
+        h.clock.advance(10_000)
+      }
+      const before = reduceBuild(await h.store.getEvents(node.slug)).nodePolling
+      const append = h.store.appendIfCurrent.bind(h.store)
+      let rejected = false
+      h.store.appendIfCurrent = async (slug, seq, event) => {
+        if (event.type === 'node.poll-checked') {
+          rejected = true
+          if (failure === 'throw') throw new Error('interrupted checkpoint')
+          return null
+        }
+        return append(slug, seq, event)
+      }
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(rejected).toBe(true)
+      expect(reduceBuild(await h.store.getEvents(node.slug)).nodePolling).toEqual(before)
+      h.store.appendIfCurrent = append
+      if (failure === 'throw') h.clock.advance(30_000) // existing durable janitor backoff
+      const fresh = harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      })
+      await fresh.dispatcher.tick({ acceptNewWork: false })
+      const after = reduceBuild(await h.store.getEvents(node.slug)).nodePolling!
+      expect(after.checkedAt).toBe(h.clock().toISOString())
+      expect(after.unchangedSince).toBe(boundary ? before!.unchangedSince : after.checkedAt)
+    })
+
+test('successful changed parent observation resets the quiet anchor', async () => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const node = (await h.store.listBuilds())[0]!
+  const before = reduceBuild(await h.store.getEvents(node.slug)).nodePolling!
+  h.clock.advance(300_000)
+  h.forge.remoteBranches.set('main', 'b'.repeat(40))
+  h.forge.nodeComparisons.set(`main...${node.branch}`, 0)
+  h.forge.nodeComparisons.set(`${node.branch}...main`, 1)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const after = reduceBuild(await h.store.getEvents(node.slug)).nodePolling!
+  expect(after.activityKey).not.toBe(before.activityKey)
+  expect(after.unchangedSince).toBe(h.clock().toISOString())
+})
+
+for (const classification of ['advisory', 'decisive', undefined] as const)
+  test(`node tick treats opaque polling evidence as ${classification ?? 'legacy decisive'}`, async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const node = (await h.store.listBuilds())[0]!
+    const events = await h.store.getEvents(node.slug)
+    const checkpoint = events.findLast((e) => e.type === 'node.poll-checked')!
+    const { seedNewerMemoryFact } = await import('../testing/newer-writer')
+    seedNewerMemoryFact(h.store as MemoryBuildStore, {
+      ...checkpoint,
+      seq: events.length + 1,
+      type: 'old-reader-unknown.node.poll-checked',
+      compatibility: classification ? { ...checkpoint.compatibility!, classification } : undefined,
+    })
+    let reads = 0
+    const compare = h.forge.compareBranches.bind(h.forge)
+    h.forge.compareBranches = async (...args) => {
+      reads++
+      return compare(...args)
+    }
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(reads > 0).toBe(classification === 'advisory')
+    expect(reduceBuild(await h.store.getEvents(node.slug)).compatibility.decisiveFacts).toBe(
+      classification === 'advisory' ? 0 : 1,
+    )
+  })
+
+test('incomplete node observation cannot advance an idle deadline', async () => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const node = (await h.store.listBuilds())[0]!
+  const before = reduceBuild(await h.store.getEvents(node.slug)).nodePolling!
+  h.clock.advance(600_000)
+  const compare = h.forge.compareBranches.bind(h.forge)
+  h.forge.compareBranches = async () => {
+    throw new Error('incomplete comparison')
+  }
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(reduceBuild(await h.store.getEvents(node.slug)).nodePolling).toEqual(before)
+  h.forge.compareBranches = compare
+  h.clock.advance(30_000)
+  await h.dispatcher.tick({ acceptNewWork: false })
+  expect(reduceBuild(await h.store.getEvents(node.slug)).nodePolling?.checkedAt).toBe(
+    h.clock().toISOString(),
+  )
+})
