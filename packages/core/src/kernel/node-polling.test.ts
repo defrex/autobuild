@@ -1,7 +1,12 @@
 import { expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import { reduceBuild } from './reducer'
-import { advancePollingActivity, nodeActivityKey, nodePollingSchedule } from './node-polling'
+import {
+  advancePollingActivity,
+  nodeActivityKey,
+  nodePollingSchedule,
+  nodePollingCheckpointRequired,
+} from './node-polling'
 
 const policy = { nodeIdleAfterSeconds: 600, nodeIdlePollSeconds: 120 }
 const start = Date.parse('2026-10-22T12:00:00Z')
@@ -156,5 +161,26 @@ test('ticket observation key ignores build phases but wakes for claims, PRs and 
     const before = nodeTicketObservationKey(parent, children)
     advancePollingActivity(parent.pollingActivity, { type, seq: 30, payload: {} } as AbEvent)
     expect(nodeTicketObservationKey(parent, children)).not.toBe(before)
+  }
+})
+
+test('checkpoint growth follows epochs and idle deadlines, including invalid evidence', () => {
+  const state = checked()
+  state.nodePolling.checkedAt = at(0).toISOString()
+  const key = nodeActivityKey(state, [])
+  for (let second = 0; second < 600; second += 10)
+    expect(nodePollingCheckpointRequired(state, key, policy, at(second))).toBe(false)
+  expect(nodePollingCheckpointRequired(state, key, policy, at(600))).toBe(true)
+  state.nodePolling.checkedAt = at(600).toISOString()
+  expect(nodePollingCheckpointRequired(state, key, policy, at(719))).toBe(false)
+  expect(nodePollingCheckpointRequired(state, key, policy, at(720))).toBe(true)
+  expect(nodePollingCheckpointRequired(state, 'changed', policy, at(610))).toBe(true)
+  expect(
+    nodePollingCheckpointRequired(state, key, { ...policy, nodeIdleAfterSeconds: 900 }, at(610)),
+  ).toBe(true)
+  for (const value of ['invalid', at(800).toISOString()]) {
+    state.nodePolling.checkedAt = value
+    expect(nodePollingCheckpointRequired(state, key, policy, at(610))).toBe(true)
+    expect(nodePollingSchedule(state, key, policy, at(610)).due).toBe(true)
   }
 })

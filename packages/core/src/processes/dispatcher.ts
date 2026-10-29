@@ -10,6 +10,8 @@ import {
 import {
   nodeActivityKey,
   nodePollingSchedule,
+  nodePollingCheckpointRequired,
+  nodePollingEvidenceValid,
   nodePollingUnsettled,
   nodeTicketObservationKey,
 } from '../kernel/node-polling'
@@ -2122,21 +2124,24 @@ export class Dispatcher {
             )
               return
             const now = this.deps.clock().toISOString()
-            const previousCheck = pollStart.nodePolling
+            const previousCheck = current.nodePolling
+            if (
+              !nodePollingCheckpointRequired(current, key, this.deps.config.policy, new Date(now))
+            )
+              return
             await this.store.appendIfCurrent(record.slug, current.lastSeq, {
               actor: DISPATCHER,
               type: 'node.poll-checked',
               payload: {
                 activityKey: key,
-                unchangedSince:
-                  previousCheck?.activityKey === key &&
-                  previousCheck.nodeIdleAfterSeconds ===
-                    this.deps.config.policy.nodeIdleAfterSeconds &&
-                  previousCheck.nodeIdlePollSeconds ===
-                    this.deps.config.policy.nodeIdlePollSeconds &&
-                  Date.parse(previousCheck.unchangedSince) <= Date.parse(now)
-                    ? previousCheck.unchangedSince
-                    : now,
+                unchangedSince: nodePollingEvidenceValid(
+                  current,
+                  key,
+                  this.deps.config.policy,
+                  new Date(now),
+                )
+                  ? previousCheck!.unchangedSince
+                  : now,
                 nodeIdleAfterSeconds: this.deps.config.policy.nodeIdleAfterSeconds,
                 nodeIdlePollSeconds: this.deps.config.policy.nodeIdlePollSeconds,
               },

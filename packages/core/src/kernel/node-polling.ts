@@ -129,6 +129,44 @@ export function nodePollingUnsettled(state: BuildState): boolean {
   )
 }
 
+/** Valid scheduling evidence may be reused across processes, never across activity epochs. */
+export function nodePollingEvidenceValid(
+  state: BuildState,
+  activityKey: string,
+  policy: NodePollingPolicy,
+  now: Date,
+): boolean {
+  const check = state.nodePolling
+  const time = now.getTime()
+  const checked = Date.parse(check?.checkedAt ?? '')
+  const unchanged = Date.parse(check?.unchangedSince ?? '')
+  return (
+    check?.activityKey === activityKey &&
+    check.nodeIdleAfterSeconds === policy.nodeIdleAfterSeconds &&
+    check.nodeIdlePollSeconds === policy.nodeIdlePollSeconds &&
+    Number.isFinite(time) &&
+    Number.isFinite(checked) &&
+    Number.isFinite(unchanged) &&
+    unchanged <= checked &&
+    checked <= time
+  )
+}
+
+/** Successful unchanged active observations need no additional durable record. */
+export function nodePollingCheckpointRequired(
+  state: BuildState,
+  activityKey: string,
+  policy: NodePollingPolicy,
+  now: Date,
+): boolean {
+  if (!nodePollingEvidenceValid(state, activityKey, policy, now)) return true
+  const check = state.nodePolling!
+  return (
+    now.getTime() - Date.parse(check.unchangedSince) >= policy.nodeIdleAfterSeconds * 1000 &&
+    now.getTime() - Date.parse(check.checkedAt) >= policy.nodeIdlePollSeconds * 1000
+  )
+}
+
 export function nodePollingSchedule(
   state: BuildState,
   activityKey: string,
@@ -142,14 +180,7 @@ export function nodePollingSchedule(
   const unchanged = Date.parse(check?.unchangedSince ?? '')
   const idle =
     !unsettled &&
-    check?.activityKey === activityKey &&
-    check.nodeIdleAfterSeconds === policy.nodeIdleAfterSeconds &&
-    check.nodeIdlePollSeconds === policy.nodeIdlePollSeconds &&
-    Number.isFinite(time) &&
-    Number.isFinite(checked) &&
-    Number.isFinite(unchanged) &&
-    unchanged <= checked &&
-    checked <= time &&
+    nodePollingEvidenceValid(state, activityKey, policy, now) &&
     time - unchanged >= policy.nodeIdleAfterSeconds * 1000
   return {
     mode: idle ? ('idle' as const) : ('active' as const),

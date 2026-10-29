@@ -267,9 +267,15 @@ GitHub-only changes are discovered on the next due check, within the idle
 interval plus normal tick scheduling while the dispatcher is running; failure,
 cooldown and transport-budget gates still apply. Pending operations retain
 active polling and action-time readiness checks remain fresh. Successful
-`node.poll-checked` facts preserve quiet history across restarts; missing facts
-force a fresh check. `ab build status` reports active or idle cadence and the
-last successful check (or unrecorded evidence).
+`node.poll-checked` advisory facts preserve quiet history across restarts.
+Each successfully observed activity or policy epoch records one quiet-period
+anchor; unchanged active checks add no checkpoints. At the quiet threshold a
+check may be immediately due, then each successful due idle check records its
+completion. Growth is bounded by one anchor per observed epoch plus due idle
+checks. Missing or unusable evidence forces a fresh check; interrupted or
+contended writes leave the durable deadline unchanged and retry conservatively. `ab build status` reports active or idle cadence and the
+last durably recorded successful check (or unrecorded evidence); this timestamp
+can trail successful active checks.
 
 ## Operator node spec revisions
 

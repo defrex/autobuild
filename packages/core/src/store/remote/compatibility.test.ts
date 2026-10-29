@@ -251,3 +251,22 @@ test('next minor withdrawal protocol retains published 1.0 protocol 4 only', () 
   expect(clientIdentityError('1.1.0', '6', '1.1.0', '6')).toBeUndefined()
   expect(clientIdentityError('1.1.0', '6', '1.0.1', '4')).toContain('upgrade the service')
 })
+
+test('supported peer admission does not make advisory polling facts decisive', async () => {
+  const { buildEventPolicy } = await import('../../events/policy')
+  const { initialCompatibility, advanceCompatibility, decodeStoredEvent } = await import(
+    '../../events/compatibility'
+  )
+  const { newerFact } = await import('../../testing/newer-writer')
+  const { mixedVersionDeferred } = await import('../../kernel/mixed-version')
+  expect(clientIdentityError('1.0.1', '4', '1.1.0', '6')).toBeUndefined()
+  const classification = buildEventPolicy['node.poll-checked']
+  expect(classification).toBe('advisory')
+  const opaque = { ...newerFact(1, classification), type: 'old-reader-unknown.node.poll-checked' }
+  expect(decodeStoredEvent(opaque)).toBeNull()
+  const compatibility = initialCompatibility()
+  advanceCompatibility(compatibility, [opaque])
+  expect(mixedVersionDeferred({ compatibility })).toBe(false)
+  advanceCompatibility(compatibility, [newerFact(2, 'decisive')])
+  expect(mixedVersionDeferred({ compatibility })).toBe(true)
+})

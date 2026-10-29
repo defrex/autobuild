@@ -880,3 +880,71 @@ export function memoryRepositoryReadCounter(
     },
   }
 }
+
+/** Polling history proof uses private reducer slices, including on fresh consumers. */
+export async function nodePollingReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  slug: string
+  tick: () => Promise<unknown>
+  advance: (ms: number) => void
+}) {
+  const { store, slug } = opts
+  const checkpoint = (await readBuildFacts(store, slug)).value.state.nodePolling!
+  let seeded = 0
+  let baseline: number[] | undefined
+  for (const length of [100, 100_000]) {
+    for (; seeded < length; seeded++)
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'node.poll-checked',
+        payload: {
+          activityKey: checkpoint.activityKey,
+          unchangedSince: checkpoint.unchangedSince,
+          nodeIdleAfterSeconds: checkpoint.nodeIdleAfterSeconds,
+          nodeIdlePollSeconds: checkpoint.nodeIdlePollSeconds,
+        },
+      })
+    await store.append(slug, {
+      actor: humanActor('budget'),
+      type: 'build.hold-requested',
+      payload: {},
+    })
+    await opts.tick()
+    const events = Reflect.get(store, 'builds').get(slug)
+      .events as import('../events/catalog').AbEvent[]
+    const boundary = events.at(-1)!.seq
+    const slice = events.slice.bind(events)
+    let history = 0
+    let rows = 0
+    events.slice = (start, end) => {
+      const selected = slice(start, end)
+      rows += selected.length
+      history += selected.filter((event) => event.seq <= boundary).length
+      return selected
+    }
+    const costs: number[] = []
+    let calls = 0
+    const getReduced = store.getReducerValue.bind(store)
+    store.getReducerValue = async (...args) => {
+      calls++
+      return getReduced(...args)
+    }
+    try {
+      // Active, threshold, non-due idle and due idle, each with a fresh dispatcher.
+      for (const elapsed of [10_000, 600_000, 10_000, 120_000]) {
+        opts.advance(elapsed)
+        rows = calls = 0
+        await opts.tick()
+        expect(history).toBe(0)
+        expect(rows).toBeLessThanOrEqual(8)
+        if (elapsed === 10_000) expect(rows).toBe(0)
+        costs.push(rows, calls)
+      }
+    } finally {
+      Reflect.deleteProperty(events, 'slice')
+      store.getReducerValue = getReduced
+    }
+    if (baseline) expect(costs).toEqual(baseline)
+    baseline = costs
+  }
+}
