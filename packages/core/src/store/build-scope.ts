@@ -104,6 +104,12 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
       return Promise.reject(new BuildScopeError(scope, 'listBuildsForRepo', repo))
     },
+    async getScanCadence(): Promise<never> {
+      throw new BuildScopeError(scope, 'getScanCadence')
+    },
+    async putScanCadence(): Promise<never> {
+      throw new BuildScopeError(scope, 'putScanCadence')
+    },
     async upsertOperatorPresence(): Promise<never> {
       throw new BuildScopeError(scope, 'upsertOperatorPresence')
     },

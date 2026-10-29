@@ -385,7 +385,11 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     req.method === 'DELETE'
   )
     return 'store'
-  if (root === 'repos' && segments[2] === 'operator-presence' && segments.length === 3) {
+  if (
+    root === 'repos' &&
+    ['operator-presence', 'scan-cadence'].includes(segments[2]!) &&
+    segments.length === 3
+  ) {
     return req.method === 'GET' || req.method === 'POST' ? 'store' : undefined
   }
 

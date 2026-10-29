@@ -8390,6 +8390,155 @@ describe('provider-neutral intake rate limits', () => {
 })
 
 describe('durable ticket scan cadence', () => {
+  for (const observation of [false, true]) {
+    test(`30 unchanged intervals survive cold dispatchers (${observation ? 'observation' : 'admission'})`, async () => {
+      const tickets = observation ? [readyTicket('standing')] : []
+      let h = counted({ tickets, toml: 'ticketScanIntervalSeconds = 120' })
+      let scans = 0
+      const invoke = () => (observation ? h.dispatcher.observeReady() : h.dispatcher.tick())
+      expect((await invoke()).queued).toBe(observation ? 1 : 0)
+      scans += h.scans()
+      const initial = (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      )
+      expect(initial).toHaveLength(1)
+      for (let interval = 0; interval < 30; interval++) {
+        const store = h.store
+        const time = h.clock().getTime()
+        h = counted({ store, tickets, toml: 'ticketScanIntervalSeconds = 120' })
+        h.clock.set(new Date(time + 60_000).toISOString())
+        expect((await invoke()).queued).toBe(observation ? 1 : 0)
+        expect(h.scans()).toBe(0)
+        h.clock.advance(60_000)
+        expect((await invoke()).queued).toBe(observation ? 1 : 0)
+        expect(h.scans()).toBe(1)
+        scans += h.scans()
+      }
+      expect(scans).toBe(31)
+      expect(
+        (await h.store.getRepoEvents(REPO)).filter(
+          (e) => e.type === 'dispatcher.ticket-scan-completed',
+        ),
+      ).toEqual(initial)
+    })
+  }
+
+  for (const [field, value] of [
+    ['queued', 1],
+    ['invalidTickets', 1],
+    ['dependencyBlocked', 1],
+    ['creationWithheld', 1],
+    ['ticketDiagnostics', ['changed']],
+    ['dependencyDiagnostics', ['changed']],
+    ['creationDiagnostics', ['changed']],
+    ['readinessFingerprint', 'changed'],
+    ['criteriaFingerprint', 'changed'],
+    ['mode', 'admission'],
+  ] as const) {
+    test(`a ${field}-only outcome change is recorded and can change back`, async () => {
+      const h = counted()
+      await h.dispatcher.observeReady()
+      const [initial] = (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      )
+      if (initial?.type !== 'dispatcher.ticket-scan-completed') throw new Error('missing scan')
+      await h.store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.ticket-scan-completed',
+        payload: { ...initial.payload, [field]: value },
+      })
+      h.clock.advance(60_000)
+      await h.dispatcher.observeReady()
+      const events = (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      )
+      expect(events).toHaveLength(3)
+      expect(events[2]?.payload).toEqual({ ...initial.payload, startedAt: h.clock().toISOString() })
+      h.clock.advance(60_000)
+      await h.dispatcher.observeReady()
+      expect(
+        (await h.store.getRepoEvents(REPO)).filter(
+          (e) => e.type === 'dispatcher.ticket-scan-completed',
+        ),
+      ).toHaveLength(3)
+    })
+  }
+
+  test('standing diagnostics compare retained text and order, after truncation', async () => {
+    let diagnostics = Array.from({ length: 1001 }, (_, i) => `diagnostic ${i}`)
+    const h = harness({
+      wrapTickets(source) {
+        source.listReady = async () => ({ tickets: [], diagnostics })
+        return source
+      },
+    })
+    const events = async () =>
+      (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      )
+    await h.dispatcher.observeReady()
+    h.clock.advance(60_000)
+    diagnostics[1000] = 'outside journal limit'
+    await h.dispatcher.observeReady()
+    expect(await events()).toHaveLength(1)
+    h.clock.advance(60_000)
+    diagnostics[0] = 'new text, equal totals'
+    await h.dispatcher.observeReady()
+    expect(await events()).toHaveLength(2)
+    h.clock.advance(60_000)
+    diagnostics = [diagnostics[1]!, diagnostics[0]!, ...diagnostics.slice(2)]
+    await h.dispatcher.observeReady()
+    expect(await events()).toHaveLength(3)
+    h.clock.advance(60_000)
+    const cold = harness({ store: h.store })
+    cold.clock.set(h.clock().toISOString())
+    const restored = await cold.dispatcher.tick({ acceptNewWork: false })
+    expect(restored.invalidTickets).toBe(1001)
+    expect(restored.ticketDiagnostics).toEqual(diagnostics.slice(0, 1000))
+  })
+
+  test('an appended outcome survives a cadence write failure without a duplicate on recovery', async () => {
+    const h = counted()
+    const put = h.store.putScanCadence.bind(h.store)
+    h.store.putScanCadence = async () => {
+      throw new Error('cache unavailable')
+    }
+    await expect(h.dispatcher.observeReady()).rejects.toThrow('cache unavailable')
+    h.store.putScanCadence = put
+    const cold = counted({ store: h.store })
+    cold.clock.advance(60_000)
+    await cold.dispatcher.observeReady()
+    expect(
+      (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      ),
+    ).toHaveLength(1)
+    expect(await h.store.getScanCadence(REPO)).not.toBeNull()
+  })
+
+  test('stale cadence cannot hide a canonical change; cache failures retry without duplicate outcomes', async () => {
+    const h = counted()
+    await h.dispatcher.tick()
+    const cadence = (await h.store.getScanCadence(REPO))!
+    await h.store.putScanCadence(REPO, { ...cadence, scanSeq: cadence.scanSeq + 100 })
+    // A missing/mismatched row falls back to the fact; it never replays history.
+    h.clock.advance(60_000)
+    const put = h.store.putScanCadence.bind(h.store)
+    h.store.putScanCadence = async () => {
+      throw new Error('cache unavailable')
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('cache unavailable')
+    h.store.putScanCadence = put
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(3)
+    expect((await h.store.getScanCadence(REPO))?.scanSeq).toBe(cadence.scanSeq)
+    expect(
+      (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      ),
+    ).toHaveLength(1)
+  })
+
   function counted(options: Parameters<typeof harness>[0] = {}) {
     let scans = 0
     const h = harness({

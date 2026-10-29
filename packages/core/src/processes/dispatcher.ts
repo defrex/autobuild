@@ -1345,13 +1345,25 @@ export class Dispatcher {
     const criteriaFingerprint = hash(readyCriteria(this.deps.config))
     const startedAt = this.deps.clock().toISOString()
     const previous = this.latestScan()
+    const cached = await this.store.getScanCadence(this.deps.repo)
+    // Outcomes always come from the reduction. This row only acknowledges their cadence.
+    const valid =
+      previous !== undefined &&
+      cached !== null &&
+      cached.scanSeq === this.store.repositoryFacts().scanSeq &&
+      cached.mode === previous.mode &&
+      cached.readinessFingerprint === previous.readinessFingerprint &&
+      cached.criteriaFingerprint === previous.criteriaFingerprint &&
+      Number.isFinite(Date.parse(cached.startedAt))
+    const baseline = valid ? cached : previous
     const elapsed =
-      previous === undefined ? Infinity : Date.parse(startedAt) - Date.parse(previous.startedAt)
+      baseline === undefined ? Infinity : Date.parse(startedAt) - Date.parse(baseline.startedAt)
     return {
       startedAt,
       mode,
       readinessFingerprint,
       criteriaFingerprint,
+      allowClockRollback: elapsed < 0,
       due:
         previous === undefined ||
         elapsed < 0 ||
@@ -1366,24 +1378,51 @@ export class Dispatcher {
     checkpoint: Awaited<ReturnType<Dispatcher['scanCheckpoint']>>,
     report: TickReport,
   ): Promise<void> {
+    const payload = {
+      startedAt: checkpoint.startedAt,
+      mode: checkpoint.mode,
+      readinessFingerprint: checkpoint.readinessFingerprint,
+      criteriaFingerprint: checkpoint.criteriaFingerprint,
+      queued: report.queued,
+      invalidTickets: report.invalidTickets,
+      ticketDiagnostics: report.ticketDiagnostics.slice(0, 1000),
+      dependencyBlocked: report.dependencyBlocked,
+      dependencyDiagnostics: report.dependencyDiagnostics.slice(0, 1000),
+      creationWithheld: report.creationWithheld,
+      creationDiagnostics: report.creationDiagnostics.slice(0, 1000),
+    }
+    const previous = this.latestScan()
+    const unchanged =
+      previous !== undefined &&
+      Object.keys(payload)
+        .filter((key) => key !== 'startedAt')
+        .every(
+          (key) =>
+            JSON.stringify(previous[key as keyof typeof payload]) ===
+            JSON.stringify(payload[key as keyof typeof payload]),
+        )
     await this.store.ensureRepo(this.deps.repo)
-    await this.store.appendRepo(this.deps.repo, {
-      actor: DISPATCHER,
-      type: 'dispatcher.ticket-scan-completed',
-      payload: {
+    let scanSeq = this.store.repositoryFacts().scanSeq
+    if (!unchanged) {
+      const event = await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.ticket-scan-completed',
+        payload,
+      })
+      scanSeq = event.seq
+    }
+    if (scanSeq === undefined) throw new Error('completed scan has no canonical fact')
+    await this.store.putScanCadence(
+      this.deps.repo,
+      {
+        scanSeq,
         startedAt: checkpoint.startedAt,
         mode: checkpoint.mode,
         readinessFingerprint: checkpoint.readinessFingerprint,
         criteriaFingerprint: checkpoint.criteriaFingerprint,
-        queued: report.queued,
-        invalidTickets: report.invalidTickets,
-        ticketDiagnostics: report.ticketDiagnostics.slice(0, 1000),
-        dependencyBlocked: report.dependencyBlocked,
-        dependencyDiagnostics: report.dependencyDiagnostics.slice(0, 1000),
-        creationWithheld: report.creationWithheld,
-        creationDiagnostics: report.creationDiagnostics.slice(0, 1000),
       },
-    })
+      checkpoint.allowClockRollback,
+    )
   }
 
   private async triggerHarvest(): Promise<void> {

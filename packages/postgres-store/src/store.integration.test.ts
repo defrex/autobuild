@@ -76,6 +76,41 @@ if (testUrl) {
   })
 
   describe('PostgreSQL durability and concurrency', () => {
+    test('scan cadence is visible through fresh connections without journal writes', async () => {
+      const database = await isolatedDatabase()
+      const first = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+      try {
+        await first.ensureRepo('cadence')
+        const cadence = {
+          scanSeq: 1,
+          startedAt: new Date().toISOString(),
+          mode: 'admission' as const,
+          readinessFingerprint: 'a',
+          criteriaFingerprint: 'b',
+        }
+        await first.putScanCadence('cadence', cadence)
+        const second = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+        try {
+          expect(await second.getScanCadence('cadence')).toEqual(cadence)
+          expect(await second.getRepoEvents('cadence')).toEqual([])
+          const sql = new SQL(database.url)
+          try {
+            await sql`UPDATE scan_cadence SET value=to_jsonb(${'broken'}::text) WHERE repo='cadence'`
+            expect(await second.getScanCadence('cadence')).toBeNull()
+            await second.putScanCadence('cadence', cadence)
+            expect(await second.getScanCadence('cadence')).toEqual(cadence)
+          } finally {
+            await sql.close()
+          }
+        } finally {
+          await second.close()
+        }
+      } finally {
+        await first.close()
+        await database.cleanup()
+      }
+    })
+
     test('latest artifact metadata never reads blob content', async () => {
       const database = await isolatedDatabase()
       const blobs = new MemoryBlobStore()

@@ -82,6 +82,23 @@ test('cache loss and corrupt private cache rows recover output parity', async ()
   const database = new Database(':memory:')
   const store = new SqliteBuildStore({ database, blobs: new MemoryBlobStore() })
   try {
+    await store.ensureRepo('repo')
+    const cadence = {
+      scanSeq: 1,
+      startedAt: '2026-07-15T12:00:00.000Z',
+      mode: 'admission' as const,
+      readinessFingerprint: 'ready',
+      criteriaFingerprint: 'criteria',
+    }
+    await store.putScanCadence('repo', cadence)
+    for (const corrupt of ['{}', 'invalid json']) {
+      database.query('UPDATE scan_cadence SET value=?1').run(corrupt)
+      expect(await store.getScanCadence('repo')).toBeNull()
+      await store.putScanCadence('repo', cadence)
+      expect(await store.getScanCadence('repo')).toEqual(cadence)
+    }
+    database.query('DELETE FROM repo_streams WHERE repo=?1').run('repo')
+    expect(await store.getScanCadence('repo')).toBeNull()
     await store.createBuild({ slug: 'build', repo: 'repo' })
     await store.append('build', { actor: KERNEL, type: 'build.paused', payload: {} })
     const expected = reduceBuild(await store.getEvents('build'))

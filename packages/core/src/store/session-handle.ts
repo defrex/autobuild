@@ -103,6 +103,12 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     listBuildsForRepo(repo: string): Promise<BuildRecord[]> {
       return Promise.reject(new SessionScopeError(scope, 'listBuildsForRepo', repo))
     },
+    async getScanCadence(): Promise<never> {
+      throw new SessionScopeError(scope, 'getScanCadence')
+    },
+    async putScanCadence(): Promise<never> {
+      throw new SessionScopeError(scope, 'putScanCadence')
+    },
     async upsertOperatorPresence(): Promise<never> {
       throw new SessionScopeError(scope, 'upsertOperatorPresence')
     },

@@ -1,3 +1,4 @@
+import { scanCadenceSchema, type ScanCadence } from '../scan-cadence'
 import {
   operatorIdentitySchema,
   OPERATOR_PRESENCE_TTL_MS,
@@ -183,6 +184,10 @@ export const BOOTSTRAP_DDL = [
     updated_at TEXT NOT NULL,
     PRIMARY KEY (scope_kind, scope_key, reducer)
   )`,
+  `CREATE TABLE IF NOT EXISTS scan_cadence (
+    repo TEXT PRIMARY KEY REFERENCES repo_streams(repo) ON DELETE CASCADE,
+    value TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS operator_presence (
   repo TEXT NOT NULL, id TEXT NOT NULL, host TEXT NOT NULL, pid INTEGER NOT NULL,
   started_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, PRIMARY KEY (repo, id)
@@ -236,6 +241,9 @@ export const BOOTSTRAP_DDL = [
     heartbeat_at TEXT,
     tick TEXT
   )`,
+  // Injected SQLite connections may leave foreign-key enforcement disabled.
+  `CREATE TRIGGER IF NOT EXISTS repo_scan_cadence_delete AFTER DELETE ON repo_streams
+    BEGIN DELETE FROM scan_cadence WHERE repo=old.repo; END`,
   `CREATE TABLE IF NOT EXISTS repo_events (
     repo TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -1184,6 +1192,41 @@ export class SqliteBuildStore implements BuildStore {
       const ts = this.now()
       this.db.insert(repoStreams).values({ repo, createdAt: ts, updatedAt: ts }).run()
       return this.toRepoRecord(this.requireRepo(repo))
+    })
+  }
+
+  async getScanCadence(repo: string): Promise<ScanCadence | null> {
+    const row = this.sqlite.query('SELECT value FROM scan_cadence WHERE repo=?1').get(repo) as {
+      value: string
+    } | null
+    if (!row) return null
+    try {
+      return scanCadenceSchema.safeParse(JSON.parse(row.value)).data ?? null
+    } catch {
+      return null
+    }
+  }
+  async putScanCadence(
+    repo: string,
+    input: ScanCadence,
+    allowClockRollback = false,
+  ): Promise<void> {
+    const cadence = scanCadenceSchema.parse(input)
+    this.writeTx(() => {
+      this.requireRepo(repo)
+      this.sqlite
+        .query(`INSERT INTO scan_cadence (repo,value) VALUES (?1,?2)
+        ON CONFLICT(repo) DO UPDATE SET value=excluded.value
+        WHERE CASE WHEN json_valid(scan_cadence.value) THEN COALESCE(
+          json_extract(scan_cadence.value,'$.scanSeq') <> ?3 OR ?4
+          OR json_extract(scan_cadence.value,'$.startedAt') <= ?5, 1) ELSE 1 END`)
+        .run(
+          repo,
+          JSON.stringify(cadence),
+          cadence.scanSeq,
+          Number(allowClockRollback),
+          cadence.startedAt,
+        )
     })
   }
 

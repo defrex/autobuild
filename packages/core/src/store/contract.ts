@@ -291,6 +291,34 @@ function atT0(offsetMs: number): string {
 
 export function describeBuildStoreContract(name: string, factory: BuildStoreFactory): void {
   describe(`BuildStore contract: ${name}`, () => {
+    test('scan cadence is keyed disposable metadata with atomic replacement and clock rollback', async () => {
+      await withStore(factory, undefined, async (store) => {
+        expect(await store.getScanCadence('cadence')).toBeNull()
+        expect(await store.getRepo('cadence')).toBeNull()
+        await store.ensureRepo('cadence')
+        const first = {
+          scanSeq: 1,
+          startedAt: CONTRACT_T0,
+          mode: 'admission' as const,
+          readinessFingerprint: 'ready',
+          criteriaFingerprint: 'criteria',
+        }
+        await store.putScanCadence('cadence', first)
+        expect(await store.getScanCadence('cadence')).toEqual(first)
+        expect(await store.getScanCadence('other')).toBeNull()
+        const later = { ...first, startedAt: atT0(60_000) }
+        await store.putScanCadence('cadence', later)
+        await store.putScanCadence('cadence', first)
+        expect(await store.getScanCadence('cadence')).toEqual(later)
+        await store.putScanCadence('cadence', first, true)
+        expect(await store.getScanCadence('cadence')).toEqual(first)
+        const next = { ...first, scanSeq: 2, mode: 'observation' as const }
+        await store.putScanCadence('cadence', next)
+        expect(await store.getScanCadence('cadence')).toEqual(next)
+        expect(await store.getRepoEvents('cadence')).toEqual([])
+      })
+    })
+
     test('operator presence is concurrent, renewable advisory liveness without journal writes', async () => {
       const clock = manualClock()
       await withStore(factory, { clock }, async (store) => {

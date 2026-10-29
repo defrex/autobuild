@@ -1,3 +1,4 @@
+export { scanCadenceSchema, scanCadenceWriteSchema } from '../scan-cadence'
 import { operatorIdentitySchema, operatorPresenceSchema } from '../operator-presence'
 export const operatorPresenceBodySchema = operatorIdentitySchema
 export const operatorPresenceWireSchema = operatorPresenceSchema

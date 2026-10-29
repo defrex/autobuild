@@ -1,3 +1,4 @@
+import { scanCadenceSchema, type ScanCadence } from '@defrex/autobuild/store-adapter'
 import { PROJECT_BLOB_LOCK, reserveProjectBlobs } from './project-lifecycle'
 import { hostedProjectContext } from './request-context'
 import {
@@ -1105,6 +1106,28 @@ export class PostgresBuildStore implements BuildStore {
       await q`INSERT INTO repo_streams (repo, created_at, updated_at)
         VALUES (${repo}, ${ts}, ${ts}) ON CONFLICT (repo) DO NOTHING`
       return this.repoRecord(await this.lockRepo(q, repo))
+    })
+  }
+
+  async getScanCadence(repo: string): Promise<ScanCadence | null> {
+    return this.run(async (q) => {
+      const [row] = await q`SELECT value FROM scan_cadence WHERE repo=${repo}`
+      return row ? (scanCadenceSchema.safeParse(row.value).data ?? null) : null
+    })
+  }
+  async putScanCadence(
+    repo: string,
+    input: ScanCadence,
+    allowClockRollback = false,
+  ): Promise<void> {
+    const cadence = scanCadenceSchema.parse(input)
+    await this.tx(async (q) => {
+      await this.lockRepo(q, repo)
+      await q`INSERT INTO scan_cadence (repo,value) VALUES (${repo},${cadence})
+        ON CONFLICT(repo) DO UPDATE SET value=EXCLUDED.value
+        WHERE COALESCE(scan_cadence.value->>'scanSeq' <> ${String(cadence.scanSeq)}
+          OR ${allowClockRollback}
+          OR scan_cadence.value->>'startedAt' <= ${cadence.startedAt}, true)`
     })
   }
 

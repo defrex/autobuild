@@ -1570,3 +1570,21 @@ proof of provider success. A clear appends once without reading history, even
 when already healthy; later degradation wins by ordinary journal order.
 Existing dispatcher/kernel automatic recovery and old payloads remain valid;
 the recovered payload additionally accepts an optional nonblank `reason`.
+
+## Ticket scan scheduling metadata
+
+`GET /repos/:repo/scan-cadence` returns null or
+`{ scanSeq, startedAt, mode, readinessFingerprint, criteriaFingerprint }`.
+`scanSeq` is a positive integer acknowledging the last changed-outcome scan
+fact; `startedAt` is an ISO timestamp, and mode is `admission` or `observation`.
+`POST` to the same path accepts `{ cadence: <that record>, allowClockRollback?: boolean }`
+and returns `{ ok: true }`. Reads are keyed and never materialize a repository.
+Writes require an existing repository and atomically replace its one cache row;
+within the same scan sequence an earlier timestamp is ignored unless an explicit
+clock-rollback rescan is acknowledged. Repository deletion removes the row.
+
+Both routes use ordinary repository authorization; delegated build/harvest
+credentials cannot mutate this dispatcher metadata. A missing route or invalid
+response fails explicitly; clients never reconstruct it from journal history.
+This is disposable cadence coordination, distinct from reducer checkpoints;
+counts and diagnostics remain exclusively in canonical repository read facts.

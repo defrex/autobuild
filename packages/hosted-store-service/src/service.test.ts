@@ -261,6 +261,40 @@ describe('hosted store service', () => {
     expect(opens).toBe(0)
   })
 
+  test('scan cadence routes reach the store with cold reads and replaceable writes', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+      issueDispatcherCredential: async () => 'abp_1_fixture',
+      openProjectRegistry: async () => testProjects([repo]),
+      env,
+      clock,
+      openStore: async () => backing,
+    })
+    const path = `http://hosted.test/repos/${encodeURIComponent(repo)}/scan-cadence`
+    const read = await service.fetch(new Request(path, { headers: machineHeaders }))
+    expect(read.status).toBe(200)
+    expect(await read.json()).toBeNull()
+    expect(await backing.getRepo(repo)).toBeNull()
+    await backing.ensureRepo(repo)
+    const cadence = {
+      scanSeq: 1,
+      startedAt: clock().toISOString(),
+      mode: 'admission' as const,
+      readinessFingerprint: 'a',
+      criteriaFingerprint: 'b',
+    }
+    const response = await service.fetch(
+      new Request(path, {
+        method: 'POST',
+        headers: machineHeaders,
+        body: JSON.stringify({ cadence }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect(await backing.getScanCadence(repo)).toEqual(cadence)
+  })
+
   test('operator presence collection is classified without requiring a journal', async () => {
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({

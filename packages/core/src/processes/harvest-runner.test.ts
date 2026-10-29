@@ -1,3 +1,6 @@
+import { Dispatcher } from './dispatcher'
+import { FakeForge } from '../ports/forge/fake'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -20,7 +23,7 @@ import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../por
 import type { TicketSource, SessionStreamEmitter } from '../ports/types'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
-import { steppingClock } from '../testing/fixed'
+import { manualClock, steppingClock } from '../testing/fixed'
 import { HARVEST_PROPOSAL_LABEL, HarvestRunner } from './harvest-runner'
 
 const mkdtemp = ownTempDirectories(afterEach)
@@ -1045,6 +1048,34 @@ describe('HarvestRunner', () => {
       const ids = sequentialIds()
       const uuids = countingUuids()
       const seeded = await seedOpenRun({ store, tickets, ids, workspace, stage })
+      if (stage === 'started') {
+        const run = reduceHarvest(await store.getRepoEvents('/repo')).latest!
+        const frozen = await store.getRepoArtifact('/repo', run.scan.kind, run.scan.rev)
+        const scanClock = manualClock()
+        for (let interval = 0; interval < 4; interval++) {
+          const dispatcher = new Dispatcher({
+            store,
+            tickets,
+            ids,
+            repo: '/repo',
+            config: config(),
+            clock: scanClock,
+            workspaces: new FakeWorkspaceProvider({ root: workspace, mode: 'logical' }),
+            forge: new FakeForge(),
+            exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+            launchRunner: async () => 'scheduled',
+          })
+          await dispatcher.observeReady()
+          scanClock.advance(60_000)
+        }
+        expect(
+          (await store.getRepoEvents('/repo')).filter(
+            (event) => event.type === 'dispatcher.ticket-scan-completed',
+          ),
+        ).toHaveLength(1)
+        expect(await store.getRepoArtifact('/repo', run.scan.kind, run.scan.rev)).toEqual(frozen)
+      }
+
       let producers = 0
       let reviewers = 0
       const scripted = new ScriptedAgentRunner({
