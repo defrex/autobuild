@@ -8,7 +8,12 @@ import {
   clientSupportsIntegrationAuditPending,
   assertPublicSnapshotReducer,
 } from '@defrex/autobuild/remote-store'
-import { reducerValueRequestSchema, resolveReducerValue } from '@defrex/autobuild/remote-store'
+import {
+  REDUCER_VALUE_PROJECTION_HEADER,
+  reducerValueForClient,
+  reducerValueRequestSchema,
+  resolveReducerValue,
+} from '@defrex/autobuild/remote-store'
 import { createDelegationHandler } from './delegated-authority'
 import { randomBytes } from 'node:crypto'
 import {
@@ -1004,7 +1009,14 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       throw new RequestError(400, 'validation', String(error))
     }
     try {
-      const result = await store.getReducerValue(scope, body)
+      const result = reducerValueForClient(
+        {
+          version: req.headers.get(AUTOBUILD_VERSION_HEADER),
+          projects: req.headers.get(REDUCER_VALUE_PROJECTION_HEADER) === '1',
+        },
+        body.reducer,
+        await store.getReducerValue(scope, body),
+      )
       const response = json(200, {
         version: result.version,
         cursor: result.cursor,

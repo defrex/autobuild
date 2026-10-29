@@ -9,7 +9,11 @@ import {
   stableVersion,
   releaseVersion,
   RELEASE_LINE_PROTOCOLS,
+  reducerValueForClient,
 } from './compatibility'
+import { repositoryReadFactsReducer } from '../../kernel/read-facts'
+import { projectReducerValue } from '../reducer-value-validation'
+import released120 from './released-reducer-values/1.2.0.json'
 
 test('release lines ignore patches and enforce both window boundaries', () => {
   const range = supportedClientRange('0.13.0')
@@ -269,4 +273,41 @@ test('supported peer admission does not make advisory polling facts decisive', a
   expect(mixedVersionDeferred({ compatibility })).toBe(false)
   advanceCompatibility(compatibility, [newerFact(2, 'decisive')])
   expect(mixedVersionDeferred({ compatibility })).toBe(true)
+})
+
+test('exact-version 1.2.0 clients receive their frozen reducer version and finished shape', () => {
+  const value = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
+  const answer = { version: repositoryReadFactsReducer.version, cursor: 7, value }
+  const released = reducerValueForClient(
+    { version: '1.2.0', projects: false },
+    'repositoryReadFacts',
+    answer,
+  )
+  expect(released.version).toBe(released120.versions.repositoryReadFacts)
+  expect(released.cursor).toBe(7)
+  // The released client accepts only values that already match its frozen shape.
+  expect(projectReducerValue('repositoryReadFacts', released.value, released120)).toEqual({
+    value: released.value,
+  })
+  expect(released.value).not.toHaveProperty('preparation')
+})
+
+test('projecting, other and unrepresentable clients receive the canonical answer', () => {
+  const value = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
+  const answer = { version: repositoryReadFactsReducer.version, cursor: 7, value }
+  for (const client of [
+    { version: '1.2.0', projects: true },
+    { version: '1.2.1', projects: false },
+    { version: '1.1.0', projects: false },
+    { version: null, projects: false },
+    { version: 'constructor', projects: false },
+  ])
+    expect(reducerValueForClient(client, 'repositoryReadFacts', answer)).toBe(answer)
+  expect(reducerValueForClient({ version: '1.2.0', projects: false }, 'constructor', answer)).toBe(
+    answer,
+  )
+  const broken = { ...answer, value: null }
+  expect(
+    reducerValueForClient({ version: '1.2.0', projects: false }, 'repositoryReadFacts', broken),
+  ).toBe(broken)
 })

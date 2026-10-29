@@ -397,9 +397,16 @@ Server-owned snapshots are disposable caches: deletion, corruption, wrong versio
 and unreadable cache storage cause server-side replay. Log read failures remain errors.
 The server answer is canonical for remote clients, regardless of missing, malformed
 or different `x-autobuild-catalog-identity` headers. The strict body stays exactly
-`{version, cursor, value}`. A reducer version mismatch, invalid envelope or invalid
-finished value raises `ReducerValueIncompatibilityError`, naming the reducer,
-client/server versions and validation detail. Clients never reconstruct named
+`{version, cursor, value}`. The reducer `version` is the server's cache identity, not
+a compatibility gate. A client accepts any value its own finished shape can
+represent and drops object properties that shape does not know. An invalid envelope
+or a value the client cannot represent, such as a missing field or an unknown
+variant, raises `ReducerValueIncompatibilityError`, naming the reducer,
+client/server versions and validation detail. Clients send
+`x-autobuild-reducer-value-projection: 1`. A 1.2.0 client predates that capability
+and accepts only its own reducer version and shape. The service answers it with the
+value projected onto the frozen 1.2.0 shape and the 1.2.0 reducer version, or with
+the unprojected answer when that shape cannot represent it. Clients never reconstruct named
 answers from raw events. Repository build-digest batches are likewise canonical:
 one repo-scoped GET returns the batch without client build discovery or per-build
 reducer requests. This does not change the explicit snapshot or event APIs.

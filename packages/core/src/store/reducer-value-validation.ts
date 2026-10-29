@@ -10,6 +10,13 @@ type Shape = {
 }
 const schemas: Record<string, Shape> = shapes.schemas
 
+/** A finished-value shape catalog: this build's generated one, or a frozen
+ * catalog from a published release line. */
+export interface ReducerValueCatalog {
+  roots: Record<string, { value: string }>
+  schemas: Record<string, Shape>
+}
+
 /** Generated structural shapes include nested event payload unions, records,
  * optional fields and literal discriminants. No accumulator is trusted merely
  * because finish() happens to accept it. */
@@ -37,8 +44,8 @@ function json(value: unknown, seen = new Set<object>()): boolean {
     Object.values(value).every((item) => json(item, new Set(seen)))
   )
 }
-function matches(id: string, value: unknown): boolean {
-  const shape = schemas[id]!
+function matches(id: string, value: unknown, table = schemas): boolean {
+  const shape = table[id]!
   switch (shape.kind) {
     case 'json':
       return json(value)
@@ -53,9 +60,11 @@ function matches(id: string, value: unknown): boolean {
     case 'boolean':
       return typeof value === 'boolean'
     case 'union':
-      return (shape.items as string[]).some((item) => matches(item, value))
+      return (shape.items as string[]).some((item) => matches(item, value, table))
     case 'array':
-      return Array.isArray(value) && value.every((item) => matches(shape.items as string, item))
+      return (
+        Array.isArray(value) && value.every((item) => matches(shape.items as string, item, table))
+      )
     case 'object': {
       if (
         value === null ||
@@ -67,12 +76,12 @@ function matches(id: string, value: unknown): boolean {
       const record = value as Record<string, unknown>
       for (const [key, prop] of Object.entries(shape.props!)) {
         if (!(key in record) && prop.optional) continue
-        if (!matches(prop.type, record[key])) return false
+        if (!matches(prop.type, record[key], table)) return false
       }
       return Object.keys(record).every(
         (key) =>
           Object.hasOwn(shape.props!, key) ||
-          (shape.index !== undefined && matches(shape.index, record[key])),
+          (shape.index !== undefined && matches(shape.index, record[key], table)),
       )
     }
     default:
@@ -172,6 +181,97 @@ function diagnose(id: string, value: unknown, path: string, depth: number): Diag
     }
   }
   return failure
+}
+
+type Projected = { value: unknown; dropped: number }
+type Unprojectable = Diagnostic
+type Projection = Projected | Unprojectable
+// Plugin consumers may compile without strict narrowing; `in` guards narrow everywhere.
+const failed = (result: Projection): result is Unprojectable => 'path' in result
+
+/** Project a value onto a catalog's shape, dropping object properties the shape
+ * does not know. Additive server fields then reach older readers as the value
+ * they were built for, while a missing field or unknown variant still fails.
+ * Among union members, the one dropping the fewest properties wins. */
+function project(
+  table: Record<string, Shape>,
+  id: string,
+  value: unknown,
+  path: string,
+  depth: number,
+): Projection {
+  if (matches(id, value, table)) return { value, dropped: 0 }
+  const shape = table[id]!
+  const failure: Unprojectable = {
+    path,
+    depth,
+    expected: shape.kind === 'literal' ? JSON.stringify(shape.value) : shape.kind,
+  }
+  if (shape.kind === 'union') {
+    let best: Projection | undefined
+    for (const item of shape.items as string[]) {
+      const next = project(table, item, value, path, depth)
+      if (!failed(next)) {
+        if (!best || failed(best) || next.dropped < best.dropped) best = next
+      } else if (!best || (failed(best) && next.depth > best.depth)) best = next
+    }
+    return best ?? failure
+  }
+  if (shape.kind === 'array' && Array.isArray(value)) {
+    const items: unknown[] = []
+    let dropped = 0
+    for (let i = 0; i < value.length; i++) {
+      const next = project(table, shape.items as string, value[i], `${path}[${i}]`, depth + 1)
+      if (failed(next)) return next
+      items.push(next.value)
+      dropped += next.dropped
+    }
+    return { value: items, dropped }
+  }
+  if (
+    shape.kind === 'object' &&
+    value !== null &&
+    typeof value === 'object' &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    const record = value as Record<string, unknown>
+    const out: Record<string, unknown> = {}
+    let dropped = 0
+    for (const [key, prop] of Object.entries(shape.props!)) {
+      if (!(key in record) && prop.optional) continue
+      const next = project(table, prop.type, record[key], property(path, key), depth + 1)
+      if (failed(next)) return next
+      if (key in record) out[key] = next.value
+      dropped += next.dropped
+    }
+    for (const key of Object.keys(record).sort()) {
+      if (Object.hasOwn(shape.props!, key)) continue
+      if (!shape.index) {
+        dropped += 1
+        continue
+      }
+      const next = project(table, shape.index, record[key], property(path, key), depth + 1)
+      if (failed(next)) return next
+      out[key] = next.value
+      dropped += next.dropped
+    }
+    return { value: out, dropped }
+  }
+  return failure
+}
+
+/** The reader-side contract for a server's canonical answer: the value as this
+ * reader's shape can represent it, or a structural diagnostic. Reducer versions
+ * are cache identities, not compatibility gates. */
+export function projectReducerValue(
+  name: string,
+  value: unknown,
+  catalog: ReducerValueCatalog = shapes,
+): { value: unknown } | ValidationFailure {
+  const root = Object.hasOwn(catalog.roots, name) ? catalog.roots[name] : undefined
+  if (!root) return { path: '$', expected: 'known reducer' }
+  const result = project(catalog.schemas, root.value, value, '$', 0)
+  return failed(result) ? { path: result.path, expected: result.expected } : { value: result.value }
 }
 
 /** Existing optional object fields keep their ordinary JSON omission semantics.

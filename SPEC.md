@@ -2976,10 +2976,17 @@ read-decoder revision. Named and generic checkpoints use catalog-specific keys;
 legacy/foreign-catalog snapshots are misses and are preserved. Unrecognized
 reducer versions replay without repairing their cache. No lower-version write
 replaces a higher-version row, even at a later cursor. Corrupt caches of the
-reader's own version may be conditionally repaired. Hosted named answers are canonical: the client accepts a representable finished
-value at its reducer version regardless of catalog identity. Version mismatches,
-invalid envelopes and invalid finished values fail with a typed incompatibility
-error naming the reducer and client/server versions. Remote clients never
+reader's own version may be conditionally repaired. Hosted named answers are canonical: the client accepts any finished value its own shape
+can represent, regardless of reducer version or catalog identity. A reducer
+version is the server's cache identity, not a compatibility gate. The client
+drops object properties its shape does not know, so additive server changes
+reach older readers. Invalid envelopes and values the client cannot represent
+(a missing field, an unknown variant) fail with a typed incompatibility error
+naming the reducer and client/server versions. Clients send
+`x-autobuild-reducer-value-projection: 1`. For a published client that predates
+this capability and checks exact versions (1.2.0), the service projects the
+answer onto that release's frozen shape and returns that release's reducer version,
+retaining the catalog while the release is in the supported window. Remote clients never
 reconstruct named answers from event logs. Catalog identity travels in response
 header `x-autobuild-catalog-identity`; strict JSON bodies remain exactly
 `{version, cursor, value}`. Missing/malformed headers do not reject an answer.

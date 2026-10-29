@@ -18,8 +18,8 @@ import {
 } from './compatibility'
 import { stampCompatibility, buildEventPolicy, repositoryEventPolicy } from '../../events/policy'
 import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
-import { CATALOG_IDENTITY_HEADER } from './version'
-import { diagnoseReducerValue } from '../reducer-value-validation'
+import { CATALOG_IDENTITY_HEADER, REDUCER_VALUE_PROJECTION_HEADER } from './version'
+import { projectReducerValue } from '../reducer-value-validation'
 import { prepareEventWrite as validateEventWrite } from '../../events/catalog'
 import { prepareRepositoryEventWrite as validateRepositoryEventWrite } from '../../events/repository'
 import {
@@ -274,8 +274,10 @@ export class RemoteBuildStore implements BuildStore {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
+    capabilities: Record<string, string> = {},
   ): Promise<Response> {
     const headers: Record<string, string> = {
+      ...capabilities,
       [AUTOBUILD_VERSION_HEADER]: this.identity.autobuildVersion,
       [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: this.identity.protocolVersion,
     }
@@ -791,7 +793,9 @@ export class RemoteBuildStore implements BuildStore {
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
     const { reducer } = resolveReducerValue(scope, request)
     const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
-    const response = await this.raw('POST', `${root}/reducer-values`, request)
+    const response = await this.raw('POST', `${root}/reducer-values`, request, undefined, {
+      [REDUCER_VALUE_PROJECTION_HEADER]: '1',
+    })
     if (!response.ok) throw await this.toError(response)
     let body: unknown
     try {
@@ -822,14 +826,16 @@ export class RemoteBuildStore implements BuildStore {
     }
     if (!parsed.success) fail(`invalid reducer envelope: ${parsed.error.message}`)
     const result = parsed.data!
-    if (result.version !== reducer.version) fail('reducer version mismatch')
-    const failure = diagnoseReducerValue(request.reducer, result.value)
-    if (failure) fail(`invalid finished value at ${failure.path}: expected ${failure.expected}`)
+    // The shape this reader can represent is the contract. A different reducer
+    // version is the server's cache identity, so release lines may skew freely.
+    const projected = projectReducerValue(request.reducer, result.value)
+    if ('path' in projected)
+      fail(`invalid finished value at ${projected.path}: expected ${projected.expected}`)
     const identity = response.headers.get(CATALOG_IDENTITY_HEADER)
     return {
       version: result.version,
       cursor: result.cursor,
-      value: result.value as ReducerValue['value'],
+      value: (projected as { value: unknown }).value as ReducerValue['value'],
       ...(identity === null ? {} : { catalogIdentity: identity }),
     }
   }

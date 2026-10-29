@@ -187,9 +187,15 @@ All event-derived checkpoints include the combined read-catalog fingerprint in
 their keys, independently of numeric reducer versions. Snapshot envelopes validate
 that fingerprint; another catalog's rows remain untouched. Remote named values
 are canonical regardless of `x-autobuild-catalog-identity`, keeping their strict
-three-field JSON body unchanged. A reducer version mismatch, invalid envelope or
-unrepresentable finished shape raises `ReducerValueIncompatibilityError` with
-client/server versions and validation detail. No remote named read replays events.
+three-field JSON body unchanged. The client projects the value onto its own
+shape (`projectReducerValue` in `store/reducer-value-validation.ts`), dropping
+unknown properties, so reducer version skew alone is not an error. An invalid
+envelope or a value the client's shape cannot represent raises
+`ReducerValueIncompatibilityError` with client/server versions and validation
+detail. Exact-version 1.2.0 clients, which predate the
+`x-autobuild-reducer-value-projection` capability, receive answers projected onto
+the frozen catalog in `store/remote/released-reducer-values/` by
+`reducerValueForClient`. No remote named read replays events.
 Repository digest batches likewise return the server batch with one scoped
 request and no discovery or per-build fallback.
 

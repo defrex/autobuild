@@ -1,6 +1,8 @@
 import semver from 'semver'
 import { z } from 'zod'
 import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
+import { projectReducerValue, type ReducerValueCatalog } from '../reducer-value-validation'
+import released120 from './released-reducer-values/1.2.0.json'
 
 /** Stable releases only: prefixes, whitespace, prereleases and build suffixes are not identities. */
 export function stableVersion(value: unknown): semver.SemVer | undefined {
@@ -124,5 +126,40 @@ export class ReducerValueIncompatibilityError extends Error {
     super(
       `incompatible reducer ${reducer}: client version ${clientVersion}, server version ${serverVersion ?? '(unavailable)'}; ${reason}`,
     )
+  }
+}
+
+interface ReleasedReducerValues extends ReducerValueCatalog {
+  versions: Record<string, number>
+}
+
+/** Published releases whose clients accept only their own reducer version and
+ * finished shape. Each catalog is frozen from its release and retained while
+ * that release is in the supported window, like `RELEASE_LINE_PROTOCOLS`. Later
+ * clients send `REDUCER_VALUE_PROJECTION_HEADER` and project for themselves. */
+const EXACT_REDUCER_VALUE_RELEASES: Readonly<Record<string, ReleasedReducerValues>> = {
+  '1.2.0': released120 as ReleasedReducerValues,
+}
+
+/** Answer an exact-version client as its release can read: project the canonical
+ * value onto the release's frozen shape and stamp the version it expects. A value
+ * the release cannot represent is returned unchanged, so the client raises its
+ * typed incompatibility error rather than misreading it. */
+export function reducerValueForClient<T extends { version: number; value: unknown }>(
+  client: { version: string | null; projects: boolean },
+  reducer: string,
+  answer: T,
+): T {
+  const { version: release } = client
+  if (client.projects || release === null) return answer
+  if (!Object.hasOwn(EXACT_REDUCER_VALUE_RELEASES, release)) return answer
+  const catalog = EXACT_REDUCER_VALUE_RELEASES[release]!
+  if (!Object.hasOwn(catalog.versions, reducer)) return answer
+  const projected = projectReducerValue(reducer, answer.value, catalog)
+  if ('path' in projected) return answer
+  return {
+    ...answer,
+    version: catalog.versions[reducer]!,
+    value: (projected as { value: unknown }).value,
   }
 }

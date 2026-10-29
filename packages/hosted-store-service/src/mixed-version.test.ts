@@ -22,6 +22,7 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   RELEASE_LINE_PROTOCOLS,
+  REDUCER_VALUE_PROJECTION_HEADER,
 } from '@defrex/autobuild/remote-store'
 import { createStoreServer } from './remote-store-server'
 import { createHostedStoreService } from './service'
@@ -104,6 +105,42 @@ test('released strict parsers accept three-field build/repository answers throug
     }
 })
 
+test('released 1.2.0 clients read their frozen reducer versions; projecting clients read canonical ones', async () => {
+  const store = await fixture()
+  const server = createStoreServer({ store, secret })
+  for (const [path, reducer, released] of [
+    ['/builds/mixed', 'buildReadFacts', 69],
+    ['/repos/repo', 'repositoryReadFacts', 31],
+  ] as const) {
+    const read = async (projects: boolean) => {
+      const response = await server.fetch(
+        new Request(`https://test${path}/reducer-values`, {
+          method: 'POST',
+          headers: {
+            ...headers,
+            [AUTOBUILD_VERSION_HEADER]: '1.2.0',
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: '6',
+            ...(projects ? { [REDUCER_VALUE_PROJECTION_HEADER]: '1' } : {}),
+          },
+          body: JSON.stringify({ reducer }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      return (await response.json()) as { version: number; value: Record<string, unknown> }
+    }
+    const canonical = await store.getReducerValue(
+      path.startsWith('/builds')
+        ? { kind: 'build', slug: 'mixed' }
+        : { kind: 'repo', repo: 'repo' },
+      { reducer },
+    )
+    expect((await read(true)).version).toBe(canonical.version)
+    const frozen = await read(false)
+    expect(frozen.version).toBe(released)
+    if (reducer === 'repositoryReadFacts') expect(frozen.value).not.toHaveProperty('preparation')
+  }
+})
+
 for (const identity of [READ_CATALOG_IDENTITY, null, 'malformed', 'f'.repeat(64)]) {
   test(`hosted client uses the server answer for header ${identity?.slice(0, 10) ?? 'absent'}`, async () => {
     const store = await fixture()
@@ -165,18 +202,54 @@ test('a backend without identity is never labelled with the service catalog', as
   releasedParser.parse(await response.json())
 })
 
-test('a newer reducer version fails without raw reads', async () => {
+for (const skew of ['newer', 'older'] as const) {
+  test(`a ${skew} reducer version with a representable value is used without raw reads`, async () => {
+    const store = await fixture()
+    const server = createStoreServer({ store, secret })
+    const calls: string[] = []
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(url, init)
+      calls.push(`${request.method} ${new URL(request.url).pathname}`)
+      const response = await server.fetch(request)
+      if (!request.url.endsWith('/reducer-values')) return response
+      const body = await response.json()
+      body.version += skew === 'newer' ? 1 : -1
+      // A newer server's additive field reaches this client as the value it knows.
+      body.value.futureField = { added: true }
+      return new Response(JSON.stringify(body), {
+        status: response.status,
+        headers: response.headers,
+      })
+    }) as typeof fetch
+    const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn })
+    await readBuildFacts(client, 'mixed')
+    expect(calls).toEqual(['POST /builds/mixed/reducer-values'])
+    const direct = new RemoteBuildStore({
+      url: 'https://test',
+      token,
+      fetchFn: ((url: string | URL | Request, init?: RequestInit) =>
+        server.fetch(new Request(url, init))) as typeof fetch,
+    })
+    const scope = { kind: 'build', slug: 'mixed' } as const
+    const answer = await client.getReducerValue(scope, { reducer: 'buildReadFacts' })
+    expect(answer.value).toEqual(
+      (await direct.getReducerValue(scope, { reducer: 'buildReadFacts' })).value,
+    )
+    expect(answer.value).not.toHaveProperty('futureField')
+  })
+}
+
+test('a value missing a field this client requires fails without raw reads', async () => {
   const store = await fixture()
   const server = createStoreServer({ store, secret })
   const calls: string[] = []
   const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
     const request = new Request(url, init)
     calls.push(`${request.method} ${new URL(request.url).pathname}`)
-    if (request.url.includes('/events?')) seedNewerMemoryFact(store, newerFact(3))
     const response = await server.fetch(request)
     if (!request.url.endsWith('/reducer-values')) return response
     const body = await response.json()
-    body.version++
+    delete body.value.state
     return new Response(JSON.stringify(body), {
       status: response.status,
       headers: response.headers,
@@ -561,18 +634,22 @@ for (const length of [100, 10_000]) {
       named: 9,
       discovery: 0,
     })
-    for (const invalid of ['version', 'value']) {
-      const brokenFetch = (async (url, init) => {
+    for (const skew of ['version', 'value']) {
+      const skewedFetch = (async (url, init) => {
         const response = await fetchFn(url, init)
         const body = await response.json()
-        if (invalid === 'version') body.version++
+        if (skew === 'version') body.version++
         else body.value = null
         return Response.json(body, { headers: response.headers })
       }) as typeof fetch
-      const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn: brokenFetch })
-      await expect(
-        client.getReducerValue({ kind: 'repo', repo: 'repo' }, { reducer: 'dispatchUpgrade' }),
-      ).rejects.toBeInstanceOf(ReducerValueIncompatibilityError)
+      const client = new RemoteBuildStore({ url: 'https://test', token, fetchFn: skewedFetch })
+      const read = client.getReducerValue(
+        { kind: 'repo', repo: 'repo' },
+        { reducer: 'dispatchUpgrade' },
+      )
+      // Version skew alone is cache identity; only an unrepresentable value fails.
+      if (skew === 'version') await expect(read).resolves.toHaveProperty('value')
+      else await expect(read).rejects.toBeInstanceOf(ReducerValueIncompatibilityError)
       expect(rows).toBe(0)
       expect(raw).toBe(0)
     }
