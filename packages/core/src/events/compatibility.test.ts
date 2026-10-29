@@ -296,3 +296,37 @@ test('pre-stage readers validate the entire failure log and defer on the new dec
     )
   }
 })
+
+test('persisted polling checkpoints remain advisory for a reader without the type', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { DISPATCHER } = await import('./envelope')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('/poll-compat')
+  await store.createBuild({ slug: 'poll-compat', repo: '/poll-compat' })
+  const event = await store.append('poll-compat', {
+    actor: DISPATCHER,
+    type: 'node.poll-checked',
+    payload: {
+      activityKey: 'key',
+      unchangedSince: new Date().toISOString(),
+      nodeIdleAfterSeconds: 600,
+      nodeIdlePollSeconds: 120,
+    },
+  })
+  expect(buildEventPolicy['node.poll-checked']).toBe('advisory')
+  expect(event.compatibility?.classification).toBe('advisory')
+  // Model the missing catalog entry at the same unknown-type seam as the
+  // older-reader fixtures above, retaining the actual producer metadata.
+  const opaque = { ...event, type: 'old-reader-unknown.node.poll-checked' }
+  const before = structuredClone(opaque)
+  expect(decodeStoredEvent(opaque)).toBeNull()
+  const state = initialCompatibility()
+  advanceCompatibility(state, [opaque])
+  expect(state.decisiveFacts).toBe(0)
+  expect(compatibilityDiagnostic(state)).toBeUndefined()
+  expect(opaque).toEqual(before)
+  advanceCompatibility(state, [newerFact(event.seq + 1, 'decisive')])
+  expect(state.decisiveFacts).toBe(1)
+  advanceCompatibility(state, [{ ...newerFact(event.seq + 2), compatibility: undefined }])
+  expect(state.decisiveFacts).toBe(2)
+})
