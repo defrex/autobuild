@@ -52,3 +52,16 @@ for (const scenario of ACCESS_SCENARIOS)
       expect(html).toContain('disabled')
     }
   })
+
+test('deletion evidence includes empty, mismatch, match and retained first row', () => {
+  for (const state of ['super', 'mismatch', 'match']) {
+    const html = renderToStaticMarkup(accessFixture(`access-projects-delete-${state}-narrow`))
+    expect(html).toContain('Full repository identity')
+    expect(/disabled=""[^>]*>Delete project/.test(html)).toBe(state !== 'match')
+  }
+  const html = renderToStaticMarkup(accessFixture('access-projects-outcome-unknown-narrow'))
+  expect(html).toContain('Deletion outcome unknown; reload to check')
+  expect(html.indexOf('data-project="https://github.com/acme/web"')).toBeLessThan(
+    html.indexOf('data-project="https://github.com/acme/api"'),
+  )
+})

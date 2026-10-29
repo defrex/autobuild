@@ -1,12 +1,16 @@
 'use client'
 import { AccessFrame, type FrameProps } from '../access/Frame'
 import { ConfirmDialog } from '../dashboard/ConfirmDialog'
-import type { Snapshot, DeletionPreview } from '../access/api'
+import { canDelete, deletionUnknown, type Snapshot, type DeletionPreview } from '../access/api'
 export function ProjectsView(
   props: FrameProps & {
     snapshots?: Snapshot[]
     unassigned?: string[]
     pendingDeletions?: string[]
+    vacatedRows?: Record<string, number>
+    unknownDeletions?: Record<string, number>
+    deletionIdentity?: string
+    onDeletionIdentity?: (value: string) => void
     deleting?: string
     deletionPreview?: DeletionPreview
     deletionError?: string
@@ -45,11 +49,17 @@ export function ProjectsView(
   )
   const deletionConfirmation = (repo: string) => (
     <ConfirmDialog
+      key={repo}
       open
+      focus="input"
       title={`Permanently delete ${repo}?`}
       confirmLabel={props.pendingDeletions?.includes(repo) ? 'Finish deletion' : 'Delete project'}
       pending={pending}
-      disabled={forbidden || props.deletionPreview?.repo !== repo}
+      disabled={
+        forbidden ||
+        !!props.unknownDeletions?.[repo] ||
+        !canDelete(repo, props.deletionIdentity ?? '', props.deletionPreview)
+      }
       onConfirm={() => props.onDeleteConfirm?.(repo)}
       onCancel={() => props.onCancel?.()}
     >
@@ -68,6 +78,32 @@ export function ProjectsView(
       ) : (
         <p role="status">Loading deletion preview…</p>
       )}
+      <label htmlFor="deletion-identity">Full repository identity</label>
+      <p id="deletion-identity-help">
+        Type <span className="project">{repo}</span> exactly to confirm.
+      </p>
+      <input
+        id="deletion-identity"
+        className="project"
+        aria-describedby="deletion-identity-help"
+        autoComplete="off"
+        spellCheck={false}
+        value={props.deletionIdentity ?? ''}
+        disabled={pending}
+        onInput={(event) => props.onDeletionIdentity?.(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            if (
+              !pending &&
+              !forbidden &&
+              !props.unknownDeletions?.[repo] &&
+              canDelete(repo, props.deletionIdentity ?? '', props.deletionPreview)
+            )
+              props.onDeleteConfirm?.(repo)
+          }
+        }}
+      />
       {props.deletionError && (
         <p className="red" role="alert">
           {props.deletionError}
@@ -76,7 +112,7 @@ export function ProjectsView(
     </ConfirmDialog>
   )
   return (
-    <AccessFrame {...props} title="Projects">
+    <AccessFrame {...props} showLoading={!props.snapshots} refreshLabel="Reload" title="Projects">
       <p className="slack access-lede">
         A project belongs to one organization. Moving it changes who can reach it immediately.
       </p>
@@ -91,18 +127,39 @@ export function ProjectsView(
           <p className="slack access-help">Only super users can see these until you assign them.</p>
           <div className="access-rows">
             {props.unassigned.map((repo) => (
-              <div className="access-row project-row" key={repo}>
+              <div
+                className="access-row project-row"
+                key={repo}
+                data-project={repo}
+                style={
+                  props.unknownDeletions?.[repo]
+                    ? {
+                        height: props.unknownDeletions[repo],
+                        minHeight: props.unknownDeletions[repo],
+                        boxSizing: 'border-box',
+                      }
+                    : undefined
+                }
+              >
                 <span className="project">{repo}</span>
                 <div className="access-actions">
-                  {select(repo)}
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={pending || forbidden || !destination(repo)}
-                    onClick={() => props.onAssign?.(repo)}
-                  >
-                    Assign
-                  </button>
+                  {props.unknownDeletions?.[repo] ? (
+                    <span role="status" className="red deletion-unknown">
+                      {deletionUnknown}
+                    </span>
+                  ) : (
+                    <>
+                      {select(repo)}
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={pending || forbidden || !destination(repo)}
+                        onClick={() => props.onAssign?.(repo)}
+                      >
+                        Assign
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -120,22 +177,45 @@ export function ProjectsView(
             a fresh connection.
           </p>
           <div className="access-rows">
-            {props.pendingDeletions.map((repo) => (
-              <div className="access-row project-row" key={repo}>
-                <span className="project">{repo}</span>
-                <span className="warn">Deletion unfinished</span>
-                <div className="access-actions">
-                  <button
-                    type="button"
-                    className="word danger"
-                    disabled={pending || forbidden}
-                    onClick={() => props.onDelete?.(repo)}
-                  >
-                    Finish deletion…
-                  </button>
+            {props.pendingDeletions.map((repo) =>
+              props.vacatedRows?.[repo] ? (
+                <div key={repo} aria-hidden="true" style={{ height: props.vacatedRows[repo] }} />
+              ) : (
+                <div
+                  className="access-row project-row"
+                  key={repo}
+                  data-project={repo}
+                  style={
+                    props.unknownDeletions?.[repo]
+                      ? {
+                          height: props.unknownDeletions[repo],
+                          minHeight: props.unknownDeletions[repo],
+                          boxSizing: 'border-box',
+                        }
+                      : undefined
+                  }
+                >
+                  <span className="project">{repo}</span>
+                  <span className="warn">Deletion unfinished</span>
+                  <div className="access-actions">
+                    {props.unknownDeletions?.[repo] ? (
+                      <span role="status" className="red deletion-unknown">
+                        {deletionUnknown}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="word danger"
+                        disabled={pending || forbidden}
+                        onClick={() => props.onDelete?.(repo)}
+                      >
+                        Finish deletion…
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ),
+            )}
           </div>
         </>
       )}
@@ -144,34 +224,59 @@ export function ProjectsView(
           <h2>{snapshots.reduce((n, s) => n + s.projects.length, 0)} assigned</h2>
           <div className="access-rows">
             {snapshots.flatMap(({ organization: org, projects }) =>
-              projects.map((repo) => (
-                <div className="access-row project-row" key={repo}>
-                  <span className="project">{repo}</span>
-                  <span>{org.name}</span>
-                  <div className="access-actions">
-                    {props.isSuperUser && (
-                      <button
-                        type="button"
-                        className="word slack"
-                        disabled={pending || forbidden || !destination(repo, org.id)}
-                        onClick={() => props.onMove?.(repo)}
-                      >
-                        Move…
-                      </button>
-                    )}
-                    {(props.isSuperUser || org.membershipRole === 'owner') && (
-                      <button
-                        type="button"
-                        className="word danger"
-                        disabled={pending || forbidden}
-                        onClick={() => props.onDelete?.(repo)}
-                      >
-                        Delete…
-                      </button>
-                    )}
+              projects.map((repo) =>
+                props.vacatedRows?.[repo] ? (
+                  <div key={repo} aria-hidden="true" style={{ height: props.vacatedRows[repo] }} />
+                ) : (
+                  <div
+                    className="access-row project-row"
+                    key={repo}
+                    data-project={repo}
+                    style={
+                      props.unknownDeletions?.[repo]
+                        ? {
+                            height: props.unknownDeletions[repo],
+                            minHeight: props.unknownDeletions[repo],
+                            boxSizing: 'border-box',
+                          }
+                        : undefined
+                    }
+                  >
+                    <span className="project">{repo}</span>
+                    <span>{org.name}</span>
+                    <div className="access-actions">
+                      {props.unknownDeletions?.[repo] ? (
+                        <span role="status" className="red deletion-unknown">
+                          {deletionUnknown}
+                        </span>
+                      ) : (
+                        <>
+                          {props.isSuperUser && (
+                            <button
+                              type="button"
+                              className="word slack"
+                              disabled={pending || forbidden || !destination(repo, org.id)}
+                              onClick={() => props.onMove?.(repo)}
+                            >
+                              Move…
+                            </button>
+                          )}
+                          {(props.isSuperUser || org.membershipRole === 'owner') && (
+                            <button
+                              type="button"
+                              className="word danger"
+                              disabled={pending || forbidden}
+                              onClick={() => props.onDelete?.(repo)}
+                            >
+                              Delete…
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )),
+                ),
+              ),
             )}
           </div>
           {(() => {

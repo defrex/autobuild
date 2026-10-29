@@ -107,3 +107,30 @@ test('unfinished deletion survives fresh page rendering with only a finish actio
   expect(confirmation).toContain('Finish deletion</button>')
   expect(confirmation).toContain('Cancel')
 })
+
+test('typing gate has safe focus and unknown rows expose no actions', () => {
+  const preview = {
+    repo,
+    token: 'generation',
+    builds: 0,
+    tickets: 0,
+    secrets: 0,
+    subscriptionAccounts: 0,
+  }
+  for (const value of ['', `${repo}/`, repo]) {
+    const html = renderToStaticMarkup(
+      <ProjectsView {...base} deleting={repo} deletionPreview={preview} deletionIdentity={value} />,
+    )
+    expect(html).toContain('Full repository identity')
+    expect(html).toContain('aria-describedby="deletion-identity-help"')
+    expect(html).not.toContain('autofocus')
+    expect(/disabled=""[^>]*>Delete project/.test(html)).toBe(value !== repo)
+  }
+  const html = renderToStaticMarkup(
+    <ProjectsView {...base} isSuperUser unknownDeletions={{ [repo]: 90 }} />,
+  )
+  expect(html).toContain('Deletion outcome unknown; reload to check')
+  expect(html).not.toContain('Delete…')
+  expect(html).not.toContain('Move…')
+  expect(html).not.toContain('Finish deletion…')
+})
