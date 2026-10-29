@@ -15,6 +15,8 @@ import {
   RELEASE_LINE_PROTOCOLS,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+  classifyClient,
+  supportedClientRange,
 } from '@defrex/autobuild/remote-store'
 import { agentActor, DISPATCHER, KERNEL, humanActor } from '@defrex/autobuild/testing'
 import { textContent } from '@defrex/autobuild/testing'
@@ -1439,19 +1441,21 @@ test('position endpoint reads only the counter and supports build-only and unkno
   expect(await backing.getRepo('org/repo')).toBeNull()
 })
 
-test.each([...new Set([AUTOBUILD_VERSION, '1.0.0-beta.0', '1.0.0'])])(
-  'audit capability survives completion and clears on settlement for %s',
-  async (version) => {
-    const { verifyAuditCapability } = await import('./testing/audit-capability')
-    // Released clients send their own line's protocol identity, not the current one.
-    const line = (v: string) => v.split('.').slice(0, 2).join('.')
-    const protocol =
-      line(version) === line(AUTOBUILD_VERSION)
-        ? REMOTE_STORE_PROTOCOL_VERSION
-        : RELEASE_LINE_PROTOCOLS[line(version)]!
-    await verifyAuditCapability(version, protocol, true)
-  },
-)
+// Published releases still inside the installed service's supported client window.
+test.each(
+  [...new Set([AUTOBUILD_VERSION, '1.0.0-beta.0', '1.0.0', '1.1.0', '1.2.0'])].filter(
+    (version) => classifyClient(version, supportedClientRange()) === 'supported',
+  ),
+)('audit capability survives completion and clears on settlement for %s', async (version) => {
+  const { verifyAuditCapability } = await import('./testing/audit-capability')
+  // Released clients send their own line's protocol identity, not the current one.
+  const line = (v: string) => v.split('.').slice(0, 2).join('.')
+  const protocol =
+    line(version) === line(AUTOBUILD_VERSION)
+      ? REMOTE_STORE_PROTOCOL_VERSION
+      : RELEASE_LINE_PROTOCOLS[line(version)]!
+  await verifyAuditCapability(version, protocol, true)
+})
 
 describe('latest artifact metadata route', () => {
   test('validates kind, preserves build scope, and reports unsupported backings explicitly', async () => {

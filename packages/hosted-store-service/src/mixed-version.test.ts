@@ -23,6 +23,8 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION,
   RELEASE_LINE_PROTOCOLS,
   REDUCER_VALUE_PROJECTION_HEADER,
+  classifyClient,
+  supportedClientRange,
 } from '@defrex/autobuild/remote-store'
 import { createStoreServer } from './remote-store-server'
 import { createHostedStoreService } from './service'
@@ -81,28 +83,38 @@ test('released strict parsers accept three-field build/repository answers throug
     sourceFor: () => new FakeTicketSource(),
     openStore: async () => store,
   })
-  for (const service of [direct, composed])
-    for (const [path, reducer] of [
-      ['/builds/mixed', 'buildReadFacts'],
-      ['/repos/repo', 'repositoryReadFacts'],
-    ]) {
-      const response = await service.fetch(
-        new Request(`https://test${path}/reducer-values`, {
-          method: 'POST',
-          headers: {
-            ...headers,
-            [AUTOBUILD_VERSION_HEADER]: '1.0.0-beta.0',
-            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: RELEASE_LINE_PROTOCOLS['1.0']!,
-          },
-          body: JSON.stringify({ reducer }),
-        }),
-      )
-      expect(response.status).toBe(200)
-      expect(response.headers.get(CATALOG_IDENTITY_HEADER)).toBe(READ_CATALOG_IDENTITY)
-      const body = await response.json()
-      expect(Object.keys(body).sort()).toEqual(['cursor', 'value', 'version'])
-      releasedParser.parse(body)
-    }
+  const line = (version: string) => version.split('.').slice(0, 2).join('.')
+  // Published releases still inside the installed service's supported client window.
+  const released = ['1.0.0-beta.0', '1.1.0', '1.2.0'].filter(
+    (version) => classifyClient(version, supportedClientRange()) === 'supported',
+  )
+  expect(released.length).toBeGreaterThan(0)
+  for (const client of released)
+    for (const service of [direct, composed])
+      for (const [path, reducer] of [
+        ['/builds/mixed', 'buildReadFacts'],
+        ['/repos/repo', 'repositoryReadFacts'],
+      ]) {
+        const response = await service.fetch(
+          new Request(`https://test${path}/reducer-values`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              [AUTOBUILD_VERSION_HEADER]: client,
+              [REMOTE_STORE_PROTOCOL_VERSION_HEADER]:
+                line(client) === line(AUTOBUILD_VERSION)
+                  ? REMOTE_STORE_PROTOCOL_VERSION
+                  : RELEASE_LINE_PROTOCOLS[line(client)]!,
+            },
+            body: JSON.stringify({ reducer }),
+          }),
+        )
+        expect(response.status).toBe(200)
+        expect(response.headers.get(CATALOG_IDENTITY_HEADER)).toBe(READ_CATALOG_IDENTITY)
+        const body = await response.json()
+        expect(Object.keys(body).sort()).toEqual(['cursor', 'value', 'version'])
+        releasedParser.parse(body)
+      }
 })
 
 test('released 1.2.0 clients read their frozen reducer versions; projecting clients read canonical ones', async () => {
