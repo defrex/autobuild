@@ -13,12 +13,13 @@ persistence requirements, and conformance bar for the protocol shipped in this
 distribution are all defined here. Protocol implementations must retain contracts for every supported client line;
 protocol changes update this document and executable contracts together.
 
-A service accepts stable and prerelease clients from its own `major.minor`
-release line and the two preceding minor lines in the same major. A major starts a new family:
-X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
-Patch versions are interchangeable in both directions and must never change
-the protocol. Clients must remain within the instance’s published compatibility window. Supported release lines retain their wire handlers and known
-protocol identities; an unknown protocol is refused independently of version.
+A published release line stays supported by a service until both at least two newer minor lines have been published and 90 days have passed since the first release of the line that superseded it. The rule spans majors: a new major keeps supporting earlier lines on the same terms. The policy floor is 1.2: lines before 1.2 are refused regardless of publication dates because their clients rebuild server state from the journal. Lines newer than the service stay unsupported (service first). Supported means the published clients of that line can use the service’s retained protocol handlers and read its reduced answers in the shapes their released clients accept.
+
+Stable patches never reset a line’s first-publication date. Only actually published
+lines at or below the service line count; prereleases do not start retirement clocks.
+Publication facts survive removal of retired identities, contracts, and handlers.
+Patch releases must retain their line’s protocol identity. Unknown historical
+protocol identities are refused independently of the numeric window.
 Stable and prerelease service and client identities share their numeric major/minor
 line. Malformed or missing identities, build metadata (`+…`), prefixes and
 whitespace are refused with HTTP 409.
@@ -29,8 +30,9 @@ and supported range.
 Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
 `protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
 Range endpoints remain stable versions. The range is inclusive at the minimum
-and exclusive at the maximum; a 0.11.x
-service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+and exclusive at the maximum; a 1.3.x
+service publishes `>=1.2.0 <1.4.0` until later publication facts permit retirement.
+The service reads the clock for each decision, so retirement needs no redeploy. Health needs no credentials, version
 headers, or available backend.
 
 ## 1. Transport and conventions
@@ -403,10 +405,18 @@ represent and drops object properties that shape does not know. An invalid envel
 or a value the client cannot represent, such as a missing field or an unknown
 variant, raises `ReducerValueIncompatibilityError`, naming the reducer,
 client/server versions and validation detail. Clients send
-`x-autobuild-reducer-value-projection: 1`. A 1.2.0 client predates that capability
-and accepts only its own reducer version and shape. The service answers it with the
-value projected onto the frozen 1.2.0 shape and the 1.2.0 reducer version, or with
-the unprojected answer when that shape cannot represent it. Clients never reconstruct named
+`x-autobuild-reducer-value-projection: 1`. The service retains frozen finished-value
+contracts for every supported published client, including projection-capable clients.
+It projects answers onto those contracts and stamps the released reducer version.
+An unknown event variant in optional `lastEvent` is omitted, including nested build
+state; cursor, progress, and compatibility facts remain canonical. The required
+`seenTypes` set retains the event types known to that released reader. Required values
+that cannot be represented retain typed incompatibility behavior. The request’s
+`x-autobuild-catalog-identity` may identify the generated finished-value catalog;
+any supplied catalog identity plus projection capability preserves the canonical answer,
+including an unrecognized source-client catalog. Source clients can share a published
+package version while requiring newer fields. Published clients without a catalog
+identity receive the frozen published contract. Clients never reconstruct named
 answers from raw events. Repository build-digest batches are likewise canonical:
 one repo-scoped GET returns the batch without client build discovery or per-build
 reducer requests. This does not change the explicit snapshot or event APIs.

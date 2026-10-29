@@ -1013,6 +1013,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         {
           version: req.headers.get(AUTOBUILD_VERSION_HEADER),
           projects: req.headers.get(REDUCER_VALUE_PROJECTION_HEADER) === '1',
+          catalogIdentity: req.headers.get(CATALOG_IDENTITY_HEADER),
         },
         body.reducer,
         await store.getReducerValue(scope, body),

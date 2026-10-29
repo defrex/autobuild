@@ -20,5 +20,7 @@ export const REMOTE_STORE_PROTOCOL_VERSION_HEADER = 'x-autobuild-protocol-versio
 export const CATALOG_IDENTITY_HEADER = 'x-autobuild-catalog-identity'
 
 /** Reducer-value capability, independent of version: the client projects the
- * canonical value onto its own shape, so the server never down-projects it. */
+ * canonical value onto its own shape. The server still adapts published clients
+ * without catalog identities to their frozen contracts when new variants would
+ * defeat that projection. Source clients supplying identities retain canonical values. */
 export const REDUCER_VALUE_PROJECTION_HEADER = 'x-autobuild-reducer-value-projection'

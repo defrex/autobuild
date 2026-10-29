@@ -963,13 +963,13 @@ conformance suite):
    client, is the conformance bar. Autobuild does not load in-process BuildStore
    plugins. Git worktrees and default file tickets necessarily remain local.
 
-A service accepts stable and prerelease clients from its own `major.minor`
-release line and the two preceding minor lines in the same major. A major starts a new family:
-X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
-Patch versions are interchangeable in both directions and must never change
-the protocol. Upgrade the service first, then projects independently within
-its window. Supported release lines retain their wire handlers and known
-protocol identities; an unknown protocol is refused independently of version.
+A published release line stays supported by a service until both at least two newer minor lines have been published and 90 days have passed since the first release of the line that superseded it. The rule spans majors: a new major keeps supporting earlier lines on the same terms. The policy floor is 1.2: lines before 1.2 are refused regardless of publication dates because their clients rebuild server state from the journal. Lines newer than the service stay unsupported (service first). Supported means the published clients of that line can use the service’s retained protocol handlers and read its reduced answers in the shapes their released clients accept.
+
+Stable patches never reset a line’s first-publication date. Only actually published
+lines at or below the service line count; prereleases do not start retirement clocks.
+Publication facts survive removal of retired identities, contracts, and handlers.
+Patch releases must retain their line’s protocol identity. Unknown historical
+protocol identities are refused independently of the numeric window.
 Stable and prerelease service and client identities share their numeric major/minor
 line. Malformed or missing identities, build metadata (`+…`), prefixes and
 whitespace are refused with HTTP 409.
@@ -980,8 +980,9 @@ and supported range.
 Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
 `protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
 Range endpoints remain stable versions. The range is inclusive at the minimum
-and exclusive at the maximum; a 0.11.x
-service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+and exclusive at the maximum; a 1.3.x
+service publishes `>=1.2.0 <1.4.0` until later publication facts permit retirement.
+The service reads the clock for each decision, so retirement needs no redeploy. Health needs no credentials, version
 headers, or available backend.
 
 `subscribe` is specced in the interface; the current implementation is polling
@@ -2983,10 +2984,16 @@ drops object properties its shape does not know, so additive server changes
 reach older readers. Invalid envelopes and values the client cannot represent
 (a missing field, an unknown variant) fail with a typed incompatibility error
 naming the reducer and client/server versions. Clients send
-`x-autobuild-reducer-value-projection: 1`. For a published client that predates
-this capability and checks exact versions (1.2.0), the service projects the
-answer onto that release's frozen shape and returns that release's reducer version,
-retaining the catalog while the release is in the supported window. Remote clients never
+`x-autobuild-reducer-value-projection: 1`. The service retains frozen contracts for
+every supported published client, including clients with projection capability.
+It adapts canonical answers to the released finished shape and reducer version.
+Unknown event variants in optional `lastEvent` are omitted, also in nested build
+state, while cursor, progress, and compatibility facts remain canonical. The
+required `seenTypes` set retains the event types known to that released reader.
+Unrepresentable required values remain typed incompatibilities. A request may
+identify its generated finished-value catalog in `x-autobuild-catalog-identity`;
+any supplied catalog identity with projection capability retains the canonical answer,
+including unrecognized source catalogs whose package version still names an older release. Remote clients never
 reconstruct named answers from event logs. Catalog identity travels in response
 header `x-autobuild-catalog-identity`; strict JSON bodies remain exactly
 `{version, cursor, value}`. Missing/malformed headers do not reject an answer.

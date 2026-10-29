@@ -3534,12 +3534,13 @@ progress is not shown. Harvest does not consume build capacity.
 
 ## Hosted service client compatibility
 
-A service accepts stable and prerelease clients from its own `major.minor`
-release line and the two preceding minor lines in the same major. A major starts a new family:
-X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
-Patch versions are interchangeable in both directions and must never change
-the protocol. Keep project clients within the instance’s published window. Supported release lines retain their wire handlers and known
-protocol identities; an unknown protocol is refused independently of version.
+A published release line stays supported by a service until both at least two newer minor lines have been published and 90 days have passed since the first release of the line that superseded it. The rule spans majors: a new major keeps supporting earlier lines on the same terms. The policy floor is 1.2: lines before 1.2 are refused regardless of publication dates because their clients rebuild server state from the journal. Lines newer than the service stay unsupported (service first). Supported means the published clients of that line can use the service’s retained protocol handlers and read its reduced answers in the shapes their released clients accept.
+
+Stable patches never reset a line’s first-publication date. Only actually published
+lines at or below the service line count; prereleases do not start retirement clocks.
+Publication facts survive removal of retired identities, contracts, and handlers.
+Patch releases must retain their line’s protocol identity. Unknown historical
+protocol identities are refused independently of the numeric window.
 Stable and prerelease service and client identities share their numeric major/minor
 line. Malformed or missing identities, build metadata (`+…`), prefixes and
 whitespace are refused with HTTP 409.
@@ -3550,8 +3551,9 @@ and supported range.
 Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
 `protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
 Range endpoints remain stable versions. The range is inclusive at the minimum
-and exclusive at the maximum; a 0.11.x
-service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+and exclusive at the maximum; a 1.3.x
+service publishes `>=1.2.0 <1.4.0` until later publication facts permit retirement.
+The service reads the clock for each decision, so retirement needs no redeploy. Health needs no credentials, version
 headers, or available backend.
 
 Remote workspace factories must use `delegateCredential(storeRef, undefined,
