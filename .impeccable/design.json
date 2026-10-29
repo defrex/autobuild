@@ -445,7 +445,7 @@
     {
       "name": "Confirmation dialog",
       "kind": "custom",
-      "description": "The one modal: names what a destructive action takes away, red primary confirm then ghost Cancel, over a translucent ground backdrop.",
+      "description": "The one modal: names what a destructive action takes away, red primary confirm then ghost Cancel, over a translucent ground backdrop. Irreversible project deletion requires exact full repository identity in a square well mono input with initial focus; confirm and Enter require a matching identity and preview. Unknown deletion rows retain their slot and footprint without actions until fresh discovery. Other actions retain confirm focus.",
       "html": "<div class=\"ds-confirm\"><strong>Remove operator@example.com?</strong><p>They lose this organization’s grant on their next request.</p><button class=\"ds-confirm-go\">Remove</button> <button class=\"ds-confirm-cancel\">Cancel</button></div>",
       "css": ".ds-confirm{font-family:var(--sans,\"Atkinson Hyperlegible Next\",system-ui,sans-serif);font-size:15px;line-height:1.5;max-width:56ch;padding:20px 22px;border:1.5px solid var(--slack,#5f6571);background:var(--ground,#fbfbfc);color:var(--ink,#1a1d24)}.ds-confirm p{margin:12px 0;color:var(--slack,#5f6571)}.ds-confirm button{font:inherit;font-weight:600;border:1.5px solid transparent;border-radius:0;padding:3px 12px;background:transparent;color:var(--slack,#5f6571)}.ds-confirm .ds-confirm-go{color:var(--ground,#fbfbfc);background:var(--red,#d32b33);border-color:var(--red,#d32b33)}.ds-confirm button:focus-visible{outline:2px solid var(--teal,#007f8a);outline-offset:2px}"
     }
