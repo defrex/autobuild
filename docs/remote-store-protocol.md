@@ -413,8 +413,10 @@ state; cursor, progress, and compatibility facts remain canonical. The required
 `seenTypes` set retains the event types known to that released reader. Required values
 that cannot be represented retain typed incompatibility behavior. The request’s
 `x-autobuild-catalog-identity` may identify the generated finished-value catalog;
-a matching catalog plus projection capability preserves full current-client fidelity.
-Missing or unrecognized identity still receives the published contract. Clients never reconstruct named
+any supplied catalog identity plus projection capability preserves the canonical answer,
+including an unrecognized source-client catalog. Source clients can share a published
+package version while requiring newer fields. Published clients without a catalog
+identity receive the frozen published contract. Clients never reconstruct named
 answers from raw events. Repository build-digest batches are likewise canonical:
 one repo-scoped GET returns the batch without client build discovery or per-build
 reducer requests. This does not change the explicit snapshot or event APIs.

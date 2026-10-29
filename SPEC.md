@@ -2992,7 +2992,8 @@ state, while cursor, progress, and compatibility facts remain canonical. The
 required `seenTypes` set retains the event types known to that released reader.
 Unrepresentable required values remain typed incompatibilities. A request may
 identify its generated finished-value catalog in `x-autobuild-catalog-identity`;
-matching catalogs with projection capability retain full current-client fidelity. Remote clients never
+any supplied catalog identity with projection capability retains the canonical answer,
+including unrecognized source catalogs whose package version still names an older release. Remote clients never
 reconstruct named answers from event logs. Catalog identity travels in response
 header `x-autobuild-catalog-identity`; strict JSON bodies remain exactly
 `{version, cursor, value}`. Missing/malformed headers do not reject an answer.

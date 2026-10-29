@@ -231,6 +231,26 @@ test('current catalog preserves full fidelity without weakening released project
   ).toBe(answer)
 })
 
+test('unrecognized source catalogs preserve canonical fields and event facts', () => {
+  const answer = {
+    version: 99,
+    cursor: 4,
+    value: {
+      value: 'abc',
+      addedAfter130: 'required by the source client',
+      seenTypes: ['future.event'],
+      lastEvent: { type: 'future.event' },
+    },
+  }
+  expect(
+    reducerValueForClient(
+      { version: '1.3.0', projects: true, catalogIdentity: 'fingerprint-of-newer-main' },
+      'recordedBaseShaValue',
+      answer,
+    ),
+  ).toBe(answer)
+})
+
 import { MemoryBuildStore } from '../memory'
 import { KERNEL } from '../../events/envelope'
 

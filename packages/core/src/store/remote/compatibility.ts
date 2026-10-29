@@ -1,5 +1,4 @@
 import semver from 'semver'
-import { REDUCER_VALUE_CONTRACT_IDENTITY } from '../reducer-value-validation'
 import { z } from 'zod'
 import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
 import { projectReducerValue, type ReducerValueCatalog } from '../reducer-value-validation'
@@ -157,7 +156,9 @@ export function reducerValueForClient<T extends { version: number; value: unknow
   reducer: string,
   answer: T,
 ): T {
-  if (client.projects && client.catalogIdentity === REDUCER_VALUE_CONTRACT_IDENTITY) return answer
+  // Source clients retain the package version between releases. Their catalog
+  // can require fields absent from that version's published contract.
+  if (client.projects && client.catalogIdentity) return answer
   const { version: release } = client
   if (release === null) return answer
   const published = RELEASED_CLIENTS.find((entry) => entry.version === release)
