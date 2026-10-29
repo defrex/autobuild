@@ -1,4 +1,10 @@
 import {
+  repoTicketScanCheckpointSchema,
+  sameScanCheckpoint,
+  validateScanCheckpoint,
+  type RepoTicketScanCheckpoint,
+} from '../ticket-scan-checkpoint'
+import {
   operatorIdentitySchema,
   OPERATOR_PRESENCE_TTL_MS,
   type OperatorIdentity,
@@ -171,6 +177,7 @@ CREATE TRIGGER IF NOT EXISTS repo_holder_change AFTER UPDATE OF lease_holder ON 
 `
 
 export const BOOTSTRAP_DDL = [
+  `CREATE TABLE IF NOT EXISTS repo_ticket_scan_checkpoints (repo TEXT PRIMARY KEY REFERENCES repo_streams(repo) ON DELETE CASCADE, value TEXT NOT NULL)`,
   // Reducer snapshots: additive and idempotent, so databases that predate the
   // table gain it on open.
   `CREATE TABLE IF NOT EXISTS reducer_snapshots (
@@ -1820,6 +1827,33 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
+  async getRepoTicketScanCheckpoint(repo: string): Promise<RepoTicketScanCheckpoint | null> {
+    const row = this.sqlite
+      .query('SELECT value FROM repo_ticket_scan_checkpoints WHERE repo = ?')
+      .get(repo) as { value: string } | null
+    return row ? validateScanCheckpoint(JSON.parse(row.value)) : null
+  }
+  async compareAndSetRepoTicketScanCheckpoint(
+    repo: string,
+    expected: RepoTicketScanCheckpoint | null,
+    next: RepoTicketScanCheckpoint,
+  ): Promise<boolean> {
+    expected = validateScanCheckpoint(expected)
+    next = repoTicketScanCheckpointSchema.parse(next)
+    return this.writeTx(() => {
+      if (!this.sqlite.query('SELECT repo FROM repo_streams WHERE repo = ?').get(repo)) return false
+      const row = this.sqlite
+        .query('SELECT value FROM repo_ticket_scan_checkpoints WHERE repo = ?')
+        .get(repo) as { value: string } | null
+      if (!sameScanCheckpoint(row ? JSON.parse(row.value) : null, expected)) return false
+      this.sqlite
+        .query(
+          'INSERT INTO repo_ticket_scan_checkpoints (repo, value) VALUES (?, ?) ON CONFLICT(repo) DO UPDATE SET value=excluded.value',
+        )
+        .run(repo, JSON.stringify(next))
+      return true
+    })
+  }
   async beginRepoTick(repo: string, holder: string): Promise<string | null> {
     return this.writeTx(() => {
       const row = this.requireRepo(repo)
