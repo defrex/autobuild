@@ -81,7 +81,7 @@ live(
 )
 
 /** A pooler seam: each transaction opens and closes a new physical connection. */
-function rebinding(url: string, inside: { count: number }): SQL {
+function rebinding(url: string, inside: { count: number }, onRefreshingRead?: () => void): SQL {
   const run = async (query: unknown, params: unknown[] = []) => {
     const sql = new SQL(url)
     try {
@@ -98,7 +98,14 @@ function rebinding(url: string, inside: { count: number }): SQL {
         inside.count++
         const guarded = ((q: TemplateStringsArray, ...p: unknown[]) => {
           if (/pg_advisory_lock\s*\(/.test(q.join(''))) throw new Error('session lock forbidden')
-          return tx(q, ...p)
+          const query = tx(q, ...p)
+          // Preserve Bun SQL query objects used as SQL fragments by other tests.
+          if (!onRefreshingRead || !/SELECT \* FROM project_secrets/.test(q.join(''))) return query
+          return query.then((rows) => {
+            if (rows.some((row: { status: string }) => row.status === 'refreshing'))
+              onRefreshingRead()
+            return rows
+          })
         }) as unknown as SQL
         try {
           return await work(guarded)
@@ -427,10 +434,18 @@ live('unknown claim/completion commit outcomes never repeat external rotation', 
           'secret-unavailable',
         )
         expect((await store.list(repo))[0]!.status).toBe('failed')
+        const beforeRetry = calls
+        await expect(store.resolveForTick(repo, now + 600000, now + 5000)).rejects.toThrow(
+          'secret-unavailable',
+        )
+        expect(calls).toBe(beforeRetry)
       } else
         expect((await store.resolveForTick(repo, now + 600000, now + 5000)).env.KIMI_API_KEY).toBe(
           'fresh',
         )
+      const beforeRetry = calls
+      if (!before) await store.resolveForTick(repo, now + 600000, now + 5000)
+      expect(calls).toBe(beforeRetry)
     }
     expect(calls).toBe(2)
   }),
@@ -789,13 +804,22 @@ live(
 live(
   'typed ChatGPT registrations retain encrypted rotating state and stable project host identity',
   () =>
-    fixture(async (sql, _url, projects) => {
-      const now = Date.now()
+    fixture(async (sql, url, projects) => {
+      let now = 2_000_000_000_000
       let calls = 0
+      let entered!: () => void, release!: () => void
+      const started = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
       const adapter: RefreshKind = {
         validateState: (raw) => chatgptStateSchema.safeParse(raw).success,
         refresh: async (raw) => {
           calls++
+          entered()
+          await gate
           const state = chatgptStateSchema.parse(raw)
           const next = {
             ...state,
@@ -817,6 +841,7 @@ live(
         projects,
         () => key,
         new Map([['chatgpt-subscription', adapter]]),
+        () => now,
       )
       const hostId = await store.chatgptHost(repo)
       expect(hostId).toBe(await store.chatgptHost(repo))
@@ -833,12 +858,33 @@ live(
         earliestRefreshAt: now - 1000,
       }
       await store.setChatGPT(repo, 'CHATGPT_ACCESS', state, 'member')
-      const snapshots = await Promise.all([
-        store.resolveForTick(repo, now + 600000, now + 10000),
-        store.resolveForTick(repo, now + 600000, now + 10000),
-      ])
+      expect((await store.resolveForTick(repo, now + 7200000, now + 10000)).env).toEqual({
+        CHATGPT_ACCESS: 'sentinel-initial-access',
+      })
+      expect(calls).toBe(0)
+      now = state.expiresAt - 600000
+      const first = store.resolveForTick(repo, now + 600000, now + 10000)
+      await started
+      let observed!: () => void
+      const refreshingRead = new Promise<void>((resolve) => {
+        observed = resolve
+      })
+      const peerPool = rebinding(url, { count: 0 }, observed)
+      const peer = new PostgresProjectSecrets(
+        peerPool,
+        projects,
+        () => key,
+        new Map([['chatgpt-subscription', adapter]]),
+        () => now,
+      )
+      const second = peer.resolveForTick(repo, now + 600000, now + 10000)
+      await refreshingRead
+      release()
+      const snapshots = await Promise.all([first, second])
       expect(calls).toBe(1)
-      expect(snapshots[0]!.env).toEqual({ CHATGPT_ACCESS: 'sentinel-next-access' })
+      for (const snapshot of snapshots)
+        expect(snapshot.env).toEqual({ CHATGPT_ACCESS: 'sentinel-next-access' })
+      expect(await store.chatgptHost(repo)).toBe(hostId)
       const persisted = JSON.stringify(await sql`SELECT * FROM project_secrets`)
       const metadata = JSON.stringify(await store.list(repo))
       for (const value of [
@@ -914,5 +960,126 @@ live('browser writes are atomic static-only mutations and preserve refreshing re
     // The unrestricted CLI operation retains its existing replacement semantics.
     await store.set(repo, 'TOKEN', 'cli-static', 'cli')
     expect((await store.list(repo))[0]?.kind).toBe('static')
+  }),
+)
+
+for (const floorOffset of [undefined, -900000, 0, 300000]) {
+  live(`hosted refresh gates expiry and provider floor: ${floorOffset}`, () =>
+    fixture(async (sql, _url, projects) => {
+      const expiry = 2_000_003_600_000
+      const threshold = expiry - 600000
+      const floor = floorOffset === undefined ? undefined : threshold + floorOffset
+      const due = Math.max(threshold, floor ?? 0)
+      let now = threshold - 900000
+      const states: unknown[] = []
+      const store = new PostgresProjectSecrets(
+        sql,
+        projects,
+        () => key,
+        new Map([
+          [
+            'fake',
+            {
+              validateState: (s: unknown) => typeof s === 'string',
+              async refresh(state: unknown) {
+                states.push(state)
+                return {
+                  accessToken: 'fresh',
+                  state: `rotation-${states.length}`,
+                  expiresAt: now + 3600000,
+                }
+              },
+            },
+          ],
+        ]),
+        () => now,
+      )
+      const register = () =>
+        store.setPayload(
+          repo,
+          'PLAN_ACCESS',
+          'fake',
+          {
+            accessToken: 'old',
+            state: 'original',
+            expiresAt: expiry,
+            ...(floor === undefined ? {} : { earliestRefreshAt: floor }),
+          },
+          'member',
+        )
+      const resolve = () => store.resolveForTick(repo, now + 7200000, now + 10000)
+      await register()
+      for (const tick of [threshold - 600000, threshold - 300000, due - 1]) {
+        now = tick
+        expect((await resolve()).env.PLAN_ACCESS).toBe('old')
+        expect(states).toEqual([])
+        expect((await store.list(repo))[0]!.status).toBe('ready')
+      }
+      now = due
+      expect((await resolve()).env.PLAN_ACCESS).toBe('fresh')
+      expect(states).toEqual(['original'])
+      now += 300000
+      expect((await resolve()).env.PLAN_ACCESS).toBe('fresh')
+      expect(states).toEqual(['original'])
+      now = due + 3000000
+      await resolve()
+      expect(states).toEqual(['original', 'rotation-1'])
+      // A fresh registration also becomes eligible immediately after the boundary.
+      await register()
+      now = due + 1
+      await resolve()
+      expect(states).toEqual(['original', 'rotation-1', 'original'])
+    }),
+  )
+}
+
+live('expired access behind a future provider floor fails closed without rotation', () =>
+  fixture(async (sql, _url, projects) => {
+    let now = 2_000_000_000_000
+    let calls = 0
+    const store = new PostgresProjectSecrets(
+      sql,
+      projects,
+      () => key,
+      new Map([
+        [
+          'fake',
+          {
+            validateState: () => true,
+            async refresh() {
+              calls++
+              throw new Error('must not refresh')
+            },
+          },
+        ],
+      ]),
+      () => now,
+    )
+    await store.setPayload(
+      repo,
+      'PLAN_ACCESS',
+      'fake',
+      {
+        accessToken: 'expired',
+        state: 'original',
+        expiresAt: now - 1,
+        earliestRefreshAt: now + 300000,
+      },
+      'member',
+    )
+    for (let tick = 0; tick < 2; tick++) {
+      const deadline = now + 100
+      const advance = setTimeout(() => {
+        now = deadline
+      }, 20)
+      try {
+        await expect(store.resolveForTick(repo, now + 600000, deadline)).rejects.toThrow(
+          'secret-unavailable',
+        )
+      } finally {
+        clearTimeout(advance)
+      }
+    }
+    expect(calls).toBe(0)
   }),
 )

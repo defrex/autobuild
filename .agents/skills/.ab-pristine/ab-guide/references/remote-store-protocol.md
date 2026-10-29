@@ -1518,11 +1518,12 @@ handoff. Metadata remains available for diagnosis.
 Refreshing kinds are internal provider integrations, not arbitrary endpoint URLs
 or CLI write formats. The five-minute hosted cadence is unchanged. A token that
 is valid now but not yet refreshable is supplied unchanged; a caller’s future
-validity horizon cannot reject it. The first tick at or after the provider’s
-earliest-refresh time rotates the credential and commits encrypted replacement
-state before supply. Providers omitting that time use a ten-minute pre-expiry
-refresh margin to tolerate a delayed five-minute tick. After downtime, expired
-access state is refreshed before supply while its durable status remains ready.
+validity horizon cannot reject it. The first tick at or after both the ten-minute pre-expiry threshold and any
+provider earliest-refresh floor rotates the credential and commits encrypted
+replacement state before supply. Equality is eligible; an absent floor retains
+the ten-minute margin, which tolerates a delayed five-minute tick. After downtime,
+expired access state is refreshed before supply while its durable status remains
+ready and both gates hold. Expired access behind a future floor is never supplied.
 Failed or uncertain refresh attempts prevent supply and require replacement. A valid
 credential is never revoked merely because its refresh window is short. A durable
 attempt permits only one refresh caller across overlapping ticks. An abandoned attempt expires to failed without reusing the

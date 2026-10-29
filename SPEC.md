@@ -4285,11 +4285,12 @@ snapshot before handoff. Local dispatch behavior
 is unchanged. Refresh kinds serialize external rotation with a committed CAS
 attempt, persist replacement state before delivery, and fail expired attempts
 without takeover. A failed credential requires explicit replacement. Valid
-credentials before their earliest refresh time remain usable, even inside a
-requested future validity horizon. The first eligible five-minute hosted tick
-refreshes and persists rotation before supply, including expired access state
-after downtime when the refresh credential remains ready. Providers without an
-earliest refresh time use a ten-minute pre-expiry margin. Failed or uncertain
+credentials before refresh is due remain usable, even inside a requested future
+validity horizon. Hosted refresh is due at or after both the ten-minute
+pre-expiry threshold and any provider earliest-refresh floor. The first eligible
+five-minute hosted tick persists rotation before supply, including expired access
+state after downtime when both gates hold and the refresh credential remains
+ready. Expired access behind a future floor is never supplied. Failed or uncertain
 refresh attempts prevent supply. A refresh window shorter than five minutes plus a one-minute
 margin emits typed advisory metadata, never invalidates a valid credential and
 never causes revocation. The public
