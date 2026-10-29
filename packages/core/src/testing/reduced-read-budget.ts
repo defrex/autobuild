@@ -202,9 +202,14 @@ export async function reducedReadBudget(opts: {
         effectiveConfig: { kind: configArtifact.kind, rev: configArtifact.revision },
       },
     })
-    const factsBytes = Buffer.byteLength(
-      JSON.stringify((await readRepositoryFacts(store, repo)).value),
-    )
+    const {
+      scan,
+      scanSeq: _scanSeq,
+      ...stableFacts
+    } = (await readRepositoryFacts(store, repo)).value
+    // The first iteration introduces a scan; its fixed payload is budgeted independently.
+    expect(Buffer.byteLength(JSON.stringify(scan ?? null))).toBeLessThan(1_000_000)
+    const factsBytes = Buffer.byteLength(JSON.stringify(stableFacts))
     if (repositoryBytes !== undefined) expect(factsBytes).toBeLessThan(repositoryBytes + 512)
     repositoryBytes = factsBytes
     // Warm persisted values independently of any consumer instance.
@@ -252,6 +257,7 @@ export async function reducedReadBudget(opts: {
     expect(costs.events).toBe(0)
     expect(costs.metadata).toBeLessThan(100)
 
+    let scanTime = 1000
     const dispatcher = () =>
       new Dispatcher({
         store: cold,
@@ -261,10 +267,59 @@ export async function reducedReadBudget(opts: {
         workspaces: new FakeWorkspaceProvider({ root: '/budget-workspaces', mode: 'logical' }),
         forge: new FakeForge(),
         ids: sequentialIds(),
-        clock: () => new Date(1000),
+        clock: () => new Date(scanTime),
         exec,
         launchRunner: async () => 'scheduled',
       })
+    await dispatcher().observeReady()
+    const scanSeq = (await readRepositoryFacts(cold, repo)).value.scanSeq
+    let cadenceReads = 0
+    let cadenceWrites = 0
+    for (let interval = 0; interval < 3; interval++) {
+      const freshHandle = await opts.fresh()
+      const counted = new Proxy(freshHandle, {
+        get(target, key) {
+          if (key === 'getScanCadence')
+            return async (...args: Parameters<BuildStore['getScanCadence']>) => {
+              cadenceReads++
+              return target.getScanCadence(...args)
+            }
+          if (key === 'putScanCadence')
+            return async (...args: Parameters<BuildStore['putScanCadence']>) => {
+              cadenceWrites++
+              return target.putScanCadence(...args)
+            }
+          const value = Reflect.get(target, key)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const observe = () =>
+        new Dispatcher({
+          store: counted,
+          repo,
+          config,
+          tickets: new FakeTicketSource([]),
+          workspaces: new FakeWorkspaceProvider({ root: '/budget-workspaces', mode: 'logical' }),
+          forge: new FakeForge(),
+          ids: sequentialIds(),
+          clock: () => new Date(scanTime),
+          exec,
+          launchRunner: async () => 'scheduled',
+        }).observeReady()
+      scanTime += 30_000
+      reset()
+      await observe()
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(100)
+      scanTime += 30_000
+      reset()
+      await observe()
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(100)
+      expect((await readRepositoryFacts(freshHandle, repo)).value.scanSeq).toBe(scanSeq)
+    }
+    expect(cadenceReads).toBe(6)
+    expect(cadenceWrites).toBe(3)
     await dispatcher().tick({ acceptNewWork: false })
     await getOperatorDashboard({ store: cold, repo, clock: () => new Date(1000) })
     reset()

@@ -132,6 +132,7 @@ export class PostgresProjectDeletion implements ProjectDeletion {
         'project_credentials',
         'project_connections',
         'operator_presence',
+        'scan_cadence',
         'project_organizations',
         'project_journal',
         'project_blob_ownership',

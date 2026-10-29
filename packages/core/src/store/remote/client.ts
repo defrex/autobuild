@@ -1,3 +1,4 @@
+import { scanCadenceSchema, type ScanCadence } from '../scan-cadence'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import {
   operatorPresenceBodySchema,
@@ -657,6 +658,24 @@ export class RemoteBuildStore implements BuildStore {
   async releaseLease(slug: string, holder: string): Promise<void> {
     await this.requestJson('POST', `${this.buildPath(slug)}/lease/release`, okResponseSchema, {
       holder,
+    })
+  }
+
+  async getScanCadence(repo: string): Promise<ScanCadence | null> {
+    return this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/scan-cadence`,
+      scanCadenceSchema.nullable(),
+    )
+  }
+  async putScanCadence(
+    repo: string,
+    cadence: ScanCadence,
+    allowClockRollback = false,
+  ): Promise<void> {
+    await this.requestJson('POST', `${this.repoPath(repo)}/scan-cadence`, okResponseSchema, {
+      cadence: scanCadenceSchema.parse(cadence),
+      allowClockRollback,
     })
   }
 

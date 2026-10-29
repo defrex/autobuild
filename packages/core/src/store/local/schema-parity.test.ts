@@ -27,6 +27,7 @@ import {
 } from 'drizzle-orm/sqlite-core'
 import {
   operatorPresence,
+  scanCadence,
   artifacts,
   builds,
   events,
@@ -49,6 +50,7 @@ const tables: Record<string, SQLiteTable> = {
   events,
   artifacts,
   operator_presence: operatorPresence,
+  scan_cadence: scanCadence,
   repo_streams: repoStreams,
   repo_change_positions: repoChangePositions,
   repo_events: repoEvents,

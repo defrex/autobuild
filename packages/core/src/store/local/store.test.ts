@@ -69,6 +69,14 @@ describe('SqliteBuildStore durability', () => {
       clock.advance(1000)
       expect(await first.heartbeat('persist', 'runner-a')).toBe(true)
       await first.ensureRepo('acme/rate-limiter')
+      const cadence = {
+        scanSeq: 1,
+        startedAt: CONTRACT_T0,
+        mode: 'admission' as const,
+        readinessFingerprint: 'ready',
+        criteriaFingerprint: 'criteria',
+      }
+      await first.putScanCadence('acme/rate-limiter', cadence)
       await first.appendRepo('acme/rate-limiter', {
         actor: humanActor('operator'),
         type: 'dispatcher.intake-set',
@@ -87,6 +95,7 @@ describe('SqliteBuildStore durability', () => {
       await first.close()
 
       const second = openLocalStore(root, { clock })
+      expect(await second.getScanCadence('acme/rate-limiter')).toEqual(cadence)
       try {
         const record = await second.getBuild('persist')
         expect(record?.repo).toBe('https://github.com/acme/rate-limiter')

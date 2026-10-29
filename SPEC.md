@@ -458,6 +458,17 @@ one scan interval plus one tick when capacity permits. Observation while intake
 is off shares the cadence; an observation measurement cannot suppress a fresh
 admission scan when intake is enabled.
 
+Only changed scan outcomes append `dispatcher.ticket-scan-completed`; comparison
+includes counts, ordered diagnostics, readiness and criteria fingerprints, and
+mode. Its `startedAt` is the measurement time of the last recorded outcome,
+not a last-scanned heartbeat. A single replaceable, repository-keyed cadence
+cache survives fresh dispatcher processes and acknowledges that canonical fact
+by sequence. It contains scheduling metadata only, never counts or lifecycle
+state, and is distinct from reducer checkpoints. Missing or stale metadata
+falls back to the recorded fact and can cause one safe extra scan without
+reconstructing history. Successful unchanged scans advance this cache only.
+
+
 ### 3.4 The event log spine
 
 Build processes append typed events to per-build logs; repository-scoped outer
