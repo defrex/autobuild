@@ -14,6 +14,7 @@ import {
   validateRestack,
   retainReplay,
 } from './reconcile-restack'
+import { gitRewrite } from '../ports/forge/git-rewrite'
 import { FakeForge } from '../ports/forge/fake'
 import { humanActor } from '../events/envelope'
 import { buildTrailers } from './build-identity'
@@ -854,5 +855,100 @@ for (const automatic of [true, false]) {
     } finally {
       await rm(cwd, { recursive: true, force: true })
     }
+  })
+}
+
+for (const automatic of [false, true]) {
+  test(`remote-only base is archived through kernel recovery (automatic=${automatic})`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-remote-archive-'))
+    const remote = join(root, 'origin.git')
+    const seed = join(root, 'seed')
+    const cwd = join(root, 'work')
+    const git = async (args: string[], path = seed) => {
+      const result = await bunExec(['git', ...args], { cwd: path })
+      if (result.exitCode) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    await git(['init', '--bare', '-q', remote], root)
+    await git(['init', '-q', '-b', 'main', seed], root)
+    await git(['config', 'user.name', 'Test'])
+    await git(['config', 'user.email', 'test@example.invalid'])
+    await git(['config', 'commit.gpgsign', 'false'])
+    await writeFile(join(seed, 'base'), 'base')
+    await git(['add', '.'])
+    await git(['commit', '-qm', 'base'])
+    const base = await git(['rev-parse', 'HEAD'])
+    await git(['commit', '--allow-empty', '-qm', 'new main'])
+    await git(['remote', 'add', 'origin', remote])
+    await git(['push', '-q', 'origin', 'main'])
+    await git(['checkout', '--orphan', 'ab/probe'])
+    await git(['commit', '--allow-empty', '-qm', 'unrelated'])
+    await git(['push', '-q', 'origin', 'ab/probe'])
+    await git(['clone', '-q', '--depth=1', '--branch', 'ab/probe', `file://${remote}`, cwd], root)
+    expect((await bunExec(['git', 'cat-file', '-e', base], { cwd })).exitCode).not.toBe(0)
+    const head = await git(['rev-parse', 'HEAD'], cwd)
+    const commands: string[][] = []
+    const capability = gitRewrite(
+      async (cmd, opts) => {
+        commands.push(cmd)
+        return bunExec(cmd, opts)
+      },
+      false,
+      async (ref, sha) => {
+        await git(['update-ref', ref, sha, '0'.repeat(40)], remote)
+      },
+    )
+    const store = await seedStore()
+    const archives = await archiveTips(
+      {
+        store,
+        slug: BUILD,
+        workspacePath: cwd,
+        exec: bunExec,
+        forge: Object.assign(new FakeForge(), { name: 'github', rewrite: capability }),
+        ...(automatic
+          ? {
+              automatic: {
+                trigger: 'verify-entry',
+                cycle: 1,
+                observation: 1,
+                message: 'Build change',
+              },
+            }
+          : {}),
+      },
+      [base],
+    )
+    const ref = archives.find((entry) => entry.sha === base)!.ref
+    expect(await git(['rev-parse', ref], remote)).toBe(base)
+    expect(await git(['cat-file', '-t', base], cwd)).toBe('commit')
+    expect(await git(['rev-parse', 'HEAD'], cwd)).toBe(head)
+    expect(await git(['status', '--porcelain'], cwd)).toBe('')
+    expect(commands.filter((cmd) => cmd[1] === 'fetch')).toContainEqual([
+      'git',
+      'fetch',
+      '--depth=1',
+      '--refmap=',
+      '--no-tags',
+      '--no-write-fetch-head',
+      'origin',
+      ref,
+    ])
+    expect(commands.some((cmd) => cmd[1] === 'push')).toBe(false)
+    await capability.archive({ workspacePath: cwd, ref, sha: base })
+    // Depth-one recovery must leave the unrelated checkout usable for guarded publication.
+    await git(['config', 'user.name', 'Test'], cwd)
+    await git(['config', 'user.email', 'test@example.invalid'], cwd)
+    await git(['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'next'], cwd)
+    const next = await git(['rev-parse', 'HEAD'], cwd)
+    expect(
+      await capability.replace({
+        workspacePath: cwd,
+        branch: 'ab/probe',
+        expected: head,
+        sha: next,
+      }),
+    ).toEqual({ kind: 'published' })
+    expect(await git(['rev-parse', 'refs/heads/ab/probe'], remote)).toBe(next)
   })
 }

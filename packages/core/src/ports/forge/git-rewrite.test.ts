@@ -151,3 +151,94 @@ for (const diagnostic of [
     expect(isForgeFailure(failure)).toBe(!/rejected|Authentication|Permission/.test(diagnostic))
   })
 }
+
+for (const after of [null, 'a'.repeat(40), 'b'.repeat(40)]) {
+  test(`uncertain remote archive requires exact readback: ${after}`, async () => {
+    const { ForgeFailure } = await import('../forge-failure')
+    const { ForgeRequestDeferred } = await import('../forge-request-context')
+    for (const failure of [
+      new ForgeFailure('rate limited', { kind: 'rate-limited', resetAt: '2026-10-29T12:00:00Z' }),
+      new ForgeFailure('unavailable', { kind: 'transient', retry: 'retryable' }),
+      new ForgeRequestDeferred('deferred'),
+    ]) {
+      const sha = 'a'.repeat(40)
+      const ref = `refs/autobuild/archive/probe/${sha}`
+      let attempted = false
+      let fetched = false
+      const capability = gitRewrite(
+        async (cmd) => {
+          if (cmd[1] === 'fetch') fetched = true
+          return {
+            exitCode: cmd[1] === 'cat-file' && !fetched ? 1 : 0,
+            stderr: '',
+            stdout: cmd[1] === 'ls-remote' && attempted && after ? `${after}\t${ref}\n` : '',
+          }
+        },
+        false,
+        async () => {
+          attempted = true
+          throw failure
+        },
+      )
+      const result = capability.archive({ workspacePath: '/ws', sha, ref })
+      if (after === sha) await result
+      else await expect(result).rejects.toBe(failure)
+      expect(fetched).toBe(after === sha)
+    }
+  })
+}
+
+test('preexisting remote archive is immutable and fetched by name when missing locally', async () => {
+  const sha = 'a'.repeat(40)
+  const ref = `refs/autobuild/archive/probe/${sha}`
+  for (const actual of [sha, 'b'.repeat(40)]) {
+    const commands: string[][] = []
+    const capability = gitRewrite(
+      async (cmd) => {
+        commands.push(cmd)
+        return {
+          exitCode: cmd[1] === 'cat-file' && !commands.some((c) => c[1] === 'fetch') ? 1 : 0,
+          stdout: cmd[1] === 'ls-remote' ? `${actual}\t${ref}\n` : '',
+          stderr: '',
+        }
+      },
+      false,
+      async () => {
+        throw new Error('must not create')
+      },
+    )
+    const result = capability.archive({ workspacePath: '/ws', sha, ref })
+    if (actual !== sha) await expect(result).rejects.toThrow('immutable archive')
+    else await result
+    expect(commands.some((c) => c[1] === 'fetch')).toBe(actual === sha)
+    expect(commands.some((c) => c[1] === 'push')).toBe(false)
+  }
+})
+
+test('archive materialization must verify the local commit', async () => {
+  const sha = 'a'.repeat(40)
+  const ref = `refs/autobuild/archive/probe/${sha}`
+  const capability = gitRewrite(
+    async (cmd) => ({
+      exitCode: cmd[1] === 'cat-file' ? 1 : 0,
+      stdout: cmd[1] === 'ls-remote' ? `${sha}\t${ref}\n` : '',
+      stderr: 'missing commit',
+    }),
+    false,
+  )
+  await expect(capability.archive({ workspacePath: '/ws', sha, ref })).rejects.toThrow(
+    'missing commit',
+  )
+})
+
+test('missing local object without provider creation fails with SHA and ref context', async () => {
+  const sha = 'a'.repeat(40)
+  const ref = `refs/autobuild/archive/probe/${sha}`
+  const capability = gitRewrite(async (cmd) => {
+    expect(cmd[1]).not.toBe('push')
+    return { exitCode: cmd[1] === 'cat-file' ? 1 : 0, stdout: '', stderr: '' }
+  }, false)
+  await expect(capability.archive({ workspacePath: '/ws', sha, ref })).rejects.toThrow(
+    `archive publication rejected for ${ref} at ${sha}`,
+  )
+})

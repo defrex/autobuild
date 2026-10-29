@@ -1442,6 +1442,11 @@ Historical merge completions retain their original shape and semantics.
 
 The optional grouped Forge rewrite capability owns authoritative head snapshots,
 immutable `refs/autobuild/archive/<slug>/<sha>` publication and expected-head CAS.
+Remote archives also publish commits present only on the remote: GitHub uses create-only
+Git-reference REST creation when the workspace lacks the commit, retaining guarded Git
+pushes for local objects. Exact remote readback confirms publication, then a depth-one
+fetch by the archive ref (without tags or configured refmap expansion) restores missing
+commits and verifies them locally before returning.
 GitHub uses explicit Git transport leases; local-git uses shared-database
 `update-ref` CAS without network calls. Exact authoritative readback acknowledges
 publication. Remote-backed local refs are caches refreshed without expected-old

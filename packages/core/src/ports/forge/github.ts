@@ -582,13 +582,17 @@ const REPRESENTATION_CACHE_CAP = 512
 
 export class GitHubForge implements Forge {
   get rewrite() {
-    return gitRewrite(async (cmd, opts) => {
-      if (cmd.includes('push')) this.invalidateReads()
-      return this.exec(cmd, opts)
-    }, false)
+    return gitRewrite(
+      async (cmd, opts) => {
+        if (cmd.includes('push')) this.invalidateReads()
+        return this.exec(cmd, opts)
+      },
+      false,
+      (ref, sha) => this.createArchive(ref, sha),
+    )
   }
   get kernelRewrite() {
-    return gitRewrite(this.kernelExec, false)
+    return gitRewrite(this.kernelExec, false, (ref, sha) => this.createArchive(ref, sha))
   }
   /** Credentials exist only in the trusted subprocess environment, never in
    * argv, repository config, remote URLs, or the resolving agent's environment. */
@@ -1899,6 +1903,22 @@ export class GitHubForge implements Forge {
       }),
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare/${encodeURIComponent(parentSha)}...${encodeURIComponent(headSha)}`,
       'node comparison',
+    )
+  }
+
+  private async createArchive(ref: string, sha: string): Promise<void> {
+    const { owner, name } = await this.requireCoordinates()
+    this.parse(
+      z.object({
+        ref: z.literal(ref),
+        object: z.object({ sha: z.literal(sha), type: z.literal('commit') }),
+      }),
+      await this.request(
+        'POST',
+        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/refs`,
+        { body: { ref, sha } },
+      ),
+      'archive create',
     )
   }
 

@@ -61,7 +61,12 @@ Declare served model prefixes and a default. Optional tool-free `oneShot` sits b
 Reconcile requires the optional grouped `Forge.rewrite` capability:
 
 1. Snapshot the actual build branch into a build-private ref.
-2. Publish immutable exact-SHA refs under `refs/autobuild/archive/<slug>/<sha>`.
+2. Publish immutable exact-SHA refs under `refs/autobuild/archive/<slug>/<sha>`. Remote
+   archives also publish commits present only on the remote: GitHub uses create-only
+   Git-reference REST creation when the workspace lacks the commit, retaining guarded
+   Git pushes for local objects. Exact remote readback confirms publication, then a
+   depth-one fetch by the archive ref (without tags or configured refmap expansion)
+   restores missing commits and verifies them locally before returning.
 3. Replace the explicit branch, leased on an explicit expected remote head.
 
 - Return `lease-mismatch` separately from transport, auth and policy failures.
