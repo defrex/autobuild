@@ -319,6 +319,7 @@ dir = "tickets"
     const workspaces = new FakeWorkspaceProvider({
       root: join(root, 'workspaces'),
       mode: 'logical',
+      base: { source: 'remote', sha: 'a'.repeat(40) },
     })
     const forge = new FakeForge()
     forge.seedBranch('main', 'a'.repeat(40))
