@@ -147,20 +147,22 @@ test('canonical ticket detail finds historical build aliases and keeps sources s
   Object.defineProperty(source, 'name', { value: 'hosted' })
   const get = source.get.bind(source)
   source.get = async (id) => {
-    const ticket = await get(id === 'ticket-legacy' || id === 'aut-1' ? 'AUT-1' : id)
+    const ticket = await get(
+      id === 'ticket-11111111-1111-1111-1111-111111111111' || id === 'aut-1' ? 'AUT-1' : id,
+    )
     return ticket ? { ...ticket, ref: { ...ticket.ref, source: 'hosted' } } : null
   }
   await store.createBuild({
     slug: 'legacy',
     repo,
-    ticket: { source: 'hosted', id: 'ticket-legacy' },
+    ticket: { source: 'hosted', id: 'ticket-11111111-1111-1111-1111-111111111111' },
   })
   await store.createBuild({
     slug: 'foreign-source',
     repo,
     ticket: { source: 'linear', id: 'AUT-1' },
   })
-  for (const id of ['AUT-1', 'aut-1', 'ticket-legacy']) {
+  for (const id of ['AUT-1', 'aut-1', 'ticket-11111111-1111-1111-1111-111111111111']) {
     const detail = await getOperatorTicket({ store, repo, backend: backend(source), id })
     expect(detail.ticket.ref.id).toBe('AUT-1')
     expect(detail.build?.slug).toBe('legacy')
@@ -185,7 +187,10 @@ for (const provider of ['linear', 'file', 'hosted', 'database']) {
       await store.createBuild({
         slug: `old-${i}`,
         repo,
-        ticket: { source: provider, id: `old-${i}` },
+        ticket: {
+          source: provider,
+          id: `ticket-00000000-0000-0000-0000-${String(i).padStart(12, '0')}`,
+        },
       })
     await store.createBuild({
       slug: 'matching',
@@ -216,14 +221,20 @@ test('hosted alias association failure preserves a completed mutation', async ()
   ])
   Object.defineProperty(source, 'name', { value: 'hosted' })
   const get = source.get.bind(source)
+  const reads: string[] = []
   source.get = async (id) => {
-    if (id === 'legacy-unavailable') throw new Error('provider unavailable')
+    reads.push(id)
+    if (id === 'ticket-22222222-2222-2222-2222-222222222222')
+      throw new Error('provider unavailable')
     return get(id)
   }
   await store.createBuild({
     slug: 'old',
     repo,
-    ticket: { source: 'hosted', id: 'legacy-unavailable' },
+    ticket: {
+      source: 'hosted',
+      id: 'ticket-22222222-2222-2222-2222-222222222222',
+    },
   })
   const detail = await mutateOperatorTicket({
     store,
@@ -233,6 +244,7 @@ test('hosted alias association failure preserves a completed mutation', async ()
   })
   expect(detail.ticket.state).toBe('Todo')
   expect(detail.build).toBeNull()
+  expect(reads).toContain('ticket-22222222-2222-2222-2222-222222222222')
   expect((await get('AUT-1'))?.state).toBe('Todo')
   expect(source.transitions).toEqual([{ id: 'AUT-1', state: 'Todo' }])
 })
@@ -410,4 +422,37 @@ test('native pages forward criteria and window without a full read or double sli
   ).rejects.toThrow('native failure')
   source.listReady = full
   expect((await listOperatorTickets({ store, repo, backend: backend(native) })).total).toBe(1)
+})
+
+test('operator association request budget stays fixed across canonical history and fresh backends', async () => {
+  const { operatorTicketAssociationBudget } = await import('../testing/reduced-read-budget')
+  await operatorTicketAssociationBudget()
+})
+
+test('optional alias failure retains prior matches after an update', async () => {
+  const store = await configuredStore()
+  const alias = 'ticket-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  const unavailable = 'ticket-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+  await store.createBuild({ slug: 'alias', repo, ticket: { source: 'hosted', id: alias } })
+  await store.createBuild({ slug: 'failure', repo, ticket: { source: 'hosted', id: unavailable } })
+  const records = await store.listBuildsForRepo(repo)
+  store.listBuildsForRepo = async () => records.sort((a) => (a.slug === 'alias' ? -1 : 1))
+  const source = new FakeTicketSource([{ ...seed, blockedBy: [] }])
+  Object.defineProperty(source, 'name', { value: 'hosted' })
+  const get = source.get.bind(source)
+  const reads: string[] = []
+  source.get = async (id) => {
+    reads.push(id)
+    if (id === unavailable) throw new Error('unavailable')
+    return get(id === alias ? 'AUT-1' : id)
+  }
+  const detail = await mutateOperatorTicket({
+    store,
+    repo,
+    backend: backend(source),
+    operation: { kind: 'update', id: 'AUT-1', patch: { title: 'Persisted' } },
+  })
+  expect(detail.build?.slug).toBe('alias')
+  expect((await get('AUT-1'))?.title).toBe('Persisted')
+  expect(reads.slice(-2)).toEqual([alias, unavailable])
 })
