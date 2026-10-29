@@ -1212,6 +1212,7 @@ class DispatchLoop {
     return this.serialize(async () => {
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
+      await this.flushPendingTickFailure()
       await this.refreshConfig()
       if (await this.acceptUpgradeYield()) return emptyTickReport()
       // Every tick verifies local lease currency, reclaiming when necessary. Without it,
@@ -3071,6 +3072,50 @@ class DispatchLoop {
     }
   }
 
+  private pendingTickFailure:
+    | { original: string; first: string; last: string; count: number }
+    | undefined
+
+  /** Reporting is diagnostic: its failure must never replace the operational error. */
+  private async reportTickFailure(error: unknown): Promise<void> {
+    const original = formatDispatcherError(error)
+    this.warn(`tick failed: ${original}`)
+    try {
+      await this.publishTickFailure(error)
+    } catch (publicationError) {
+      const now = this.wiring.clock().toISOString()
+      if (this.pendingTickFailure) {
+        this.pendingTickFailure.last = now
+        this.pendingTickFailure.count++
+      } else {
+        this.pendingTickFailure = { original, first: now, last: now, count: 1 }
+      }
+      // Never reuse an old boundary to close a later tick (or a peer's tick).
+      this.tickStartedAt = undefined
+      this.warn(`tick failure unreported: ${formatDispatcherError(publicationError)}`)
+    }
+  }
+
+  private async flushPendingTickFailure(): Promise<void> {
+    const pending = this.pendingTickFailure
+    if (!pending) return
+    try {
+      await this.wiring.store.appendRepo(this.repoIdentity, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-failed',
+        payload: {
+          run: this.runId,
+          error:
+            `Unreported tick failure window ${pending.first} through ${pending.last} ` +
+            `(${pending.count} failures); original tick error: ${pending.original}`,
+        },
+      })
+      this.pendingTickFailure = undefined
+    } catch (error) {
+      this.warn(`tick failure window still unreported: ${formatDispatcherError(error)}`)
+    }
+  }
+
   private async publishTickFailure(error: unknown): Promise<void> {
     const failed = {
       actor: DISPATCHER,
@@ -4639,7 +4684,7 @@ class DispatchLoop {
         // invocation.
         if (this.pastDeadline()) return
         const initial = await this.dispatcherTick(true).catch(async (error: unknown) => {
-          await this.publishTickFailure(error)
+          await this.reportTickFailure(error)
           throw error
         })
         const initialPrinted = this.printReport(initial, false)
@@ -4682,18 +4727,18 @@ class DispatchLoop {
       this.startUpgradeChecks()
       let startup = true
       while (!this.watchStopped && !this.superseded) {
+        let failed = false
         try {
           const report = await this.dispatcherTick(startup)
           this.printReport(report, this.harvestInFlight === undefined)
           startup = false
         } catch (error) {
           if (this.forgePublicationFailed) throw error
-          const message = formatDispatcherError(error)
-          await this.publishTickFailure(error)
-          this.warn(`tick failed: ${message}`)
+          failed = true
+          await this.reportTickFailure(error)
         }
         if (this.watchStopped || this.superseded) break
-        await sleep(intervalMs)
+        await sleep(failed || this.pendingTickFailure ? Math.max(intervalMs, 1000) : intervalMs)
       }
       if (this.superseded) {
         this.warn('dispatcher superseded by another invocation — detaching')
