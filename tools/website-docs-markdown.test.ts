@@ -43,6 +43,21 @@ test('production copy covers every article, responsive geometry, formatting and 
   const errors = []
   const check = (value, message) => { if (!value) errors.push(message) }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+  let context = 'serializer', writes = 0
+  const frame = document.querySelector('iframe')
+  const describe = () => {
+    const doc = frame.contentDocument, button = doc?.querySelector('[data-docs-copy]')
+    return JSON.stringify({url:doc?.URL, ready:doc?.readyState, disabled:button?.disabled, label:button?.textContent, writes})
+  }
+  const require = (value, expectation) => { if (!value) throw Error(context + ': expected ' + expectation + '; observed ' + describe()) }
+  const waitFor = async (condition, expectation) => {
+    const deadline = performance.now() + 3000
+    while (!condition()) {
+      require(performance.now() < deadline, expectation)
+      await sleep(5)
+    }
+  }
+  let restoreTimers = () => {}
   try {
     const article = document.createElement('article')
     article.innerHTML = ${JSON.stringify(fixture)}
@@ -53,22 +68,53 @@ test('production copy covers every article, responsive geometry, formatting and 
     article.innerHTML = ${JSON.stringify(punctuationFixture)}
     const punctuation = articleMarkdown(article, '${SITE_URL}/docs/example/')
     check(punctuation === ${JSON.stringify(punctuationExpected)}, 'punctuation: ' + JSON.stringify(punctuation))
-    const frame = document.querySelector('iframe')
     for (const width of [1440, 720, 390]) {
       frame.style.width = width + 'px'
       for (const path of ${JSON.stringify(DOCS_PAGES.map((page) => page.path))}) {
         document.body.dataset.progress = path + width
-        await new Promise(resolve => { frame.onload = resolve; frame.src = path })
+        context = path + ' width=' + width + ' navigation'
+        // A load event alone can belong to the iframe's initial document.
+        frame.src = path
+        await waitFor(() => frame.contentDocument?.location.pathname === path && frame.contentDocument.readyState === 'complete', 'requested document fully loaded')
         const win = frame.contentWindow, doc = frame.contentDocument
         await doc.fonts.ready
         const button = doc.querySelector('[data-docs-copy]'), status = doc.querySelector('[data-copy-status]')
+        context = path + ' width=' + width + ' copy'
+        require(button && status, 'copy button and live status')
         let copied
-        Object.defineProperty(win.navigator, 'clipboard', { configurable: true, value: { writeText: async text => { copied = text } } })
+        writes = 0
+        let clock = 0, nextTimer = -1
+        const timers = new Map()
+        const controlled = width === 390 && path === ${JSON.stringify(DOCS_PAGES.at(-1)!.path)}
+        const advance = ms => {
+          clock += ms
+          for (const [id, timer] of timers) if (timer.at <= clock) { timers.delete(id); timer.callback() }
+        }
+        // Control only production reset callbacks; promises and announcement tasks stay real.
+        if (controlled) {
+          const originalSet = win.setTimeout, originalClear = win.clearTimeout
+          win.setTimeout = (callback, delay, ...args) => {
+            if (delay !== 2000) return originalSet.call(win, callback, delay, ...args)
+            const id = nextTimer--
+            timers.set(id, {at:clock + delay, callback:() => callback(...args)})
+            return id
+          }
+          win.clearTimeout = id => { if (!timers.delete(id)) originalClear.call(win, id) }
+          restoreTimers = () => { win.setTimeout = originalSet; win.clearTimeout = originalClear }
+        }
+        Object.defineProperty(win.navigator, 'clipboard', { configurable: true, value: { writeText: async text => { writes++; copied = text } } })
         const initialWidth = button.getBoundingClientRect().width
-        button.click(); await sleep(20)
+        const success = async (action) => {
+          context = path + ' width=' + width + ' ' + action
+          const previous = writes
+          button.click()
+          await waitFor(() => writes === previous + 1 && typeof copied === 'string' && button.textContent === 'Copied' && status.textContent === 'Copied' && !button.disabled, 'fresh clipboard write and completed success announcement')
+          require(typeof copied === 'string', 'string clipboard payload')
+        }
+        await success('copy')
         check(Math.abs(button.getBoundingClientRect().width - initialWidth) < 1, path + ' stable outcome width')
         const title = doc.querySelector('h1')
-        check(copied.split('\\n')[0] === '# ' + title.textContent, path + ' title')
+        check(copied.split('\\n')[0] === '# ' + title.textContent, context + ' title: expected first line # ' + title.textContent)
         let index = 0
         for (const h2 of doc.querySelectorAll('article h2')) {
           const next = copied.indexOf('## ' + h2.textContent, index)
@@ -91,39 +137,47 @@ test('production copy covers every article, responsive geometry, formatting and 
         check(style.fontSize === '14px' && style.fontWeight === '700' && style.lineHeight === '20px' && style.borderTopWidth === '2px' && style.borderRadius === '0px' && style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.borderTopColor === 'rgba(0, 0, 0, 0)' && style.color === 'rgb(136, 136, 136)', path + ' styles')
         check(doc.documentElement.scrollWidth <= width, path + width + ' overflow')
         check(button.textContent === 'Copied' && status.textContent === 'Copied' && status.getAttribute('aria-live') === 'polite' && status.getAttribute('aria-atomic') === 'true', path + ' success announcement')
+        if (!controlled) continue
+        document.body.dataset.progress = 'clipboard states'
+        require(timers.size === 1, 'success schedules a 2000 ms reset')
+        advance(1999); check(button.textContent === 'Copied', context + ' success retained before two seconds')
+        advance(1); check(button.textContent === 'Copy as Markdown', context + ' success reset at two seconds')
+        await success('first repeated success')
+        advance(1200)
+        await success('second repeated success')
+        require(timers.size === 1, 'new success cancels previous reset')
+        advance(1999); check(button.textContent === 'Copied', context + ' new success owns full reset interval')
+        advance(1); check(button.textContent === 'Copy as Markdown', context + ' new success resets')
+        await success('success before failure')
+        advance(1200)
+        const failure = async (action) => {
+          context = path + ' width=' + width + ' ' + action
+          button.click()
+          require(button.disabled && status.textContent === '', 'fresh failure action clears announcement while pending')
+          await waitFor(() => !button.disabled && button.textContent === 'Copy failed' && status.textContent === 'Copy failed', 'completed fresh failure announcement')
+        }
+        Object.defineProperty(win.navigator, 'clipboard', {configurable:true, value:{writeText: async () => { writes++; throw Error('denied') }}})
+        await failure('rejected clipboard')
+        require(timers.size === 0, 'failure cancels success reset')
+        advance(801); check(button.textContent === 'Copy failed', context + ' stale success timer cleared')
+        Object.defineProperty(win.navigator, 'clipboard', {configurable:true, value:undefined})
+        await failure('unavailable clipboard')
+        let resolveWrite
+        writes = 0
+        Object.defineProperty(win.navigator, 'clipboard', {configurable:true, value:{writeText: () => { writes++; return new Promise(resolve => {resolveWrite = resolve}) }}})
+        context = path + ' width=' + width + ' native Enter'
+        document.body.dataset.progress = 'keyboard'
+        frame.focus(); button.focus()
+        const ready = document.createElement('meta'); ready.name = 'keyboard-ready'; document.head.append(ready)
+        await waitFor(() => writes === 1, 'one clipboard write from native Enter activation')
+        require(typeof resolveWrite === 'function', 'pending clipboard resolver')
+        button.click()
+        check(button.disabled && writes === 1 && button.textContent !== 'Copied', context + ' pending write serialized')
+        resolveWrite()
+        await waitFor(() => !button.disabled && button.textContent === 'Copied' && status.textContent === 'Copied' && doc.activeElement === button, 'completed keyboard success announcement and restored focus')
       }
     }
-    document.body.dataset.progress = 'clipboard states'
-    const win = frame.contentWindow, doc = frame.contentDocument
-    const button = doc.querySelector('[data-docs-copy]'), status = doc.querySelector('[data-copy-status]')
-    check(button.textContent === 'Copied', 'initial success')
-    await sleep(1800); check(button.textContent === 'Copied', 'success retained before two seconds')
-    await sleep(300); check(button.textContent === 'Copy as Markdown', 'success reset after two seconds')
-    button.click(); await sleep(20); await sleep(1200)
-    button.click(); await sleep(20); await sleep(900)
-    check(button.textContent === 'Copied', 'new success owns reset timer')
-    await sleep(1200); check(button.textContent === 'Copy as Markdown', 'new success resets')
-    document.body.dataset.progress = 'timer failure'
-    button.click(); await sleep(20); await sleep(1200)
-    Object.defineProperty(win.navigator, 'clipboard', {configurable:true, value:{writeText: async () => { throw Error('denied') }}})
-    button.click(); await sleep(30)
-    check(button.textContent === 'Copy failed' && status.textContent === 'Copy failed', 'rejected announcement')
-    await sleep(900); check(button.textContent === 'Copy failed', 'stale success timer cleared')
-    Object.defineProperty(win.navigator, 'clipboard', {configurable:true, value:undefined})
-    button.click(); await sleep(30)
-    check(button.textContent === 'Copy failed' && status.textContent === 'Copy failed', 'unavailable announcement')
-    let resolveWrite, writes = 0
-    Object.defineProperty(win.navigator, 'clipboard', {configurable:true, value:{writeText: () => { writes++; return new Promise(resolve => {resolveWrite = resolve}) }}})
-    document.body.dataset.progress = 'keyboard'
-    frame.focus(); button.focus()
-    const ready = document.createElement('meta'); ready.name = 'keyboard-ready'; document.head.append(ready)
-    for (let attempt = 0; attempt < 100 && writes === 0; attempt++) await sleep(10)
-    check(writes === 1, 'native Enter activation')
-    button.click()
-    check(button.disabled && writes === 1 && button.textContent !== 'Copied', 'pending write serialized')
-    resolveWrite(); await sleep(20)
-    check(!button.disabled && button.textContent === 'Copied' && doc.activeElement === button, 'recovery and focus')
-  } catch (error) { errors.push(String(error)) }
+  } catch (error) { errors.push(String(error)) } finally { restoreTimers() }
   const meta = document.createElement('meta'); meta.name = 'capture-probe'
   meta.content = JSON.stringify({ error:errors.join('; '), status:'markdown complete' }); document.head.append(meta)
   </script></body></html>`
