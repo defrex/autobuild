@@ -147,7 +147,9 @@ export function nodePollingEvidenceValid(
     Number.isFinite(time) &&
     Number.isFinite(checked) &&
     Number.isFinite(unchanged) &&
-    unchanged <= checked &&
+    // The anchor uses the dispatcher clock; checkedAt uses the store clock.
+    // Validate each against now without imposing an order across clocks.
+    unchanged <= time &&
     checked <= time
   )
 }

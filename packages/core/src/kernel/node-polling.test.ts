@@ -184,3 +184,26 @@ test('checkpoint growth follows epochs and idle deadlines, including invalid evi
     expect(nodePollingSchedule(state, key, policy, at(610)).due).toBe(true)
   }
 })
+
+test('dispatcher anchors survive a lagging store clock without accepting future evidence', () => {
+  const state = checked()
+  const key = nodeActivityKey(state, [])
+  state.nodePolling.checkedAt = at(-0.2).toISOString()
+  expect(nodePollingCheckpointRequired(state, key, policy, at(10))).toBe(false)
+  expect(nodePollingSchedule(state, key, policy, at(600))).toMatchObject({
+    mode: 'idle',
+    due: true,
+  })
+  expect(nodePollingCheckpointRequired(state, key, policy, at(600))).toBe(true)
+  state.nodePolling.checkedAt = at(599.8).toISOString()
+  expect(nodePollingSchedule(state, key, policy, at(719))).toMatchObject({
+    mode: 'idle',
+    due: false,
+  })
+  expect(nodePollingCheckpointRequired(state, key, policy, at(720))).toBe(true)
+  for (const value of ['invalid', at(800).toISOString()]) {
+    state.nodePolling.unchangedSince = value
+    expect(nodePollingSchedule(state, key, policy, at(610)).mode).toBe('active')
+    expect(nodePollingCheckpointRequired(state, key, policy, at(610))).toBe(true)
+  }
+})

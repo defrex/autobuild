@@ -11951,52 +11951,55 @@ test.each([10, 1000])(
   },
 )
 
-test('node checkpoint growth across active and idle periods', async () => {
-  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
-  h.forge.remoteBranches.set('main', BASE_SHA)
-  await h.dispatcher.tick()
-  await h.dispatcher.tick({ acceptNewWork: false })
-  const node = (await h.store.listBuilds())[0]!
-  const count = async () =>
-    (await h.store.getEvents(node.slug)).filter((e) => e.type === 'node.poll-checked').length
-  let checks = 0
-  const compare = h.forge.compareBranches.bind(h.forge)
-  h.forge.compareBranches = async (...args) => {
-    checks++
-    return compare(...args)
-  }
-  const tick = () =>
-    harness({
-      store: h.store,
-      clock: h.clock,
-      wrapTickets: () => h.tickets,
-      dispatchForge: h.forge,
-    }).dispatcher.tick({ acceptNewWork: false })
-  const before = await count()
-  for (let i = 0; i < 59; i++) {
-    h.clock.advance(10_000)
-    await tick()
-  }
-  const active = (await count()) - before
-  const activeChecks = checks
-  for (let i = 0; i < 37; i++) {
-    h.clock.advance(10_000)
-    await tick()
-  }
-  expect(active).toBe(0)
-  expect(activeChecks).toBe(177)
-  expect((await count()) - before - active).toBe(4)
-  expect(checks - activeChecks).toBe(12)
-  for (let i = 0; i < 3; i++) {
-    await h.store.append(node.slug, {
-      actor: humanActor('test'),
-      type: 'build.hold-requested',
-      payload: {},
-    })
-    await tick()
-  }
-  expect((await count()) - before - active).toBe(7)
-})
+for (const storeLagMs of [0, 200])
+  test(`node checkpoint growth across active and idle periods with ${storeLagMs}ms store lag`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock: () => new Date(clock().getTime() - storeLagMs) })
+    const h = harness({ clock, store, tickets: [readyTicket('N', { kind: 'node' })] })
+    h.forge.remoteBranches.set('main', BASE_SHA)
+    await h.dispatcher.tick()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const node = (await h.store.listBuilds())[0]!
+    const count = async () =>
+      (await h.store.getEvents(node.slug)).filter((e) => e.type === 'node.poll-checked').length
+    let checks = 0
+    const compare = h.forge.compareBranches.bind(h.forge)
+    h.forge.compareBranches = async (...args) => {
+      checks++
+      return compare(...args)
+    }
+    const tick = () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false })
+    const before = await count()
+    for (let i = 0; i < 59; i++) {
+      h.clock.advance(10_000)
+      await tick()
+    }
+    const active = (await count()) - before
+    const activeChecks = checks
+    for (let i = 0; i < 37; i++) {
+      h.clock.advance(10_000)
+      await tick()
+    }
+    expect(active).toBe(0)
+    expect(activeChecks).toBe(177)
+    expect((await count()) - before - active).toBe(4)
+    expect(checks - activeChecks).toBe(12)
+    for (let i = 0; i < 3; i++) {
+      await h.store.append(node.slug, {
+        actor: humanActor('test'),
+        type: 'build.hold-requested',
+        payload: {},
+      })
+      await tick()
+    }
+    expect((await count()) - before - active).toBe(7)
+  })
 
 test('fresh node polling has bounded reads at 100 and 100000 events', async () => {
   const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
