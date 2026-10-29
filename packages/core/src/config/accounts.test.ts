@@ -1,6 +1,7 @@
+import { readFile } from 'node:fs/promises'
 import { expect, test } from 'bun:test'
 import { accountSchema, kimiEndpoint, selectAccount } from './accounts'
-import { accountEnvironment, accountSettings } from '../ports/runner/account-env'
+import { accountEnvironment, withAccountSettings } from '../ports/runner/account-env'
 import { accountGuestEnvironment, accountPolicy } from '../ports/workspace/account-policy'
 
 const accounts = {
@@ -35,7 +36,7 @@ test('selection preserves legacy routes and labels ambiguous or incompatible rou
   ).toThrow('ambiguous')
 })
 
-test('account environment removes competing credentials without mutating inputs', () => {
+test('account environment removes competing credentials without mutating inputs', async () => {
   const ambient = {
     KIMI_KEY: 'sentinel-kimi',
     CLAUDE_CODE_OAUTH_TOKEN: 'wrong',
@@ -47,7 +48,9 @@ test('account environment removes competing credentials without mutating inputs'
   expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
   expect(env.ANTHROPIC_BASE_URL).toBe(kimiEndpoint('overseas').baseUrl)
   expect(ambient.CLAUDE_CODE_OAUTH_TOKEN).toBe('wrong')
-  expect(JSON.parse(accountSettings(env, selected)[1]!).env.CLAUDE_CODE_OAUTH_TOKEN).toBe('')
+  await withAccountSettings(env, selected, async (args) => {
+    expect(JSON.parse(await readFile(args[1]!, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN).toBe('')
+  })
 })
 
 test('host transforms isolate accounts by exact header and regional hostname', () => {

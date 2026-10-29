@@ -1,3 +1,6 @@
+import { readFile, stat, access } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { nativeHandle } from './native-session'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { delimiter } from 'node:path'
 import type { StreamPart } from '../../store/streams/types'
@@ -808,6 +811,12 @@ test('selected account owns auth settings on start and continue and credential r
   const runner = new ClaudeAgentRunner({
     runCli: async (invocation) => {
       calls.push(invocation)
+      const path = invocation.args[invocation.args.indexOf('--settings') + 1]!
+      const settings = JSON.parse(await readFile(path, 'utf8'))
+      expect(settings.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(invocation.env.CLAUDE_CODE_OAUTH_TOKEN)
+      expect((await stat(path)).mode & 0o777).toBe(0o600)
+      expect((await stat(dirname(path))).mode & 0o777).toBe(0o700)
+      expect(invocation.args.join(' ')).not.toContain(invocation.env.CLAUDE_CODE_OAUTH_TOKEN!)
       return {
         stdout: JSON.stringify({
           type: 'result',
@@ -842,9 +851,12 @@ test('selected account owns auth settings on start and continue and credential r
   expect(calls[0]!.env.ANTHROPIC_API_KEY).toBeUndefined()
   expect(calls[0]!.env.ANTHROPIC_BASE_URL).toBeUndefined()
   const settingsIndex = calls[0]!.args.indexOf('--settings')
-  expect(JSON.parse(calls[0]!.args[settingsIndex + 1]!).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(
-    'sentinel-account-token',
-  )
+  expect(
+    await access(calls[0]!.args[settingsIndex + 1]!).then(
+      () => true,
+      () => false,
+    ),
+  ).toBe(false)
   expect(started.result.kind).toBe('failed')
   if (started.result.kind === 'failed') {
     expect(started.result.failure.cause).toBe('credentials')
@@ -853,4 +865,209 @@ test('selected account owns auth settings on start and continue and credential r
   }
   await runner.continue(started.session, 'retry', { env: { PERSONAL: 'rotated-sentinel' } })
   expect(calls[1]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('rotated-sentinel')
+})
+
+for (const kind of ['claude', 'overseas', 'china', 'remote'] as const) {
+  for (const mode of [
+    'buffered',
+    'stream',
+    'fallback',
+    'observer',
+    'complete',
+    'throw',
+    'reject',
+    'abort',
+    'pre-abort',
+    'resume',
+    'sync-buffer',
+  ] as const) {
+    test(`protected account settings: ${kind} ${mode}`, async () => {
+      const paths: string[] = []
+      const parts: StreamPart[] = []
+      const controller = new AbortController()
+      const account = {
+        name: 'selected',
+        descriptor:
+          kind === 'claude'
+            ? { kind: 'claude-subscription' as const, credentialEnv: 'SELECTED_KEY' }
+            : {
+                kind: 'kimi-code' as const,
+                credentialEnv: 'SELECTED_KEY',
+                region: kind === 'china' ? ('china' as const) : ('overseas' as const),
+              },
+      }
+      const inspect = async (invocation: ClaudeCliInvocation) => {
+        const path = invocation.args[invocation.args.indexOf('--settings') + 1]!
+        paths.push(path)
+        expect(invocation.args.join(' ')).not.toContain('synthetic-selected-secret')
+        expect(invocation.args.join(' ')).not.toContain('synthetic-competing-secret')
+        const file = await stat(path)
+        expect(file.isFile()).toBe(true)
+        expect(file.mode & 0o777).toBe(0o600)
+        expect((await stat(dirname(path))).mode & 0o777).toBe(0o700)
+        const raw = await readFile(path, 'utf8')
+        const settings = JSON.parse(raw)
+        expect(settings.apiKeyHelper).toBe('')
+        const key = kind === 'claude' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY'
+        expect(settings.env[key]).toBe(invocation.env[key])
+        if (kind === 'remote') {
+          expect(raw).not.toContain('synthetic-')
+          expect(JSON.stringify(invocation.env)).not.toContain('synthetic-')
+        } else expect(settings.env[key]).toBe('synthetic-selected-secret')
+        expect(
+          settings.env[kind === 'claude' ? 'ANTHROPIC_API_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN'],
+        ).toBe('')
+        if (kind !== 'claude') {
+          expect(settings.env.ANTHROPIC_BASE_URL).toBe(
+            `https://api.kimi.${kind === 'china' ? 'com' : 'ai'}/coding/`,
+          )
+          expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('kimi-for-coding')
+        }
+        if (mode === 'abort' || mode === 'pre-abort') {
+          if (mode === 'abort') controller.abort(new Error('cancelled'))
+          await waitForContractAbort(invocation.signal)
+        }
+        if (mode === 'reject') throw new Error('offline launch rejected')
+        return output([result('protected-native', 0, 0, { result: 'ok' })])
+      }
+      const runner = new ClaudeAgentRunner({
+        runCli:
+          mode === 'sync-buffer'
+            ? (invocation) => {
+                paths.push(invocation.args[invocation.args.indexOf('--settings') + 1]!)
+                throw new Error('offline synchronous spawn failed')
+              }
+            : inspect,
+        ...(['stream', 'observer', 'throw', 'abort', 'pre-abort'].includes(mode)
+          ? {
+              runCliStream: (invocation: ClaudeCliInvocation) => {
+                if (mode === 'throw') {
+                  paths.push(invocation.args[invocation.args.indexOf('--settings') + 1]!)
+                  throw new Error('offline spawn failed')
+                }
+                const pending = inspect(invocation)
+                // Attach immediately, as the real streaming boundary does.
+                void pending.catch(() => {})
+                return {
+                  lines: (async function* () {
+                    yield (await pending).stdout
+                  })(),
+                  result: pending,
+                }
+              },
+            }
+          : {}),
+      })
+      if (mode === 'pre-abort') controller.abort(new Error('already cancelled'))
+      const opts = startOpts({
+        account,
+        env: {
+          AB_ACCOUNT_PLACEHOLDERS: kind === 'remote' ? '1' : '0',
+          AB_BUILD_RUNNER_OPTIONS: '',
+          AB_HARVEST_RUNNER_OPTIONS: '',
+          SELECTED_KEY: 'synthetic-selected-secret',
+          ANTHROPIC_API_KEY: 'synthetic-competing-secret',
+        },
+        signal: controller.signal,
+        ...(['stream', 'fallback', 'throw', 'abort', 'pre-abort'].includes(mode)
+          ? { stream: { append: (values: readonly StreamPart[]) => parts.push(...values) } }
+          : {}),
+        ...(mode === 'observer' ? { onNativeSession: async () => {} } : {}),
+      })
+      if (mode === 'complete')
+        await runner.complete({
+          prompt: 'offline',
+          cwd: opts.workspacePath,
+          env: opts.env,
+          account,
+        })
+      else if (mode === 'resume') {
+        const resumed = await runner.resume(
+          nativeHandle('claude', 'protected-native', opts.workspacePath),
+          'offline resume',
+          opts,
+        )
+        expect(resumed.kind).toBe('resumed')
+      } else
+        await runner.start(opts).catch((error) => {
+          expect(['abort', 'pre-abort']).toContain(mode)
+          expect(String(error)).not.toContain('synthetic-')
+        })
+      expect(paths).toHaveLength(1)
+      for (const path of paths) {
+        expect(
+          await access(path).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(false)
+        expect(
+          await access(dirname(path)).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(false)
+      }
+      expect(JSON.stringify(parts)).not.toContain('synthetic-')
+    })
+  }
+}
+
+test('native observer failure awaits child settlement before removing protected settings', async () => {
+  let path!: string
+  let finish!: (result: ClaudeCliResult) => void
+  let cancelled!: () => void
+  const aborted = new Promise<void>((resolve) => {
+    cancelled = resolve
+  })
+  const runner = new ClaudeAgentRunner({
+    runCliStream: (invocation) => {
+      path = invocation.args[invocation.args.indexOf('--settings') + 1]!
+      invocation.signal!.addEventListener('abort', cancelled, { once: true })
+      return {
+        lines: (async function* () {
+          yield JSON.stringify({ type: 'system', session_id: 'offline' })
+        })(),
+        result: new Promise<ClaudeCliResult>((resolve) => {
+          finish = resolve
+        }),
+      }
+    },
+  })
+  const pending = runner.start(
+    startOpts({
+      account: {
+        name: 'test',
+        descriptor: { kind: 'claude-subscription', credentialEnv: 'TOKEN' },
+      },
+      env: {
+        TOKEN: 'synthetic-observer-token',
+        AB_ACCOUNT_PLACEHOLDERS: '0',
+        AB_BUILD_RUNNER_OPTIONS: '',
+        AB_HARVEST_RUNNER_OPTIONS: '',
+      },
+      onNativeSession: async () => {
+        throw new Error('observer failed')
+      },
+    }),
+  )
+  const failure = pending.catch((error: unknown) => error)
+  try {
+    await aborted
+    expect(
+      await access(path).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(true)
+  } finally {
+    finish({ stdout: '', stderr: 'cancelled', exitCode: 1 })
+  }
+  expect(await failure).toHaveProperty('result.kind', 'failed')
+  expect(
+    await access(dirname(path)).then(
+      () => true,
+      () => false,
+    ),
+  ).toBe(false)
 })
