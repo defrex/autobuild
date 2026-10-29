@@ -163,9 +163,15 @@ async function matchingBuild(
   }
   const matches = normalized.filter(({ ref }) => ref.id === id).map(({ record }) => record)
   if (!matches.length && source.name === 'hosted') {
+    // Readable refs already identify tickets; only legacy local-store refs need aliases.
+    const aliases = new Map<string, string | null>()
     try {
-      for (const { record, ref } of normalized)
-        if ((await source.get(ref.id))?.ref.id === id) matches.push(record)
+      for (const { record, ref } of normalized) {
+        if (!/^ticket-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref.id))
+          continue
+        if (!aliases.has(ref.id)) aliases.set(ref.id, (await source.get(ref.id))?.ref.id ?? null)
+        if (aliases.get(ref.id) === id) matches.push(record)
+      }
     } catch {
       /* optional alias association must not undo a successful mutation */
     }
