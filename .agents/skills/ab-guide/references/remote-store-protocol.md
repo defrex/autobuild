@@ -1445,11 +1445,12 @@ re-registers the same ID. Watch withdrawal treats only 404/405 as an unsupported
 route and silently retains TTL expiry; authorization, transport and malformed
 success errors are diagnosed without failing the watch.
 
-Release line 1.1 uses protocol 6. Published v1.0.0/v1.0.1 use protocol 4;
-protocol 5 never shipped. The release identity table retains `1.0 -> 4`, and
-a 1.1/protocol-6 instance admits those published clients. A 1.0 instance does
-not admit 1.1 clients; route fallback never bypasses peer admission. Patches
-within a published release line must keep its protocol identity.
+Historically, release line 1.1 used protocol 6 and retained the `1.0 -> 4`
+identity to admit published v1.0.0/v1.0.1 clients, which used protocol 4;
+protocol 5 never shipped. A 1.0 instance did not admit 1.1 clients. The current
+policy refuses all pre-1.2 clients and does not retain their identities for
+admission. Route fallback never bypasses peer admission. Patches within a
+published release line must keep its protocol identity.
 
 
 ## Project secrets (v1)
