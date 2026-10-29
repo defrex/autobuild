@@ -46,12 +46,24 @@ export const errorKindSchema = z.enum([
   'conflict',
   'internal',
   'unsupported-operation',
+  'cursor-too-old',
+  'checkpoint-integrity',
+  'retired-seed-generation',
 ])
 export type ErrorKind = z.infer<typeof errorKindSchema>
 
 export const errorBodySchema = z.object({
   error: z.string(),
   kind: errorKindSchema,
+  scope: z
+    .union([
+      z.object({ kind: z.literal('build'), slug: z.string() }),
+      z.object({ kind: z.literal('repo'), repo: z.string() }),
+    ])
+    .optional(),
+  requestedCursor: z.number().int().nonnegative().safe().optional(),
+  head: z.number().int().nonnegative().safe().optional(),
+  oldestCursor: z.number().int().nonnegative().safe().optional(),
 })
 export type ErrorBody = z.infer<typeof errorBodySchema>
 

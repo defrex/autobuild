@@ -1,3 +1,4 @@
+import { readBuildRange, isTerminalEventReadError } from '../store/event-reads'
 import { integrationFailed } from '../kernel/integration-state'
 import { awaitsConsent } from '../kernel/landing-readiness'
 import { leafRestackReducer, type LeafRestackState } from '../kernel/leaf-restack-state'
@@ -575,6 +576,8 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         if (streams.has(slug)) return
         const record = await store.getBuild(slug)
         if (record === null) return
+        if (resumeSeq !== undefined && store.getStreamSeed)
+          await store.getStreamSeed({ kind: 'build', slug }, resumeSeq)
         const current = await readBuildStreamSeed(store, slug)
         const stream = registerStream(slug, current, slugs.includes(slug))
         if (resumeSeq !== undefined) {
@@ -585,7 +588,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
             for (const pr of stream.seed.mergeAttentionPrs)
               deliveredAttention.add(mergeIdentity(slug, pr))
           }
-          for (const event of await store.getEvents(slug, resumeSeq)) {
+          for (const event of await readBuildRange(store, slug, resumeSeq)) {
             stream.seed = buildStreamSeedReducer.advance(stream.seed, [event])
             stream.lastSeq = event.seq
             positions[slug] = event.seq
@@ -650,7 +653,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         stream: WaitStream,
         readOpts?: RemotePollReadOpts,
       ): Promise<void> => {
-        const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
+        const fresh = await readBuildRange(store, stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
           stream.seed = buildStreamSeedReducer.advance(stream.seed, [event])
           stream.lastSeq = event.seq
@@ -712,6 +715,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           try {
             await discoverBuilds()
           } catch (error) {
+            if (isTerminalEventReadError(error)) throw error
             allReadsOk = false
             tickStreak.onFailure(error)
           }
@@ -721,6 +725,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           try {
             await pollBuild(stream)
           } catch (error) {
+            if (isTerminalEventReadError(error)) throw error
             allReadsOk = false
             tickStreak.onFailure(error)
           }
@@ -763,6 +768,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         try {
           await discoverBuilds()
         } catch (error) {
+          if (isTerminalEventReadError(error)) throw error
           const message = error instanceof Error ? error.message : String(error)
           throw new Error(`could not list builds in this store (${message})`)
         }

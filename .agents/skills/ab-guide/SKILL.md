@@ -2406,7 +2406,9 @@ For a standing operator loop, first check `ab repository status --json` for
 live `operator.registrations`. Report another live operator rather than registering
 unless the human directs otherwise. Arm `ab watch --operator --json` with no slugs;
 re-arm with `ab watch --operator --json --since <watch-cursor>` using only that
-standing watch's own final or record cursor. Reconcile active and newly dispatched
+standing watch's own final or record cursor. On `cursor-too-old`, re-arm without
+`--since`, reconcile status and acknowledge the unavailable historical gap.
+Reconcile active and newly dispatched
 builds after arming and on timeout. Keep watching after initially queued work ends.
 `ab wait` neither renews presence nor carries registration identity. Separate
 unflagged diagnostic watches and waits must not replace the monitor or its cursor.
@@ -2506,6 +2508,15 @@ cursor=$(printf '%s' "$record" | grep -o '"cursor":"[^"]*"' | cut -d'"' -f4)
 # exit 0: $record names the condition in its `condition` field — act on it.
 # exit 2: the build ended without the condition; exit 3: deadline, re-arm.
 ```
+
+Hosted watch/wait `--since` resumes read only the gap within the latest 1,000
+sequence positions, inclusive at head minus 1,000. Keep the cursor on normal
+re-arms and ordinary reducer upgrades. Typed `cursor-too-old` names the oldest
+servable cursor: re-arm without `--since`, reconcile repository/build status,
+and acknowledge the lost historical gap. Never fall back to cursor zero.
+Checkpoint integrity errors are terminal; retired seed generations require an
+upgrade/restart and fresh attachment. Explicit MCP `builds.events` history is
+paged at 256 events with `cursor` and `hasMore`; follow every continuation.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the

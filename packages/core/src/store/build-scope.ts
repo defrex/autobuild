@@ -151,6 +151,28 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
       own('appendWithArtifactsIfCurrent', slug)
       return store.appendWithArtifactsIfCurrent(slug, expectedSeq, artifacts, makeEvent)
     },
+    ...(store.getBuildEventPage
+      ? {
+          async getBuildEventPage(
+            slug: string,
+            since?: number,
+            opts?: import('./event-reads').EventReadOptions,
+          ) {
+            own('getBuildEventPage', slug)
+            return store.getBuildEventPage!(slug, since, opts)
+          },
+        }
+      : {}),
+    ...(store.getStreamSeed
+      ? {
+          async getStreamSeed(target: SnapshotScope, cursor: number) {
+            if (target.kind !== 'build')
+              throw new BuildScopeError(scope, 'getStreamSeed', target.repo)
+            own('getStreamSeed', target.slug)
+            return store.getStreamSeed!(target, cursor)
+          },
+        }
+      : {}),
     async getEvents(
       slug: string,
       sinceSeq?: number,

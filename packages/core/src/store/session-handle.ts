@@ -143,6 +143,18 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
       return Promise.reject(new SessionScopeError(scope, 'appendWithArtifactsIfCurrent', slug))
     },
+    getStreamSeed(
+      target: SnapshotScope,
+      _cursor: number,
+    ): Promise<import('./reducer-values').ReducerValue> {
+      return Promise.reject(
+        new SessionScopeError(
+          scope,
+          'getStreamSeed',
+          target.kind === 'build' ? target.slug : target.repo,
+        ),
+      )
+    },
     getEvents(slug: string, _sinceSeq?: number): Promise<AbEvent[]> {
       return Promise.reject(new SessionScopeError(scope, 'getEvents', slug))
     },

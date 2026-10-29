@@ -1,3 +1,4 @@
+import { readHarvestTail } from '../store/event-reads'
 import { readRepositoryFacts, type RepositoryReadFacts } from '../store/reduced-reads'
 /** Typed agent/operator surface for repository-scoped harvest workflows. Agent
  * stdout is never interpreted: proposal sets and review verdicts land through
@@ -863,7 +864,7 @@ export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
         view.events =
           record === null
             ? []
-            : (await store.getRepoEvents(repo)).filter(isHarvestEvent).slice(-opts.events)
+            : (await readHarvestTail(store, repo, opts.events)).filter(isHarvestEvent)
       if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
       else for (const line of renderHarvestStatus(view)) opts.stdout(line)
     },

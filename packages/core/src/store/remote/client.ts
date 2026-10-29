@@ -1,3 +1,13 @@
+import { z } from 'zod'
+import {
+  CursorTooOldError,
+  CheckpointIntegrityError,
+  RetiredSeedGenerationError,
+  IncompleteEventReadError,
+  validateEventCursor,
+  type EventReadOptions,
+  type EventPage,
+} from '../event-reads'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import {
   operatorPresenceBodySchema,
@@ -294,12 +304,21 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   private async toError(response: Response): Promise<Error> {
-    let body: { error: string; kind: string } | undefined
+    let body: import('./protocol').ErrorBody | undefined
     try {
       body = errorBodySchema.parse(await response.json())
     } catch {
       // Not a protocol error body — fall back to the status line.
     }
+    if (
+      body?.kind === 'cursor-too-old' &&
+      body.scope &&
+      body.requestedCursor !== undefined &&
+      body.head !== undefined
+    )
+      return new CursorTooOldError(body.scope, body.requestedCursor, body.head)
+    if (body?.kind === 'checkpoint-integrity') return new CheckpointIntegrityError(body.error)
+    if (body?.kind === 'retired-seed-generation') return new RetiredSeedGenerationError()
     const message = body?.error ?? `store server responded ${response.status}`
     if (response.status === 401 || response.status === 403) {
       return new AuthError(message)
@@ -519,24 +538,39 @@ export class RemoteBuildStore implements BuildStore {
     }
   }
 
-  async getEvents(
+  async getEvents(slug: string, sinceSeq = 0, opts?: EventReadOptions): Promise<AbEvent[]> {
+    const page = await this.getBuildEventPage(slug, sinceSeq, opts)
+    if (page.hasMore) throw new IncompleteEventReadError(sinceSeq, page.cursor)
+    return page.events
+  }
+
+  async getBuildEventPage(
     slug: string,
-    sinceSeq = 0,
-    opts?: { waitSeconds?: number; signal?: AbortSignal },
-  ): Promise<AbEvent[]> {
-    const params = new URLSearchParams({ since: String(sinceSeq) })
+    since = 0,
+    opts?: EventReadOptions,
+  ): Promise<EventPage<AbEvent>> {
+    validateEventCursor(since)
+    const params = new URLSearchParams({ since: String(since) })
+    if (opts?.through !== undefined) {
+      validateEventCursor(opts.through)
+      params.set('through', String(opts.through))
+    }
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
     return this.heldRequest(
       opts?.signal,
-      (): AbEvent[] => [],
+      (): EventPage<AbEvent> => ({ events: [], cursor: since, hasMore: false }),
       () =>
         this.requestJson(
           'GET',
           `${this.buildPath(slug)}/events?${params}`,
-          eventListSchema,
+          z.object({
+            events: eventListSchema,
+            cursor: z.number().int().nonnegative().safe(),
+            hasMore: z.boolean(),
+          }),
           undefined,
           opts?.signal,
-        ) as Promise<AbEvent[]>,
+        ) as Promise<EventPage<AbEvent>>,
     )
   }
 
@@ -786,6 +820,45 @@ export class RemoteBuildStore implements BuildStore {
           opts?.signal,
         ) as Promise<RepositoryEvent[]>,
     )
+  }
+
+  async getStreamSeed(scope: SnapshotScope, cursor: number): Promise<ReducerValue> {
+    validateEventCursor(cursor)
+    const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
+    const value = await this.requestJson(
+      'GET',
+      `${root}/stream-seed?cursor=${cursor}`,
+      reducerValueSchema,
+    )
+    const request = { reducer: scope.kind === 'build' ? 'buildStreamSeed' : 'repositoryAttention' }
+    const { reducer } = resolveReducerValue(scope, request)
+    if (value.version !== reducer.version || diagnoseReducerValue(request.reducer, value.value))
+      throw new ReducerValueIncompatibilityError(
+        request.reducer,
+        scope,
+        reducer.version,
+        value.version,
+        'invalid historical seed',
+      )
+    return value as ReducerValue
+  }
+  getRepositoryTail(repo: string, since = 0, opts?: EventReadOptions): Promise<RepositoryEvent[]> {
+    return this.getRepoEvents(repo, since, opts)
+  }
+  getHarvestHistoryPage(
+    repo: string,
+    before = Number.MAX_SAFE_INTEGER,
+  ): Promise<EventPage<RepositoryEvent>> {
+    validateEventCursor(before)
+    return this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/harvest-history?before=${before}`,
+      z.object({
+        events: repositoryEventListSchema,
+        cursor: z.number().int().nonnegative().safe(),
+        hasMore: z.boolean(),
+      }),
+    ) as Promise<EventPage<RepositoryEvent>>
   }
 
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
@@ -1333,7 +1406,7 @@ export class RemoteBuildStore implements BuildStore {
     // answers immediately and the cadence degrades to the old request rate.
     const { waitSeconds = REMOTE_EVENT_WAIT_SECONDS, ...rest } = opts
     return pollingSubscribe(
-      (since, pollOpts) => this.getEvents(slug, since, pollOpts),
+      async (since, pollOpts) => (await this.getBuildEventPage(slug, since, pollOpts)).events,
       { ...rest, waitSeconds: waitSeconds > 0 ? waitSeconds : undefined },
       onEvent,
     )
