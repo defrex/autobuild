@@ -8,6 +8,9 @@ type Shape = {
   props?: Record<string, { type: string; optional: boolean }>
   index?: string
 }
+export const REDUCER_VALUE_CONTRACT_IDENTITY = new Bun.CryptoHasher('sha256')
+  .update(JSON.stringify(shapes))
+  .digest('hex')
 const schemas: Record<string, Shape> = shapes.schemas
 
 /** A finished-value shape catalog: this build's generated one, or a frozen

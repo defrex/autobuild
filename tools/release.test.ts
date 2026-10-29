@@ -1171,6 +1171,8 @@ test('hosted release frozen installs succeed before the new core version is publ
     return testHarness.run(request)
   }
   await runRelease(['--version', releaseVersion], fixture.root, {
+    // This fixture proves packaging, with compatibility covered separately below.
+    prepareCompatibility: async () => [],
     run,
     output: testHarness.output,
     repositoryUrl: fixture.remote,
@@ -1485,3 +1487,123 @@ for (const fragmentOnly of [false, true]) {
     }
   }
 }
+
+import { prepareReleaseCompatibility, COMPATIBILITY_ROOT } from './release-compatibility'
+import type { ReleasedClient } from '../packages/core/src/store/remote/released-clients'
+import type { ReleasedReducerValues } from '../packages/core/src/store/remote/released-reducer-values'
+const tinyCatalog: ReleasedReducerValues = {
+  roots: { build: { value: '0' } },
+  schemas: { '0': { kind: 'object', props: {} } },
+  versions: { build: 1 },
+}
+const pub = (version: string, publishedAt: string): ReleasedClient => ({
+  version,
+  publishedAt,
+  protocol: '6',
+  contract: `${version}.json`,
+  provenance: { tag: `v${version}` },
+})
+async function compatibilityFixture(
+  entries = [pub('1.2.0', '2026-10-28T20:17:06.230Z'), pub('1.3.0', '2026-10-29T15:44:57.934Z')],
+) {
+  const fixture = await createFixture()
+  const directory = join(fixture.root, COMPATIBILITY_ROOT)
+  await mkdir(join(directory, 'released-reducer-values'), { recursive: true })
+  await writeFile(join(directory, 'released-clients.json'), JSON.stringify(entries))
+  for (const entry of entries)
+    await writeFile(
+      join(directory, 'released-reducer-values', entry.contract!),
+      JSON.stringify(tinyCatalog),
+    )
+  return fixture
+}
+
+test('compatibility preparation freezes target artifacts, preserves dates, and refuses missing supported evidence', async () => {
+  const fixture = await compatibilityFixture()
+  const args = {
+    root: fixture.root,
+    outgoing: '1.3.0',
+    target: '1.4.0',
+    now: '2026-10-30T12:00:00.000Z',
+    current: {
+      catalog: { ...tinyCatalog, versions: { build: 2 } },
+      protocol: '6',
+      catalogIdentity: 'published-target-fingerprint',
+    },
+  }
+  const files = await prepareReleaseCompatibility(args)
+  expect(files.map((file) => file.path)).toContain(
+    `${COMPATIBILITY_ROOT}/released-reducer-values/1.4.0.json`,
+  )
+  const ledger = JSON.parse(
+    files.find((file) => file.path.endsWith('released-clients.json'))!.content,
+  )
+  expect(ledger[0].publishedAt).toBe('2026-10-28T20:17:06.230Z')
+  expect(ledger[2].publishedAt).toBe(args.now)
+  expect(ledger[2].catalogIdentity).toBe(args.current.catalogIdentity)
+  for (const file of files) await writeFile(join(fixture.root, file.path), file.content)
+  await expect(
+    prepareReleaseCompatibility({
+      ...args,
+      current: { ...args.current, catalogIdentity: 'changed' },
+    }),
+  ).rejects.toThrow('immutable release contract')
+  const retry = await prepareReleaseCompatibility({ ...args, now: '2026-11-01T00:00:00.000Z' })
+  expect(retry).toEqual([])
+  await rm(join(fixture.root, COMPATIBILITY_ROOT, 'released-reducer-values/1.2.0.json'))
+  await expect(prepareReleaseCompatibility(args)).rejects.toThrow(
+    'missing supported identity or contract',
+  )
+})
+
+test('missing outgoing contract is recovered from published evidence, never current source', async () => {
+  const fixture = await compatibilityFixture([pub('1.2.0', '2026-10-28T20:17:06.230Z')])
+  const historical = { ...tinyCatalog, versions: { build: 123 } }
+  const files = await prepareReleaseCompatibility({
+    root: fixture.root,
+    outgoing: '1.3.0',
+    target: '1.4.0',
+    now: '2026-10-30T00:00:00.000Z',
+    current: { catalog: tinyCatalog, protocol: '6', catalogIdentity: 'target-fingerprint' },
+    recover: async (_, version) => ({
+      publication: pub(version, '2026-10-29T15:44:57.934Z'),
+      catalog: historical,
+    }),
+  })
+  expect(
+    JSON.parse(files.find((file) => file.path.endsWith('1.3.0.json'))!.content).versions.build,
+  ).toBe(123)
+  const targetLedger = JSON.parse(
+    files.find((file) => file.path.endsWith('released-clients.json'))!.content,
+  )
+  expect(targetLedger.find((entry: ReleasedClient) => entry.version === '1.4.0').contract).toBe(
+    '1.2.0.json',
+  )
+  expect(files.some((file) => file.path.endsWith('1.4.0.json'))).toBe(false)
+})
+
+test('compatibility candidates are visible to gates and restored after dry-run or failure', async () => {
+  for (const fail of [false, true]) {
+    const fixture = await createFixture({
+      config: fixtureConfig.replace(
+        'lint = "true"',
+        `lint = ${JSON.stringify(`test -f compatibility-new.json && ${fail ? 'false' : 'true'}`)}`,
+      ),
+    })
+    const before = await readFile(join(fixture.root, 'autobuild.toml'), 'utf8')
+    const h = harness()
+    const operation = runRelease(['--minor', '--dry-run'], fixture.root, {
+      run: h.run,
+      output: h.output,
+      prepareCompatibility: async () => [
+        { path: 'compatibility-new.json', content: '{}\n' },
+        { path: 'autobuild.toml', content: `${before}\n# staged compatibility\n` },
+      ],
+    })
+    if (fail) await expect(operation).rejects.toThrow('lint quality gate failed')
+    else await operation
+    expect(existsSync(join(fixture.root, 'compatibility-new.json'))).toBe(false)
+    expect(await readFile(join(fixture.root, 'autobuild.toml'), 'utf8')).toBe(before)
+    expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+  }
+})
