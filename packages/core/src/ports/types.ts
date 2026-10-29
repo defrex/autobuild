@@ -521,6 +521,7 @@ export interface ForgeRewrite {
     branch: string
     destinationRef: string
   }): Promise<string>
+  /** Remote archives recover remote-present objects by exact ref and return a verified local commit. */
   archive(input: { workspacePath: string; ref: string; sha: string }): Promise<void>
   replace(input: {
     workspacePath: string

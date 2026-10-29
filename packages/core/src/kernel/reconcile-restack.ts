@@ -188,14 +188,13 @@ export async function archiveTips(deps: RestackDeps, extra: string[] = []) {
   const archives: { ref: string; sha: string }[] = []
   for (const sha of tips) {
     const ref = `refs/autobuild/archive/${deps.slug}/${sha}`
-    // Recovery can obtain evidence from an already published exact archive.
+    // Restore durable local changes first; the remote capability recovers other objects.
     if (
       (await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0 &&
       !(await restoreChange(deps, sha))
     ) {
       if (deps.forge.name === 'local-git')
         throw new Error(`missing recorded Git object ${sha}; restore it before reconcile`)
-      await git(deps, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref])
     }
     await capability.archive({ workspacePath: deps.workspacePath, ref, sha })
     archives.push({ ref, sha })
