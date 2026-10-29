@@ -1,3 +1,4 @@
+import type { Exec } from '../ports/workspace/git-worktree'
 import { requestNodeRestack } from '../operator/restack'
 import { expect, test } from 'bun:test'
 import { makeHarness, happyHandlers, readyTicket, writeFileIn, CONFIG_TOML } from './harness'
@@ -206,6 +207,15 @@ for (const trailerFlag of [undefined, false]) {
           sha,
           ...(trailerFlag === undefined ? {} : { buildTrailerPresent: trailerFlag }),
         },
+      })
+      // Force the legacy refresh path to retain snapshot failure/race coverage.
+      const prior = journal.find((event) => event.type === 'change-presence.observed')!
+      if (prior.type !== 'change-presence.observed') throw new Error('missing observation')
+      const { witness: _witness, ...legacy } = prior.payload
+      await h.store.appendRepo(h.origin, {
+        actor: DISPATCHER,
+        type: 'change-presence.observed',
+        payload: legacy,
       })
       if (trailerFlag === undefined) {
         const snapshot = h.forgeAdapter.snapshotBase!.bind(h.forgeAdapter)
@@ -498,3 +508,188 @@ for (const saturated of [false, true])
     // Real-Git queued-path refresh took 5.67s in the 4-vCPU sandbox alongside
     // the unit suite; retain both capacity states and all presence assertions.
   }, 15_000)
+
+test('durable destination witnesses bound unrelated history, ready-set churn and cold reuse', async () => {
+  const { git } = await import('./harness')
+  const { DISPATCHER } = await import('../events/envelope')
+  const { Dispatcher } = await import('../processes/dispatcher')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Empty node' }), kind: 'node' },
+      { ...readyTicket('HOLD', { state: 'Backlog' }), target: 'NODE' },
+      readyTicket('BLOCK', { state: 'In Progress' }),
+      { ...readyTicket('DEP'), blockedBy: ['BLOCK', 'ABSENT'] },
+      readyTicket('ABSENT', { state: 'In Progress' }),
+    ],
+  })
+  try {
+    const base = await git(['rev-parse', 'HEAD'], h.origin)
+    const tree = await git(['rev-parse', `${base}^{tree}`], h.origin)
+    const absent = await git(['commit-tree', tree, '-p', base, '-m', 'absent sibling'], h.origin)
+    const seed = async (slug: string, sha: string, id = slug, kind?: 'node') => {
+      const ticket = { source: 'fake', id }
+      await h.store.createBuild({
+        slug,
+        repo: h.origin,
+        ticket,
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: { ticket, repo: h.origin, baseBranch: 'main', ...(kind ? { kind } : {}) },
+        },
+      })
+      await h.store.append(slug, { actor: DISPATCHER, type: 'pr.merged', payload: { sha } })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
+    await seed('blocker', absent, 'BLOCK')
+    await seed('always-absent', 'f'.repeat(40), 'ABSENT')
+    let snapshots = 0
+    let walks = 0
+    let pendingHead: string | undefined
+    const dispatcherDeps = Reflect.get(h.dispatcher, 'deps')
+    const exec: Exec = dispatcherDeps.exec
+    dispatcherDeps.exec = async (...args: Parameters<typeof exec>) => {
+      if (pendingHead && args[0][1] === 'log' && args[0].includes(pendingHead)) {
+        walks++
+        pendingHead = undefined
+      }
+      return exec(...args)
+    }
+    const snapshot = h.forgeAdapter.snapshotBase!.bind(h.forgeAdapter)
+    h.forgeAdapter.snapshotBase = async (input) => {
+      const head = await snapshot(input)
+      if (input.destinationRef.endsWith('/presence') && input.base === 'main') {
+        snapshots++
+        pendingHead = head
+      }
+      return head
+    }
+    await h.dispatcher.tick()
+    const proof = async () =>
+      (await readRepositoryFacts(h.store, h.origin)).value.presence['root:main']!
+    const original = JSON.stringify(await proof())
+    expect(snapshots).toBe(1)
+    expect(walks).toBe(1)
+    const eventCount = async () =>
+      (await h.store.getRepoEvents(h.origin)).filter(
+        (event) =>
+          event.type === 'change-presence.observed' && event.payload.destination === 'root:main',
+      ).length
+    expect(await eventCount()).toBe(1)
+    for (const count of [10, 100]) {
+      for (let i = 0; i < count; i++)
+        await seed(`unrelated-${count}-${i}`, (i + count + 100).toString(16).padStart(40, '0'))
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(JSON.stringify(await proof())).toBe(original)
+      expect(snapshots).toBe(1)
+      expect(walks).toBe(1)
+      expect(await eventCount()).toBe(1)
+      expect(h.tickets.claims).not.toContain('DEP')
+    }
+    h.tickets.add({ ...readyTicket('OTHER'), target: 'NODE', blockedBy: ['ABSENT'] })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(JSON.stringify(await proof())).toBe(original)
+    expect(snapshots).toBe(1)
+    expect(walks).toBe(1)
+    expect(await eventCount()).toBe(1)
+    await h.tickets.transition('OTHER', 'Backlog')
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(JSON.stringify(await proof())).toBe(original)
+    expect(snapshots).toBe(1)
+    expect(walks).toBe(1)
+    const deps = Reflect.get(h.dispatcher, 'deps')
+    const cold = new Dispatcher(deps)
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect(JSON.stringify(await proof())).toBe(original)
+    expect(snapshots).toBe(1)
+    expect(walks).toBe(1)
+    expect(await eventCount()).toBe(1)
+    // A legacy observation is readable, but cannot authorize admission without sampling.
+    const { witness: _witness, ...legacy } = await proof()
+    await h.store.appendRepo(h.origin, {
+      actor: DISPATCHER,
+      type: 'change-presence.observed',
+      payload: {
+        ...legacy,
+        evidence: JSON.stringify({ version: 2, revisions: [] }),
+      },
+    })
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect(snapshots).toBe(2)
+    expect(walks).toBe(2)
+    expect(JSON.stringify(await proof())).toBe(original)
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect(snapshots).toBe(2)
+    expect(walks).toBe(2)
+    // Late confirmed landing facts at this immutable head require only reprojection.
+    await seed('late-landing', base)
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect((await proof()).identities).toContain('build:late-landing')
+    expect(snapshots).toBe(2)
+    expect(walks).toBe(2)
+    const changedEvents = await eventCount()
+    expect(changedEvents).toBe(4) // initial, legacy, refresh, late landing
+    await h.store.append('late-landing', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect((await proof()).identities).not.toContain('build:late-landing')
+    expect(snapshots).toBe(2)
+    expect(walks).toBe(2)
+    expect(await eventCount()).toBe(changedEvents + 1)
+    await seed('late-node', base, 'late-node', 'node')
+    await h.store.append('late-node', {
+      actor: DISPATCHER,
+      type: 'node.contribution-recorded',
+      payload: { landing: base, head: base, base, identities: ['build:nested'] },
+    })
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect((await proof()).identities).toContain('build:nested')
+    expect((await proof()).identities).not.toContain('build:deep')
+    await seed('nested', absent, 'nested', 'node')
+    await h.store.append('nested', {
+      actor: DISPATCHER,
+      type: 'node.contribution-recorded',
+      payload: { landing: absent, head: absent, base, identities: ['build:deep'] },
+    })
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect((await proof()).identities).toContain('build:deep')
+    expect(snapshots).toBe(2)
+    expect(walks).toBe(2)
+    await h.store.append('late-node', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect((await proof()).identities).not.toContain('build:deep')
+    expect(h.tickets.claims).not.toContain('DEP')
+    // Move to the sibling landing, then force back: both changes must refresh.
+    await git(['update-ref', 'refs/heads/main', absent], h.origin)
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect(snapshots).toBe(3)
+    expect(walks).toBe(3)
+    expect((await proof()).identities).toContain('build:blocker')
+    await git(['update-ref', 'refs/heads/main', base], h.origin)
+    h.clock.advance(60_000)
+    await cold.tick()
+    expect(snapshots).toBe(4)
+    expect(walks).toBe(4)
+    expect((await proof()).identities).not.toContain('build:blocker')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)

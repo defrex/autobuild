@@ -1120,6 +1120,11 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           const later = {
             ...payload,
             evidence: 'landing-revision-2',
+            witness: {
+              version: 1 as const,
+              commits: ['a'.repeat(40)],
+              identities: ['build:blocker' as const],
+            },
             identities: ['build:blocker', 'build:second'],
           }
           await store.appendRepo(repo, {
