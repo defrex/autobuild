@@ -704,7 +704,10 @@ export const forgeHealthEventPayloadSchemas = {
     resetAt: z.iso.datetime(),
     firstFailureAt: z.iso.datetime(),
   }),
-  'dispatcher.forge-recovered': z.strictObject({ forge: z.string().min(1) }),
+  'dispatcher.forge-recovered': z.strictObject({
+    forge: z.string().min(1),
+    reason: z.string().trim().min(1).optional(),
+  }),
 } as const
 
 export const ticketMigrationEventPayloadSchemas = {
@@ -912,7 +915,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.ticket-scan-completed': ['dispatcher'],
   'dispatcher.ticket-source-dependency-limited': ['dispatcher'],
   'dispatcher.forge-degraded': ['dispatcher', 'kernel'],
-  'dispatcher.forge-recovered': ['dispatcher', 'kernel'],
+  'dispatcher.forge-recovered': ['dispatcher', 'kernel', 'human'],
   'dispatcher.ticket-source-degraded': ['dispatcher'],
   'dispatcher.ticket-source-recovered': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],

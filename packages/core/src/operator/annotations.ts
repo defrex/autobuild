@@ -86,6 +86,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'repository.forge_clear': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
   'repository.status': {
     readOnlyHint: true,
     destructiveHint: false,

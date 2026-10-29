@@ -500,6 +500,25 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
     expect(issued.status).toBe(200)
     const token = (await issued.json()).token
     if (target.kind === 'harvest-runner') harvestToken = token
+    const { createOperatorServer } = await import('./operator-server')
+    const operator = createOperatorServer({
+      store: f.store,
+      projects: f.projects,
+      auth: f.auth,
+      secret,
+      clock: f.clock,
+    })
+    const beforeRecovery = await f.store.getRepoEvents(A)
+    const clear = await operator.fetch(
+      request(`/operator/v1/repos/${encodeURIComponent(A)}/tools/repository.forge_clear`, token, {
+        repo: A,
+        forge: 'github',
+        reason: 'spoofed operator',
+        actor: { kind: 'human', user: 'owner' },
+      }),
+    )
+    expect(clear.status).toBe(403)
+    expect(await f.store.getRepoEvents(A)).toEqual(beforeRecovery)
     for (const [operation, input] of Object.entries(inputs)) {
       let opened = false
       const server = createTicketServer({
@@ -1137,6 +1156,56 @@ test.each(['build-runner', 'build-phase'] as const)(
       expect(response.status).toBe(200)
       token = (await response.json()).token
     }
+    // B is independently registered and accessible with its own authority.
+    const other = await f.credentials.issue(B, 'other-owner', {
+      purpose: 'project-owner',
+      expiresAt: new Date(+f.clock() + 86400000),
+    })
+    expect(
+      (await f.server.fetch(request(`/repos/${encodeURIComponent(B)}/events`, other.token))).status,
+    ).toBe(200)
+    const cooldown = {
+      actor: { kind: 'kernel' },
+      type: 'dispatcher.forge-degraded',
+      payload: {
+        forge: 'github',
+        message: 'limit',
+        firstFailureAt: f.clock().toISOString(),
+        resetAt: new Date(+f.clock() + 1000).toISOString(),
+      },
+    }
+    expect(await f.projects.has(A)).toBe(true)
+    expect(await f.projects.has(B)).toBe(true)
+    const artifactsA = await f.store.listRepoArtifacts(A)
+    const artifactsB = await f.store.listRepoArtifacts(B)
+    const beforeA = await f.store.getRepoEvents(A)
+    const beforeB = await f.store.getRepoEvents(B)
+    const denied = await f.server.fetch(
+      request(`/repos/${encodeURIComponent(B)}/events`, token, cooldown),
+    )
+    expect(denied.status).toBe(403)
+    expect(await denied.text()).toContain('wrong project')
+    expect(await f.store.getRepoEvents(A)).toEqual(beforeA)
+    expect(await f.store.getRepoEvents(B)).toEqual(beforeB)
+    expect(await f.store.listRepoArtifacts(A)).toEqual(artifactsA)
+    expect(await f.store.listRepoArtifacts(B)).toEqual(artifactsB)
+    for (const actor of [
+      { kind: 'human', user: 'owner' },
+      { kind: 'dispatcher' },
+      { kind: 'agent', session: 'guard-phase', role: 'implement' },
+    ]) {
+      const before = await f.store.getRepoEvents(A)
+      const artifacts = await f.store.listRepoArtifacts(A)
+      expect(
+        (
+          await f.server.fetch(
+            request(`/repos/${encodeURIComponent(A)}/events`, token, { ...cooldown, actor }),
+          )
+        ).status,
+      ).toBe(403)
+      expect(await f.store.getRepoEvents(A)).toEqual(before)
+      expect(await f.store.listRepoArtifacts(A)).toEqual(artifacts)
+    }
     const remote = new RemoteBuildStore({
       url: 'http://store',
       token,
@@ -1290,4 +1359,100 @@ test('harvest suspension closes the old phase immediately while runner authority
     200,
   )
   expect((await f.server.fetch(request(`${base}/events`, old))).status).toBe(401)
+})
+
+test('hosted admission validates cooldowns before append or atomic artifact deposit for every authority', async () => {
+  const f = await fixture()
+  const admin = mintToken(secret, {
+    version: 1,
+    ownerAdmin: { user: 'admin' },
+    exp: +f.clock() + 86400000,
+  })
+  for (const token of [f.project.token, f.token, admin]) {
+    for (const resetAt of [
+      undefined,
+      'invalid',
+      '9999-01-01T00:00:00Z',
+      new Date(+f.clock() + 86400001).toISOString(),
+    ]) {
+      const event = {
+        actor: { kind: 'kernel' },
+        type: 'dispatcher.forge-degraded',
+        payload: {
+          forge: 'github',
+          message: 'limit',
+          firstFailureAt: f.clock().toISOString(),
+          resetAt,
+        },
+      }
+      const before = await f.store.getRepoEvents(A)
+      const artifacts = await f.store.listRepoArtifacts(A)
+      expect(
+        (await f.server.fetch(request(`/repos/${encodeURIComponent(A)}/events`, token, event)))
+          .status,
+      ).toBe(400)
+      expect(await f.store.getRepoEvents(A)).toEqual(before)
+      const response = await f.server.fetch(
+        request(`/repos/${encodeURIComponent(A)}/deposits`, token, {
+          event,
+          artifacts: [{ kind: 'evidence', contentBase64: 'eA==' }],
+        }),
+      )
+      expect(response.status).toBe(token === f.token ? 403 : 400)
+      expect(await f.store.listRepoArtifacts(A)).toEqual(artifacts)
+      expect(await f.store.getRepoEvents(A)).toEqual(before)
+    }
+  }
+  for (const offset of [-1000, 86400000]) {
+    expect(
+      (
+        await f.server.fetch(
+          request(`/repos/${encodeURIComponent(A)}/events`, f.token, {
+            actor: { kind: 'kernel' },
+            type: 'dispatcher.forge-degraded',
+            payload: {
+              forge: 'github',
+              message: 'limit',
+              firstFailureAt: f.clock().toISOString(),
+              resetAt: new Date(+f.clock() + offset).toISOString(),
+            },
+          }),
+        )
+      ).status,
+    ).toBe(201)
+  }
+})
+
+test('a provider deadline beyond admission fails recording explicitly without retrying the provider', async () => {
+  const { RemoteBuildStore } = await import('@defrex/autobuild/remote-store')
+  const { FakeForge, ForgeFailure } = await import('@defrex/autobuild/plugin-sdk')
+  const { guardForge } = await import('@defrex/autobuild/testing')
+  const f = await fixture()
+  const remote = new RemoteBuildStore({
+    url: 'http://store',
+    token: f.token,
+    fetchFn: ((input, init) => f.server.fetch(new Request(input, init))) as typeof fetch,
+  })
+  const raw = new FakeForge()
+  let calls = 0
+  raw.getPrState = async () => {
+    calls++
+    throw new ForgeFailure('observed distant deadline', {
+      kind: 'rate-limited',
+      resetAt: new Date(+f.clock() + 86400001).toISOString(),
+    })
+  }
+  const forge = guardForge(raw, {
+    store: remote,
+    repo: A,
+    name: 'github',
+    now: f.clock,
+    wait: true,
+  })
+  await expect(forge.getPrState(A, 1)).rejects.toMatchObject({
+    name: 'EventValidationError',
+    message: expect.stringContaining('24 hours'),
+  })
+  expect(calls).toBe(1)
+  expect(await f.store.getRepoEvents(A)).toEqual([])
 })

@@ -977,6 +977,7 @@ describe('agent tool registry contract', () => {
       'builds.restack': { repo, slug: 'demo' },
       'builds.control': { repo, slug: 'demo', action: 'hold' },
       'builds.answer': { repo, slug: 'demo', resolution: 'guidance', text: 'hi' },
+      'repository.forge_clear': { repo, forge: 'github', reason: 'override' },
       'repository.settings': { repo, setting: 'intake', enabled: true },
       'repository.bulk_control': { repo, action: 'pause' },
       'harvest.control': { repo, action: 'toggle-gate' },

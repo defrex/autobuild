@@ -7366,6 +7366,10 @@
         "forge": {
           "type": "2",
           "optional": false
+        },
+        "reason": {
+          "type": "4",
+          "optional": true
         }
       }
     },
@@ -23560,10 +23564,6 @@
         "attempt": {
           "type": "25",
           "optional": false
-        },
-        "holder": {
-          "type": "15",
-          "optional": true
         }
       }
     },
@@ -23878,6 +23878,10 @@
         "incompleteIdentities": {
           "type": "6",
           "optional": false
+        },
+        "holder": {
+          "type": "4",
+          "optional": true
         }
       }
     },
