@@ -2717,6 +2717,17 @@ first retry after a source cooldown remain recorded. Recorded starts may arrive
 with completion; optional `startedAt` preserves the actual start time, falling
 back to envelope time for historical journals.
 
+Watch mode keeps running when both a tick and its failure publication fail,
+warning locally with both errors. Failed iterations wait at least the configured
+interval or one second, whichever is longer. One bounded in-memory episode
+retains the original error, count and observation window; recovery appends a
+standalone `dispatcher.tick-failed` diagnostic before the next operational tick.
+An unacknowledged diagnostic remains pending and may be duplicated after a lost
+response. Reporting never closes a later tick boundary or gates committed
+handoff acceptance. Explicit shutdown, supersession and fatal forge publication
+still stop the loop; once mode rethrows the original tick error even if reporting
+fails. Stopping before recovery leaves only local warnings for unreported failures.
+
 Repository tick telemetry is bounded mutable operational metadata, like leases.
 `beginRepoTick` persists the open boundary before unsafe work; `finishRepoTick`
 atomically replaces it with actual completion time and outcome and appends any
