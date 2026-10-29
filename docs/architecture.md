@@ -1617,6 +1617,38 @@ execution and unchanged-base progress budgets retain their existing accounting.
 
 ## Forge failure recovery
 
+Destination heads come only from the authoritative forge branch; dispatcher-host
+refs are never a fallback. Failed remote reads retain the accepted observation;
+classified rate limits use repository forge degradation and cooldown. Changed
+heads require immutable commit ancestry proof against the accepted target and
+the destination base already used by replay. Missing capability or failed proof
+defers new replay. A non-descendant without kernel lineage records
+`target.rewritten` with branch,
+previous SHA and observed SHA, retains the accepted target, and raises watch/wait
+attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
+clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
+Upstream force-pushes are never adopted automatically. Accepted node reparenting
+starts a new branch scope; frozen transactions recover their retained inputs.
+
+Kernel restacks of a node are admitted through durable guarded publication
+receipts, not treated as external force-pushes. The dispatcher walks an index
+keyed by node and previous head, at most 64 receipt lookups from each child
+baseline; cost is capped independently of journal length or total receipts.
+Exact links use point lookups. When forward child landings separate restacks,
+the dispatcher walks backwards from the latest publication with an indexed
+previous-receipt cursor. Every gap requires immutable ancestry from the earlier
+published head to the later receipt's previous head, as do the baseline and tip
+ends of the proof. Missing links never imply rewrite authority.
+The proven receipts travel in `target.moved.lineage`; build-scoped runners use
+that recorded proof without reading another build. Clearing attention for an
+unchanged accepted SHA retains newly proven lineage in `target.rewrite-cleared`.
+Missing receipts or a gap
+over 64 still record `target.rewritten` and raise attention. Each hop makes at
+most two immutable ancestry comparisons. The exact walk and gap recovery share
+the same 64-read cap, including unsuccessful lookups. Unchanged accepted
+polls read no receipts or event rows.
+
+
 `kernel/publication-retry.ts` selects eligibility from the publication ledger
 and shares the policy between `processes/build-runner.ts` and trusted
 `cli/publication-settlement.ts`. The lease sweep skips ineligible retained intents;

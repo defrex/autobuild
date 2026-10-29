@@ -319,6 +319,7 @@ dir = "tickets"
     const workspaces = new FakeWorkspaceProvider({
       root: join(root, 'workspaces'),
       mode: 'logical',
+      base: { source: 'remote', sha: 'a'.repeat(40) },
     })
     const forge = new FakeForge()
     forge.seedBranch('main', 'a'.repeat(40))
@@ -1524,6 +1525,10 @@ readyState = "Ready"
     [...h.agents.sessions.values()].some((session) => session.opts.skill === 'ab-verify-visual'),
   ).toBe(false)
 
+  // Keep the preceding API observation frozen while Git's authoritative
+  // reconcile snapshot sees the subsequent forward move. This tests manual
+  // reconcile's path selection rather than a clean waiting restack.
+  h.forge.seedBranch('main', ofType(await h.events(SLUG), 'target.moved').at(-1)!.payload.sha)
   // Advance only the remote base with a path covered by base-only's selector.
   // The post-reconcile anchor must subtract it from the build-owned diff.
   await h.advanceRemote(

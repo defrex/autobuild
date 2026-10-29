@@ -1,3 +1,4 @@
+import { observeTarget } from './target-observation'
 import { nodeRestackDemand } from './node-restack-demand'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
@@ -88,6 +89,19 @@ export async function runNodeTransaction(
     const oldBase = source ? boundaries[source]! : state.nodeOpened?.sha
     if (!oldBase) throw new Error('node source provenance unavailable; operator review required')
     const parent = await snapshotParent(deps, input.parentBranch, `${destinationRef}-parent-head`)
+    const admission = await observeTarget({
+      store: deps.store,
+      forge: deps.forge,
+      slug: deps.slug,
+      branch: input.parentBranch,
+      sha: parent,
+      enforceUsedBaseline: true,
+      actor: KERNEL,
+    })
+    if (admission === 'rejected') return 'idle'
+    state = await current(deps.store, deps.slug)
+    revision = state.lastSeq
+    node = state.nodeRestack
     // Observe immutable Git distance even while the node intentionally trails.
     const base = node?.contributionBase ?? oldBase
     if (

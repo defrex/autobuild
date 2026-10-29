@@ -3495,3 +3495,27 @@ test('startup reduced-read incompatibility remains legible without history recon
   expect(reduced).toBe(1)
   expect(history).toBe(0)
 })
+
+test('a fresh watch reports current upstream rewrite with branch and both immutable SHAs', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'target.rewritten',
+    payload: {
+      branch: 'main',
+      previousSha: 'a'.repeat(40),
+      sha: 'b'.repeat(40),
+    },
+  })
+  const h = harness(store)
+  await abWatch({ ...h.base, slugs: ['b1'], count: 1, timeout: '1' })
+  expect(h.out).toHaveLength(2)
+  const record = JSON.parse(h.out[0]!)
+  expect(record.event.type).toBe('target.rewritten')
+  expect(record.event.payload).toEqual({
+    branch: 'main',
+    previousSha: 'a'.repeat(40),
+    sha: 'b'.repeat(40),
+  })
+})

@@ -1,3 +1,5 @@
+import { proveTargetLineage } from '../kernel/target-lineage'
+import { assertTargetOid, observeTarget } from '../kernel/target-observation'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import type { TicketPreparation } from '../kernel/ticket-preparation'
 import { sampleTargetDistance } from '../kernel/target-distance'
@@ -2707,25 +2709,36 @@ export class Dispatcher {
   private async observeTarget(
     slug: string,
     branch: string,
-    previous: string | undefined,
+    _previous: string | undefined,
     report: TickReport,
   ): Promise<boolean> {
-    let sha: string
     try {
-      sha = await this.baseSha(branch)
+      const sha = await this.baseSha(branch)
+      return (
+        (await observeTarget({
+          store: this.store,
+          forge: this.deps.forge,
+          slug,
+          branch,
+          sha,
+          actor: DISPATCHER,
+          proveRewrite: (node, from) =>
+            proveTargetLineage({
+              store: this.store,
+              forge: this.deps.forge,
+              node,
+              from,
+              branch,
+              sha,
+            }),
+        })) !== 'unchanged'
+      )
     } catch (error) {
       const message =
         error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       report.janitorDiagnostics.push(`build ${slug}: target observation failed — ${message}`)
       return false
     }
-    if (sha === previous) return false
-    await this.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'target.moved',
-      payload: { branch, sha },
-    })
-    return true
   }
 
   private forgeWorkspacePath(events: CurrentBuildFacts): string {
@@ -4039,42 +4052,12 @@ export class Dispatcher {
     } satisfies EventWrite<'workspace.released'>)
   }
 
-  /** Current tip of the base branch. A forge with the checkout-less
-   * `remoteBranchSha` capability answers from the GitHub API (origin mode);
-   * otherwise `git ls-remote <path> refs/heads/<b>` against the dispatcher's
-   * physical checkout (§15.7: no network). The checkout, not the store
-   * identity — `deps.repo` is the normalized origin since the identity
-   * change, and ls-remote against it would hit the network from a URL.
-   * Origin-less fixtures whose identity is a path keep working through the
-   * fallback. */
+  /** Only the authoritative forge may resolve a destination tip. */
   private async baseSha(baseBranch: string): Promise<string> {
-    const remoteBranchSha = this.deps.forge.remoteBranchSha
-    if (remoteBranchSha !== undefined) {
-      try {
-        return await remoteBranchSha.call(this.deps.forge, baseBranch)
-      } catch {
-        // A forge that advertises the capability but cannot resolve this branch
-        // (a checkout-mode adapter, an unseeded test fake, or a transient
-        // remote failure) falls through to the physical checkout's git read.
-        // In origin mode there is no checkout, so the git read's failure is the
-        // actionable error and the tick still fails closed.
-      }
-    }
-    const args = [
-      'git',
-      'ls-remote',
-      this.deps.checkout ?? this.deps.repo,
-      `refs/heads/${baseBranch}`,
-    ]
-    const result = await this.deps.exec(args, {})
-    const sha = result.stdout.trim().split(/\s+/)[0]
-    if (result.exitCode !== 0 || !sha) {
-      throw new Error(
-        `${args.join(' ')} exited ${result.exitCode}: ${
-          result.stderr.trim() || result.stdout.trim() || '(no output)'
-        }`,
-      )
-    }
+    const read = this.deps.forge.remoteBranchSha
+    if (!read) throw new Error('forge remoteBranchSha capability unavailable')
+    const sha = await read.call(this.deps.forge, baseBranch)
+    assertTargetOid(sha)
     return sha
   }
 
@@ -5751,6 +5734,7 @@ export class Dispatcher {
     sampling: { refreshOnly?: boolean } = {},
   ): Promise<void> {
     if (
+      state.targetRewrite ||
       state.status === 'paused' ||
       state.status === 'done' ||
       state.status === 'aborted' ||

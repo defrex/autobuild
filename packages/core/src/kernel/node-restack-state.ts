@@ -19,6 +19,7 @@ export function sameParentRejection(
  * holder resumes these immutable inputs before admitting another operation. */
 export interface NodeRestackState {
   requests?: Record<string, EventPayload<'node.restack-requested'>>
+  targetRewrite?: EventPayload<'target.rewritten'>
   distance?: EventPayload<'node.parent-distance'>
   parentRequest?: EventPayload<'node.parent-requested'>
   parentChange?: EventPayload<'node.parent-accepted'>
@@ -57,6 +58,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         state.parentRequest = event.payload
         break
       case 'node.parent-accepted':
+        delete state.targetRewrite
         state.parentChange = event.payload
         delete state.parentRequest
         delete state.parentReplay
@@ -80,7 +82,20 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
       case 'node.parent-completed':
         if (state.parentChange?.id === event.payload.id) delete state.parentChange
         break
+      case 'target.rewritten':
+        state.targetRewrite = event.payload
+        break
+      case 'target.rewrite-cleared':
+        if (
+          event.payload.lineage &&
+          state.observedParent?.branch === event.payload.branch &&
+          state.observedParent.sha === event.payload.sha
+        )
+          state.observedParent.lineage = event.payload.lineage
+        delete state.targetRewrite
+        break
       case 'target.moved':
+        delete state.targetRewrite
         if (state.contributionBase !== undefined) state.observedParent = event.payload
         break
       case 'node.opened':
@@ -214,7 +229,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 7,
+  version: 9,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),
