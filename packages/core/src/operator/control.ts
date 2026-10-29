@@ -134,3 +134,23 @@ export async function controlHarvestRun(opts: {
   })
   return { action: projected.action, event }
 }
+
+/** Explicit operator override. No history lookup or provider-success claim. */
+export async function clearForgeDegradation(opts: {
+  store: BuildStore
+  repo: string
+  user: string
+  via?: Via
+  forge: string
+  reason: string
+}): Promise<{ event: RepositoryEventEnvelope }> {
+  const forge = opts.forge.trim()
+  const reason = opts.reason.trim()
+  if (!forge || !reason || !opts.user.trim()) throw new Error('forge, reason and user are required')
+  const event = await opts.store.appendRepo(opts.repo, {
+    actor: humanActor(opts.user, opts.via),
+    type: 'dispatcher.forge-recovered',
+    payload: { forge, reason },
+  })
+  return { event }
+}

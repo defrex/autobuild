@@ -56,3 +56,8 @@ export type { BuildDelegationFacts, HarvestDelegationFacts } from '../../kernel/
 export { delegationFactKey } from '../../kernel/service-facts'
 
 export { assertPublicSnapshotReducer } from '../snapshots'
+
+export {
+  validateForgeDegradation,
+  MAX_FORGE_DEGRADATION_MS,
+} from '../../events/forge-degradation-policy'

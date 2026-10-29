@@ -128,3 +128,26 @@ test('scope callbacks and observation cache hits cannot prove forge recovery', a
   expect(calls).toBe(2)
   expect(await readForgeHealth(store, 'r')).toBeUndefined()
 })
+
+test('an explicit override permits a probe but a real limit restores the observed cooldown', async () => {
+  const { clearForgeDegradation } = await import('../operator/control')
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  const raw = new FakeForge()
+  const resetAt = new Date(+now() + 60_000).toISOString()
+  raw.getPrState = async () => {
+    throw new ForgeFailure('limit', { kind: 'rate-limited', resetAt })
+  }
+  const forge = guardForge(raw, { store, repo: 'r', name: 'github', now })
+  await expect(forge.getPrState('r', 1)).rejects.toThrow('limit')
+  await clearForgeDegradation({
+    store,
+    repo: 'r',
+    user: 'Ada',
+    forge: 'github',
+    reason: 'override erroneous state',
+  })
+  expect(await readForgeHealth(store, 'r')).toBeUndefined()
+  await expect(forge.getPrState('r', 1)).rejects.toThrow('limit')
+  expect((await readForgeHealth(store, 'r'))?.resetAt).toBe(resetAt)
+})

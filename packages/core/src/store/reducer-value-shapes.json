@@ -7398,6 +7398,10 @@
         "forge": {
           "type": "2",
           "optional": false
+        },
+        "reason": {
+          "type": "4",
+          "optional": true
         }
       }
     },

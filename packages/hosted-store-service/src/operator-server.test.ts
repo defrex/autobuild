@@ -780,6 +780,34 @@ describe('the generic tools route', () => {
     const event = (await store.getRepoEvents(repo)).at(-1)
     expect(event?.actor).toEqual({ kind: 'human', user: 'Ada', via })
 
+    const cleared = await call(repo, 'repository.forge_clear', {
+      repo,
+      forge: 'github',
+      reason: 'bad recorded deadline',
+    })
+    expect(cleared.status).toBe(200)
+    expect(await cleared.json()).toMatchObject({
+      event: {
+        type: 'dispatcher.forge-recovered',
+        actor: { kind: 'human', user: 'Ada', via },
+        payload: { forge: 'github', reason: 'bad recorded deadline' },
+      },
+    })
+    const before = await store.getRepoEvents(repo)
+    expect(
+      (await call(repo, 'repository.forge_clear', { repo, forge: 'github', reason: ' ' })).status,
+    ).toBe(400)
+    expect(
+      (
+        await call('/another-repo', 'repository.forge_clear', {
+          repo: '/another-repo',
+          forge: 'github',
+          reason: 'override',
+        })
+      ).status,
+    ).toBe(403)
+    expect(await store.getRepoEvents(repo)).toEqual(before)
+
     // The same route executes any tool from the closed table.
     const read = await call(repo, 'builds.list', { repo, scope: 'all' })
     expect(read.status).toBe(200)

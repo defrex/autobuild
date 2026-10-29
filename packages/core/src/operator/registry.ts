@@ -36,6 +36,7 @@ import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { TicketOperationError } from '../ports/tickets/operations'
 import { OPERATOR_NOTES_REPO_KIND } from '../store/retention'
 import {
+  clearForgeDegradation,
   OperatorControlError,
   setRepositorySetting,
   toggleHarvestGate,
@@ -675,6 +676,25 @@ export const TOOLS: readonly ToolEntry[] = [
                 prepareOperatorTicketAssets({ ref, store, repo, backend: ctx.tickets }),
             }
           : {}),
+      })
+    },
+  ),
+  defineTool(
+    'repository.forge_clear',
+    'Explicitly clear erroneous forge cooldown state with an audited reason; does not prove provider recovery.',
+    z.strictObject({
+      repo: z.string().min(1).describe('Exact repository identity.'),
+      forge: z.string().trim().min(1).describe('Forge adapter name.'),
+      reason: z.string().trim().min(1).describe('Reason for the operator override.'),
+    }),
+    '{event}: the durable human-attributed recovery fact.',
+    async (raw, ctx) => {
+      const input = raw as { repo: string; forge: string; reason: string }
+      return clearForgeDegradation({
+        ...input,
+        store: ctx.store,
+        user: attributed(ctx),
+        ...(ctx.via !== undefined ? { via: ctx.via } : {}),
       })
     },
   ),
