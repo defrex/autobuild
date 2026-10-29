@@ -478,7 +478,7 @@ export async function makeHarness(opts: {
     })
     // This fixture's served bare repository is the authoritative forge, even
     // when FakeForge supplies the scripted PR surface.
-    const served = new LocalGitForge({ repoRoot: origin })
+    const served = new LocalGitForge({ repoRoot: opts.localGitForge === true ? origin : remote })
     const scriptedBranch = forge.remoteBranchSha.bind(forge)
     forge.remoteBranchSha = async (branch) =>
       forge.remoteBranches.has(branch) ? scriptedBranch(branch) : served.remoteBranchSha(branch)
