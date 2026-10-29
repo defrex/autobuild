@@ -195,3 +195,7 @@ failed bounce comment does not return an invalid ticket to Ready.
 
 Once a build is established, ordinary interrupted-dispatch recovery completes
 its missing boundaries; preparation cleanup cannot release its claim.
+
+## Spec revision during leaf reconcile
+
+If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated. The retained transaction and restack identity are reused; no abort or destructive reset is needed.
