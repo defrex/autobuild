@@ -95,7 +95,11 @@ restart, abnormal dispatcher stops/loss, ticket-source and forge degradation pas
 for ticket sources without reset), and five minutes of continuous tick failures. Advertised resets
 wait for a post-reset tick to finish before requiring action; ordinary recovery
 on that retry stays silent. Source grace and cooldown-driven failures do not
-start the tick-failure clock. Routine outcomes and self-healing failures stay silent.
+start the tick-failure clock. When failure writes are unavailable, dispatch watch
+continues with local warnings and retries at least one second apart (or its
+configured interval, if longer). Recovery records the bounded unreported window;
+local warnings do not start durable attention retroactively. Explicit shutdown
+still stops dispatch without waiting for reporting recovery. Routine outcomes and self-healing failures stay silent.
 
 Every record carries a cursor; bounded watches end with a bare `{"cursor": …}`
 line. Re-arm only with `ab watch --operator --json --since <watch-cursor>`,

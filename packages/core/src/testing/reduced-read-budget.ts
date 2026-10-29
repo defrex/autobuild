@@ -194,6 +194,7 @@ export async function reducedReadBudget(opts: {
     }
     await coldDispatchOnceBudget(store, cold, length, costs)
     await coldDispatchOnceBudget(store, cold, length, costs, true)
+    await coldDispatchOnceBudget(store, cold, length, costs, true, true)
     reset()
     const view = new RepoViewStore(cold, { repo })
     await view.refresh()
@@ -406,10 +407,13 @@ async function coldDispatchOnceBudget(
   length: number,
   costs: ReducedReadCosts,
   interactive = false,
+  outage = false,
 ) {
-  const onceRepo = interactive
-    ? 'https://github.com/budget/interactive-ticks'
-    : 'https://github.com/budget/cold-once'
+  const onceRepo = outage
+    ? 'https://github.com/budget/outage-ticks'
+    : interactive
+      ? 'https://github.com/budget/interactive-ticks'
+      : 'https://github.com/budget/cold-once'
   await store.ensureRepo(onceRepo)
   for (let i = 0; i < length; i++)
     await store.appendRepo(onceRepo, {
@@ -438,6 +442,7 @@ steps = []
     const stop = new AbortController()
     let ticks = 0
     let ticketScanWrites = 0
+    let deferredAttempts = 0
     let tickAcquisitions = { facts: 0, digests: 0 }
     const checked = new Proxy(cold, {
       get(target, key) {
@@ -456,6 +461,7 @@ steps = []
           return (...args: Parameters<BuildStore['finishRepoTick']>) => {
             // Close the kernel window before the independent dashboard poll.
             tickAcquisitions = { ...acquisitions, facts: acquisitions.facts - ticketScanWrites }
+            if (outage && ticks === 0) throw new Error('budget tick write refused')
             return target.finishRepoTick(...args)
           }
         if (interactive && key === 'appendRepo')
@@ -463,6 +469,10 @@ steps = []
             // Cold readiness publishes a scan and refreshes its committed facts;
             // this is separate from acquiring the shared tick inputs.
             if (args[1].type === 'dispatcher.ticket-scan-completed') ticketScanWrites++
+            if (outage && args[1].type === 'dispatcher.tick-failed') {
+              deferredAttempts++
+              if (ticks === 1) throw new Error('budget report write refused')
+            }
             return target.appendRepo(...args)
           }
         if (key === 'getRepoBuildDigests')
@@ -515,7 +525,8 @@ steps = []
             ),
           }
         : undefined,
-      sleep: async () => {
+      sleep: async (ms) => {
+        if (outage && ticks < 2) expect(ms).toBeGreaterThanOrEqual(1000)
         // Drain the asynchronous launch gate before closing each tick window.
         await new Promise((resolve) => setTimeout(resolve, 0))
         expect(tickAcquisitions).toEqual({ facts: 1, digests: 1 })
@@ -529,7 +540,7 @@ steps = []
         await readRepositoryFacts(cold, onceRepo)
         await readBuildDigests(cold, onceRepo)
         expect(costs.events).toBe(rows)
-        if (++ticks === 2) stop.abort()
+        if (++ticks === (outage ? 3 : 2)) stop.abort()
       },
       kernelRunId: run,
       storeRef: '/budget',
@@ -555,7 +566,8 @@ steps = []
         clock: () => new Date(1000),
       }),
     })
-    if (interactive) expect(ticks).toBe(2)
+    if (interactive) expect(ticks).toBe(outage ? 3 : 2)
+    if (outage) expect(deferredAttempts).toBe(2)
     const finished = (await readRepositoryFacts(checked, onceRepo)).value.recentRuns.find(
       ([id]) => id === run,
     )?.[1]
