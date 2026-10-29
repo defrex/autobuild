@@ -1,3 +1,4 @@
+import { repoTicketScanCheckpointSchema } from '../ticket-scan-checkpoint'
 import { operatorIdentitySchema, operatorPresenceSchema } from '../operator-presence'
 export const operatorPresenceBodySchema = operatorIdentitySchema
 export const operatorPresenceWireSchema = operatorPresenceSchema
@@ -532,3 +533,11 @@ export const finishRepoTickResponseSchema = z
     events: z.array(repositoryEventEnvelopeWireSchema),
   })
   .nullable()
+
+export const scanCheckpointResponseSchema = repoTicketScanCheckpointSchema.nullable()
+export const scanCheckpointCasBodySchema = z
+  .object({
+    expected: repoTicketScanCheckpointSchema.nullable(),
+    next: repoTicketScanCheckpointSchema,
+  })
+  .strict()

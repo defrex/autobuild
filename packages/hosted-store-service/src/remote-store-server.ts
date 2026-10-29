@@ -1,3 +1,4 @@
+import { scanCheckpointCasBodySchema } from '@defrex/autobuild/remote-store'
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
 import { CATALOG_IDENTITY_HEADER } from '@defrex/autobuild/remote-store'
@@ -804,6 +805,14 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           200,
           await store.listRepoArtifacts(repo, url.searchParams.get('kind') ?? undefined),
         )
+      case 'GET ticket-scan-checkpoint':
+        return json(200, await store.getRepoTicketScanCheckpoint(repo))
+      case 'POST ticket-scan-checkpoint': {
+        const body = await readBody(req, scanCheckpointCasBodySchema)
+        return json(200, {
+          ok: await store.compareAndSetRepoTicketScanCheckpoint(repo, body.expected, body.next),
+        })
+      }
       case 'POST tick/begin': {
         const body = await readBody(req, leaseHolderBodySchema)
         return json(200, await store.beginRepoTick(repo, body.holder))
@@ -1456,6 +1465,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         'GET artifacts',
         'GET artifact-list',
         'GET artifact-meta',
+        'GET ticket-scan-checkpoint',
+        'POST ticket-scan-checkpoint',
         'POST tick/begin',
         'POST tick/finish',
         'POST lease/claim',

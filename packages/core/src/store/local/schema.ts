@@ -254,3 +254,12 @@ export const operatorPresence = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.repo, t.id] })],
 )
+
+export const repoTicketScanCheckpoints = sqliteTable('repo_ticket_scan_checkpoints', {
+  repo: text('repo')
+    .primaryKey()
+    .references(() => repoStreams.repo, { onDelete: 'cascade' }),
+  value: text('value', { mode: 'json' })
+    .notNull()
+    .$type<import('../ticket-scan-checkpoint').RepoTicketScanCheckpoint>(),
+})

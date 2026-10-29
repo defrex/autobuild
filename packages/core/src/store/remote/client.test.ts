@@ -1450,3 +1450,9 @@ describe('latest artifact metadata compatibility', () => {
     })
   }
 })
+
+test('unsupported scan checkpoint endpoint fails explicitly without a journal fallback', async () => {
+  const { store, calls } = makeStore([{ status: 404, body: wireError('no route', 'not-found') }])
+  await expect(store.getRepoTicketScanCheckpoint('repo')).rejects.toThrow('no route')
+  expect(calls).toHaveLength(1)
+})
