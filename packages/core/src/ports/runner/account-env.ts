@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import {
   accountRemedy,
   accountPlaceholder,
@@ -76,13 +79,61 @@ export function accountEnvironment(
 
 /** CLI settings outrank user/project settings.env. Empty competing values also
  * override saved values, without editing the user's files. */
-export function accountSettings(env: Record<string, string>, account?: SelectedAccount): string[] {
-  if (account === undefined) return []
-  return [
-    '--settings',
-    JSON.stringify({
-      apiKeyHelper: '',
-      env: Object.fromEntries(ROUTING_KEYS.map((key) => [key, env[key] ?? ''])),
-    }),
-  ]
+export async function withAccountSettings<T>(
+  env: Record<string, string>,
+  account: SelectedAccount | undefined,
+  invoke: (args: string[]) => Promise<T>,
+  files: {
+    mkdtemp: (prefix: string) => Promise<string>
+    writeFile: typeof writeFile
+    rm: typeof rm
+  } = { mkdtemp, writeFile, rm },
+): Promise<T> {
+  if (account === undefined) return await invoke([])
+  let directory: string | undefined
+  try {
+    // mkdtemp creates the directory with mode 0700 from the outset.
+    directory = await files.mkdtemp(join(resolve(tmpdir()), 'autobuild-account-'))
+    const path = join(directory, 'settings.json')
+    await files.writeFile(
+      path,
+      JSON.stringify({
+        apiKeyHelper: '',
+        env: Object.fromEntries(ROUTING_KEYS.map((key) => [key, env[key] ?? ''])),
+      }),
+      { flag: 'wx', mode: 0o600 },
+    )
+  } catch {
+    if (directory !== undefined) {
+      try {
+        await files.rm(directory, { recursive: true, force: true })
+      } catch {
+        throw new Error('Account settings setup and cleanup failed')
+      }
+    }
+    throw new Error('Account settings setup failed')
+  }
+  let outcome: { value: T } | { error: unknown }
+  let cleanupFailed = false
+  try {
+    outcome = { value: await invoke(['--settings', join(directory, 'settings.json')]) }
+  } catch (error) {
+    outcome = { error }
+  } finally {
+    try {
+      await files.rm(directory, { recursive: true, force: true })
+    } catch {
+      cleanupFailed = true
+    }
+  }
+  if (cleanupFailed) {
+    throw new Error(
+      'error' in outcome
+        ? 'Account invocation failed and settings cleanup failed'
+        : 'Account settings cleanup failed',
+      'error' in outcome ? { cause: outcome.error } : undefined,
+    )
+  }
+  if ('error' in outcome) throw outcome.error
+  return outcome.value
 }
