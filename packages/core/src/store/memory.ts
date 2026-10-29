@@ -1,3 +1,4 @@
+import { scanCadenceSchema, type ScanCadence } from './scan-cadence'
 import {
   operatorIdentitySchema,
   OPERATOR_PRESENCE_TTL_MS,
@@ -720,6 +721,27 @@ export class MemoryBuildStore implements BuildStore {
       this.repos.set(repo, state)
     }
     return this.repoSnapshot(state)
+  }
+
+  private readonly scanCadence = new Map<string, ScanCadence>()
+  async getScanCadence(repo: string): Promise<ScanCadence | null> {
+    return structuredClone(this.scanCadence.get(repo) ?? null)
+  }
+  async putScanCadence(
+    repo: string,
+    input: ScanCadence,
+    allowClockRollback = false,
+  ): Promise<void> {
+    if (!this.repos.has(repo)) throw new Error(`unknown repo "${repo}"`)
+    const cadence = scanCadenceSchema.parse(input)
+    const previous = this.scanCadence.get(repo)
+    if (
+      !previous ||
+      previous.scanSeq !== cadence.scanSeq ||
+      (previous.scanSeq === cadence.scanSeq &&
+        (allowClockRollback || Date.parse(cadence.startedAt) >= Date.parse(previous.startedAt)))
+    )
+      this.scanCadence.set(repo, structuredClone(cadence))
   }
 
   private readonly operators = new Map<string, Map<string, OperatorPresence>>()

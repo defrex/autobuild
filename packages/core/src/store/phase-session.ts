@@ -318,6 +318,12 @@ export function scopeLocalStoreToPhaseSession(
       return store.subscribe(slug, opts, onEvent)
     },
 
+    async getScanCadence(): Promise<never> {
+      return admin('getScanCadence')
+    },
+    async putScanCadence(): Promise<never> {
+      return admin('putScanCadence')
+    },
     async upsertOperatorPresence(): Promise<never> {
       return admin('upsertOperatorPresence')
     },

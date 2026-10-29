@@ -8267,6 +8267,10 @@
           "type": "4",
           "optional": true
         },
+        "scanSeq": {
+          "type": "42",
+          "optional": true
+        },
         "scan": {
           "type": "659",
           "optional": true
@@ -9518,6 +9522,10 @@
         },
         "scan": {
           "type": "659",
+          "optional": false
+        },
+        "scanSeq": {
+          "type": "42",
           "optional": false
         },
         "recentRuns": {

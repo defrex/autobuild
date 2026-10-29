@@ -190,6 +190,8 @@ test('every raw route family denies foreign project before parsing or mutation',
     ['GET', 'state-events'],
     ['GET', 'build-digests'],
     ['GET', 'change-position'],
+    ['GET', 'scan-cadence'],
+    ['POST', 'scan-cadence'],
     ['GET', 'builds'],
     ['GET', 'artifacts?kind=x'],
     ['POST', 'artifacts'],
@@ -516,6 +518,34 @@ test('delegated listing retains project scope while internal operator grants rem
   expect(calls).toEqual([A])
 })
 
+test('scan cadence authorizes repository reads and dispatcher writes before touching metadata', async () => {
+  const projects = testProjects([A, B])
+  const { store: credentials, auth } = testCredentials(projects)
+  const owner = await credentials.issue(A, 'owner')
+  const foreign = await credentials.issue(B, 'owner')
+  const store = new MemoryBuildStore()
+  const server = createStoreServer({ store, auth })
+  const path = `/repos/${encodeURIComponent(A)}/scan-cadence`
+  expect(await (await server.fetch(request(path, owner.token))).json()).toBeNull()
+  expect(await store.getRepo(A)).toBeNull()
+  await store.ensureRepo(A)
+  const cadence = {
+    scanSeq: 1,
+    startedAt: '2026-10-24T12:00:00.000Z',
+    mode: 'admission',
+    readinessFingerprint: 'a',
+    criteriaFingerprint: 'b',
+  }
+  expect((await server.fetch(request(path, foreign.token, { cadence }))).status).toBe(403)
+  expect((await server.fetch(request(path, owner.token, { cadence }))).status).toBe(200)
+  expect(await (await server.fetch(request(path, owner.token))).json()).toEqual(cadence)
+  expect(
+    (await server.fetch(request(path, owner.token, { cadence: { ...cadence, scanSeq: 0 } })))
+      .status,
+  ).toBe(400)
+  expect(await store.getRepoEvents(A)).toEqual([])
+})
+
 test('operator presence requires repository operator authority before reads or writes', async () => {
   const projects = testProjects([A, B])
   const { store: credentials, auth } = testCredentials(projects)
@@ -584,6 +614,21 @@ test('operator presence requires repository operator authority before reads or w
         },
       },
     })
+    expect(
+      (
+        await delegated.fetch(
+          request(`/repos/${encodeURIComponent(A)}/scan-cadence`, 'unused', {
+            cadence: {
+              scanSeq: 1,
+              startedAt: identity.startedAt,
+              mode: 'admission',
+              readinessFingerprint: 'a',
+              criteriaFingerprint: 'b',
+            },
+          }),
+        )
+      ).status,
+    ).toBe(403)
     expect((await delegated.fetch(deletion('unused'))).status).toBe(403)
     for (const body of [undefined, identity]) {
       const response = await delegated.fetch(request(path, 'unused', body))

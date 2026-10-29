@@ -1,3 +1,4 @@
+import { scanCadenceWriteSchema } from '@defrex/autobuild/remote-store'
 import { validateForgeDegradation } from '@defrex/autobuild/remote-store'
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
@@ -1443,6 +1444,14 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return fail(404, 'not-found', 'unknown operator presence route')
       }
       const scope = await authorize(req, 'repo', repo)
+      if (segments.length === 3 && segments[2] === 'scan-cadence') {
+        if (req.method === 'GET') return json(200, await store.getScanCadence(repo))
+        if (req.method === 'POST') {
+          const body = await readBody(req, scanCadenceWriteSchema)
+          await store.putScanCadence(repo, body.cadence, body.allowClockRollback)
+          return json(200, { ok: true })
+        }
+      }
       if (segments.length === 3 && segments[2] === 'sessions') {
         return sessionCollectionRoute(req, repo)
       }

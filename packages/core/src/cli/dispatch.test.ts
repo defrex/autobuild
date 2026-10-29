@@ -11319,7 +11319,7 @@ test('unfocused frontend leaves the supervised kernel ticking and running a read
 for (const intake of [true, false]) {
   for (const hosted of [true, false]) {
     for (const interactive of [false, true]) {
-      test(`warmed idle tick makes exactly six backing calls (intake=${intake}, hosted=${hosted}, interactive=${interactive})`, async () => {
+      test(`warmed idle tick makes exactly seven backing calls (intake=${intake}, hosted=${hosted}, interactive=${interactive})`, async () => {
         const clock = manualClock()
         const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
         await fx.store.ensureRepo(fx.origin)
@@ -11393,6 +11393,7 @@ for (const intake of [true, false]) {
                 'getReducerValue',
                 'listBuilds',
                 'getRepoBuildDigests',
+                'getScanCadence',
                 'finishRepoTick',
               ])
               stop.abort()
