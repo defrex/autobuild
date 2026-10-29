@@ -1,3 +1,5 @@
+import { reducerValueForClient } from '../store/remote/compatibility'
+import { RELEASED_CLIENTS } from '../store/remote/released-clients'
 import { decideNextFromFacts } from '../kernel/engine'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -228,6 +230,31 @@ export async function reducedReadBudget(opts: {
     for (const operations of [1, 8]) {
       reset()
       for (let n = 0; n < operations; n++) {
+        const canonical = await cold.getReducerValue(
+          { kind: 'build', slug },
+          { reducer: 'buildReadFacts' },
+        )
+        for (const release of RELEASED_CLIENTS) {
+          const unknownLatest = structuredClone(canonical)
+          if (
+            unknownLatest.value &&
+            typeof unknownLatest.value === 'object' &&
+            'state' in unknownLatest.value
+          ) {
+            const state = unknownLatest.value.state as Record<string, unknown>
+            state.lastEvent = {
+              type: 'future.optional-display',
+              seq: canonical.cursor,
+              payload: {},
+            }
+          }
+          const projected = reducerValueForClient(
+            { version: release.version, projects: release.projects ?? false },
+            'buildReadFacts',
+            unknownLatest,
+          )
+          expect(projected.cursor).toBe(canonical.cursor)
+        }
         await readBuildFacts(cold, slug)
         const revised = (await readBuildFacts(cold, revisedSlug)).value
         expect(decideNextFromFacts(revised.state, revised.log, config)).toEqual({

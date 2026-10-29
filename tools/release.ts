@@ -1,3 +1,4 @@
+import { prepareReleaseCompatibility } from './release-compatibility'
 import { collectPendingChangelog } from './changelog-fragments'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -59,6 +60,8 @@ export interface ReleaseDependencies {
   run?: CommandRunner
   output?: ReleaseOutput
   today?: () => string
+  now?: () => string
+  prepareCompatibility?: typeof prepareReleaseCompatibility
   /** Test seam; production releases always use the canonical GitHub repository. */
   repositoryUrl?: string
   /** Test seam; production releases pack the distribution through
@@ -317,7 +320,7 @@ export function replaceReadmeInstall(readme: string, version: string): string {
 }
 
 export function replacePackageVersion(manifestText: string, version: string): string {
-  const manifest = JSON.parse(manifestText) as { version?: unknown }
+  const manifest = JSON.parse(manifestText) as { version?: unknown; name?: unknown }
   if (typeof manifest.version !== 'string') throw new Error('package.json version must be a string')
   const matches = [...manifestText.matchAll(/^(\s*"version"\s*:\s*")[^"]*("\s*,?\s*)$/gm)]
   if (matches.length !== 1)
@@ -327,7 +330,7 @@ export function replacePackageVersion(manifestText: string, version: string): st
     throw new Error('could not locate package.json version field')
   const replacement = `${match[1]}${version}${match[2]}`
   const content = `${manifestText.slice(0, match.index)}${replacement}${manifestText.slice(match.index + match[0].length)}`
-  const rendered = JSON.parse(content) as { version?: unknown }
+  const rendered = JSON.parse(content) as { version?: unknown; name?: unknown }
   if (rendered.version !== version) throw new Error('rendered package.json has the wrong version')
   return content
 }
@@ -809,7 +812,7 @@ export async function runRelease(
   ])
   const config = readReleaseConfig(configText)
   const workspaceManifests = await readWorkspaceManifests(root)
-  const manifest = JSON.parse(manifestText) as { version?: unknown }
+  const manifest = JSON.parse(manifestText) as { version?: unknown; name?: unknown }
   if (typeof manifest.version !== 'string') throw new Error('package.json version must be a string')
   for (const workspace of workspaceManifests.slice(1)) {
     if (workspace.manifest.version !== manifest.version) {
@@ -932,6 +935,17 @@ export async function runRelease(
     })
   }
 
+  if (manifest.name === PUBLISHED_CLI_PACKAGE || dependencies.prepareCompatibility) {
+    manifestCandidates.push(
+      ...(await (dependencies.prepareCompatibility ?? prepareReleaseCompatibility)({
+        root,
+        outgoing: manifest.version,
+        target: version,
+        now: (dependencies.now ?? (() => new Date().toISOString()))(),
+      })),
+    )
+  }
+
   const preGateHead = (
     await git(run, root, ['rev-parse', 'HEAD'], 'could not resolve HEAD')
   ).stdout.trim()
@@ -941,11 +955,16 @@ export async function runRelease(
   const gateFiles = await Promise.all(
     manifestCandidates.map(async (candidate) => ({
       ...candidate,
-      original: await readFile(resolve(root, candidate.path), 'utf8'),
+      original: await readFile(resolve(root, candidate.path), 'utf8').catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return undefined
+          throw error
+        },
+      ),
     })),
   )
-  await Promise.all(gateFiles.map((file) => writeFile(resolve(root, file.path), file.content)))
   try {
+    await Promise.all(gateFiles.map((file) => writeFile(resolve(root, file.path), file.content)))
     for (const name of ['lint', 'typecheck', 'test'] as const) {
       output.log(`Running ${name} gate at ${version}: ${config.commands[name]}`)
       const result = await run({ command: 'sh', args: ['-c', config.commands[name]], cwd: root })
@@ -977,7 +996,13 @@ export async function runRelease(
       }
     }
   } finally {
-    await Promise.all(gateFiles.map((file) => writeFile(resolve(root, file.path), file.original)))
+    await Promise.all(
+      gateFiles.map((file) =>
+        file.original === undefined
+          ? rm(resolve(root, file.path), { force: true })
+          : writeFile(resolve(root, file.path), file.original),
+      ),
+    )
   }
 
   const summary = await generateSummary(run, root, entries, output)
@@ -1106,7 +1131,11 @@ export async function runRelease(
     )
     pushed = true
   } catch (error) {
-    if (!pushed) await restoreBeforePush(run, root, originalHead, tag)
+    if (!pushed) {
+      await restoreBeforePush(run, root, originalHead, tag)
+      for (const file of gateFiles)
+        if (file.original === undefined) await rm(resolve(root, file.path), { force: true })
+    }
     throw error
   }
 
