@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accept reducer version skew between hosted clients and servers. Remote clients now accept any reduced value their own shape can represent instead of requiring an exact reducer version, so an older or newer server no longer breaks reads. Published 1.2.0 clients keep working against newer servers: the service answers them from a frozen 1.2.0 catalog. **Upgrade hosted clients from 1.2.0**: 1.2.0 still rejects values that gained an event type it does not know.
+
 ## v1.2.0 — 2026-10-28
 
 This release builds out hosted projects. Hosted dispatcher ticks can now use encrypted project secrets, which operators manage from a new write-only Settings view, and they can delete a hosted project along with its remote state. Agent runtimes can now bill through subscription accounts, including ChatGPT subscriptions with single-owner token refresh, and connection links now open directly and require an organization assignment. Much of the release limits how much database reading recurring work can do: server-reduced answers are now canonical, idle hot-upgrade probes cost one store request, project liveness is checked once per request, ticket listings use native paging where the source supports it, and the hosted cron dispatcher's credentials and storage are now bounded. Other changes document the hosted protocols, make this repository's verify suite pass in Vercel Sandbox, and capture confirmation dialogs as modals with their backdrop.

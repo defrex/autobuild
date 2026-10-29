@@ -69,3 +69,11 @@ remote store protocol identity is unchanged from v1.1.0
 (8d98e5255ad9b191c3215c7def930c57f9ec4bbc) to the 1.2 line, so the current
 decoders are the v1.1 wire contract and no separate fixture is frozen yet.
 Freeze v1.1 decoders here when a later line changes protocol 6.
+
+The 1.3 preparation retains published v1.1.x and v1.2.x clients on protocol 6,
+unchanged since v1.1.0, so the current decoders remain their wire contract.
+Published v1.2.0 clients also require their own reducer versions and strict
+finished shapes. The service answers them from the frozen catalog in
+`packages/core/src/store/remote/released-reducer-values/1.2.0.json`, taken from
+v1.2.0 (ec484bec559dd64813c9790e2b7d08e55f2384d6). Retain it while 1.2 is in the
+supported window.

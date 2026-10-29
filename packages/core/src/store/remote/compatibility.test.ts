@@ -147,6 +147,16 @@ test('a 1.2 service retains the published 1.0 protocol-4 and 1.1 protocol-6 clie
   }
 })
 
+test('a 1.3 service retains the published 1.1 and 1.2 protocol-6 clients', () => {
+  expect(RELEASE_LINE_PROTOCOLS['1.2']).toBe('6')
+  for (const client of ['1.1.0', '1.1.999', '1.2.0', '1.2.999']) {
+    expect(clientIdentityError(client, '6', '1.3.0', '6')).toBeUndefined()
+    expect(clientIdentityError(client, '5', '1.3.0', '6')).toContain(
+      'unsupported protocol identity',
+    )
+  }
+})
+
 test('a later service retains the published 0.14 protocol-4 identity', () => {
   expect(RELEASE_LINE_PROTOCOLS['0.14']).toBe('4')
   for (const client of ['0.14.0', '0.14.999']) {
