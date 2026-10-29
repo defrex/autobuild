@@ -1,4 +1,5 @@
-import { classifyGitNetworkFailure } from '../forge-failure'
+import { ForgeRequestDeferred } from '../forge-request-context'
+import { classifyGitNetworkFailure, isForgeFailure } from '../forge-failure'
 import type { ForgeRewrite, RewriteResult } from '../types'
 import type { Exec } from '../workspace/git-worktree'
 import { isValidGitBranchName } from '../../kernel/origin'
@@ -15,7 +16,11 @@ function branchRef(branch: string): string {
 
 /** Git transport and shared-database implementations share validation, but local-git
  * never consults a remote, even when the repository happens to have one. */
-export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
+export function gitRewrite(
+  exec: Exec,
+  local: boolean,
+  createArchive?: (ref: string, sha: string) => Promise<void>,
+): ForgeRewrite {
   async function git(cwd: string, args: string[], allowFailure = false) {
     const network = !local && ['push', 'fetch', 'ls-remote'].includes(args[0] ?? '')
     let result: Awaited<ReturnType<Exec>>
@@ -130,24 +135,56 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
       const existing = await read(input.workspacePath, input.ref)
       if (existing !== null && existing !== input.sha)
         throw new Error(`immutable archive ${input.ref} names ${existing}, expected ${input.sha}`)
+      const missing =
+        !local &&
+        (await git(input.workspacePath, ['cat-file', '-e', `${input.sha}^{commit}`], true))
+          .exitCode !== 0
       if (existing === null) {
-        const result = await git(
-          input.workspacePath,
-          local
-            ? ['update-ref', input.ref, input.sha, '0'.repeat(input.sha.length)]
-            : ['push', `--force-with-lease=${input.ref}:`, 'origin', `${input.sha}:${input.ref}`],
-          true,
-        )
-        // An uncertain acknowledgement is adopted only after an exact readback.
-        if ((await read(input.workspacePath, input.ref)) !== input.sha)
+        let failure: unknown
+        try {
+          if (missing) {
+            if (!createArchive)
+              throw new Error('remote archive creation is unavailable in this adapter')
+            await createArchive(input.ref, input.sha)
+          } else {
+            const result = await git(
+              input.workspacePath,
+              local
+                ? ['update-ref', input.ref, input.sha, '0'.repeat(input.sha.length)]
+                : [
+                    'push',
+                    `--force-with-lease=${input.ref}:`,
+                    'origin',
+                    `${input.sha}:${input.ref}`,
+                  ],
+              true,
+            )
+            if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout)
+          }
+        } catch (error) {
+          failure = error
+        }
+        // Mutation acknowledgement alone is never proof, including API races.
+        let confirmed: string | null
+        try {
+          confirmed = await read(input.workspacePath, input.ref)
+        } catch (error) {
+          if (isForgeFailure(failure) || failure instanceof ForgeRequestDeferred) throw failure
+          throw error
+        }
+        if (confirmed !== input.sha) {
+          if (isForgeFailure(failure) || failure instanceof ForgeRequestDeferred) throw failure
           throw new Error(
-            `archive publication rejected for ${input.ref}: ${result.stderr}; enable refs/autobuild/archive/ publication before branch rewrites`,
+            `archive publication rejected for ${input.ref} at ${input.sha}: ${String(failure ?? 'exact readback did not confirm publication')}; enable refs/autobuild/archive/ publication before branch rewrites`,
+            { cause: failure },
           )
+        }
       }
       if (!local) {
         // Fetch by the exact archive ref, never by an unadvertised object id.
         await git(input.workspacePath, [
           'fetch',
+          ...(missing ? ['--depth=1', '--refmap='] : []),
           '--no-tags',
           '--no-write-fetch-head',
           'origin',

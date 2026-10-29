@@ -3357,7 +3357,12 @@ should drain work before upgrading rather than run mixed-version writers.
 Before branch replacement the kernel publishes Git tips named by retained
 history and rewrite facts, plus both heads and the temporary change, under immutable non-branch refs
 `refs/autobuild/archive/<slug>/<sha>`. Archives must be fetchable by exact ref;
-namespace or permission failures stop publication without a branch/tag fallback.
+namespace or permission failures stop publication without a branch/tag fallback. Remote
+archives also publish commits present only on the remote: GitHub uses create-only
+Git-reference REST creation when the workspace lacks the commit, retaining guarded Git
+pushes for local objects. Exact remote readback confirms publication, then a depth-one
+fetch by the archive ref (without tags or configured refmap expansion) restores missing
+commits and verifies them locally before returning.
 Publication requests and loss records alone are not retained Git history: their
 unpublished objects may have died with a released sandbox. A separately published
 or reviewed tip remains an archive requirement even when an earlier request named

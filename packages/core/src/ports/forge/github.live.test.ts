@@ -611,6 +611,7 @@ describe.skipIf(!runLiveGitHub)('GitHub reconcile transport (manual opt-in)', ()
     let candidate: string | undefined
     let branchHead: string | undefined
     let archived = false
+    let remoteOnlyArchive: string | undefined
     try {
       const old = await run(['git', 'rev-parse', 'HEAD'], cwd)
       const tree = await run(['git', 'rev-parse', 'HEAD^{tree}'], cwd)
@@ -628,6 +629,13 @@ describe.skipIf(!runLiveGitHub)('GitHub reconcile transport (manual opt-in)', ()
       await run(['git', 'fetch', '--no-tags', origin, archive], fresh)
       expect(await run(['git', 'rev-parse', 'FETCH_HEAD^{tree}'], fresh)).toBe(tree)
       expect(await run(['git', 'cat-file', '-t', candidate], fresh)).toBe('commit')
+      // The orphan archive's fresh repository has no copy of the remote base.
+      expect((await bunExec(['git', 'cat-file', '-e', old], { cwd: fresh })).exitCode).not.toBe(0)
+      await run(['git', 'remote', 'add', 'origin', origin], fresh)
+      remoteOnlyArchive = `refs/autobuild/archive/${slug}/${old}`
+      await h.forge.rewrite!.archive({ workspacePath: fresh, ref: remoteOnlyArchive, sha: old })
+      expect(await run(['git', 'cat-file', '-t', old], fresh)).toBe('commit')
+
       await run(
         [
           'git',
@@ -670,6 +678,17 @@ describe.skipIf(!runLiveGitHub)('GitHub reconcile transport (manual opt-in)', ()
             cwd,
           )
       }
+      if (remoteOnlyArchive !== undefined)
+        await run(
+          [
+            'git',
+            'push',
+            `--force-with-lease=${remoteOnlyArchive}:${remoteOnlyArchive.split('/').at(-1)}`,
+            'origin',
+            `:${remoteOnlyArchive}`,
+          ],
+          cwd,
+        )
       await rm(fresh, { recursive: true, force: true })
       await h.cleanup?.()
     }
