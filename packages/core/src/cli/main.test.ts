@@ -540,6 +540,23 @@ describe('runCli — read-only status routing', () => {
     }
   }
 
+  test('forge-clear routes with required arguments and refuses phase use', async () => {
+    for (const argv of [
+      ['repository', 'forge-clear'],
+      ['repository', 'forge-clear', '--forge', 'github'],
+    ]) {
+      const d = sessionlessDeps()
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.err.join(' ')).toContain('--reason')
+    }
+    const d = sessionlessDeps()
+    d.processEnv = { AB_BUILD: 'one', AB_SESSION: 'phase' }
+    expect(
+      await runCli(['repository', 'forge-clear', '--forge', 'github', '--reason', 'override'], d),
+    ).toBe(1)
+    expect(d.err.join(' ')).toContain('outside a build or harvest session')
+  })
+
   test('ab repository status routes sessionless and reports empty-journal defaults', async () => {
     const d = sessionlessDeps()
     expect(await runCli(['repository', 'status', '--json'], d)).toBe(0)

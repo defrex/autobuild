@@ -263,6 +263,7 @@ These fields describe intent; dispatch and merge behavior are unchanged.`,
     detail: page([
       'Usage:',
       '  ab repository status [--json] [--store <ref>]',
+      '  ab repository forge-clear --forge <name> --reason <text> [--json] [--store <ref>]',
       '',
       'Report the durable ticket-intake setting and repository-wide pause from',
       'the same journal projection used by dispatch and the dashboard.',

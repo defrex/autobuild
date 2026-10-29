@@ -1,3 +1,4 @@
+import { abForgeClear } from './forge-clear'
 import { abAccountsLogin } from './accounts'
 import { abSecrets } from './secrets'
 import { currentTicketRef } from '../kernel/ticket-migrations'
@@ -812,6 +813,33 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'repository': {
       const usage = 'usage: ab repository status [--json] [--store <ref>] (§8.2)'
       const [sub, ...more] = rest
+      if (sub === 'forge-clear') {
+        const clearUsage =
+          'usage: ab repository forge-clear --forge <name> --reason <text> [--json] [--store <ref>]'
+        const parsed = parseArgs(
+          more,
+          { forge: 'value', reason: 'value', json: 'boolean', store: 'value' },
+          clearUsage,
+        )
+        const forge = stringFlag(parsed, 'forge')
+        const reason = stringFlag(parsed, 'reason')
+        if (parsed.positionals.length || !forge?.trim() || !reason?.trim())
+          throw new Error(clearUsage)
+        if (!deps.exec) throw new Error('repository forge-clear requires an exec seam')
+        const storeRef = stringFlag(parsed, 'store')
+        await abForgeClear({
+          targetRepo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          exec: deps.exec,
+          stdout,
+          forge,
+          reason,
+          json: parsed.flags.has('json'),
+          ...(storeRef !== undefined ? { storeRef } : {}),
+          ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+        })
+        return 0
+      }
       if (sub !== 'status') throw new Error(usage)
       const parsed = parseArgs(more, { json: 'boolean', store: 'value' }, usage)
       if (parsed.positionals.length > 0) throw new Error(usage)

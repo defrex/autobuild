@@ -75,3 +75,32 @@ There's no operator-surface plugin map. Build a client of the versioned, authent
 - A new surface adds no pipeline phase and no embedded operator agent.
 
 [Writing a plugin](plugin-authoring.md) covers infrastructure adapters.
+
+
+### Forge cooldown admission and explicit recovery
+
+Hosted repository event appends and atomic artifact deposits validate
+`dispatcher.forge-degraded` before any durable mutation. The payload must match
+its event schema, with a finite ISO `resetAt` at most 24 hours after server time
+(inclusive). Already-expired deadlines are accepted. Invalid or out-of-horizon
+writes return `400 validation` (the remote adapter exposes `EventValidationError`);
+the server never clamps or invents a provider reset. Historical decoding has no clock-relative restriction.
+
+Build-runner and build-phase grants may POST only the kernel-authored
+`dispatcher.forge-degraded` repository fact through the events route. The
+preceding `requireProject` check binds this exception to the exact repository
+in the delegated claim. A hosted project identifies one repository. Delegates
+cannot write recovery, deposits or other repository facts, regardless of the
+actor claimed in an envelope.
+
+An authorized operator can explicitly clear erroneous state through
+`repository.forge_clear {repo, forge, reason}` or
+`ab repository forge-clear --forge <name> --reason <text> [--json] [--store <ref>]`.
+The reason is required and nonblank. The result contains the durable recovery
+`event`, attributed to the authenticated human with normal `via` attribution.
+Build and harvest delegates cannot invoke this operator mutation. CLI use
+requires an operator outside build/harvest sessions. This is an override, not
+proof of provider success. A clear appends once without reading history, even
+when already healthy; later degradation wins by ordinary journal order.
+Existing dispatcher/kernel automatic recovery and old payloads remain valid;
+the recovered payload additionally accepts an optional nonblank `reason`.

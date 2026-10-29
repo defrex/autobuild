@@ -312,7 +312,8 @@ export class RemoteBuildStore implements BuildStore {
     ) {
       return new TicketAssetValidationError(message)
     }
-    if (response.status === 422) return new EventValidationError(message)
+    if (response.status === 422 || (response.status === 400 && body?.kind === 'validation'))
+      return new EventValidationError(message)
     // Typed stream rejections rehydrate by the server's message shape: the
     // ceiling names its bytes, the closed-append names its stream (a 409 is
     // otherwise the generic already-exists conflict).
