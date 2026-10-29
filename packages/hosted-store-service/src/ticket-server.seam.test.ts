@@ -22,6 +22,8 @@ import { createTicketServer } from './ticket-server'
 /** Ticket shape/capability fixtures must identify each release with its actual
  * wire protocol, independently of which line is currently installed. */
 function releasedClientProtocol(version: string): string {
+  // Refusal cases need no retained historical handler or protocol evidence.
+  if (classifyClient(version, supportedClientRange()) !== 'supported') return '6'
   const line = version.split('.').slice(0, 2).join('.')
   if (line === AUTOBUILD_VERSION.split('.').slice(0, 2).join('.')) {
     return REMOTE_STORE_PROTOCOL_VERSION

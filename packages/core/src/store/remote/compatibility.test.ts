@@ -4,216 +4,12 @@ import {
   clientSupportsIntegrationAuditPending,
   classifyClient,
   supportedClientRange,
-  compatibilityAdvice,
   clientIdentityError,
-  stableVersion,
   releaseVersion,
-  RELEASE_LINE_PROTOCOLS,
   reducerValueForClient,
 } from './compatibility'
 import { repositoryReadFactsReducer } from '../../kernel/read-facts'
 import { projectReducerValue } from '../reducer-value-validation'
-import released120 from './released-reducer-values/1.2.0.json'
-
-test('release lines ignore patches and enforce both window boundaries', () => {
-  const range = supportedClientRange('0.13.0')
-  expect(range).toEqual({ minVersion: '0.11.0', maxVersionExclusive: '0.14.0' })
-  for (const version of ['0.11.0', '0.11.999', '0.12.3', '0.13.999'])
-    expect(classifyClient(version, range)).toBe('supported')
-  expect(classifyClient('0.10.999', range)).toBe('older')
-  expect(classifyClient('0.14.0', range)).toBe('newer')
-  expect(compatibilityAdvice('0.14.0', '0.13.0', range)).toContain(
-    'upgrade the service to at least 0.14.0',
-  )
-  expect(compatibilityAdvice('0.10.0', '0.13.0', range)).toContain(
-    "upgrade the project's Autobuild",
-  )
-  for (const [client, service] of [
-    ['0.11.3', '0.11.0'],
-    ['0.11.0', '0.11.3'],
-  ])
-    expect(classifyClient(client, supportedClientRange(service))).toBe('supported')
-})
-
-test('major families clamp rather than inventing previous major lines', () => {
-  expect(supportedClientRange('2.0.0')).toEqual({
-    minVersion: '2.0.0',
-    maxVersionExclusive: '2.1.0',
-  })
-  expect(supportedClientRange('2.1.0')).toEqual({
-    minVersion: '2.0.0',
-    maxVersionExclusive: '2.2.0',
-  })
-  expect(classifyClient('1.99.0', supportedClientRange('2.0.0'))).toBe('older')
-  expect(supportedClientRange('0.100.0').minVersion).toBe('0.98.0')
-})
-
-test('identities reject noncanonical versions and enforce independent protocols', () => {
-  for (const value of [null, '', 'v0.11.0', '0.11', '0.11.0+build', '00.11.0', ' 0.11.0']) {
-    expect(stableVersion(value)).toBeUndefined()
-    expect(classifyClient(value, supportedClientRange())).toBe('invalid')
-  }
-  const oldest = supportedClientRange().minVersion
-  for (const value of [
-    oldest,
-    `${releaseVersion(AUTOBUILD_VERSION)!.major}.${releaseVersion(AUTOBUILD_VERSION)!.minor}.999`,
-  ])
-    expect(
-      clientIdentityError(
-        value,
-        releaseVersion(value)!.minor === releaseVersion(AUTOBUILD_VERSION)!.minor
-          ? REMOTE_STORE_PROTOCOL_VERSION
-          : RELEASE_LINE_PROTOCOLS[oldest.split('.').slice(0, 2).join('.')]!,
-      ),
-    ).toBeUndefined()
-  for (const protocol of [null, '2', '3', '04'])
-    expect(clientIdentityError(AUTOBUILD_VERSION, protocol)).toContain('version mismatch')
-})
-
-// Exercise negotiation, rather than just range arithmetic, against the actual
-// distribution and a synthetic next release before package.json is bumped.
-const installed = releaseVersion(AUTOBUILD_VERSION)!
-const nextMinor = `${installed.major}.${installed.minor + 1}.0`
-for (const serviceVersion of [AUTOBUILD_VERSION, nextMinor, '2.0.0']) {
-  test(`recorded lines negotiate and unknown lines fail closed for service ${serviceVersion}`, () => {
-    const range = supportedClientRange(serviceVersion)
-    const first = stableVersion(range.minVersion)!
-    const end = stableVersion(range.maxVersionExclusive)!
-    for (let minor = first.minor; minor < end.minor; minor++) {
-      const line = `${first.major}.${minor}`
-      const protocol =
-        minor === end.minor - 1 ? REMOTE_STORE_PROTOCOL_VERSION : RELEASE_LINE_PROTOCOLS[line]
-      for (const patch of [0, 999]) {
-        const error = clientIdentityError(`${line}.${patch}`, protocol ?? null, serviceVersion)
-        if (protocol === undefined) expect(error).toContain('unsupported protocol identity')
-        else expect(error).toBeUndefined()
-      }
-    }
-  })
-}
-
-test('the own-line protocol comes from service identity, including new major/minor lines', () => {
-  for (const serviceVersion of ['0.11.0', '0.12.0', '2.0.0']) {
-    const service = stableVersion(serviceVersion)!
-    const client = `${service.major}.${service.minor}.999`
-    expect(clientIdentityError(client, '4', serviceVersion, '4')).toBeUndefined()
-    expect(clientIdentityError(client, '3', serviceVersion, '4')).toContain(
-      'unsupported protocol identity',
-    )
-  }
-  // A new current protocol does not overwrite historical identities.
-  expect(clientIdentityError('0.10.0', '3', '0.12.0', '4')).toBeUndefined()
-  expect(clientIdentityError('0.10.0', '4', '0.12.0', '4')).toContain(
-    'unsupported protocol identity',
-  )
-  // Unknown historical lines remain closed, rather than inheriting a guessed identity.
-  expect(clientIdentityError('2.0.0', '4', '2.1.0', '4')).toContain('unsupported protocol identity')
-})
-
-test('a protocol-4 service on 0.14 retains the published 0.13 protocol-3 clients', () => {
-  expect(RELEASE_LINE_PROTOCOLS['0.13']).toBe('3')
-  for (const client of ['0.12.0', '0.13.0', '0.13.999']) {
-    expect(clientIdentityError(client, '3', '0.14.0', '4')).toBeUndefined()
-    expect(clientIdentityError(client, '4', '0.14.0', '4')).toContain(
-      'unsupported protocol identity',
-    )
-  }
-  expect(clientIdentityError('0.14.0', '4', '0.14.0', '4')).toBeUndefined()
-})
-
-test('the 0.14 historical line retains protocol 4 when a newer service changes protocol', () => {
-  expect(RELEASE_LINE_PROTOCOLS['0.14']).toBe('4')
-  for (const client of ['0.14.0', '0.14.999']) {
-    expect(clientIdentityError(client, '4', '0.15.0', '5')).toBeUndefined()
-    for (const protocol of ['3', '5'])
-      expect(clientIdentityError(client, protocol, '0.15.0', '5')).toContain(
-        'unsupported protocol identity',
-      )
-  }
-})
-
-test('a 1.2 service retains the published 1.0 protocol-4 and 1.1 protocol-6 clients', () => {
-  expect(RELEASE_LINE_PROTOCOLS['1.1']).toBe('6')
-  for (const [client, protocol] of [
-    ['1.0.0', '4'],
-    ['1.0.999', '4'],
-    ['1.1.0', '6'],
-    ['1.1.999', '6'],
-  ] as const) {
-    expect(clientIdentityError(client, protocol, '1.2.0', '6')).toBeUndefined()
-    expect(clientIdentityError(client, '5', '1.2.0', '6')).toContain(
-      'unsupported protocol identity',
-    )
-  }
-})
-
-test('a 1.3 service retains the published 1.1 and 1.2 protocol-6 clients', () => {
-  expect(RELEASE_LINE_PROTOCOLS['1.2']).toBe('6')
-  for (const client of ['1.1.0', '1.1.999', '1.2.0', '1.2.999']) {
-    expect(clientIdentityError(client, '6', '1.3.0', '6')).toBeUndefined()
-    expect(clientIdentityError(client, '5', '1.3.0', '6')).toContain(
-      'unsupported protocol identity',
-    )
-  }
-})
-
-test('a later service retains the published 0.14 protocol-4 identity', () => {
-  expect(RELEASE_LINE_PROTOCOLS['0.14']).toBe('4')
-  for (const client of ['0.14.0', '0.14.999']) {
-    expect(clientIdentityError(client, '4', '0.15.0', '4')).toBeUndefined()
-    expect(clientIdentityError(client, '3', '0.15.0', '4')).toContain(
-      'unsupported protocol identity',
-    )
-  }
-})
-
-test('canonical prereleases share stable release lines and independent protocol gates', () => {
-  const range = supportedClientRange('1.0.0-beta.1')
-  expect(range).toEqual(supportedClientRange('1.0.0'))
-  for (const client of [
-    '1.0.0-beta.0',
-    '1.0.0-beta.1',
-    '1.0.0',
-    '1.0.99-rc.a-1',
-    '1.0.0-0',
-    '1.0.0-alpha',
-    '1.0.0-a.1.Z-2',
-  ]) {
-    expect(releaseVersion(client)).toBeDefined()
-    expect(stableVersion(client)?.version).toBe(client.includes('-') ? undefined : client)
-    expect(
-      clientIdentityError(client, REMOTE_STORE_PROTOCOL_VERSION, '1.0.0-beta.1'),
-    ).toBeUndefined()
-    expect(clientIdentityError(client, '3', '1.0.0-beta.1')).toContain('unsupported protocol')
-    expect(classifyClient(client, supportedClientRange('1.0.0'))).toBe('supported')
-  }
-  for (const client of ['0.14.0', '1.1.0-beta.0']) {
-    expect(compatibilityAdvice(client, '1.0.0-beta.1', range)).toBe(
-      compatibilityAdvice(client, '1.0.0', range)?.replace(
-        'service Autobuild 1.0.0 ',
-        'service Autobuild 1.0.0-beta.1 ',
-      ),
-    )
-  }
-  expect(compatibilityAdvice('1.1.0-beta.0', '1.0.0', range)).toContain('service first')
-  expect(clientIdentityError('0.12.0-beta.0', '3', '0.14.0')).toBeUndefined()
-  expect(clientIdentityError('0.12.0-beta.0', '4', '0.14.0')).toContain('unsupported protocol')
-  expect(clientIdentityError('2.0.0-beta.0', '4', '2.1.0')).toContain('unsupported protocol')
-  for (const value of [
-    '1.0.0-',
-    '1.0.0-a..b',
-    '1.0.0-01',
-    '1.0.0+a',
-    '1.0.0-beta+a',
-    'v1.0.0',
-    ' 1.0.0',
-    '1.0.0\n',
-    '01.0.0',
-  ]) {
-    expect(releaseVersion(value)).toBeUndefined()
-    expect(classifyClient(value, range)).toBe('invalid')
-  }
-})
 
 test('audit capability follows its introduction line independently of admission', () => {
   for (const version of [
@@ -243,7 +39,7 @@ test('audit capability follows its introduction line independently of admission'
     ' 1.0.0',
   ])
     expect(clientSupportsIntegrationAuditPending(version)).toBe(false)
-  expect(clientIdentityError('0.13.0', '3', '0.14.0', '4')).toBeUndefined()
+  expect(clientIdentityError('0.13.0', '3', '1.3.0', '6')).toContain('policy floor 1.2')
   expect(clientSupportsIntegrationAuditPending('0.13.0')).toBe(false)
 })
 
@@ -254,18 +50,6 @@ test('operator presence protocol rejects peers without the new required operatio
   expect(clientIdentityError(AUTOBUILD_VERSION, '6')).toBeUndefined()
 })
 
-test('next minor withdrawal protocol retains published 1.0 protocol 4 only', () => {
-  for (const version of ['1.0.0', '1.0.1']) {
-    expect(clientIdentityError(version, '4', '1.1.0', '6')).toBeUndefined()
-    for (const protocol of ['5', '6'])
-      expect(clientIdentityError(version, protocol, '1.1.0', '6')).toContain(
-        'unsupported protocol identity',
-      )
-  }
-  expect(clientIdentityError('1.1.0', '6', '1.1.0', '6')).toBeUndefined()
-  expect(clientIdentityError('1.1.0', '6', '1.0.1', '4')).toContain('upgrade the service')
-})
-
 test('supported peer admission does not make advisory polling facts decisive', async () => {
   const { buildEventPolicy } = await import('../../events/policy')
   const { initialCompatibility, advanceCompatibility, decodeStoredEvent } = await import(
@@ -273,7 +57,7 @@ test('supported peer admission does not make advisory polling facts decisive', a
   )
   const { newerFact } = await import('../../testing/newer-writer')
   const { mixedVersionDeferred } = await import('../../kernel/mixed-version')
-  expect(clientIdentityError('1.0.1', '4', '1.1.0', '6')).toBeUndefined()
+  expect(clientIdentityError('1.2.0', '6', '1.3.0', '6')).toBeUndefined()
   const classification = buildEventPolicy['node.poll-checked']
   expect(classification).toBe('advisory')
   const opaque = { ...newerFact(1, classification), type: 'old-reader-unknown.node.poll-checked' }
@@ -285,39 +69,288 @@ test('supported peer admission does not make advisory polling facts decisive', a
   expect(mixedVersionDeferred({ compatibility })).toBe(true)
 })
 
-test('exact-version 1.2.0 clients receive their frozen reducer version and finished shape', () => {
+test('unrecorded clients receive the canonical answer', () => {
   const value = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
   const answer = { version: repositoryReadFactsReducer.version, cursor: 7, value }
-  const released = reducerValueForClient(
-    { version: '1.2.0', projects: false },
-    'repositoryReadFacts',
-    answer,
-  )
-  expect(released.version).toBe(released120.versions.repositoryReadFacts)
-  expect(released.cursor).toBe(7)
-  // The released client accepts only values that already match its frozen shape.
-  expect(projectReducerValue('repositoryReadFacts', released.value, released120)).toEqual({
-    value: released.value,
-  })
-  expect(released.value).not.toHaveProperty('preparation')
+  for (const version of [null, 'constructor', '0.0.0-policy-excluded'])
+    expect(reducerValueForClient({ version, projects: false }, 'repositoryReadFacts', answer)).toBe(
+      answer,
+    )
 })
 
-test('projecting, other and unrepresentable clients receive the canonical answer', () => {
-  const value = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
-  const answer = { version: repositoryReadFactsReducer.version, cursor: 7, value }
-  for (const client of [
-    { version: '1.2.0', projects: true },
-    { version: '1.2.1', projects: false },
-    { version: '1.1.0', projects: false },
-    { version: null, projects: false },
-    { version: 'constructor', projects: false },
-  ])
-    expect(reducerValueForClient(client, 'repositoryReadFacts', answer)).toBe(answer)
-  expect(reducerValueForClient({ version: '1.2.0', projects: false }, 'constructor', answer)).toBe(
-    answer,
-  )
-  const broken = { ...answer, value: null }
-  expect(
-    reducerValueForClient({ version: '1.2.0', projects: false }, 'repositoryReadFacts', broken),
-  ).toBe(broken)
+import {
+  RELEASED_CLIENTS,
+  supportedPublishedLines,
+  validatePublications,
+  type ReleasedClient,
+} from './released-clients'
+import { RELEASED_REDUCER_VALUES } from './released-reducer-values'
+import { REDUCERS } from '../../kernel/reducer-registry'
+import { REDUCER_VALUE_CONTRACT_IDENTITY } from '../reducer-value-validation'
+const epoch = Date.parse('2026-10-29T00:00:00Z')
+const day = 86400000
+const record = (version: string, days: number): ReleasedClient => ({
+  version,
+  publishedAt: new Date(epoch + days * day).toISOString(),
+  protocol: '6',
+  contract: 'synthetic.json',
+  provenance: { tag: `v${version}` },
 })
+const ledger = [record('1.2.0', 0), record('1.4.0', 1), record('2.0.0', 2)]
+
+test('retirement needs both two newer publications and exactly 90 UTC days since successor', () => {
+  for (const delta of [-1, 0, 1]) {
+    const now = epoch + 91 * day + delta
+    expect(supportedClientRange('2.0.0', now, ledger).minVersion).toBe(
+      delta < 0 ? '1.2.0' : '1.4.0',
+    )
+    const error = clientIdentityError('1.2.99', '6', '2.0.0', '6', now, ledger)
+    if (delta < 0) expect(error).toBeUndefined()
+    else {
+      expect(error).toContain('>=1.4.0 <2.1.0')
+      expect(error).toContain('90 days')
+      expect(error).toContain('policy floor 1.2')
+    }
+  }
+  expect(supportedClientRange('1.4.0', epoch + 900 * day, ledger).minVersion).toBe('1.2.0')
+  expect(supportedClientRange('1.2.0', epoch + 900 * day, ledger).minVersion).toBe('1.2.0')
+  expect(supportedClientRange('2.0.0', epoch + 50 * day, ledger).minVersion).toBe('1.2.0')
+  expect(
+    supportedClientRange('2.0.0', epoch + 91 * day, [...ledger, record('2.1.0', 3)]).minVersion,
+  ).toBe('1.4.0')
+})
+
+test('patches and prereleases never start or reset stable line clocks', () => {
+  const extra = [...ledger, record('2.1.0-beta.1', 3), record('1.4.1', 50)]
+  expect(supportedClientRange('2.0.0', epoch + 91 * day, extra).minVersion).toBe('1.4.0')
+  expect(
+    supportedPublishedLines('2.0.0', epoch + 91 * day, [
+      ...ledger.slice(0, 2),
+      record('2.0.0-beta.1', 2),
+    ]),
+  ).toEqual(['1.2.0', '1.4.0'])
+})
+
+test('floor, gaps, future lines and protocol identities fail closed', () => {
+  for (const client of ['0.99.0', '1.0.0', '1.1.999', '1.1.0-beta.1'])
+    expect(
+      clientIdentityError(client, '6', '2.0.0', '6', epoch, [record('1.1.0', 0), ...ledger]),
+    ).toContain('policy floor 1.2')
+  expect(clientIdentityError('1.3.0', '6', '2.0.0', '6', epoch, ledger)).toContain(
+    'unsupported protocol identity',
+  )
+  expect(clientIdentityError('2.1.0', '6', '2.0.0', '6', epoch, ledger)).toContain('service first')
+  expect(clientIdentityError('1.2.0', '5', '2.0.0', '6', epoch, ledger)).toContain('90 days')
+  expect(clientIdentityError('2.2.999-rc.1', '7', '2.2.0-rc.2', '7', epoch, ledger)).toBeUndefined()
+  for (const value of [null, '', 'v1.2.0', '1.2', '1.2.0+build', '01.2.0', '1.2.0-01', ' 1.2.0']) {
+    expect(releaseVersion(value)).toBeUndefined()
+    expect(classifyClient(value, supportedClientRange())).toBe('invalid')
+  }
+})
+
+test('retired identities and contracts can be removed without readmission', () => {
+  const retired = ledger.map((entry, index) =>
+    index
+      ? entry
+      : { version: entry.version, publishedAt: entry.publishedAt, provenance: entry.provenance },
+  )
+  expect(clientIdentityError('1.2.0', '6', '2.0.0', '6', epoch + 91 * day, retired)).toContain(
+    'upgrade',
+  )
+  expect(clientIdentityError('1.4.0', '6', '2.0.0', '6', epoch + 91 * day, retired)).toBeUndefined()
+})
+
+test('publication evidence is ordered, unique, and timestamped', () => {
+  expect(() => validatePublications(RELEASED_CLIENTS)).not.toThrow()
+  expect(() => validatePublications([...ledger, ledger[0]!])).toThrow('ordered')
+  expect(() => validatePublications([{ ...ledger[0]!, publishedAt: 'not a date' }])).toThrow(
+    'timestamp',
+  )
+})
+
+// A fixed clock makes coverage independent of the day CI happens to run.
+const contractTestClock = Date.parse('2026-10-30T00:00:00Z')
+const supportedReleases = RELEASED_CLIENTS.filter((entry) =>
+  supportedPublishedLines(AUTOBUILD_VERSION, contractTestClock).includes(
+    `${entry.version.split('.').slice(0, 2).join('.')}.0`,
+  ),
+)
+// Model the first header-sending published line using an immutable old catalog.
+const matrixReleases = [
+  ...supportedReleases,
+  {
+    ...supportedReleases.at(-1)!,
+    version: '1.4.0',
+    projects: true,
+    catalogIdentity: 'frozen-published-1.4-catalog',
+  },
+]
+for (const release of matrixReleases) {
+  test(`published ${release.version}: every named reducer fits its frozen acceptance contract`, () => {
+    expect(release.protocol).toBeDefined()
+    expect(release.contract).toBeDefined()
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]!
+    expect(catalog).toBeDefined()
+    for (const [name, entry] of Object.entries(REDUCERS)) {
+      if (!('scope' in entry.valueRead) || !Object.hasOwn(catalog.versions, name)) continue
+      expect(catalog.roots[name], name).toBeDefined()
+      expect(catalog.versions[name], name).toBeNumber()
+      const value = entry.reducer.finish(entry.reducer.initial())
+      const answer = { version: entry.reducer.version, cursor: 999, value }
+      const before = JSON.stringify(answer)
+      const adapted = reducerValueForClient(
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
+        name,
+        answer,
+        matrixReleases,
+      )
+      expect(projectReducerValue(name, adapted.value, catalog), name).toEqual({
+        value: adapted.value,
+      })
+      expect(adapted.version, name).toBe(catalog.versions[name]!)
+      expect(adapted.cursor).toBe(999)
+      expect(JSON.stringify(answer)).toBe(before)
+    }
+    const value = repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial())
+    const broken = { version: 99, cursor: 7, value: null }
+    expect(
+      reducerValueForClient(
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
+        'repositoryReadFacts',
+        broken,
+        matrixReleases,
+      ),
+    ).toBe(broken)
+    const unknown = { ...broken, value }
+    expect(
+      reducerValueForClient({ version: release.version, projects: false }, 'constructor', unknown),
+    ).toBe(unknown)
+  })
+}
+
+test('current catalog preserves full fidelity without weakening released projections', () => {
+  const answer = { version: 99, cursor: 4, value: { future: 'field' } }
+  expect(
+    reducerValueForClient(
+      {
+        version: AUTOBUILD_VERSION,
+        projects: true,
+        catalogIdentity: REDUCER_VALUE_CONTRACT_IDENTITY,
+      },
+      'build',
+      answer,
+    ),
+  ).toBe(answer)
+})
+
+test('unrecognized source catalogs preserve canonical fields and event facts', () => {
+  const answer = {
+    version: 99,
+    cursor: 4,
+    value: {
+      value: 'abc',
+      addedAfter130: 'required by the source client',
+      seenTypes: ['future.event'],
+      lastEvent: { type: 'future.event' },
+    },
+  }
+  expect(
+    reducerValueForClient(
+      { version: '1.3.0', projects: true, catalogIdentity: 'fingerprint-of-newer-main' },
+      'recordedBaseShaValue',
+      answer,
+    ),
+  ).toBe(answer)
+})
+
+import { MemoryBuildStore } from '../memory'
+import { KERNEL } from '../../events/envelope'
+
+for (const release of matrixReleases)
+  test(`published ${release.version}: new latest-event discriminants are omitted only from optional display fields, including nested state`, async () => {
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]!
+    const store = new MemoryBuildStore()
+    await store.createBuild({ slug: 'released-new-event', repo: 'repo' })
+    await store.append('released-new-event', {
+      actor: KERNEL,
+      type: 'node.restack-availability-observed',
+      payload: {
+        version: 1,
+        fingerprint: 'fp',
+        branch: 'node',
+        parentBranch: 'main',
+        head: 'head',
+        parent: 'parent',
+        base: 'base',
+        available: ['head'],
+      },
+    })
+    for (const reducer of ['build', 'buildReadFacts', 'buildStreamSeed']) {
+      const answer = await store.getReducerValue(
+        { kind: 'build', slug: 'released-new-event' },
+        { reducer },
+      )
+      const before = JSON.stringify(answer)
+      function futureEvents(input: unknown): unknown {
+        if (Array.isArray(input)) return input.map(futureEvents)
+        if (!input || typeof input !== 'object') return input
+        return Object.fromEntries(
+          Object.entries(input).map(([key, value]) => [
+            key,
+            key === 'lastEvent' && value && typeof value === 'object'
+              ? { ...value, type: 'future.released-reader-unknown' }
+              : key === 'seenTypes' && Array.isArray(value)
+                ? [...value, 'future.released-reader-unknown']
+                : futureEvents(value),
+          ]),
+        )
+      }
+      const input = { ...answer, value: futureEvents(answer.value) }
+      const projected = reducerValueForClient(
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
+        reducer,
+        input,
+        matrixReleases,
+      )
+      expect(projectReducerValue(reducer, projected.value, catalog)).toEqual({
+        value: projected.value,
+      })
+      expect(projected.cursor).toBe(answer.cursor)
+      function assertDisplay(input: unknown) {
+        if (!input || typeof input !== 'object') return
+        expect(input).not.toHaveProperty('lastEvent')
+        for (const nested of Object.values(input))
+          if (nested && typeof nested === 'object') assertDisplay(nested)
+      }
+      assertDisplay(projected.value)
+      expect(JSON.stringify(answer)).toBe(before)
+    }
+    const { buildReducer } = await import('../../kernel/reducer')
+    const state = buildReducer.finish(buildReducer.initial())
+    const malformed = { ...state, lastEvent: { type: 'build.created' } }
+    const broken = { version: 99, value: malformed }
+    expect(
+      reducerValueForClient(
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
+        'build',
+        broken,
+        matrixReleases,
+      ),
+    ).toBe(broken)
+  })

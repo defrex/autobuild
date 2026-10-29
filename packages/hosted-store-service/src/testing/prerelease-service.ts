@@ -10,7 +10,7 @@ import {
 import { createHostedStoreService } from '../service'
 import { ticketProject } from './ticket-project'
 
-assert.equal(AUTOBUILD_VERSION, '1.0.0-beta.1')
+assert.equal(AUTOBUILD_VERSION, '1.4.0-beta.1')
 const repo = 'https://github.com/acme/widgets'
 const secret = 'beta-secret'
 const project = await ticketProject(repo, secret)
@@ -35,19 +35,19 @@ assert.deepEqual(await health.json(), {
   ok: true,
   autobuildVersion: AUTOBUILD_VERSION,
   protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
-  supportedClientRange: { minVersion: '1.0.0', maxVersionExclusive: '1.1.0' },
+  supportedClientRange: { minVersion: '1.2.0', maxVersionExclusive: '1.5.0' },
 })
 const owner = mintToken(secret, {
   version: 1,
   ownerAdmin: { user: 'Beta owner' },
   exp: Date.now() + 60_000,
 })
-for (const version of ['1.0.0-beta.0', '1.0.0-beta.1', '1.0.0', '0.14.0', 'wrong-protocol']) {
-  const accepted = version.startsWith('1.')
+for (const version of ['1.4.0-beta.0', '1.4.0-beta.1', '1.4.0', '1.1.0', 'wrong-protocol']) {
+  const accepted = version.startsWith('1.4.')
   for (const route of ['store', 'ticket', 'operator']) {
     const headers = {
       authorization: `Bearer ${route === 'ticket' ? project.token : owner}`,
-      [AUTOBUILD_VERSION_HEADER]: version === 'wrong-protocol' ? '1.0.0-beta.0' : version,
+      [AUTOBUILD_VERSION_HEADER]: version === 'wrong-protocol' ? '1.4.0-beta.0' : version,
       [REMOTE_STORE_PROTOCOL_VERSION_HEADER]:
         version === 'wrong-protocol' ? 'wrong' : REMOTE_STORE_PROTOCOL_VERSION,
       'content-type': 'application/json',
