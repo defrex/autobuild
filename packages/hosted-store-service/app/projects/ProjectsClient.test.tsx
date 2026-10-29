@@ -319,6 +319,13 @@ test('an acknowledged sibling deletion leaves an empty slot while another outcom
     await click('Delete…', document.querySelector('[data-project]')!)
     await type(one)
     await click('Delete project')
+    // Response.json() may finish reading its native stream after React's act
+    // queue empties. Wait for the acknowledged close, not just the click.
+    for (let turn = 0; turn < 50 && document.querySelector('dialog[open]'); turn++)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    expect(document.querySelector('dialog[open]')).toBeNull()
     const unknown = document.querySelector('[data-project]')!
     expect(unknown.getAttribute('data-project')).toBe(two)
     expect(unknown.parentElement!.children[0]!.getAttribute('aria-hidden')).toBe('true')
