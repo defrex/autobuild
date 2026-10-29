@@ -2308,7 +2308,12 @@ The default watch reports actionable conditions only:
   this clock; after grace, the first qualifying failure starts a new five-minute
   interval. Each persistence episode is reported once. Repository read failures
   fail the watch tick and retry on the next tick; repeated failures use this
-  existing attention. Validation errors include reducer, scope, cursor, field
+  existing attention. If failure publication is also unavailable, watch warns
+  with both errors and retries at least one second apart (or the configured
+  interval, if longer). It retains one bounded unreported window and appends
+  it on recovery, without blocking handoff acceptance. Local warnings do not
+  start the durable attention clock retroactively; explicit stops remain stops.
+  Validation errors include reducer, scope, cursor, field
   path, and running version/commit in the stored tick error.
 
 Repository conditions are included with no slugs or with `--repository`.

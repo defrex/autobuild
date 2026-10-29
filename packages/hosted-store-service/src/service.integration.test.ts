@@ -1209,8 +1209,8 @@ if (testUrl)
     try {
       const fixtureSql = new SQL(database.url)
       try {
-        await fixtureSql`INSERT INTO project_generations (repo,generation) VALUES ('/reduced-read-budget',${crypto.randomUUID()}),('/reduced-read-budget/revised',${crypto.randomUUID()}),('https://github.com/budget/cold-once',${crypto.randomUUID()}),('https://github.com/budget/interactive-ticks',${crypto.randomUUID()})`
-        await fixtureSql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),'/reduced-read-budget','added','fixture',now()),(nextval('project_journal_seq'),'/reduced-read-budget/revised','added','fixture',now()),(nextval('project_journal_seq'),'https://github.com/budget/cold-once','added','fixture',now()),(nextval('project_journal_seq'),'https://github.com/budget/interactive-ticks','added','fixture',now())`
+        await fixtureSql`INSERT INTO project_generations (repo,generation) VALUES ('/reduced-read-budget',${crypto.randomUUID()}),('/reduced-read-budget/revised',${crypto.randomUUID()}),('https://github.com/budget/cold-once',${crypto.randomUUID()}),('https://github.com/budget/interactive-ticks',${crypto.randomUUID()}),('https://github.com/budget/outage-ticks',${crypto.randomUUID()})`
+        await fixtureSql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),'/reduced-read-budget','added','fixture',now()),(nextval('project_journal_seq'),'/reduced-read-budget/revised','added','fixture',now()),(nextval('project_journal_seq'),'https://github.com/budget/cold-once','added','fixture',now()),(nextval('project_journal_seq'),'https://github.com/budget/interactive-ticks','added','fixture',now()),(nextval('project_journal_seq'),'https://github.com/budget/outage-ticks','added','fixture',now())`
       } finally {
         await fixtureSql.close()
       }

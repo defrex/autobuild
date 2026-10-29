@@ -539,7 +539,17 @@ completion samples with journal ticks. Heartbeat renewal cannot invent progress.
 The memory, SQLite, Postgres and remote adapters share this contract, including
 no mutation after lease expiry and no partial publication on validation failure.
 Repository read failures fail a watch tick and retry on the next iteration;
-continuous failures use the existing five-minute persistent-tick attention.
+continuous durably reported failures use the existing five-minute persistent-tick attention.
+Watch mode keeps running when both a tick and its failure publication fail,
+warning locally with both errors. Failed iterations wait at least the configured
+interval or one second, whichever is longer. One bounded in-memory episode
+retains the original error, count and observation window; recovery appends a
+standalone `dispatcher.tick-failed` diagnostic before the next operational tick.
+An unacknowledged diagnostic remains pending and may be duplicated after a lost
+response. Reporting never closes a later tick boundary or gates committed
+handoff acceptance. Explicit shutdown, supersession and fatal forge publication
+still stop the loop; once mode rethrows the original tick error even if reporting
+fails. Stopping before recovery leaves only local warnings for unreported failures.
 Failure settlement writes through the fenced backing store without reading the
 failed projection. Repository view writes distinguish a committed result from a
 subsequent refresh failure, retaining the last complete snapshot while propagating
