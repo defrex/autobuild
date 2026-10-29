@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## v1.3.0 — 2026-10-29
+
+This release lets hosted clients and servers run different reducer versions: remote clients now accept any reduced value their own shape can represent, and published 1.2.0 clients keep working because the service answers them from a frozen 1.2.0 catalog, though 1.2.0 users should still upgrade. Recurring store reads now have tighter bounds across hosted ticket listing, dashboard snapshot uploads, parked-build config reads, presence evidence and observation sampling. Dispatching is more resilient: watch keeps running through tick-reporting outages, ticket claims are recovered when build preparation fails, unfinished reconciles resume before revised specs are replanned, and hosted forge cooldowns are bounded and come with audited operator recovery. Credential handling also improves, with local account credentials kept out of Claude process arguments and hosted ChatGPT credentials refreshed before they expire.
+
+- [#793](https://github.com/defrex/autobuild/pull/793) — Suppress dispatcher loss reports for runs with recorded stops
+- [#791](https://github.com/defrex/autobuild/pull/791) — Keep dispatch watch running through tick-reporting outages
+- [#790](https://github.com/defrex/autobuild/pull/790) — Resume unfinished reconcile before replanning revised specs
+- [#789](https://github.com/defrex/autobuild/pull/789) — Keep local account credentials out of Claude process arguments
+- [#788](https://github.com/defrex/autobuild/pull/788) — Refresh hosted ChatGPT credentials near expiry and honor provider floors
+- [#787](https://github.com/defrex/autobuild/pull/787) — Avoid repeated preparation for unavailable presence requests
+- [#786](https://github.com/defrex/autobuild/pull/786) — Bound hosted forge cooldowns and add audited operator recovery
+- [#785](https://github.com/defrex/autobuild/pull/785) — Bound destination presence evidence and avoid unrelated invalidation
+- [#784](https://github.com/defrex/autobuild/pull/784) — Reuse the dispatcher tick view for observation sampling
+- [#783](https://github.com/defrex/autobuild/pull/783) — Bound hosted ticket listing queries when tickets have targets
+- [#782](https://github.com/defrex/autobuild/pull/782) — Bound dashboard snapshot uploads and retained run identities
+- [#781](https://github.com/defrex/autobuild/pull/781) — Recover ticket claims when build preparation fails
+- [#780](https://github.com/defrex/autobuild/pull/780) — Avoid repeated pinned-config reads for unchanged parked builds
+- [#779](https://github.com/defrex/autobuild/pull/779) — Avoid serializing hosted ticket reads behind state seeding
 - Accept reducer version skew between hosted clients and servers. Remote clients now accept any reduced value their own shape can represent instead of requiring an exact reducer version, so an older or newer server no longer breaks reads. Published 1.2.0 clients keep working against newer servers: the service answers them from a frozen 1.2.0 catalog. **Upgrade hosted clients from 1.2.0**: 1.2.0 still rejects values that gained an event type it does not know.
 
 ## v1.2.0 — 2026-10-28
