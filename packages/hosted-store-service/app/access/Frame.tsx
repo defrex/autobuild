@@ -7,6 +7,8 @@ export interface FrameProps {
   isSuperUser: boolean
   pending?: boolean
   error?: string
+  showLoading?: boolean
+  refreshLabel?: string
   onRefresh?: () => void
   menuOpen?: boolean
 }
@@ -16,6 +18,8 @@ export function AccessFrame({
   isSuperUser,
   pending,
   error,
+  showLoading = true,
+  refreshLabel = 'Refresh',
   onRefresh,
   menuOpen,
   title,
@@ -42,11 +46,11 @@ export function AccessFrame({
           <h1>{title}</h1>
           {onRefresh && (
             <button type="button" className="word" disabled={pending} onClick={onRefresh}>
-              Refresh
+              {refreshLabel}
             </button>
           )}
         </div>
-        {pending && (
+        {pending && showLoading && (
           <p role="status" className="slack">
             Loading acknowledged state…
           </p>
