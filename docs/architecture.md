@@ -282,8 +282,11 @@ eligibility describe that same prefix. Ordinary polling, including the first
 batch on an old build, reads only events after the cursor and advances that seed
 event by event, preserving state at event N in each emitted record. Watch uses
 historical eligibility for baseline suppression; wait retains its separate
-current-attention registration policy. Only an explicit `--since` older than C
-reconstructs a historical prefix once in `cli/historical-build-state.ts`.
+current-attention registration policy. For an explicit `--since` older than C,
+hosted stores retrieve an exact server-owned checkpoint and read only the bounded delta; local adapters retain
+historical prefix reconstruction in `cli/historical-build-state.ts`. Hosted
+cursors outside the tail window fail without replay; see
+[hosted event bounds and exact resume](remote-store-protocol.md#hosted-event-bounds-and-exact-resume).
 Actual event listings, transcripts and cursor streams remain raw reads. The
 interactive terminal frontend retains its independently established incremental
 feed. `tools/persisted-reduced-reads.test.ts` scans production TypeScript calls

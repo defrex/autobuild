@@ -565,7 +565,9 @@ section 4) accept an optional `wait` parameter in whole seconds. When at least
 one event with `seq` strictly greater than parsed `since` already exists, the
 response is returned immediately, exactly as without `wait`. Otherwise the
 server may hold the request until such an event is appended or the bound
-elapses, whichever comes first; at the bound it answers `200 []`. Omitting
+elapses, whichever comes first. At the bound, repository reads answer `200 []`;
+build reads answer `200 {"events": [], "cursor": N, "hasMore": false}`,
+where N is the requested `since` cursor. Omitting
 `wait` (or `wait=0`) is byte-identical behavior to the immediate form.
 
 `wait` is parsed with a dedicated digits-only grammar — one or more ASCII
@@ -933,7 +935,7 @@ session-attribution dimension — stream parts have no actor.
 | `listStreams` | `GET /builds/{slug}/streams` and `GET /repos/{repo}/streams` | none | `200` + `StreamRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getStream` | `GET /builds/{slug}/streams/{id}` and `GET /repos/{repo}/streams/{id}` | none | `200` + `StreamRecord`; `404` when unknown **or** scoped to another resource |
 | `appendStreamParts` | `POST /builds/{slug}/streams/{id}/chunks` and `POST /repos/{repo}/streams/{id}/chunks` | `{"parts": [ { "type": nonempty string, … } ]}`, nonempty | `201` + `StreamChunk` |
-| `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) parsed leniently like the `since` of section 3; `wait` (whole seconds) parsed by the digits-only grammar of section 3's event-wait rules — one or more ASCII digits, anything else `400 validation` per section 9 — and clamped to the 30-second stream ceiling below | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
+| `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) must be one or more ASCII digits representing a safe nonnegative integer; invalid values are `400 validation`; `wait` (whole seconds) parsed by the digits-only grammar of section 3's event-wait rules — one or more ASCII digits, anything else `400 validation` per section 9 — and clamped to the 30-second stream ceiling below | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
 | `closeStream` | `POST /builds/{slug}/streams/{id}/close` and `POST /repos/{repo}/streams/{id}/close` | `{"outcome": "completed" \| "aborted"}` | `200` + the closed `StreamRecord` |
 
 Because a stream id is globally unique but names no scope, a conforming server
@@ -946,6 +948,10 @@ routes, which resolve the stream's own scope and then authorize against it:
 | `appendStreamParts` | `POST /streams/{id}/chunks` | |
 | `readStream` | `GET /streams/{id}/chunks?since={n}&wait={n}` | |
 | `closeStream` | `POST /streams/{id}/close` | |
+
+Both scoped and top-level chunk reads use the same `since` grammar: omission
+defaults to zero; empty, whitespace-padded, hexadecimal, signed, fractional,
+and unsafe-integer values receive `400 validation`.
 
 On both route families, a stream that does not exist and one scoped to a
 different resource are the same `404 not-found` (`unknown stream "…"`), so no
@@ -972,8 +978,8 @@ Read wait semantics: when no newer chunk exists and the stream is open, the
 server may hold the request up to the parsed `wait` bound in whole seconds,
 returning as soon as a chunk is appended or the stream closes, and no later
 than the bound. A `wait` above 30 seconds is clamped to 30. Reads of a closed
-stream never wait. A server may return before the bound at any time. Unlike
-`since`, the `wait` value follows the strict digits grammar of section 3's
+stream never wait. A server may return before the bound at any time. The
+`wait` value follows the strict digits grammar of section 3's
 event-wait rules (a value that is not one or more ASCII digits is `400`
 `validation` per section 9), with the 30-second stream ceiling as its clamp.
 
