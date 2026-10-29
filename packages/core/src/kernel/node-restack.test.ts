@@ -715,3 +715,132 @@ test('a real conflicted transaction records NUL-delimited filenames including sp
     (await store.getEvents('a')).findLast((e) => e.type === 'node.item-conflicted')?.payload,
   ).toMatchObject({ files })
 })
+
+test('unavailable nested presence waits durably, survives re-parenting, and progresses only on actual coverage', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { DISPATCHER } = await import('../events/envelope')
+  const { FakeForge } = await import('../ports/forge/fake')
+  const { gitRewrite } = await import('../ports/forge/git-rewrite')
+  const { runNodeTransaction } = await import('./node-restack-transaction')
+  const { sampleBuildInput } = await import('../store/contract')
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  const { deps, git, commit, base } = await fixture()
+  await git('checkout', '-b', 'source')
+  const source = await commit('source-change', 'source')
+  await git('checkout', '-b', 'ab-node/destination', base)
+  await commit('owned', 'owned')
+  await git('checkout', '-b', 'parent', base)
+  let parent = await commit('parent-change')
+  const store = new MemoryBuildStore()
+  await store.createBuild(sampleBuildInput('waiting'))
+  await store.append('waiting', { actor: DISPATCHER, type: 'node.opened', payload: { sha: base } })
+  await store.append('waiting', {
+    actor: DISPATCHER,
+    type: 'node.restack-requested',
+    payload: {
+      id: 'presence',
+      reason: 'presence',
+      branch: 'parent',
+      parent,
+      dependent: { source: 'fake', id: 'D' },
+      identities: ['build:source'],
+    },
+  })
+  await store.append('waiting', {
+    actor: DISPATCHER,
+    type: 'node.restack-requested',
+    payload: {
+      id: 'obsolete',
+      reason: 'presence',
+      branch: 'previous-destination',
+      parent,
+      dependent: { source: 'fake', id: 'OLD' },
+      identities: ['build:absent'],
+    },
+  })
+  await store.createBuild(sampleBuildInput('targeting-leaf'))
+  await store.append('targeting-leaf', {
+    actor: { kind: 'kernel' },
+    type: 'finalize.completed',
+    payload: {
+      pr: { number: 77, url: 'https://example/77', headSha: 'old' },
+    },
+  })
+  await store.claimNodeWriter('waiting', 'holder', 60_000)
+  const forge = new FakeForge()
+  forge.rewrite = gitRewrite(deps.exec, true)
+  forge.setPrState(77, { state: 'open', mergeable: true })
+  forge.setAutoMergeState(77, true)
+  const { suspendNativeLanding } = await import('./landing-publication')
+  let refuseCancellation = false
+  const tx = {
+    ...deps,
+    store,
+    slug: 'waiting',
+    forge: Object.assign(forge, {
+      snapshotBase: async () => parent,
+    }),
+    holder: 'holder',
+    canWrite: async () => true,
+    beforeReplay: async (operation: string) => {
+      cancellations++
+      if (refuseCancellation) throw new Error('cancellation unconfirmed')
+      await suspendNativeLanding(
+        { ...deps, store, forge, slug: 'targeting-leaf' },
+        `node:waiting:${operation}`,
+      )
+    },
+  }
+  let cancellations = 0
+  const run = () =>
+    runNodeTransaction(tx, { branch: 'ab-node/destination', parentBranch: 'parent', id: 'replay' })
+  const append = store.appendIfCurrent.bind(store)
+  store.appendIfCurrent = async (...args) => {
+    if (args[2].type === 'node.restack-availability-observed')
+      throw new Error('assessment interrupted')
+    return append(...args)
+  }
+  await expect(run()).rejects.toThrow('assessment interrupted')
+  expect(
+    (await readBuildFacts(store, 'waiting')).value.state.nodeRestack?.availability,
+  ).toBeUndefined()
+  store.appendIfCurrent = append
+  expect(await run()).toBe('idle')
+  const first = (await readBuildFacts(store, 'waiting')).value.state.nodeRestack!
+  expect(first.availability?.available).toEqual([])
+  expect(first.requests?.presence).toBeDefined()
+  expect(first.requests?.obsolete).toBeUndefined()
+  expect(
+    (await store.getEvents('waiting')).find((e) => e.type === 'node.restack-satisfied')?.payload,
+  ).toMatchObject({ id: 'obsolete', outcome: 'destination-changed' })
+  expect(cancellations).toBe(0)
+  expect(await run()).toBe('idle')
+  expect(
+    (await store.getEvents('waiting')).filter(
+      (e) => e.type === 'node.restack-availability-observed',
+    ),
+  ).toHaveLength(1)
+  // Same branch now points to a different ancestry without the required identity.
+  await git('checkout', '--detach', base)
+  parent = await commit('replacement-parent')
+  expect(await run()).toBe('idle')
+  expect(
+    (await readBuildFacts(store, 'waiting')).value.state.nodeRestack?.requests?.presence,
+  ).toBeDefined()
+  // Restore the identity into the immediate parent. Only actual destination
+  // coverage after replay may settle the request.
+  await git('cherry-pick', source)
+  parent = await git('rev-parse', 'HEAD')
+  refuseCancellation = true
+  await expect(run()).rejects.toThrow('cancellation unconfirmed')
+  expect((await readBuildFacts(store, 'waiting')).value.state.nodeRestack?.active).toBeUndefined()
+  expect(forge.isAutoMergeEnabled(77)).toBe(true)
+  refuseCancellation = false
+  expect(await run()).toBe('completed')
+  expect(forge.autoMergeCalls.filter((call) => !call.enabled)).toHaveLength(1)
+  expect(forge.isAutoMergeEnabled(77)).toBe(false)
+  expect(cancellations).toBeGreaterThan(0)
+  expect((await readBuildFacts(store, 'waiting')).value.state.nodeRestack?.requests).toEqual({})
+  const inventory = await nodeInventory(deps, await git('rev-parse', 'ab-node/destination'), parent)
+  expect(inventory.builds).toContain('source')
+})

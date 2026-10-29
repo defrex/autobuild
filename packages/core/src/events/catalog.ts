@@ -72,6 +72,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'integration.audited': ['kernel', 'dispatcher'],
   'node.restack-requested': ['dispatcher', 'human'],
   'node.restack-satisfied': ['kernel', 'dispatcher'],
+  'node.restack-availability-observed': ['kernel', 'dispatcher'],
   'node.parent-distance': ['kernel', 'dispatcher'],
   'node.parent-requested': ['dispatcher', 'human'],
   'node.parent-accepted': ['dispatcher', 'human'],

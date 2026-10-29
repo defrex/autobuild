@@ -21,6 +21,20 @@ export function nodeRestackLog(): AbEvent[] {
     { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'd'.repeat(40) } },
     {
       actor: KERNEL,
+      type: 'node.restack-availability-observed',
+      payload: {
+        version: 1,
+        fingerprint: 'assessment',
+        branch: 'ab-node/node',
+        parentBranch: 'main',
+        head: expected,
+        parent,
+        base: 'd'.repeat(40),
+        available: [],
+      },
+    },
+    {
+      actor: KERNEL,
       type: 'node.writer-reserved',
       payload: {
         id: 'node-tx',

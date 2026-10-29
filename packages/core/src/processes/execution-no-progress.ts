@@ -52,6 +52,7 @@ export const executionProgress = {
   'node.inventory': 'bookkeeping',
   'node.restack-requested': 'bookkeeping',
   'node.restack-satisfied': 'progress',
+  'node.restack-availability-observed': 'bookkeeping',
   'node.parent-distance': 'bookkeeping',
   'node.parent-requested': 'bookkeeping',
   'node.parent-accepted': 'progress',
