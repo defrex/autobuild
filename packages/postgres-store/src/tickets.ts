@@ -295,8 +295,10 @@ export class PostgresTicketSource implements TicketSource {
     return this.retry.tx(this.sql, async (q) => {
       if (criteria.state === undefined) await seedTicketStates(q, this.repo, this.configured)
       const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
-      const rows: Row[] =
-        await q`SELECT *, revision::text AS revision, ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers FROM ab_tickets
+      // Project targets in the listing statement to avoid per-record lookups.
+      const rows: Row[] = await q`SELECT *, revision::text AS revision,
+        (SELECT t.readable_id FROM ab_tickets t WHERE t.repo = ab_tickets.repo AND t.id = ab_tickets.target_id) AS target_readable_id,
+        ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers FROM ab_tickets
         WHERE repo = ${this.repo}
           AND (${state}::text IS NULL OR state = ${state})
           AND labels @> ${q.array(labels, 'text')}
