@@ -409,3 +409,47 @@ for (const warm of [false, true]) {
     })
   }
 }
+
+for (const [scope, name, log] of [
+  [build, 'buildStreamSeed', randomBuildLog(2, 100)],
+  [repo, 'repositoryAttention', randomStatusJournal(2, 100)],
+] as const) {
+  test(`${name} repairs legacy advancement from the latest checkpoint`, async () => {
+    const events = log.map((event, index) => ({ ...event, seq: index + 1 })) as (
+      | AbEvent
+      | RepositoryEvent
+    )[]
+    const gap = events.splice(-7)
+    const h = cache(events)
+    const request = { reducer: name }
+    const checkpoints = new Map<number, ReducerSnapshot>()
+    const storage: ReducerValueStorage = {
+      ...h.storage,
+      checkpoints: {
+        coverage: async (_key, cursor) => checkpoints.has(cursor),
+        latest: async (_key, through) =>
+          checkpoints.get(Math.max(-1, ...[...checkpoints.keys()].filter((c) => c <= through))) ??
+          null,
+        publish: async (key, snapshot, captured) => {
+          for (const checkpoint of captured) checkpoints.set(checkpoint.cursor, checkpoint)
+          h.rows.set(key, { snapshot, token: JSON.stringify(snapshot) })
+        },
+      },
+    }
+    await readReducerValue(scope, request, storage)
+    events.push(...gap)
+    // The still-live pre-change server uses the same canonical key but has no sink.
+    const legacy = await readReducerValue(scope, request, h.storage)
+    const recovered = await readReducerValue(scope, request, storage)
+    expect(recovered).toEqual(legacy)
+    expect(h.costs.at(-1)).toBe(7)
+    expect(checkpoints.has(recovered.cursor)).toBe(true)
+    expect(await readReducerValue(scope, request, storage)).toEqual(recovered)
+    expect(h.costs.at(-1)).toBe(0)
+    // Initial legacy adoption is recoverable even when no checkpoint exists.
+    checkpoints.clear()
+    expect(await readReducerValue(scope, request, storage)).toEqual(legacy)
+    expect(h.costs.at(-1)).toBe(events.length)
+    expect(checkpoints.has(recovered.cursor)).toBe(true)
+  })
+}

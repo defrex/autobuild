@@ -1243,6 +1243,7 @@
     "$.harvestSessions[].transcript.rev: number",
     "$.harvestSessions[].transcript: object",
     "$.harvestSessions[]: object",
+    "$.harvestTerminals: object",
     "$.harvestVerdicts: object",
     "$.health.active.cause: string",
     "$.health.active.message: string",
