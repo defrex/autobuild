@@ -1,3 +1,4 @@
+import { validateForgeDegradation } from '@defrex/autobuild/remote-store'
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
 import { CATALOG_IDENTITY_HEADER } from '@defrex/autobuild/remote-store'
@@ -492,6 +493,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         req.method === 'POST' &&
         new URL(req.url).pathname.split('/').slice(3).join('/') === 'events'
       ) {
+        // The preceding requireProject binds this exception to the exact grant repository.
         // Kernel forge guards report newly observed limits through the journal.
         // Delegates cannot recover the forge, change leases, or append other facts.
         const body = eventWriteWireSchema.safeParse(await req.clone().json())
@@ -704,6 +706,15 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     return json(200, await store.ensureRepo(body.repo))
   }
 
+  function validateRepoAdmission(event: { type: string; payload: unknown }): void {
+    if (event.type !== 'dispatcher.forge-degraded') return
+    try {
+      validateForgeDegradation(event.payload, clock())
+    } catch (error) {
+      throw new RequestError(400, 'validation', (error as Error).message)
+    }
+  }
+
   async function repoRoute(
     req: Request,
     url: URL,
@@ -723,6 +734,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
 
+        validateRepoAdmission(body)
         const actor = enforceVia(scope, body.actor)
         return json(201, await store.appendRepo(repo, { ...body, actor } as RepositoryEventWrite))
       }
@@ -756,6 +768,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       case 'POST deposits': {
         const body = await readBody(req, depositsBodySchema)
 
+        validateRepoAdmission(body.event)
         const actor = enforceVia(scope, body.event.actor)
         const inputs = body.artifacts.map((artifact) => ({
           kind: artifact.kind,
@@ -810,6 +823,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'POST tick/finish': {
         const body = await readBody(req, finishRepoTickBodySchema)
+        for (const event of body.events) validateRepoAdmission(event)
         const events = body.events.map((event) => ({
           ...event,
           actor: enforceVia(scope, event.actor),

@@ -1058,3 +1058,37 @@ test('a partial build tuple is rejected by the command guard', async () => {
   expect(result.stderr).toContain('AB_BUILD')
   expect(result.stderr).not.toContain('AB_BUILD is not set')
 })
+
+test('repository forge-clear persists human recovery through the binary and explicit store selection', async () => {
+  const repo = await realpath(tmp)
+  const path = join(tmp, 'clear-store')
+  const store = openLocalStore(path)
+  await store.ensureRepo(repo)
+  await store.close()
+  const result = await runBin(
+    [
+      'repository',
+      'forge-clear',
+      '--forge',
+      'github',
+      '--reason',
+      'wrong deadline',
+      '--json',
+      '--store',
+      path,
+    ],
+    { USER: 'Ada' },
+  )
+  expect(result.code).toBe(0)
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    event: {
+      type: 'dispatcher.forge-recovered',
+      actor: { kind: 'human', user: 'Ada' },
+      payload: { forge: 'github', reason: 'wrong deadline' },
+    },
+  })
+  const readback = openLocalStore(path)
+  expect((await readback.getRepoEvents(repo)).length).toBe(1)
+  await readback.close()
+  expect((await runBin(['repository', 'forge-clear', '--forge', 'github'])).code).toBe(1)
+})

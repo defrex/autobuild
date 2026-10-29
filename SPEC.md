@@ -4174,7 +4174,15 @@ clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
 
 A classified forge rate limit records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery
-request, and only success clears degradation. A further limit extends cooldown.
+request; a successful probe records automatic recovery. An authorized operator
+may explicitly override erroneous recorded state with
+`ab repository forge-clear --forge <name> --reason <text>` or
+`repository.forge_clear {repo, forge, reason}`. This appends a human-attributed
+`dispatcher.forge-recovered` fact with the reason; it does not prove provider
+success. A subsequent actual limit records a fresh cooldown. Hosted admission
+requires a schema-valid finite ISO `resetAt` no later than server time plus
+24 hours, inclusive; past deadlines remain valid. Rejection never clamps or
+invents a provider reset, and historical events remain readable.
 Native merge application failures keep candidate-specific retry eligibility,
 including automatic decisions without a human command. Retries recheck consent,
 holds, verification and the exact candidate. Uncertain enables remain pending

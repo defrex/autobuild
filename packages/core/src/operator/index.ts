@@ -141,3 +141,5 @@ export { listOperatorLandings } from './landings'
 export { readTicketTree, getOperatorTicketTree } from './tickets'
 
 export { requestNodeRestack } from './restack'
+
+export { clearForgeDegradation } from './control'
