@@ -40,6 +40,7 @@ export const buildEventPolicy = {
   'node.restack-requested': 'decisive',
   'node.restack-satisfied': 'decisive',
   'node.poll-checked': 'advisory',
+  'node.restack-availability-observed': 'advisory',
   'node.parent-distance': 'advisory',
   'node.parent-requested': 'decisive',
   'node.parent-accepted': 'decisive',
