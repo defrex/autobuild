@@ -1348,3 +1348,14 @@ a.rowhead {
 .settings-page h3 {
   margin-block: 1.5em 0.75em;
 }
+
+.confirm-body input.project {
+  font-family: var(--mono);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.deletion-unknown {
+  font-size: 0.875em;
+  max-width: 36ch;
+}
