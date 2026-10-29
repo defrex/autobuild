@@ -983,6 +983,34 @@ test('a provider without trusted rewrite capability refuses without using plain 
   expect(h.published).toEqual([])
 })
 
+test('a reconcile rewrite recorded lost is never retried, so settlement cannot fail the tick', async () => {
+  const h = await seedRestackPublication()
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'publication.lost',
+    payload: {
+      request: h.request.seq,
+      operation: 'reconcile',
+      branch: BRANCH,
+      sha: SHA,
+      reason: 'replacement',
+    },
+  })
+  let calls = 0
+  h.deps.publication!.rewrite = async () => {
+    calls++
+    throw new Error(`archive publication rejected: fatal: bad object ${SHA}`)
+  }
+  await settlePendingPublication(h.deps, SLUG)
+  await settlePendingPublication(h.deps, SLUG)
+  expect(calls).toBe(0)
+  const events = await h.store.getEvents(SLUG)
+  expect(
+    events.some((e) => e.type === 'reconcile.completed' || e.type === 'reconcile.rewritten'),
+  ).toBe(false)
+  expect(h.published).toEqual([])
+})
+
 test('lost and abandoned publication objects do not block trusted reconcile archives', async () => {
   const h = await seedRestackPublication(true)
   let archived: string[] = []
