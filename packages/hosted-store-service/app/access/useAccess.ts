@@ -23,6 +23,7 @@ export function useAccess<T>(load: (signal: AbortSignal) => Promise<T>) {
       if (gate.current.current(id)) {
         setData(next)
         setForbidden(false)
+        return next
       }
     } catch (failure) {
       if (!gate.current.current(id)) return
@@ -66,7 +67,9 @@ export function useAccess<T>(load: (signal: AbortSignal) => Promise<T>) {
           throw failure
         }
       },
-      refresh,
+      async () => {
+        await refresh()
+      },
       (message) => {
         if (mounted.current) setError(message)
       },
@@ -75,5 +78,5 @@ export function useAccess<T>(load: (signal: AbortSignal) => Promise<T>) {
     if (mounted.current) setPending(false)
     return result && mounted.current
   }
-  return { data, pending, error, forbidden, reload, write }
+  return { data, pending, error, forbidden, reload, write, refresh }
 }

@@ -2753,13 +2753,25 @@ declare both spellings, including empty arrays. `ab upgrade` migrates this key.
 
 ### Permanent hosted project deletion
 
+The browser requires the exact full repository identity in a transient dialog field;
+confirm stays disabled for empty or mismatched input and focus starts in the field.
+The handler independently binds that identity to the selected repository and its
+fresh validated preview. Only JSON `{deleted:true}` acknowledges completion.
+After any failed or unrecognized deletion response, the browser shows
+“Deletion outcome unknown; reload to check” and holds the row in its original slot
+without actions, even after dismissal. Only a complete successful discovery begun
+by Reload after the attempt settles it: absence removes the row, presence restores
+its authorized actions, and pending cleanup restores Finish deletion with a fresh
+preview and exact typing. An earlier or unsuccessful read cannot settle the outcome.
+The server's `{repo}` body and generation-bound If-Match contract are unchanged.
+
 Super users and organization owners can permanently delete an authorized project
 from the web Projects page after a warning and count preview in the shared confirmation dialog. This removes
 hosted state, tickets, blobs, secrets and accounts, revokes all credentials and
 retains only repository, actor, deletion time and an opaque generation id as audit.
 `ab disconnect` only revokes the saved credential; admin `projects remove` only
-unregisters access and retains data. Failed deletion leaves access refused and
-supports retry with the original preview token from the Projects page’s unfinished deletions list, including after a
+unregisters access and retains data. Server cleanup failure leaves access refused and
+supports recovery from the Projects page’s discovered unfinished deletions list, including after a
 reload or service restart; registration waits for cleanup. Each request shares one
 full admission per project. Deletion invalidates admitted generations during the
 initial purge and waits only for active mutation transactions; a later mutation

@@ -116,9 +116,54 @@ export async function projectManagement(isSuperUser: boolean, signal?: AbortSign
       : Promise.resolve(undefined),
     request<{ projects: string[] }>('projects/deletions', 'GET', undefined, signal),
   ])
+  const repositories = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every((repo) => typeof repo === 'string')
+  if (
+    !repositories(unfinished.projects) ||
+    (isSuperUser && !repositories(waiting?.projects)) ||
+    assigned.some((s) => !s.organization || !repositories(s.projects) || !Array.isArray(s.members))
+  )
+    throw new Error('Project discovery incomplete. Reload to check.')
   return {
     snapshots: assigned,
     unassigned: waiting?.projects,
     pendingDeletions: unfinished.projects,
+  }
+}
+
+export const deletionUnknown = 'Deletion outcome unknown; reload to check'
+export function validDeletionPreview(value: unknown, repo: string): value is DeletionPreview {
+  if (!value || typeof value !== 'object') return false
+  const p = value as DeletionPreview
+  return (
+    p.repo === repo &&
+    typeof p.token === 'string' &&
+    p.token.length > 0 &&
+    [p.builds, p.tickets, p.secrets, p.subscriptionAccounts].every(
+      (n) => Number.isSafeInteger(n) && n >= 0,
+    )
+  )
+}
+export function canDelete(repo: string, typed: string, preview?: DeletionPreview) {
+  return typed === repo && validDeletionPreview(preview, repo)
+}
+/** Only the validated acknowledgment establishes success; all other outcomes need discovery. */
+export async function deleteHostedProject(repo: string, token: string, timeoutMs = 30000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const value = await request<unknown>(
+      'projects/deletion',
+      'DELETE',
+      { repo },
+      controller.signal,
+      { 'if-match': token },
+    )
+    if (!value || typeof value !== 'object' || !('deleted' in value) || value.deleted !== true)
+      throw new Error(deletionUnknown)
+  } catch {
+    throw new Error(deletionUnknown)
+  } finally {
+    clearTimeout(timer)
   }
 }

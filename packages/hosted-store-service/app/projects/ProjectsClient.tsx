@@ -1,6 +1,15 @@
 'use client'
 import { useCallback, useEffect, useState, useRef } from 'react'
-import { request, projectManagement, orgPath, type DeletionPreview } from '../access/api'
+import {
+  request,
+  projectManagement,
+  orgPath,
+  canDelete,
+  validDeletionPreview,
+  deleteHostedProject,
+  deletionUnknown,
+  type DeletionPreview,
+} from '../access/api'
 import { useAccess } from '../access/useAccess'
 import { confirmedTarget, type Confirmation } from '../access/state'
 import { ProjectsView } from './ProjectsView'
@@ -13,6 +22,13 @@ export function ProjectsClient({
   isOwner?: boolean
   isSuperUser: boolean
 }) {
+  const [typed, setTyped] = useState('')
+  const [vacated, setVacated] = useState<Record<string, number>>({})
+  const [unknown, setUnknown] = useState<Record<string, number>>({})
+  const retained = useRef<Record<string, number>>({})
+  type Management = Awaited<ReturnType<typeof projectManagement>>
+  const [frozen, setFrozen] = useState<Management>()
+  const attemptRevision = useRef(0)
   const [deleting, setDeleting] = useState<string>()
   const deletionSource = useRef<string | undefined>(undefined)
   const [deletionPreview, setDeletionPreview] = useState<DeletionPreview>()
@@ -31,8 +47,8 @@ export function ProjectsClient({
   // Hide only until discovery acknowledges the completed purge. A later
   // reconnection with the same repository name must be visible again.
   useEffect(() => {
-    if (state.data) setHidden([])
-  }, [state.data])
+    if (state.data && !frozen) setHidden([])
+  }, [state.data, frozen])
   const sourceOf = (repo: string | undefined) =>
     state.data?.pendingDeletions.includes(repo ?? '')
       ? 'pending-deletion'
@@ -68,7 +84,9 @@ export function ProjectsClient({
       setConfirmation(undefined)
   }
   async function previewDelete(repo: string) {
+    if (deletionBusy.current || retained.current[repo] || state.forbidden) return
     const revision = ++previewRevision.current
+    setTyped('')
     setConfirmation(undefined)
     deletionSource.current = sourceOf(repo)
     setDeleting(repo)
@@ -78,62 +96,121 @@ export function ProjectsClient({
       const preview = await request<DeletionPreview>(
         `projects/deletion?repo=${encodeURIComponent(repo)}`,
       )
-      if (revision === previewRevision.current) setDeletionPreview(preview)
+      if (!validDeletionPreview(preview, repo))
+        throw new Error('Preview unavailable. Reload to check.')
+      if (revision === previewRevision.current) {
+        setTyped('')
+        setDeletionPreview(preview)
+      }
     } catch (error) {
       if (revision === previewRevision.current)
         setDeletionError(error instanceof Error ? error.message : 'Preview unavailable. Try again.')
     }
   }
   async function deleteProject(repo: string) {
-    if (deletionBusy.current || deletionPreview?.repo !== repo) return
+    const source = sourceOf(repo)
+    const permitted =
+      isSuperUser ||
+      source === 'pending-deletion' ||
+      state.data?.snapshots.find((s) => s.organization.id === source)?.organization
+        .membershipRole === 'owner'
+    if (
+      deletionBusy.current ||
+      state.pending ||
+      state.forbidden ||
+      !permitted ||
+      !source ||
+      deleting !== repo ||
+      deletionSource.current !== source ||
+      retained.current[repo] ||
+      !canDelete(repo, typed, deletionPreview)
+    )
+      return
+    const token = deletionPreview!.token
+    attemptRevision.current++
+    setFrozen((previous) => previous ?? state.data)
+    const row = Array.from(document.querySelectorAll<HTMLElement>('[data-project]')).find(
+      (el) => el.dataset.project === repo,
+    )
+    const rowHeight = row?.getBoundingClientRect().height || 90
+    retained.current = { ...retained.current, [repo]: rowHeight }
     deletionBusy.current = true
     setDeletionPending(true)
     setDeletionError(undefined)
     try {
-      await request('projects/deletion', 'DELETE', { repo }, undefined, {
-        'if-match': deletionPreview.token,
-      })
+      await deleteHostedProject(repo, token)
+      const remaining = { ...retained.current }
+      delete remaining[repo]
+      retained.current = remaining
+      setUnknown(remaining)
+      if (!Object.keys(remaining).length) {
+        setFrozen(undefined)
+        setVacated({})
+      } else
+        setVacated((previous) => ({
+          ...previous,
+          [repo]: rowHeight,
+        }))
+      setTyped('')
       setDeleting(undefined)
       setDeletionPreview(undefined)
       setHidden((previous) => [...previous, repo])
       state.reload()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Deletion failed. Try again.'
-      if (error && typeof error === 'object' && 'status' in error && error.status === 412) {
-        await previewDelete(repo)
-      }
-      setDeletionError(message)
+    } catch {
+      setUnknown({ ...retained.current })
+      setDeletionPreview(undefined)
+      setTyped('')
+      setDeletionError(deletionUnknown)
     } finally {
       deletionBusy.current = false
       setDeletionPending(false)
     }
   }
-  const visibleSnapshots = state.data?.snapshots.map((snapshot) => {
-    const preserve =
-      deletionError &&
-      deleting &&
-      deletionSource.current === snapshot.organization.id &&
-      (isSuperUser || snapshot.organization.membershipRole === 'owner')
-    const projects =
-      preserve && !snapshot.projects.includes(deleting)
-        ? [...snapshot.projects, deleting]
-        : snapshot.projects
-    return {
-      ...snapshot,
-      projects: projects.filter(
-        (repo) => !hidden.includes(repo) && !state.data?.pendingDeletions.includes(repo),
-      ),
+  const display = state.forbidden ? undefined : (frozen ?? state.data)
+  const visibleSnapshots = display?.snapshots.map((snapshot) => ({
+    ...snapshot,
+    organization: {
+      ...snapshot.organization,
+      membershipRole:
+        state.data?.snapshots.find((s) => s.organization.id === snapshot.organization.id)
+          ?.organization.membershipRole ?? null,
+    },
+    projects: snapshot.projects.filter(
+      (repo) =>
+        (!hidden.includes(repo) || !!vacated[repo]) && !display.pendingDeletions.includes(repo),
+    ),
+  }))
+  async function refreshUnknown() {
+    if (deletionBusy.current) return
+    const revision = attemptRevision.current
+    try {
+      const fresh = await state.refresh()
+      if (fresh && revision === attemptRevision.current && !deletionBusy.current) {
+        retained.current = {}
+        setUnknown({})
+        setVacated({})
+        setFrozen(undefined)
+        setHidden([])
+      }
+    } catch {
+      /* Unsuccessful discovery cannot establish absence. */
     }
-  })
+  }
   return (
     <ProjectsView
       identity={identity}
       isOwner={isOwner}
       isSuperUser={isSuperUser}
-      {...state.data}
+      {...display}
       snapshots={visibleSnapshots}
-      pendingDeletions={state.data?.pendingDeletions.filter((repo) => !hidden.includes(repo))}
+      pendingDeletions={display?.pendingDeletions.filter(
+        (repo) => !hidden.includes(repo) || !!vacated[repo],
+      )}
       pending={state.pending || deletionPending}
+      vacatedRows={vacated}
+      unknownDeletions={unknown}
+      deletionIdentity={typed}
+      onDeletionIdentity={setTyped}
       deleting={deleting}
       deletionPreview={deletionPreview}
       deletionError={deletionError}
@@ -146,6 +223,7 @@ export function ProjectsClient({
       onDestination={(repo, id) => setDestinations((prev) => ({ ...prev, [repo]: id }))}
       onAssign={(repo) => void assign(repo)}
       onMove={(target) => {
+        setTyped('')
         previewRevision.current++
         setDeleting(undefined)
         setDeletionPreview(undefined)
@@ -156,6 +234,7 @@ export function ProjectsClient({
         if (activeConfirmation === repo) void assign(repo)
       }}
       onCancel={() => {
+        setTyped('')
         previewRevision.current++
         setDeleting(undefined)
         setDeletionPreview(undefined)
@@ -164,7 +243,7 @@ export function ProjectsClient({
       }}
       onRefresh={() => {
         setConfirmation(undefined)
-        state.reload()
+        void refreshUnknown()
       }}
     />
   )
