@@ -86,6 +86,27 @@ live operator is present, tell the human and do not become a second operator
 unless directed. Otherwise arm a repository-wide `ab watch --operator --json`.
 A flagged watch writes only mutable liveness, never events or a lease.
 
+### Diagnose missing account credentials
+
+Local startup refuses missing selected primary/alternate account sources before
+taking the repository lease. Unused declared accounts do not block startup.
+Read the aggregate error: supply the named environment slot, renew Claude with
+`claude setup-token`, replace a Kimi membership key, or sign in ChatGPT with
+`ab accounts login NAME --local`. A safely owned local refreshing login counts;
+a failed, mismatched, unsafe or live foreign-owned record fails closed.
+Successor preflight refusal keeps the predecessor active and reports upgrade
+attention; it never claims or rotates the predecessor's credentials.
+
+Hosted absence appears as one durable repository condition per account, in
+repository status, watch and dashboard warnings. Set `ab secrets set VARIABLE`,
+or renew ChatGPT with `ab accounts login NAME --project`. The next tick resumes
+automatically; do not retry builds or reset infrastructure attempts. Hosted
+account slots never use service environment fallback. Config changes may also
+hold account-dependent launches. Observation, controls and cleanup continue.
+Presence is checked without inference; present rejected credentials retain their
+account-specific rejection attention. See [accounts](../ab-guide/references/accounts.md#dispatcher-admission).
+Credential/process changes remain subject to the Boundaries below.
+
 ### Watch for attention events
 
 `ab watch --operator --json` is the standing monitor. Keep its default filter: every

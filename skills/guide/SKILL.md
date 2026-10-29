@@ -961,6 +961,24 @@ step as failed and file an observation while the green build continues.
 
 ### `[accounts]`
 
+Local dispatch refuses missing selected primary/alternate credentials before
+claiming the repository lease. Selected internal and agent-step routes count;
+unused descriptors are readiness-only. Sources are nonempty environment slots
+or safely owned local refreshing logins. Successor preflight inspects transferable
+sources without taking ownership; a missing source keeps the predecessor active
+and raises upgrade attention. Config reloads hold account-dependent launches.
+Hosted account slots use project secrets exclusively, including empty snapshots:
+no deployment environment fallback. One durable repository condition per missing
+account names its source and `ab secrets set VARIABLE` remedy (ChatGPT renewal:
+`ab accounts login NAME --project`). The next tick recovers without per-build
+retry or infrastructure-attempt consumption. Existing execution observation,
+policy repair, controls and cleanup continue. Presence checks make no inference
+request; present rejected credentials keep account-specific attention. Local
+remedies are `claude setup-token` plus setting the configured variable, replacing
+the Kimi membership key, or `ab accounts login NAME --local` for ChatGPT.
+See [account admission](references/accounts.md#dispatcher-admission).
+
+
 An open map of account name to a strict, nonsecret descriptor. Claude and Kimi
 accounts use Claude Code; ChatGPT subscriptions require explicit Codex selection.
 Provision Claude/Kimi credentials manually; authorize ChatGPT with
@@ -1577,8 +1595,12 @@ arguments or responses. These sessionless commands use the saved owner
 credential and recheck current membership. The current setter owns the value,
 which serves every hosted build of that project. Hosted ticks resolve a fresh,
 complete encrypted set and override matching deployment variables for that
-project only; local dispatchers keep using their own environment. For projects
-with saved secrets, failed configuration, decryption or refresh prevents dispatch.
+project only; selected account slots never fall back to deployment variables,
+even for an empty snapshot. Local dispatchers keep using their own environment. For projects
+with saved secrets, failed configuration, decryption or refresh holds new work;
+a ready subset may still repair running policies. A missing selected account
+raises a durable repository condition and recovers automatically on the next
+tick after its secret is set.
 Projects without secrets continue with an empty set without encryption
 configuration. Every secret write still requires valid encryption configuration.
 List exposes only status, owner, timestamps and a keyed fingerprint. See the

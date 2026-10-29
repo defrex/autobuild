@@ -12494,3 +12494,59 @@ for (const peer of [false, true]) {
     }
   })
 }
+
+describe('account credentials precede local repository authority', () => {
+  for (const once of [true, false]) {
+    test(`missing selected accounts refuse ${once ? 'once' : 'watch'} before any lease or launch`, async () => {
+      const toml =
+        DISPATCH_CONFIG_TOML.replace(
+          '[roles.default]',
+          '[roles.default]\naccount = "primary"\nalternates = [{ account = "backup" }]',
+        ) +
+        `
+[accounts.primary]
+kind = "claude-subscription"
+credentialEnv = "PRIMARY_TOKEN"
+[accounts.backup]
+kind = "claude-subscription"
+credentialEnv = "BACKUP_TOKEN"
+[accounts.unused]
+kind = "chatgpt-subscription"
+credentialEnv = "UNUSED_TOKEN"
+`
+      const f = await makeFixture([], happyHandlers(), toml)
+      try {
+        let claims = 0
+        f.store.claimRepoLease = async () => {
+          claims++
+          return true
+        }
+        let launches = 0
+        const wiring = f.wire()
+        wiring.buildExecution.start = async () => {
+          launches++
+          throw new Error('unexpected launch')
+        }
+        const failure = await abDispatch({
+          targetRepo: f.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once,
+          wire: () => wiring,
+        }).catch((error) => error)
+        expect(failure).toBeInstanceOf(Error)
+        expect(failure.message).toContain('PRIMARY_TOKEN')
+        expect(failure.message).toContain('BACKUP_TOKEN')
+        expect(failure.message).toContain('claude setup-token')
+        expect(failure.message).not.toContain('UNUSED_TOKEN')
+        expect(claims).toBe(0)
+        expect(launches).toBe(0)
+        expect(await f.store.listBuilds()).toEqual([])
+      } finally {
+        await f.cleanup()
+      }
+    })
+  }
+})

@@ -1,3 +1,8 @@
+import {
+  applyProjectAccountSnapshot,
+  missingAccountCredentials,
+  MissingAccountCredentialsError,
+} from '../accounts/availability'
 import { LocalCredentials } from '../accounts/local-credentials'
 import { LocalAccountOwner, renewLocalAccounts } from '../accounts/local-owner'
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
@@ -92,7 +97,12 @@ import {
   type PipelineSourceFailure,
   type PipelineSourceMeta,
 } from '../config/pipeline-source'
-import { effectiveRuntimeReferences, roleKeyWarnings, SLUG_ROLE } from '../config/roles'
+import {
+  effectiveRuntimeReferences,
+  selectedExecutionAccounts,
+  roleKeyWarnings,
+  SLUG_ROLE,
+} from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins, pluginResolutionKind } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
@@ -300,7 +310,7 @@ interface ResumePrompt {
 /** The real adapters the loop drives — resolved by `wire` (default: the
  * production ports; tests inject fakes). */
 export interface DispatchWiring {
-  renewAccounts?: (authority: { repo: string; run: string }) => Promise<void>
+  renewAccounts?: (authority?: { repo: string; run: string }) => Promise<void>
   releaseAccounts?: () => Promise<void>
 
   credentialIssuer?: typeof delegateCredential
@@ -552,16 +562,22 @@ async function defaultWire(
   if (opts.env.AB_PROJECT_SECRETS_FAILED === '1')
     for (const name of JSON.parse(opts.env.AB_PROJECT_SECRETS_UNAVAILABLE ?? '[]') as string[])
       delete opts.env[name]
-  let accounts = config.accounts
+  let allAccounts = config.accounts
+  let accounts = selectedExecutionAccounts(config)
+  // Origin execution accepts only the project snapshot, including an empty one.
+  if (originMode) {
+    const snapshot = JSON.parse(opts.env.AB_PROJECT_ACCOUNT_ENV ?? '{}') as Record<string, string>
+    applyProjectAccountSnapshot(allAccounts, opts.env, snapshot)
+  }
   const credentials = new LocalCredentials(join(state.checkout, '.autobuild'))
   const owner = new LocalAccountOwner(credentials)
   const claimed = new Set<string>()
   let renewal: Promise<void> | undefined
   let accountTimer: ReturnType<typeof setInterval> | undefined
-  const renewAccounts = async (authority: { repo: string; run: string }) => {
+  const renewAccounts = async (authority?: { repo: string; run: string }) => {
     if (opts.repository || !Object.values(accounts).some((a) => a.kind === 'chatgpt-subscription'))
       return
-    if (!accountTimer) {
+    if (authority && !accountTimer) {
       accountTimer = setInterval(() => {
         void (async () => {
           const held = await opened.store.getRepo(authority.repo)
@@ -592,9 +608,9 @@ async function defaultWire(
   }
   opened.store = redactAccountStore(
     opened.store,
-    accountRedactor(() => accounts, opts.env),
+    accountRedactor(() => allAccounts, opts.env),
   )
-  let runtimeReferences = effectiveRuntimeReferences(config)
+  let runtimeReferences = effectiveRuntimeReferences(config, { includeUnusedAccounts: false })
   // A local override relocates the whole tree. Remote stores still need local
   // scratch beneath the repository default. Plugin factories receive only
   // their explicit config plus repository/environment context.
@@ -607,7 +623,8 @@ async function defaultWire(
     env: opts.env,
     storeRef: opened.storeRef,
     runtimeReferences: () => runtimeReferences,
-    accounts: () => accounts,
+    accounts: () => allAccounts,
+    executionAccounts: () => accounts,
     sandboxSetupCommand: config.commands.setup,
     sandboxRoot: resolve(join(opened.localStateRoot, 'orchestrator-sandboxes')),
     sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
@@ -647,8 +664,18 @@ async function defaultWire(
     clock: systemClock,
     plugins,
     updateRuntimeReferences: (effectiveConfig) => {
-      accounts = effectiveConfig.accounts
-      runtimeReferences = effectiveRuntimeReferences(effectiveConfig)
+      allAccounts = effectiveConfig.accounts
+      accounts = selectedExecutionAccounts(effectiveConfig)
+      if (originMode) {
+        const snapshot = JSON.parse(opts.env.AB_PROJECT_ACCOUNT_ENV ?? '{}') as Record<
+          string,
+          string
+        >
+        applyProjectAccountSnapshot(allAccounts, opts.env, snapshot)
+      }
+      runtimeReferences = effectiveRuntimeReferences(effectiveConfig, {
+        includeUnusedAccounts: false,
+      })
     },
   }
 }
@@ -901,6 +928,8 @@ class DispatchLoop {
       forge: wiring.forge,
       config,
       getConfig: () => this.liveConfig.current().config,
+      missingAccounts: () => this.missingAccounts(),
+      accountCredentialSource: opts.repository ? 'project-secrets' : 'environment',
       repairBuildConfig: (slug) => this.publishBuildConfig(slug),
       repo: this.repoIdentity,
       // Origin mode: the forge answers remote base-branch questions; no
@@ -924,6 +953,14 @@ class DispatchLoop {
         maxHarvestRecoveryAttempts: this.maxHarvestRecoveryAttempts,
       },
     })
+  }
+
+  private missingAccounts() {
+    return missingAccountCredentials(
+      selectedExecutionAccounts(this.currentConfig().config),
+      this.opts.env,
+      this.opts.repository ? 'project-secrets' : 'environment',
+    )
   }
 
   private currentConfig(): ConfigSnapshot {
@@ -2329,7 +2366,7 @@ class DispatchLoop {
   private launchHarvest(): void {
     // Do not even start a second local contender while one is active. A second
     // dispatch process is independently excluded by the repository lease.
-    if (this.stopped || this.harvestInFlight !== undefined) return
+    if (this.stopped || this.harvestInFlight !== undefined || this.missingAccounts().length) return
 
     let tracked: Promise<void>
     tracked = this.launchHarvestIfNeeded()
@@ -2809,6 +2846,10 @@ class DispatchLoop {
           // Left open: durable settlement re-proves and reaps it later.
         }
       }
+      if (error instanceof MissingAccountCredentialsError) {
+        await this.dispatcher.holdForMissingAccounts(error)
+        return
+      }
       this.pendingHarvest.harvestFailed += 1
       await this.appendStatus({
         actor: DISPATCHER,
@@ -3222,6 +3263,7 @@ class DispatchLoop {
     cleanupPending: boolean
     identity?: BuildExecutionHandle['identity']
   }): Promise<void> {
+    if (await this.dispatcher.holdForMissingAccounts(input.error)) return
     // The failed executor may have appended through its own handle.
     await this.repoView.refreshBuild(input.slug)
     await appendInfrastructureFailure(
@@ -3249,6 +3291,7 @@ class DispatchLoop {
    * kernel decisions; the kernel reserves the durable execution lease before
    * launch and retains it until the executor has reaped its complete tree. */
   private async launchRunner(slug: string): Promise<LaunchRunnerResult> {
+    if (this.missingAccounts().length) return 'already-active'
     if (!this.acceptingBuildLaunches || this.activeBuildRuns.has(slug)) return 'already-active'
 
     const reservation = Symbol(slug)
@@ -3423,6 +3466,12 @@ class DispatchLoop {
       this.inFlightKinds.set(tracked, handle.supervision)
       return 'scheduled'
     } catch (error) {
+      if (error instanceof MissingAccountCredentialsError) {
+        await this.dispatcher.holdForMissingAccounts(error)
+        if (leaseClaimed) await this.repoView.releaseLease(slug, instance)
+        this.activeBuildRuns.delete(slug)
+        return 'already-active'
+      }
       if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
         this.activeBuildRuns.delete(slug)
       }
@@ -4645,6 +4694,11 @@ class DispatchLoop {
   async run(): Promise<void> {
     // Before the `--once` branch, so both modes report it exactly once.
     this.reportRoleDiagnostics()
+    if (!this.opts.repository) {
+      await this.wiring.renewAccounts?.()
+      const missing = this.missingAccounts()
+      if (missing.length) throw new MissingAccountCredentialsError(missing)
+    }
     // Repository supervisor lease (§12): two invocations for one repository
     // never both act. A losing invocation records the yield and performs no
     // claims, launches, or publications. The holder is the invocation's

@@ -1,3 +1,8 @@
+import { hostname } from 'node:os'
+import { selectedExecutionAccounts } from '../config/roles'
+import { LocalCredentials } from '../accounts/local-credentials'
+import { inspectLocalAccountEnvironment } from '../accounts/local-owner'
+import { missingAccountCredentials, MissingAccountCredentialsError } from '../accounts/availability'
 import type { BuildStore } from '../store/types'
 import { DISPATCHER } from '../events/envelope'
 import type { Handoff } from '../kernel/dispatch-upgrade'
@@ -176,6 +181,20 @@ async function runGenerationPreflight(
             config.accounts,
           )
           const facts = (await readDispatcherRunFacts(opened.store, opened.repo, handoff.run)).value
+          const start = facts.start
+          const predecessorPid =
+            start?.type === 'dispatcher.run-started' && start.payload.host === hostname()
+              ? start.payload.pid
+              : undefined
+          const accounts = selectedExecutionAccounts(config)
+          const available = inspectLocalAccountEnvironment(
+            new LocalCredentials(join(launch.checkout, '.autobuild')),
+            accounts,
+            env,
+            predecessorPid,
+          )
+          const missing = missingAccountCredentials(accounts, available)
+          if (missing.length) throw new MissingAccountCredentialsError(missing)
           if (facts.stopRequest || facts.stop)
             throw new Error('predecessor stopped during preflight')
         },
@@ -202,6 +221,20 @@ async function runGenerationPreflight(
           (current.completed &&
             facts.stop?.type === 'dispatcher.run-stopped' &&
             facts.stop.payload.outcome === 'normal'))
+      if (ready) {
+        const config = await loadConfig(join(launch.checkout, 'autobuild.toml'))
+        const accounts = selectedExecutionAccounts(config)
+        const available = inspectLocalAccountEnvironment(
+          new LocalCredentials(join(launch.checkout, '.autobuild')),
+          accounts,
+          env,
+        )
+        const missing = missingAccountCredentials(accounts, available)
+        if (missing.length) {
+          await failure(new MissingAccountCredentialsError(missing).message)
+          return false
+        }
+      }
       if (ready && (await opened.store.claimRepoLease(opened.repo, launch.run, 60_000))) {
         await opened.store.appendRepo(opened.repo, {
           actor: DISPATCHER,

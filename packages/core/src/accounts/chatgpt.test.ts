@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os'
 import { transaction, authorizationUrl, callback, parseTokens } from './chatgpt-oauth'
 import { earliestRefreshAt, type ChatGPTState } from './chatgpt-state'
 import { LocalCredentials } from './local-credentials'
-import { LocalAccountOwner } from './local-owner'
+import {
+  LocalAccountOwner,
+  renewLocalAccounts,
+  inspectLocalAccountEnvironment,
+} from './local-owner'
 import { localInference } from './local-inference'
 import { selectAccount, accountPlaceholder } from '../config/accounts'
 import { accountGuestEnvironment, accountPolicy } from '../ports/workspace/account-policy'
@@ -369,7 +373,6 @@ test('ChatGPT isolates CODEX_HOME while preserving the shell HOME and Git identi
   }
 })
 
-import { renewLocalAccounts } from './local-owner'
 test('dispatcher renewal recovers an expired access token after restart', async () => {
   const f = fixture()
   try {
@@ -486,3 +489,74 @@ for (const floorOffset of [undefined, -30000, 0, 30000]) {
     }
   })
 }
+
+test('no local record preserves an external token; a failed or mismatched record fails closed', async () => {
+  const f = fixture()
+  try {
+    const owner = new LocalAccountOwner(f.credentials)
+    const env: Record<string, string | undefined> = { EXTERNAL: 'opaque' }
+    await renewLocalAccounts(
+      owner,
+      { external: { ...descriptor, credentialEnv: 'EXTERNAL' } },
+      env,
+      new Set(),
+    )
+    expect(Boolean(env.EXTERNAL)).toBe(true)
+    const record = f.credentials.load('plan')!
+    f.credentials.save('plan', { ...record, status: 'failed' })
+    const local: Record<string, string | undefined> = { CHATGPT: 'opaque' }
+    await renewLocalAccounts(owner, { plan: descriptor }, local, new Set())
+    expect(local.CHATGPT).toBeUndefined()
+    f.credentials.save('plan', { ...record, descriptor: { ...descriptor, credentialEnv: 'OTHER' } })
+    await renewLocalAccounts(owner, { plan: descriptor }, local, new Set())
+    expect(local.CHATGPT).toBeUndefined()
+  } finally {
+    f.cleanup()
+  }
+})
+test('handoff inspection recognizes only the actual predecessor and never claims or rotates', () => {
+  const f = fixture()
+  try {
+    const owner = new LocalAccountOwner(f.credentials, async () => {
+      throw new Error('must not refresh')
+    })
+    owner.claim('plan')
+    const before = f.credentials.load('plan')!
+    expect(
+      inspectLocalAccountEnvironment(f.credentials, { plan: descriptor }, {}).CHATGPT,
+    ).toBeUndefined()
+    expect(
+      Boolean(
+        inspectLocalAccountEnvironment(f.credentials, { plan: descriptor }, {}, process.pid)
+          .CHATGPT,
+      ),
+    ).toBe(true)
+    expect(f.credentials.load('plan')).toEqual(before)
+    owner.release('plan')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('unused descriptors remain redacted and available transforms survive route removal without being required', () => {
+  const accounts = { selected: descriptor, unused: { ...descriptor, credentialEnv: 'UNUSED' } }
+  const result = accountPolicy(
+    'allow-all',
+    accounts,
+    { CHATGPT: 'opaque' },
+    { selected: descriptor },
+  )
+  expect(result.missing).toEqual([])
+  const protectedGuest = accountGuestEnvironment({ UNUSED: 'opaque-unused' }, accounts, {
+    UNUSED: 'opaque-unused',
+  })
+  expect(protectedGuest.UNUSED).toBe(accountPlaceholder('unused'))
+  const withUnused = accountPolicy(
+    'allow-all',
+    accounts,
+    { CHATGPT: 'opaque', UNUSED: 'opaque-unused' },
+    { selected: descriptor },
+  )
+  expect(JSON.stringify(withUnused.policy)).toContain(accountPlaceholder('unused'))
+  expect(accountPolicy('allow-all', accounts, {}).missing).toHaveLength(2)
+})

@@ -675,3 +675,59 @@ for (const outcome of ['normal', 'abnormal'] as const) {
     }
   })
 }
+
+test('account conditions survive run start, update descriptors, and recover on route removal', async () => {
+  const { missingAccountCredentials, reconcileMissingAccounts } = await import(
+    '../accounts/availability'
+  )
+  const { repositoryReadFactsReducer } = await import('../kernel/read-facts')
+  const { projectRepositoryStatus, renderRepositoryStatus } = await import('./repository-status')
+  const { summarizeEvent } = await import('./watch')
+  const { repositoryNeedsAttention } = await import('./attention')
+  const events: import('../events/repository').RepositoryEvent[] = []
+  const append = async (write: import('../events/repository').RepositoryEventWrite) => {
+    events.push({
+      ...write,
+      repo: 'repo',
+      seq: events.length + 1,
+      ts: '2026-10-29T00:00:00.000Z',
+    } as import('../events/repository').RepositoryEvent)
+  }
+  const reconcile = async (envName: string | undefined) => {
+    const missing = missingAccountCredentials(
+      envName ? { billing: { kind: 'claude-subscription', credentialEnv: envName } } : {},
+      {},
+      'project-secrets',
+    )
+    await reconcileMissingAccounts(
+      missing,
+      repositoryReadFactsReducer.reduce(events).missingAccounts,
+      append,
+    )
+  }
+  await reconcile('BILLING_TOKEN')
+  await append({
+    actor: { kind: 'dispatcher' },
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'fresh',
+      pid: 1,
+      roleWarnings: [],
+      effectiveConfig: { kind: 'config', rev: 0 },
+    },
+  })
+  await reconcile('BILLING_TOKEN')
+  expect(events.filter((e) => e.type === 'account.credentials-unavailable')).toHaveLength(1)
+  expect(repositoryNeedsAttention(events[0]!)).toBe(true)
+  expect(summarizeEvent(events[0]!, null)).toContain('ab secrets set BILLING_TOKEN')
+  expect(renderRepositoryStatus(projectRepositoryStatus('repo', events)).join('\n')).toContain(
+    'project-secrets',
+  )
+  await reconcile('REPLACEMENT_TOKEN')
+  expect(events.filter((e) => e.type === 'account.credentials-unavailable')).toHaveLength(2)
+  await reconcile(undefined)
+  expect(repositoryReadFactsReducer.reduce(events).missingAccounts).toEqual({})
+  expect(renderRepositoryStatus(projectRepositoryStatus('repo', events)).join('\n')).not.toContain(
+    'Missing credentials:',
+  )
+})

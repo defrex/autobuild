@@ -5,6 +5,40 @@ subscription within ordinary individual usage. Claude and Kimi credentials are
 provisioned manually; Autobuild never runs `claude setup-token`. ChatGPT
 accounts use OpenAI's browser authorization through the CLI.
 
+## Dispatcher admission
+
+Before taking the repository lease, a local dispatcher checks every account
+selected by an effective primary or alternate route, including internal roles
+and agent verify/finalize steps. Unused declared accounts do not block dispatch;
+`ab init --validate` still checks them for readiness. Availability means a
+nonempty configured environment variable or a matching, safely owned local
+refreshing login (`bun ab accounts login NAME --local`). A failed, unsafe,
+mismatched or live foreign-owned local record fails closed. An external access
+token remains usable when no local login record exists. Startup checks presence,
+without inference or provider validation. Missing sources produce one error with
+all account names, variable names and remedies, before any work is claimed.
+
+Successor preflight checks the same sources without claiming or refreshing the
+predecessor's login. A missing source refuses handoff and raises upgrade
+attention while the predecessor stays active. Accepted config changes that
+require unavailable accounts hold new account-dependent work.
+
+Hosted ticks resolve selected accounts only from project secrets, never from
+deployment credentials or local logins. An absent secret raises one durable
+repository condition per account; repeated ticks do not repeat the condition or
+spend build infrastructure attempts. Set it with `bun ab secrets set VARIABLE`,
+or renew ChatGPT with `bun ab accounts login NAME --project`. The next tick
+recovers automatically, without a per-build retry. Running executions continue
+to be observed and their policies repaired; controls and cleanup continue.
+A provisioning race uses the same repository condition and remains retryable.
+Presence and rejection are separate: present but rejected credentials retain
+account-specific rejection attention.
+
+For local Claude subscriptions, renew with `claude setup-token` and set the
+dispatcher credential variable. For Kimi, replace the membership key in that
+variable. For local ChatGPT, sign in again with `bun ab accounts login NAME
+--local`. Diagnostics contain source names and remedies, never secret values.
+
 ```toml
 [accounts.personal]
 kind = "claude-subscription"
