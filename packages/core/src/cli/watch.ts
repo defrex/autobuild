@@ -9,7 +9,7 @@ import { readDispatchUpgrade, readBuildDigests } from '../store/reduced-reads'
 import { readBuildStreamSeed, readRepositoryAttention } from '../store/reduced-reads'
 import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-facts'
 import { historicalBuildState, historicalRepositoryAttention } from './historical-build-state'
-import { readDispatcherLiveness } from './dispatcher-liveness'
+import { readDispatcherRunFacts } from '../store/reduced-reads'
 import { projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
 import type { RepositoryRecord } from '../store/types'
 /**
@@ -732,7 +732,6 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         const deliveredAttention = new Set(resumedCursor?.deliveredAttention ?? [])
         let repositoryAttention = new RepositoryAttention()
         let attentionInitialized = false
-        let livenessEvents: RepositoryEvent[] = []
         const observedOwners = new Map<string, RepositoryRecord>()
         const streams = new Map<string, Stream>()
         // Every stream's position — matching or not, delivered or baselined —
@@ -824,7 +823,6 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         const checkLiveness = async (): Promise<void> => {
           if (!followRepository || stop) return
           if ((await store.getRepo(repo)) === null) return
-          livenessEvents = (await readDispatcherLiveness(store, repo, now())).events
           // Sample metadata after the journal. Recheck both immediately before
           // reporting: a failed read is infrastructure, never evidence of death.
           const record = await store.getRepo(repo)
@@ -838,25 +836,23 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               Date.parse(owner.lease.expiresAt) > now().getTime()
             )
               continue
-            livenessEvents = (await readDispatcherLiveness(store, repo, now())).events
             const current = await store.getRepo(repo)
             if (current?.lease?.holder === id) {
               observedOwners.set(id, current)
               if (Date.parse(current.lease.expiresAt) > now().getTime()) continue
             }
-            const evidence = projectDispatcherLiveness(
-              current?.lease?.holder === id ? current : owner,
-              livenessEvents,
-              now(),
-            )
-            if (
-              livenessEvents.some(
-                (e) => e.type === 'dispatcher.run-stopped' && e.payload.run === id,
-              )
-            ) {
+            const facts = (await readDispatcherRunFacts(store, repo, id)).value
+            if (facts.stop) {
               observedOwners.delete(id)
               continue
             }
+            const evidence = projectDispatcherLiveness(
+              current?.lease?.holder === id ? current : owner,
+              [facts.start, facts.latestStart, facts.stop, facts.tick, facts.runtime].filter(
+                (event): event is RepositoryEvent => event !== undefined,
+              ),
+              now(),
+            )
             // Only a validated takeover proves transfer; intent or release alone
             // must still report a predecessor whose successor never arrives.
             upgrade ??= await readDispatchUpgrade(store, repo)

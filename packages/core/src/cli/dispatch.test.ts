@@ -10410,6 +10410,7 @@ describe('dispatch rate-limit journaling', () => {
         })
         expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(false)
         expect(events.some((event) => event.type === 'dispatcher.run-stopped')).toBe(true)
+        expect((await fx.store.getRepo(fx.origin))?.lease).toBeUndefined()
         expect(fx.tickets.claims).toEqual([])
         expect(await fx.store.listBuilds()).toEqual([])
       } finally {
@@ -12465,3 +12466,30 @@ for (const scenario of [
       await fx.cleanup()
     }
   }, 15_000)
+
+for (const peer of [false, true]) {
+  test(`once teardown releases only its own lease (peer=${peer})`, async () => {
+    const fx = await makeFixture([], happyHandlers())
+    try {
+      await fx.store.ensureRepo(fx.origin)
+      if (peer) await fx.store.claimRepoLease(fx.origin, 'peer', 60000)
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        wire: fx.wire,
+      })
+      expect((await fx.store.getRepo(fx.origin))?.lease?.holder).toBe(peer ? 'peer' : undefined)
+      const events = await fx.store.getRepoEvents(fx.origin)
+      expect(
+        events.filter((event) => event.type === 'dispatcher.run-stopped').at(-1)?.payload.outcome,
+      ).toBe('normal')
+    } finally {
+      await fx.cleanup()
+    }
+  })
+}

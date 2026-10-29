@@ -170,7 +170,9 @@ establish loss: a healthy lease can accompany a slow tick.
 An unscoped watch, or a named watch with `--repository`, reports loss as a
 read-only observation: `{repo, build:null, state:null, observation:{type:
 "dispatcher.lost", run, observedAt, leaseExpiresAt, ...identity}, cursor}`.
-A validated successor takeover suppresses predecessor loss even while its sessions
+Any persisted stop suppresses loss, including an abnormal stop, which retains its
+own default attention event. Correlation uses persisted per-run values without
+full-log fallback. A validated successor takeover suppresses predecessor loss even while its sessions
 drain. An unfinished handoff without takeover still reports loss on lease expiry;
 successor loss and upgrade-failure/rollback attention remain independent.
 It has no durable event envelope. Keep its cursor just as for event records;
