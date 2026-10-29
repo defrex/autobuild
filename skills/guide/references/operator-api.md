@@ -457,6 +457,18 @@ projects return the same unknown-repository result as absent projects. Machine c
 
 ### Permanent project deletion
 
+The browser requires the exact full repository identity in a transient dialog field;
+confirm stays disabled for empty or mismatched input and focus starts in the field.
+The handler independently binds that identity to the selected repository and its
+fresh validated preview. Only JSON `{deleted:true}` acknowledges completion.
+After any failed or unrecognized deletion response, the browser shows
+“Deletion outcome unknown; reload to check” and holds the row in its original slot
+without actions, even after dismissal. Only a complete successful discovery begun
+by Reload after the attempt settles it: absence removes the row, presence restores
+its authorized actions, and pending cleanup restores Finish deletion with a fresh
+preview and exact typing. An earlier or unsuccessful read cannot settle the outcome.
+The server's `{repo}` body and generation-bound If-Match contract are unchanged.
+
 Super users and the owner of a project's organization can delete it from the
 Projects page. Owners see only projects in organizations they own; Move and
 Assign remain super-user operations. The shared confirmation dialog names the project,

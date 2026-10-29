@@ -14,6 +14,7 @@ export function ConfirmDialog({
   confirmLabel,
   pending = false,
   disabled = false,
+  focus = 'confirm',
   onConfirm,
   onCancel,
 }: {
@@ -24,6 +25,7 @@ export function ConfirmDialog({
   pending?: boolean
   /** The decision cannot be taken yet, though it can still be dismissed. */
   disabled?: boolean
+  focus?: 'confirm' | 'input'
   onConfirm: () => void
   onCancel: () => void
 }) {
@@ -37,8 +39,9 @@ export function ConfirmDialog({
       // once scripts run it becomes a true modal.
       if (dialog.open && !dialog.matches(':modal')) dialog.close()
       if (!dialog.open) dialog.showModal()
+      if (focus === 'input') dialog.querySelector('input')?.focus()
     } else if (dialog.open) dialog.close()
-  }, [open])
+  }, [open, focus])
 
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: the backdrop press mirrors Escape, which the dialog's cancel event handles
@@ -66,7 +69,7 @@ export function ConfirmDialog({
               className="btn danger primary"
               disabled={pending || disabled}
               // biome-ignore lint/a11y/noAutofocus: the dialog opened to take this decision; Enter confirms as in the terminal
-              autoFocus
+              autoFocus={focus === 'confirm'}
               onClick={onConfirm}
             >
               {confirmLabel}
