@@ -2365,13 +2365,14 @@ outcome. Last-tick age refreshes independently of the event cursor and never use
 heartbeat as completion evidence. Open telemetry protects unsafe work during
 shutdown; historical journals retain their boundary fallback. Missing historical
 evidence is null. The liveness query uses
-bounded repository facts first, with a full-history fallback when a later
-invocation hides the holder start or the latest stop. Other state reads retain
-their bounded semantics.
+persisted repository and exact per-run reduced values, including when newer
+invocations hide an older holder or stop. Missing facts never trigger a full-log
+fallback.
 
 Repository-following `ab watch` additionally emits a read-only `dispatcher.lost`
 observation when an observed lease expires without a matching stop or validated
-successor takeover. A completed ownership transfer suppresses predecessor loss
+successor takeover. Any recorded stop, normal or abnormal, suppresses loss;
+abnormal stops retain their own default attention event. A completed ownership transfer suppresses predecessor loss
 even while its sessions drain; a handoff without takeover still reports loss on
 expiry. Successor loss and upgrade-failure/rollback attention remain independent. JSON carries
 `observation` instead of `event`, with run, observedAt, leaseExpiresAt and available
