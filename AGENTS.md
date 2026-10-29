@@ -140,6 +140,16 @@ Every change is held to these rules:
   or repository log from the start is acceptable when an operator asked for
   history. It is never acceptable as a cold start, a fallback, a recovery path,
   or a cache miss on a recurring path.
+- **A reduced value is computed once per key, then served.** Regenerating a
+  value from the log is a core strength of this architecture, not a violation:
+  when the canonical store has no saved value for a scope and reducer identity
+  (a new reducer, or a version a deploy just changed), it may reduce that key
+  from the log once. That reduction is serialized so concurrent requests never
+  duplicate it, and its result is saved durably. Every later request for the
+  same key returns the saved value and advances it incrementally. What is
+  forbidden is recomputing a value that should already exist: a lost,
+  per-process or unsaved result that triggers the same full reduction again
+  is a bug.
 - **The server's reduced value is canonical.** A remote client never rebuilds
   a value from the event log that the server already answered. When client
   and server cannot agree, the read fails with a typed error; it never falls
