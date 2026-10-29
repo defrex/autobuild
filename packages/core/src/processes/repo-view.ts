@@ -462,6 +462,16 @@ export class RepoViewStore implements BuildStore {
     await this.backing.releaseLease(slug, holder)
     this.invalidate()
   }
+  getScanCadence(repo: string) {
+    return this.backing.getScanCadence(repo)
+  }
+  putScanCadence(
+    repo: string,
+    cadence: import('../store/scan-cadence').ScanCadence,
+    allowClockRollback = false,
+  ) {
+    return this.backing.putScanCadence(repo, cadence, allowClockRollback)
+  }
   upsertOperatorPresence(
     repo: string,
     identity: OperatorIdentity,

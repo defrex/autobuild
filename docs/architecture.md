@@ -148,6 +148,13 @@ shape changes without a bump. Current-state consumers use the typed persisted
 read helpers in `store/reduced-reads.ts`; whole-array reducers remain pure
 reference projections for tests and explicit historical output.
 
+**Ticket scan cadence.** BuildStore keeps one replaceable `scan_cadence` row
+per repository, shared by fresh dispatcher processes. It acknowledges the
+canonical changed-outcome scan event by sequence and stores only its scheduling
+baseline, mode and input fingerprints. It is disposable coordination metadata,
+not a reducer snapshot or authoritative outcome; loss permits a safe extra scan.
+Keyed reads and atomic upserts have constant cost and never read journal rows.
+
 **Reducer snapshots.** The `BuildStore` port can keep, per scope (one build log
 or the repository journal) and registered reducer, that reducer's accumulator as
 of a cursor: `getReducerSnapshot(scope, reducer, version)` and

@@ -154,6 +154,7 @@ test.skipIf(!url)(
       await f.sql`INSERT INTO ticket_grants (id,digest,repo,registration,execution,kind,expires_at) VALUES (${`grant-${index}`},${`digest-${index}`},${repository},1,'execution','runner',now())`
       await f.sql`INSERT INTO ticket_grants (id,digest,repo,registration,execution,kind,parent,expires_at) VALUES (${`child-${index}`},${`child-digest-${index}`},${repository},1,'execution','phase',${`grant-${index}`},now())`
       await f.sql`INSERT INTO project_secrets (repo,name,kind,owner,set_at,fingerprint,payload,generation,revision,status) VALUES (${repository},'ACCOUNT','subscription','owner',now(),'fingerprint','encrypted','generation',1,'ready')`
+      await f.sql`INSERT INTO scan_cadence (repo,value) VALUES (${repository},'{}')`
       await f.sql`INSERT INTO operator_presence (repo,id,host,pid,started_at,heartbeat_at) VALUES (${repository},'operator','host',1,now(),now())`
       for (const prefix of ['event', 'artifact', 'session', 'repo', 'asset', 'stream'])
         f.objects.add(`${prefix}-${index}`)

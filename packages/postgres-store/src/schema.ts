@@ -18,7 +18,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 21
+export const SCHEMA_VERSION = 22
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -896,7 +896,15 @@ export const SCHEMA_V20_CHECKSUM = new Bun.CryptoHasher('sha256')
   .digest('hex')
 export const DISPATCHER_CREDENTIAL_INDEX_DDL = `CREATE INDEX IF NOT EXISTS dispatcher_credentials_expiry ON project_credentials (repo, expires_at, id) WHERE purpose = 'dispatcher';
 CREATE INDEX IF NOT EXISTS dispatcher_credentials_revoked ON project_credentials (repo, revoked_at, id) WHERE purpose = 'dispatcher';`
-export const SCHEMA_DDL = `${SCHEMA_V20_DDL}\n${DISPATCHER_CREDENTIAL_INDEX_DDL}`
+export const SCHEMA_V21_DDL = `${SCHEMA_V20_DDL}\n${DISPATCHER_CREDENTIAL_INDEX_DDL}`
+export const SCHEMA_V21_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V21_DDL)
+  .digest('hex')
+export const SCAN_CADENCE_DDL = `CREATE TABLE IF NOT EXISTS scan_cadence (
+  repo text PRIMARY KEY REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  value jsonb NOT NULL
+);`
+export const SCHEMA_DDL = `${SCHEMA_V21_DDL}\n${SCAN_CADENCE_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -994,6 +1002,10 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  scan_cadence: [
+    ['repo', 'text', true],
+    ['value', 'jsonb', true],
+  ],
   project_generations: [
     ['repo', 'text', true],
     ['generation', 'text', true],
@@ -1263,6 +1275,8 @@ const EXPECTED_CONSTRAINTS = [
   'project_secret_keys|p|id||||',
   'project_secret_audit|p|id||||',
   'project_secret_audit|c|||||',
+  'scan_cadence|p|repo||||',
+  'scan_cadence|f|repo|repo_streams|repo|c|',
   'operator_presence|p|repo,id||||',
   'project_ticket_policy|p|repo||||',
   'ticket_grants|p|id||||',
@@ -1667,6 +1681,7 @@ export async function migratePostgres(
       await tx.unsafe(DISPATCHER_CREDENTIAL_INDEX_DDL)
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
+      await tx.unsafe(SCAN_CADENCE_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
       await tx.unsafe(REPO_CHANGE_DDL)
       await tx.unsafe(AUTH_SCHEMA_DDL)
@@ -1717,6 +1732,8 @@ export async function migratePostgres(
           if (marker.checksum !== SCHEMA_CHECKSUM) {
             throw schemaError(`marker is incompatible: ${checksumMismatchCause(SCHEMA_VERSION)}`)
           }
+        } else if (version === 21 && marker.checksum === SCHEMA_V21_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 20 && marker.checksum === SCHEMA_V20_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {

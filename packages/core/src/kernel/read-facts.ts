@@ -524,6 +524,7 @@ export interface RepositoryReadAcc {
   sandboxes: ReturnType<typeof sandboxStatesReducer.initial>
   status: ReturnType<ReturnType<typeof dispatchStatusReducer>['initial']>
   run?: string
+  scanSeq?: number
   scan?: Extract<RepositoryEvent, { type: 'dispatcher.ticket-scan-completed' }>['payload']
   recentRuns: [string, DispatcherRunFacts][]
   latestRun?: string
@@ -533,7 +534,7 @@ export interface RepositoryReadAcc {
 export const repositoryReadFactsReducer = defineReducer({
   rawEvents: true,
   version:
-    4 +
+    5 +
     ticketMigrationsReducer.version +
     dispatchUpgradeReducer.version +
     ticketPreparationReducer.version +
@@ -653,7 +654,10 @@ export const repositoryReadFactsReducer = defineReducer({
         acc.status = dispatchStatusReducer(acc.run).initial()
       }
       if (acc.run) acc.status = dispatchStatusReducer(acc.run).advance(acc.status, [event])
-      if (event.type === 'dispatcher.ticket-scan-completed') acc.scan = event.payload
+      if (event.type === 'dispatcher.ticket-scan-completed') {
+        acc.scan = event.payload
+        acc.scanSeq = event.seq
+      }
       if (event.type === 'dispatcher.run-started') acc.latestRun = event.payload.run
       if (event.type === 'dispatcher.run-stopped') acc.latestStoppedRun = event.payload.run
       if (
@@ -711,6 +715,7 @@ export const repositoryReadFactsReducer = defineReducer({
     sandboxes: sandboxStatesReducer.finish(acc.sandboxes),
     status: acc.run ? dispatchStatusReducer(acc.run).finish(acc.status) : undefined,
     scan: acc.scan,
+    scanSeq: acc.scanSeq,
     recentRuns: structuredClone(acc.recentRuns),
     latestRun: acc.latestRun,
     latestStoppedRun: acc.latestStoppedRun,

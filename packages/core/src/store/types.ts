@@ -1,3 +1,4 @@
+import type { ScanCadence } from './scan-cadence'
 import type { OperatorIdentity, OperatorPresence } from './operator-presence'
 export type { OperatorIdentity, OperatorPresence } from './operator-presence'
 import type { ReducerValueRequest, ReducerValue } from './reducer-values'
@@ -425,6 +426,10 @@ export interface BuildStore {
   // Kept alongside, not inside, build streams: repository state is not a build.
   ensureRepo(repo: string): Promise<RepositoryRecord>
   getRepo(repo: string): Promise<RepositoryRecord | null>
+  /** One keyed, replaceable scheduling cache row; missing reads create nothing. */
+  getScanCadence(repo: string): Promise<ScanCadence | null>
+  putScanCadence(repo: string, cadence: ScanCadence, allowClockRollback?: boolean): Promise<void>
+
   /** Mutable advisory liveness. No event, lease or repository creation. */
   upsertOperatorPresence(
     repo: string,

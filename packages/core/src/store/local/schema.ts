@@ -15,6 +15,13 @@ import type { TicketRef } from '../../ontology'
 import type { TicketAssetEntry } from '../ticket-assets'
 import type { StreamPart } from '../streams/types'
 
+export const scanCadence = sqliteTable('scan_cadence', {
+  repo: text('repo')
+    .primaryKey()
+    .references(() => repoStreams.repo, { onDelete: 'cascade' }),
+  value: text('value').notNull(),
+})
+
 export const builds = sqliteTable(
   'builds',
   {
