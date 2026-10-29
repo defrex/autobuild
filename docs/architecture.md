@@ -1880,3 +1880,20 @@ revokes credentials only; admin `projects remove` unregisters without purging.
 See [project deletion protocol](operator-api.md#permanent-project-deletion).
 
 The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
+
+
+Hosted event reads use the bounded capabilities in `store/event-reads.ts`:
+repository cursors must be at least `max(0, head - 1000)`, and build pages
+contain at most 256 events with `cursor` and `hasMore`. PostgreSQL seeks and
+limits at the database boundary, including held reads; remote complete-array
+reads reject partial suffixes. Exact historical watch/wait seeds come from
+rolling server-owned checkpoints in `postgres-store/src/stream-seeds.ts`.
+The canonical reducer fold publishes its cache and trailing checkpoints
+atomically under a reader-only lock. Initial adoption is an explicit resumable
+migration; later new identities rebuild once, then advance durably with deltas.
+Two live generations and permanent indexed retirement tombstones support
+adjacent runtimes without letting old processes evict newer ones. Watch/wait
+propagate expiry and integrity errors, preserving valid cursors across reducer
+upgrades. Expired cursors require re-arming without `--since` and status
+reconciliation. Harvest completion uses reduced session terminal receipts;
+explicit harvest history uses reverse indexed pages.

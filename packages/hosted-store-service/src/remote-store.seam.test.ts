@@ -505,9 +505,9 @@ describe('event wait over the wire', () => {
     const backing = new MemoryBuildStore()
     const ignoring: MemoryBuildStore = new Proxy(backing, {
       get(target, prop) {
-        if (prop === 'getEvents') {
+        if (prop === 'getBuildEventPage') {
           return async (slug: string, sinceSeq?: number) =>
-            (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+            (target as MemoryBuildStore).getBuildEventPage(slug, sinceSeq)
         }
         const value = Reflect.get(target, prop, target) as unknown
         return typeof value === 'function' ? (value as () => unknown).bind(target) : value
@@ -1505,4 +1505,74 @@ describe('latest artifact metadata route', () => {
       error: 'latest artifact metadata is unsupported',
     })
   })
+})
+
+test('hosted bounds reject old cursors and keep exact seeds across fresh clients', async () => {
+  const { CursorTooOldError, CheckpointIntegrityError, IncompleteEventReadError } = await import(
+    '@defrex/autobuild/remote-store'
+  )
+  const backing = new MemoryBuildStore()
+  await backing.ensureRepo('bounds')
+  await backing.createBuild({ slug: 'bounds', repo: 'bounds' })
+  for (let i = 0; i < 1100; i++) {
+    await backing.append('bounds', { actor: KERNEL, type: 'build.paused', payload: {} })
+    await backing.appendRepo('bounds', {
+      actor: humanActor('budget'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+  }
+  const server = startStoreServer({ store: backing })
+  const client = new RemoteBuildStore({ url: server.url })
+  try {
+    await expect(client.getRepoEvents('bounds', 99)).rejects.toBeInstanceOf(CursorTooOldError)
+    expect(await client.getRepoEvents('bounds', 100)).toHaveLength(1000)
+    await expect(client.getEvents('bounds')).rejects.toBeInstanceOf(IncompleteEventReadError)
+    const seen: number[] = []
+    let cursor = 0
+    for (;;) {
+      const page = await client.getBuildEventPage('bounds', cursor)
+      expect(page.events.length).toBeLessThanOrEqual(256)
+      seen.push(...page.events.map((e) => e.seq))
+      cursor = page.cursor
+      if (!page.hasMore) break
+    }
+    expect(seen).toEqual(Array.from({ length: 1100 }, (_, i) => i + 1))
+    const scope = { kind: 'build', slug: 'bounds' } as const
+    expect((await client.getStreamSeed(scope, 100)).cursor).toBe(100)
+    const fresh = new RemoteBuildStore({ url: server.url })
+    expect(await fresh.getStreamSeed(scope, 100)).toEqual(await client.getStreamSeed(scope, 100))
+    await expect(client.getStreamSeed(scope, 99)).rejects.toBeInstanceOf(CursorTooOldError)
+    const maps = Reflect.get(backing, 'seedCheckpoints') as Map<string, Map<number, unknown>>
+    for (const entries of maps.values()) entries.delete(100)
+    await expect(client.getStreamSeed(scope, 100)).rejects.toBeInstanceOf(CheckpointIntegrityError)
+  } finally {
+    await client.close()
+    server.stop()
+  }
+})
+
+test('explicit harvest history seeks matching events across a gap outside the repository window', async () => {
+  const { harvestStartedWrite } = await import('@defrex/autobuild/plugin-sdk')
+  const { readHarvestTail } = await import('@defrex/autobuild/remote-store')
+  const backing = new MemoryBuildStore()
+  await backing.ensureRepo('harvest-pages')
+  for (let i = 0; i < 270; i++)
+    await backing.appendRepo('harvest-pages', harvestStartedWrite(`h-${i}`))
+  for (let i = 0; i < 1200; i++)
+    await backing.appendRepo('harvest-pages', {
+      actor: humanActor('budget'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+  const server = startStoreServer({ store: backing })
+  const client = new RemoteBuildStore({ url: server.url })
+  try {
+    const events = await readHarvestTail(client, 'harvest-pages', 260)
+    expect(events.map((e) => e.seq)).toEqual(Array.from({ length: 260 }, (_, i) => i + 11))
+    await expect(client.getRepoEvents('harvest-pages')).rejects.toThrow('too old')
+  } finally {
+    await client.close()
+    server.stop()
+  }
 })

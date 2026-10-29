@@ -146,3 +146,5 @@ export type {
 export { assertPublicSnapshotReducer } from './snapshots'
 
 export { readPersistedBuildDigests } from './reduced-reads'
+
+export * from './event-reads'

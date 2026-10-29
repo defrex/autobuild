@@ -126,6 +126,10 @@ export class RepoViewStore implements BuildStore {
     private readonly backing: BuildStore,
     opts: RepoViewOptions,
   ) {
+    this.getBuildEventPage = backing.getBuildEventPage?.bind(backing)
+    this.getRepositoryTail = backing.getRepositoryTail?.bind(backing)
+    this.getStreamSeed = backing.getStreamSeed?.bind(backing)
+    this.getHarvestHistoryPage = backing.getHarvestHistoryPage?.bind(backing)
     this.repo = opts.repo
   }
   private build<T>(slug: string, task: () => Promise<T>): Promise<T> {
@@ -290,6 +294,10 @@ export class RepoViewStore implements BuildStore {
   getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
     return this.backing.getRepoStateEvents(repo)
   }
+  getBuildEventPage: BuildStore['getBuildEventPage']
+  getRepositoryTail: BuildStore['getRepositoryTail']
+  getStreamSeed: BuildStore['getStreamSeed']
+  getHarvestHistoryPage: BuildStore['getHarvestHistoryPage']
   getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
     return this.backing.getReducerValue(scope, request)
   }
