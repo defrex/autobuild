@@ -101,6 +101,12 @@ requires its membership key. Invalid credentials need renewal (`claude setup-tok
 for Claude, replacement membership key for Kimi); quota and overload failures
 retain alternate fallback.
 
+Selected Claude/Kimi credentials stay out of process arguments: each invocation
+uses a private 0700 directory and a regular 0600 settings file, removed after
+normal exit, launch failure or cancellation. The settings preserve selected-account
+authentication precedence over saved user/project settings. Remote settings and
+environments continue to contain placeholders only.
+
 Choose the region of your Kimi membership. The default `overseas` selects
 `https://api.kimi.ai/coding/`; `china` selects `https://api.kimi.com/coding/`.
 The base URL and egress hostname are fixed together and cannot be overridden
