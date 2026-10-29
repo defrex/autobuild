@@ -171,7 +171,7 @@ import {
 } from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
-  sampleUnclaimedObservationCount,
+  unclaimedObservationCount,
   evaluateHarvestPressureFromStore,
   evaluateHarvestPressureFromDigests,
 } from '../processes/harvest'
@@ -1232,31 +1232,25 @@ class DispatchLoop {
       }
       this.tickStartedAt = startedAt
 
-      // Unclaimed observations are display-only and sampled once per interactive
-      // dispatcher tick from the journal and one repo-scoped digest read
-      // (AUT-487) — flat in the finished-build count. A journal record that
-      // does not yet exist reads as an empty journal (AUT-524); the sample
-      // writes nothing. Any other failed sample must neither fail dispatch nor
-      // replace the last complete measurement with a fabricated zero.
+      // Refresh inside the serialized tick so claims and the display both see
+      // the latest repository facts. Shared refresh failures still fail the tick.
+      await this.repoView.refresh()
+      const digests = await this.repoView.getRepoBuildDigests(this.repoIdentity)
       if (this.dashboard) {
         try {
-          this.observationCount = await sampleUnclaimedObservationCount(
-            this.wiring.store,
-            this.repoIdentity,
-          )
+          // Display-only sampling reuses the refreshed inputs without backing
+          // reads. Publish only a complete measurement; retain it on failure.
+          const count = unclaimedObservationCount({
+            digests,
+            harvestEvents: this.repoView.repositoryFacts().harvest,
+          })
+          this.observationCount = count
         } catch {
-          // Display-only sampling failures retain the last factual count and
-          // retry on the next tick; they are not dashboard failures.
+          // Retry on the next tick without fabricating a zero.
         }
       }
-
-      // Sample inside the serialized tick, not at process startup. Every
-      // dispatcher therefore gates claims from the latest repository facts.
-      await this.repoView.refresh()
       const executionSlugs = new Set(
-        [...(await this.repoView.getRepoBuildDigests(this.repoIdentity))]
-          .filter(([, digest]) => digest.executionOpen)
-          .map(([slug]) => slug),
+        [...digests].filter(([, digest]) => digest.executionOpen).map(([slug]) => slug),
       )
       await authorizeRemoteHandoffs(
         this.wiring.store,
