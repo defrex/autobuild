@@ -61,15 +61,16 @@ plan review, code review, the repository's full verify suite, finalize,
 merge, and a restack for everything queued behind it. Ten small tickets pay
 that cost ten times, and a blocker chain pays it in series. Prefer fewer,
 larger tickets: one ticket per coherent change, as large as one plan and one
-review pass can hold without the quality bar slipping.
+review pass can hold without the quality bar slipping, and no larger than one
+implement session can finish.
 
 A ticket is the right size when its acceptance criteria describe one feature
 or fix a reviewer can judge in a single pass, one plan can cover it without
 deferring a design decision to a later build, and its out-of-scope list is
 short and obvious. It is too big when its criteria fall into groups that share
-no behavior, when part of it waits on a decision nobody has made, or when its
+no behavior, when part of it waits on a decision nobody has made, when its
 parts need different merge — one can ship now while another needs consent
-or must wait.
+or must wait — or when implementing it would outgrow one session.
 
 Do not split:
 
@@ -79,6 +80,39 @@ Do not split:
   its own;
 - to make progress visible, or because the spec got long. A long spec with
   clear criteria is fine.
+
+### Fit one implement session
+
+Larger stops paying off where the work outgrows one agent session. The first
+implement round is a single session, and everything it does stays in that
+session's context: the spec and plan, every file it reads, every edit, every
+test and check run and its output, and every debugging detour. A ticket that
+fills the implementer's context window — commonly a million tokens or less —
+degrades mid-build: the harness compacts away the reasoning that held the
+change together, or an operator has to clear context and restart by hand.
+Size each ticket to finish well inside one window, with headroom for
+debugging.
+
+Nothing measures this at grooming time, so estimate from what the
+implementer must do, not from how long the spec is:
+
+- **Reading.** Count the code it must understand before it can edit safely.
+  Several unfamiliar subsystems, each read end to end, cost more than the
+  diff itself.
+- **Edit sites.** Count files touched, not lines changed. A rename or
+  signature change threaded through dozens of callers spends context on
+  every one, however mechanical.
+- **Iteration.** Count the separate behaviors that each need their own
+  tests, failures, and fixes, and the slow or verbose loops — full suites,
+  UI captures, migrations — the session will repeat.
+- **Your own reading.** If writing the spec meant reading most of several
+  subsystems, the implementer reads them again, then writes the code and
+  tests on top.
+
+Most tickets sit far below this ceiling; it is a limit, not a target. A
+ticket that touches one subsystem and a handful of files needs no estimate.
+When the signals put a ticket near the ceiling, split it at a seam (below)
+rather than gamble on the build fitting.
 
 ### Cut along seams
 

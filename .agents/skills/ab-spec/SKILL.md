@@ -87,7 +87,10 @@ in order, but as a conversation, not a form:
    [sizing and splitting](../ab-guide/references/spec-standard.md#sizing-and-splitting)
    before treating the work as several tickets: default to one larger ticket,
    and when a split is warranted, propose the seams and the blocker graph to
-   the user with the reason for each cut.
+   the user with the reason for each cut. Check a large ticket against the
+   standard's implement-session ceiling even when its criteria hang together:
+   estimate the reading, edit sites, and iteration the implementer faces, and
+   tell the user when it looks too big for one session.
 3. **Out of scope.** Ask what adjacent work is explicitly excluded. Propose
    candidates — the tempting expansions you noticed while reading the code.
 4. **Evidence.** Link what exists: the error rates, the user reports, the
@@ -258,9 +261,9 @@ repository, report that rather than waiting on builds that cannot start.
 
 ## Rules
 
-- **Fewer, larger tickets.** Split only when sizing calls for it, cut at
-  seams, and keep the blocker graph wide so independent tickets build
-  together.
+- **Fewer, larger tickets.** Split only when sizing calls for it — including
+  when a ticket would outgrow one implement session — cut at seams, and keep
+  the blocker graph wide so independent tickets build together.
 - The spec says **what and why, never how.** An exported, attached `design`
   asset is a contract on observable visual and reference outcomes — layout,
   content, states, copy, look — that plan, review, and verify judge against;
