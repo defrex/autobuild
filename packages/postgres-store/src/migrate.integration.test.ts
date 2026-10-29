@@ -47,7 +47,10 @@ import { openPostgresBuildStore } from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
-async function schemaHarness(): Promise<{ url: string; cleanup: () => Promise<void> }> {
+async function schemaHarness(): Promise<{
+  url: string
+  cleanup: () => Promise<void>
+}> {
   if (!testUrl) throw new Error('AB_POSTGRES_TEST_URL is required')
   const schema = `ab_migrate_${crypto.randomUUID().replaceAll('-', '')}`
   const admin = new SQL(testUrl)
@@ -115,7 +118,11 @@ if (testUrl) {
         checksum: SCHEMA_CHECKSUM,
       },
       { name: 'newer', version: SCHEMA_VERSION + 1, checksum: SCHEMA_CHECKSUM },
-      { name: 'checksum-mismatched', version: SCHEMA_VERSION, checksum: 'wrong' },
+      {
+        name: 'checksum-mismatched',
+        version: SCHEMA_VERSION,
+        checksum: 'wrong',
+      },
     ]) {
       test(`rejects an ${scenario.name} marker`, async () => {
         const harness = await schemaHarness()
@@ -175,7 +182,12 @@ if (testUrl) {
         expect(await sql`SELECT * FROM streams WHERE id='preserved-stream'`).toHaveLength(1)
         const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
         try {
-          const identity = { id: 'one', host: 'host', pid: 1, startedAt: CONTRACT_T0 }
+          const identity = {
+            id: 'one',
+            host: 'host',
+            pid: 1,
+            startedAt: CONTRACT_T0,
+          }
           await Promise.all(
             Array.from({ length: 8 }, () =>
               store.upsertOperatorPresence('presence-migration', identity),
@@ -253,7 +265,10 @@ if (testUrl) {
         try {
           const digests = await store.getRepoBuildDigests('acme/v6')
           expect([...digests.keys()]).toEqual(['v6-build'])
-          expect(digests.get('v6-build')).toEqual({ slug: 'v6-build', observations: [] })
+          expect(digests.get('v6-build')).toEqual({
+            slug: 'v6-build',
+            observations: [],
+          })
         } finally {
           await store.close()
         }
@@ -662,7 +677,10 @@ if (testUrl) {
             // (N legacy rows backfill 1..N and setval positions the next
             // nextval at N+1), but assert the design-critical property, not
             // the literal.
-            const session = await store.createSession({ repo: 'acme/guard', operator: 'op' })
+            const session = await store.createSession({
+              repo: 'acme/guard',
+              operator: 'op',
+            })
             const sessionSeq = Number(
               (await sql`SELECT creation_seq FROM sessions WHERE id = ${session.id}`)[0]
                 ?.creation_seq,
@@ -697,13 +715,19 @@ if (testUrl) {
               { kind: 'session', session: session.id },
               'widened-check probe',
             )
-            expect(probed.scope).toEqual({ kind: 'session', session: session.id })
+            expect(probed.scope).toEqual({
+              kind: 'session',
+              session: session.id,
+            })
 
             // The store answers a read over the migrated tables.
             expect(
-              (await store.listStreams({ kind: 'build', build: 'guard-canary' })).map(
-                (record) => record.id,
-              ),
+              (
+                await store.listStreams({
+                  kind: 'build',
+                  build: 'guard-canary',
+                })
+              ).map((record) => record.id),
             ).toContain(stream.id)
           } finally {
             await store.close()
@@ -958,7 +982,12 @@ if (testUrl) {
         const source = database.source({
           teamKey: 'AUT',
           repo: one,
-          lifecycle: { triage: 'Backlog', ready: 'Ready', doing: 'Doing', done: 'Done' },
+          lifecycle: {
+            triage: 'Backlog',
+            ready: 'Ready',
+            doing: 'Doing',
+            done: 'Done',
+          },
         })
         expect((await source.get('old-1'))?.state).toBe('Historical')
         expect((await source.get('old-1'))?.blockedBy).toEqual(['ONE-2'])
@@ -997,7 +1026,11 @@ if (testUrl) {
           '--user',
           'owner',
         ],
-        { env: { ...process.env, AB_POSTGRES_URL: world.url }, stdout: 'pipe', stderr: 'pipe' },
+        {
+          env: { ...process.env, AB_POSTGRES_URL: world.url },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
       )
       expect(await child.exited).toBe(0)
       expect(await new Response(child.stderr).text()).toBe('')
@@ -1024,7 +1057,10 @@ if (testUrl) {
             throw new Error('secret provider failure')
           },
         }),
-        () => ({ ...world.blobs, get: async () => new TextEncoder().encode('{broken') }),
+        () => ({
+          ...world.blobs,
+          get: async () => new TextEncoder().encode('{broken'),
+        }),
         () => world.blobs,
       ]) {
         await expect(migratePostgres(world.url, openBlobs ? { openBlobs } : {})).rejects.toThrow()
@@ -1111,7 +1147,11 @@ if (testUrl)
         name: 'proof.txt',
         layout: 'file' as const,
         entries: [
-          { type: 'file' as const, path: 'proof.txt', content: new TextEncoder().encode('proof') },
+          {
+            type: 'file' as const,
+            path: 'proof.txt',
+            content: new TextEncoder().encode('proof'),
+          },
         ],
       }
       await world.store.putTicketAsset(two, 'old-1', asset)
@@ -1476,7 +1516,9 @@ if (testUrl) {
         expect(failureMessage).toContain('assign every remaining legacy team (ONE)')
         expect(failureMessage).not.toContain('provider-secret-must-not-leak')
         expect(await world.snapshot()).toEqual(before)
-        const assignments = await openTicketAssignmentsFromEnv({ AB_POSTGRES_URL: world.url })
+        const assignments = await openTicketAssignmentsFromEnv({
+          AB_POSTGRES_URL: world.url,
+        })
         try {
           await assignments.assign('ONE', owner, 'owner')
         } finally {
@@ -1507,7 +1549,9 @@ if (testUrl)
       const unreadable = await world.project(two, 'TWO')
       await world.seed('ONE')
       await world.seed('TWO')
-      const assignments = await openTicketAssignmentsFromEnv({ AB_POSTGRES_URL: world.url })
+      const assignments = await openTicketAssignmentsFromEnv({
+        AB_POSTGRES_URL: world.url,
+      })
       try {
         await assignments.assign('ONE', one, 'owner')
         const blobs = {
@@ -1561,7 +1605,13 @@ if (testUrl)
         kind: 'reference',
         name: 'proof',
         layout: 'file',
-        entries: [{ type: 'file', path: 'proof', content: new TextEncoder().encode('old') }],
+        entries: [
+          {
+            type: 'file',
+            path: 'proof',
+            content: new TextEncoder().encode('old'),
+          },
+        ],
       })
       await world.store.createBuild({
         slug: 'legacy-pin',
@@ -1605,7 +1655,12 @@ if (testUrl)
         const source = db.source({
           repo,
           teamKey: 'NEW',
-          lifecycle: { triage: 'Backlog', ready: 'Ready', doing: 'Doing', done: 'Done' },
+          lifecycle: {
+            triage: 'Backlog',
+            ready: 'Ready',
+            doing: 'Doing',
+            done: 'Done',
+          },
         })
         expect((await source.get('ticket-a'))?.ref.id).toBe('ENG-1')
         expect((await source.get('ticket-b'))?.blockedBy).toEqual(['ENG-1'])
@@ -1621,7 +1676,13 @@ if (testUrl)
           kind: 'reference',
           name: 'proof',
           layout: 'file',
-          entries: [{ type: 'file', path: 'proof', content: new TextEncoder().encode('new') }],
+          entries: [
+            {
+              type: 'file',
+              path: 'proof',
+              content: new TextEncoder().encode('new'),
+            },
+          ],
         })
         expect(
           (await world.store.getTicketAsset(repo, 'ticket-a', 'reference', 'proof'))?.meta.revision,
@@ -1631,7 +1692,11 @@ if (testUrl)
             .revision,
         ).toBe(0)
         expect(
-          (await world.store.listTicketAssets(repo, 'eng-1', { revisions: true })).length,
+          (
+            await world.store.listTicketAssets(repo, 'eng-1', {
+              revisions: true,
+            })
+          ).length,
         ).toBe(2)
         await world.store.removeTicketAsset(repo, 'eNg-1', 'reference', 'proof')
         expect(await world.store.getTicketAsset(repo, 'ticket-a', 'reference', 'proof')).toBeNull()
@@ -1864,3 +1929,31 @@ if (testUrl)
       }
     },
   )
+test.skipIf(!testUrl)(
+  'v21 upgrade retains credential indexes and adds scan checkpoints',
+  async () => {
+    const { SCHEMA_V21_CHECKSUM } = await import('./schema')
+    const world = await schemaHarness()
+    const sql = new SQL(world.url)
+    try {
+      await migratePostgres(world.url)
+      await sql`DROP TABLE repo_ticket_scan_checkpoints`
+      await sql`UPDATE ab_schema_migrations SET version = 21, checksum = ${SCHEMA_V21_CHECKSUM}`
+      await migratePostgres(world.url)
+      await assertSchema(sql)
+      const columns = await sql<
+        { column_name: string }[]
+      >`SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'repo_ticket_scan_checkpoints'
+      ORDER BY ordinal_position`
+      expect(columns.map((row) => row.column_name)).toEqual(['repo', 'value'])
+      const marker =
+        await sql`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true`
+      expect(Number(marker[0].version)).toBe(SCHEMA_VERSION)
+      expect(marker[0].checksum).toBe(SCHEMA_CHECKSUM)
+    } finally {
+      await sql.close()
+      await world.cleanup()
+    }
+  },
+)

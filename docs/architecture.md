@@ -1830,3 +1830,17 @@ revokes credentials only; admin `projects remove` unregisters without purging.
 See [project deletion protocol](operator-api.md#permanent-project-deletion).
 
 The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
+
+### Ticket scan scheduling metadata
+
+`BuildStore.getRepoTicketScanCheckpoint` and
+`compareAndSetRepoTicketScanCheckpoint` address one fixed-size repository-keyed
+value (`startedAt`, SHA-256 anchor). Memory, SQLite and PostgreSQL implement
+atomic CAS, including absent writers; the remote store forwards exact-key reads
+and writes without event replay. Scoped phase/session handles deny access.
+Each cadence decision reads once; each successful scan attempts at most one CAS.
+The dispatcher anchors timing to the canonical reduced scan payload, falling
+back to the journal measurement on a missing or mismatched checkpoint. Changed
+outcomes append before CAS; unchanged outcomes update timing only. Failures do
+not advance timing, and stale writers leave the winner intact. Historical scan
+facts and separately retained harvest packets remain unchanged.
