@@ -512,8 +512,14 @@ no client retries it from zero or silently baselines it.
 `GET /repos/{repo}/stream-seed?cursor=N` return the exact finished seed at N as
 `{version, cursor, value}`. The server owns the accumulator. It checks expiry
 before canonical catch-up, then returns a checkpoint including event N; clients
-read only events strictly after N. Missing/corrupt coverage returns typed
-`checkpoint-integrity` (HTTP 500), rather than replaying lost stored state.
+read only events strictly after N. Missing historical positions or corrupt stored
+state return typed `checkpoint-integrity` (HTTP 500).
+
+During deployment overlap or rollback, a pre-checkpoint server may advance a
+valid canonical row without checkpoint coverage. Under the seed lock, the new
+server repairs it from the highest checkpoint at or below that row, reading only
+the uncovered suffix and publishing the canonical value and checkpoints atomically.
+Only when no checkpoint exists does legacy adoption refold from zero.
 
 The PostgreSQL migration command performs one explicit resumable adoption fold
 for existing scopes in batches of at most 256 events, storing progress durably.

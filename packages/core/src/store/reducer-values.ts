@@ -93,6 +93,7 @@ export interface ReducerValueStorage {
   checkpoints?: {
     publish(key: string, snapshot: ReducerSnapshot, checkpoints: ReducerSnapshot[]): Promise<void>
     coverage(key: string, cursor: number): Promise<boolean>
+    latest(key: string, through: number): Promise<ReducerSnapshot | null>
   }
   highWater(): Promise<number>
   read(key: string): Promise<ValueCacheRow | null>
@@ -144,8 +145,32 @@ export async function readReducerValue(
   }
   if (storage.checkpoints && row && !valid)
     throw new CheckpointIntegrityError('corrupt canonical stream seed')
-  if (storage.checkpoints && valid && !(await storage.checkpoints.coverage(key, cursor)))
-    throw new CheckpointIntegrityError('canonical stream seed has no checkpoint coverage')
+  let recovering = false
+  if (storage.checkpoints && valid && !(await storage.checkpoints.coverage(key, cursor))) {
+    // A pre-checkpoint server may advance the shared canonical row during a
+    // rolling deploy or rollback. Its accumulator cannot supply the missing
+    // intermediate seeds. Refold only the uncovered suffix under the seed lock.
+    const checkpoint = await storage.checkpoints.latest(key, cursor)
+    if (checkpoint) {
+      const state = checkpoint.state as { identity?: unknown; acc?: unknown } | null
+      if (
+        checkpoint.version !== reducer.version ||
+        !Number.isSafeInteger(checkpoint.cursor) ||
+        checkpoint.cursor < 0 ||
+        checkpoint.cursor > cursor ||
+        state?.identity !== identity ||
+        !entry.validate(state.acc)
+      )
+        throw new CheckpointIntegrityError('corrupt recovery stream-seed checkpoint')
+      acc = structuredClone(state.acc)
+      cursor = checkpoint.cursor
+    } else {
+      // Initial legacy adoption with no checkpoint to resume from.
+      acc = reducer.initial()
+      cursor = 0
+    }
+    recovering = true
+  }
   const start = cursor
   const delta = (await storage.events(cursor, boundary)).filter((event) => event.seq <= boundary)
   for (const event of delta) {
@@ -175,7 +200,7 @@ export async function readReducerValue(
     }
   } else acc = reducer.advance(acc, entry.adapt(projectStoredEvents(delta)))
   const value = entry.value(reducer.finish(acc))
-  if (!valid || delta.length > 0) {
+  if (!valid || recovering || delta.length > 0) {
     const next = { version: reducer.version, cursor, state: { identity, acc } }
     if (storage.checkpoints) {
       await storage.checkpoints.publish(key, next, checkpoints)

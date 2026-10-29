@@ -55,6 +55,11 @@ export async function admitSeed(q: Exec, scope: SnapshotScope, identity: string)
 export function seedStorage(q: Exec, scope: SnapshotScope) {
   const scopeKey = seedScopeKey(scope)
   return {
+    async latest(identity: string, through: number) {
+      const rows =
+        await q`SELECT cursor FROM stream_seed_checkpoints WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND identity=${identity} AND cursor<=${through} ORDER BY cursor DESC LIMIT 1`
+      return rows[0] ? loadSeed(q, scope, identity, Number(rows[0].cursor)) : null
+    },
     async coverage(identity: string, cursor: number) {
       const rows =
         await q`SELECT 1 FROM stream_seed_checkpoints WHERE scope_kind=${scope.kind} AND scope_key=${scopeKey} AND identity=${identity} AND cursor=${cursor}`

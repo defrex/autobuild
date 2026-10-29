@@ -1008,6 +1008,11 @@ export class MemoryBuildStore implements BuildStore {
       this.seedGenerations.set(scopeKey, generations)
     }
     return this.readValue(scope, request, {
+      latest: async (identity, through) => {
+        const checkpoints = this.seedCheckpoints.get(`${scopeKey}\u0000${identity}`)
+        const cursor = Math.max(-1, ...[...(checkpoints?.keys() ?? [])].filter((c) => c <= through))
+        return checkpoints?.get(cursor) ?? null
+      },
       coverage: async (identity, cursor) =>
         this.seedCheckpoints.get(`${scopeKey}\u0000${identity}`)?.has(cursor) ?? false,
       publish: async (identity, snapshot, checkpoints) => {

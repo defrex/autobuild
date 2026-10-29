@@ -1889,6 +1889,29 @@ test.skipIf(!testUrl)(
       const before = await sql`SELECT cursor,state,updated_at FROM reducer_snapshots`
       await migratePostgres(database.url)
       expect(await sql`SELECT cursor,state,updated_at FROM reducer_snapshots`).toEqual(before)
+      // Migration runs while the previous deployment is still serving. That
+      // process advances the same canonical row without checkpoint publication.
+      const { readReducerValue } = await import('@defrex/autobuild/store-adapter')
+      const { seedValueStorage } = await import('./stream-seeds')
+      const scope = { kind: 'repo', repo: 'adoption' } as const
+      await sql`INSERT INTO repo_events(repo,seq,ts,actor,type,payload) SELECT 'adoption',n,now(),'{"kind":"human","user":"budget"}'::jsonb,'dispatcher.intake-set','{"enabled":false}'::jsonb FROM generate_series(1501,1507) n`
+      const legacy = await readReducerValue(
+        scope,
+        { reducer: 'repositoryAttention' },
+        {
+          ...seedValueStorage(sql, scope),
+          checkpoints: undefined,
+          put: async (key, snapshot) => {
+            await sql`UPDATE reducer_snapshots SET cursor=${snapshot.cursor},state=${JSON.stringify(snapshot.state)}::jsonb WHERE scope_kind='repo' AND scope_key='adoption' AND reducer=${key}`
+            return true
+          },
+        },
+      )
+      expect(await store.getReducerValue(scope, { reducer: 'repositoryAttention' })).toEqual(legacy)
+      expect((await store.getStreamSeed(scope, 1507)).value).toEqual(legacy.value)
+      expect((await store.getStreamSeed(scope, 1503)).cursor).toBe(1503)
+      expect((await sql`SELECT count(*) AS n FROM stream_seed_checkpoints`)[0]!.n).toBe('1001')
+      expect((await sql`SELECT complete FROM stream_seed_bootstrap`)[0]!.complete).toBe(true)
     } finally {
       await store.close()
       await sql.close()
