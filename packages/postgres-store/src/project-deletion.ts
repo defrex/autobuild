@@ -153,6 +153,8 @@ export class PostgresProjectDeletion implements ProjectDeletion {
    * lets concurrent purges of shared content hand responsibility to the last
    * reservation instead of mutually preserving bytes forever. */
   private async purgeContent(tx: SQL, repo: string) {
+    await tx`DELETE FROM stream_seed_checkpoints WHERE (scope_kind='repo' AND scope_key=${repo}) OR (scope_kind='build' AND scope_key IN (SELECT slug FROM builds WHERE repo=${repo}))`
+    await tx`DELETE FROM stream_seed_generations WHERE (scope_kind='repo' AND scope_key=${repo}) OR (scope_kind='build' AND scope_key IN (SELECT slug FROM builds WHERE repo=${repo}))`
     await tx`DELETE FROM reducer_snapshots WHERE
         (scope_kind = 'repo' AND scope_key = ${repo}) OR
         (scope_kind = 'build' AND scope_key IN (SELECT slug FROM builds WHERE repo = ${repo})) OR

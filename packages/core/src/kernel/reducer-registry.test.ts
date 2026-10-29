@@ -595,7 +595,7 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 32,
+        "repositoryReadFacts": 33,
         "repositoryStateEvents": 7,
         "sandboxStates": 1,
         "session": 1,

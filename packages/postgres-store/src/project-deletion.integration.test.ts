@@ -143,6 +143,13 @@ test.skipIf(!url)(
       await f.sql`INSERT INTO ab_ticket_states (repo,name) VALUES (${repository},'Ready')`
       await f.sql`INSERT INTO ab_ticket_counters (repo,last_number) VALUES (${repository},3)`
       await f.sql`INSERT INTO reducer_snapshots (scope_kind,scope_key,reducer,version,cursor,state,updated_at) VALUES ('build',${build},'legacy',1,1,'{}',now()),('repo',${repository},'legacy',1,1,'{}',now())`
+      for (const [kind, key] of [
+        ['build', build],
+        ['repo', repository],
+      ]) {
+        await f.sql`INSERT INTO stream_seed_generations(scope_kind,scope_key,identity) VALUES (${kind},${key},'test-seed')`
+        await f.sql`INSERT INTO stream_seed_checkpoints(scope_kind,scope_key,identity,cursor,snapshot) VALUES (${kind},${key},'test-seed',1,'{}')`
+      }
       await f.sql`INSERT INTO project_secret_audit (id,repo,name,actor,ts,action) VALUES (${`audit-${index}`},${repository},'KEY','actor',now(),'set')`
       await f.sql`INSERT INTO project_secrets (repo,name,kind,owner,set_at,fingerprint,payload,generation,revision,status) VALUES (${repository},'KEY','static','owner',now(),'fingerprint','encrypted','generation',1,'ready')`
       await f.sql`INSERT INTO streams (id,scope_kind,build,label,format,status,artifact_blob_ref,created_at,creation_seq) VALUES (${`stream-${index}`},'build',${build},'legacy','ui-message','closed',${`stream-${index}`},now(),1)`
@@ -187,6 +194,15 @@ test.skipIf(!url)(
       expect((await f.sql.unsafe(`SELECT * FROM ${table}`)).length, table).toBe(1)
     }
     expect((await f.sql`SELECT * FROM reducer_snapshots`).length).toBe(2)
+    for (const table of ['stream_seed_generations', 'stream_seed_checkpoints']) {
+      const remaining = await f.sql.unsafe(`SELECT scope_kind,scope_key FROM ${table}`)
+      expect(remaining).toHaveLength(2)
+      expect(
+        remaining.every(
+          (row: { scope_key: string }) => row.scope_key === other || row.scope_key === 'build-1',
+        ),
+      ).toBe(true)
+    }
     expect([...f.objects].sort()).toEqual([
       'artifact-1',
       'asset-1',

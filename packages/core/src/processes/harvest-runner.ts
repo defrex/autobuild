@@ -915,8 +915,11 @@ export class HarvestRunner {
         throw error
       }
 
-      const since = await store.getRepoEvents(repo, started.seq)
-      const terminal = since.some((event) => spec.terminal(event, session))
+      const hasTerminal = async () => {
+        const event = (await readRepositoryFacts(store, repo)).value.harvestTerminals[session]
+        return event !== undefined && event.seq > started.seq && spec.terminal(event, session)
+      }
+      const terminal = await hasTerminal()
       const owner = live?.runner ?? target.runner
       const close =
         streamBracket !== undefined
@@ -942,11 +945,7 @@ export class HarvestRunner {
         if (spec.producer) this.producer = undefined
         // Cleanup can finish a typed deposit already in flight. Its terminal
         // wins even when cancellation initially observed no result.
-        const completed =
-          terminal ||
-          (await store.getRepoEvents(repo, started.seq)).some((event) =>
-            spec.terminal(event, session),
-          )
+        const completed = terminal || (await hasTerminal())
         if (completed) {
           await this.depositTranscript(spec, session, content, usage, target.model, close)
           return
