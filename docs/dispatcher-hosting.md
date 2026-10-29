@@ -32,6 +32,12 @@ bun ab dispatch
 bun ab dispatch --once
 ```
 
+Local startup checks selected primary and alternate account sources before
+acquiring the repository lease, in both watch and `--once` modes. Missing
+credentials refuse startup with every account's source and remedy. Successor
+preflight also refuses missing sources and keeps the running generation active.
+Unused declared accounts do not block dispatch. See [account admission](accounts.md#dispatcher-admission).
+
 The host needs:
 
 - the runtime CLI, dependencies, Git and check tools ([Workspaces](workspaces.md))
@@ -39,6 +45,13 @@ The host needs:
 - credentials for a remote Store or workspace provisioning, if used
 
 A service manager may own the process under an identity with the same configuration and credentials. To restart, stop gracefully and let drain and suspension finish; work resumes from durable state. A restart never answers escalations or grants merge consent. See [the dispatcher lifecycle](dispatcher.md).
+
+Hosted cron ticks hold new account-dependent work behind one durable repository
+condition per missing project secret. Use `bun ab secrets set VARIABLE`, or
+`bun ab accounts login NAME --project` for refreshing ChatGPT credentials; the
+next tick recovers automatically without spending build infrastructure attempts.
+Project account slots never fall back to service-environment credentials.
+Observation, controls and cleanup continue during the hold.
 
 ### Origin-mode dispatcher with remote workspaces
 

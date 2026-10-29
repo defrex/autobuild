@@ -1,3 +1,4 @@
+import { accountCredentialsCapture } from '../../../tools/account-credentials-capture'
 import { SETTINGS_SCENARIOS, settingsFixture } from './settings-fixtures'
 import { fullDocumentScreenshot } from './full-document'
 import { verifyStagesCapture } from '../../../tools/verify-stages-capture'
@@ -220,6 +221,23 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     height: 3200,
     requires: ['active 5/5', '4 configured', 'descendant-held slots', 'queue-conflict'],
   },
+  ...(['missing', 'recovered'] as const).flatMap((state) =>
+    ['wide', 'narrow'].map((size) => ({
+      id: `account-credentials-${state}-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: size === 'wide' ? 1800 : 2400,
+      ...(state === 'missing'
+        ? {
+            requires: [
+              'Missing credentials:',
+              'BILLING_TOKEN',
+              'ab secrets set',
+              'project-secrets',
+            ],
+          }
+        : { requires: [], forbids: ['Missing credentials:'] }),
+    })),
+  ),
   {
     id: 'builds-forge-readiness-wide',
     width: 1440,
@@ -914,6 +932,13 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
           },
         })),
       }
+      return shell(builds(model), { model })
+    }
+    case 'account-credentials-missing-wide':
+    case 'account-credentials-missing-narrow':
+    case 'account-credentials-recovered-wide':
+    case 'account-credentials-recovered-narrow': {
+      const model = accountCredentialsCapture(models.mixed, spec.id.includes('recovered'))
       return shell(builds(model), { model })
     }
     case 'builds-forge-readiness-wide':
