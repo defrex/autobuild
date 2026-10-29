@@ -74,9 +74,9 @@ async function verifyDistribution(version: string, fixture: string, success: str
 }
 
 test('prerelease distribution serves health, store, tickets and operator routes', async () => {
-  await verifyDistribution('1.0.0-beta.1', 'prerelease-service.ts', 'beta service verified')
+  await verifyDistribution('1.4.0-beta.1', 'prerelease-service.ts', 'beta service verified')
 }, 60_000)
 
-test('historical service strips audit capability only for pre-introduction clients', async () => {
-  await verifyDistribution('0.14.0', 'audit-capability-service.ts', 'audit service verified')
+test('current service refuses pre-floor clients and preserves supported audit capability', async () => {
+  await verifyDistribution('1.3.0', 'audit-capability-service.ts', 'audit service verified')
 }, 60_000)

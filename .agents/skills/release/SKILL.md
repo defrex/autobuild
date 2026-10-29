@@ -18,18 +18,20 @@ A patch release must not change the protocol: patches on a release line are
 interchangeable in both directions. Protocol changes require a new major.minor
 line and retained handlers for every line still in the supported client window.
 
-Before a new minor or major release, review `RELEASE_LINE_PROTOCOLS` in
-`packages/core/src/store/remote/compatibility.ts` against the target version's
-supported window. Record the outgoing line's protocol identity before it
-becomes historical, retain every older identity and wire handler still in the
-window, and review the frozen contracts in
-`packages/hosted-store-service/src/compatibility-fixtures/` to add or retire
-fixtures deliberately. The new service's own line uses its current protocol
-automatically. Check every advertised line through `clientIdentityError` for
-the target version. The release command's gates run with the target version
-already written into the release files, so a version-sensitive test that only
-held at the outgoing version fails the gate instead of breaking main after the
-release.
+The release command automatically records the outgoing published client’s protocol
+identity, publication timestamp, and frozen reducer contract, recovering missing
+evidence from the integrity-checked npm artifact. It freezes the target’s generated
+finished shapes and reducer versions before running target-version gates. Never
+hand-edit historical contracts or publication dates. Dry-run prints these candidate
+files and restores both original bytes and file existence after the gates.
+
+Support ends only after two newer published minor lines and 90 days since the
+successor line first shipped, including across majors. The floor is 1.2; earlier
+clients are always refused. Prereleases do not start stable retirement clocks and
+patches do not reset them. Keep publication facts after retiring contracts.
+Preparation refuses missing supported identities, contracts, or retained handler
+evidence before committing or publishing. Review the frozen compatibility matrix
+when adding or retiring a wire family. No real release is part of a feature build.
 
 ## Preconditions
 

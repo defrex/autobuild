@@ -2,7 +2,15 @@ import semver from 'semver'
 import { z } from 'zod'
 import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
 import { projectReducerValue, type ReducerValueCatalog } from '../reducer-value-validation'
-import released120 from './released-reducer-values/1.2.0.json'
+import {
+  RELEASED_CLIENTS,
+  releaseLine,
+  supportedPublishedLines,
+  CLIENT_POLICY_FLOOR,
+  CLIENT_SUPPORT_POLICY,
+  type ReleasedClient,
+} from './released-clients'
+import { RELEASED_REDUCER_VALUES } from './released-reducer-values'
 
 /** Stable releases only: prefixes, whitespace, prereleases and build suffixes are not identities. */
 export function stableVersion(value: unknown): semver.SemVer | undefined {
@@ -34,12 +42,21 @@ export const supportedClientRangeSchema = z
   .refine((range) => semver.lt(range.minVersion, range.maxVersionExclusive))
 export type SupportedClientRange = z.infer<typeof supportedClientRangeSchema>
 
-/** A major starts a new family: X.0 has one line, X.1 two, X.2+ three. */
-export function supportedClientRange(serviceVersion = AUTOBUILD_VERSION): SupportedClientRange {
+/** Capture time per decision, so retirement takes effect without a redeploy. */
+export function supportedClientRange(
+  serviceVersion = AUTOBUILD_VERSION,
+  now = Date.now(),
+  releases: readonly ReleasedClient[] = RELEASED_CLIENTS,
+): SupportedClientRange {
   const version = releaseVersion(serviceVersion)
   if (!version) throw new Error('service must have a canonical release version')
+  const lines = supportedPublishedLines(serviceVersion, now, releases)
   return {
-    minVersion: `${version.major}.${Math.max(0, version.minor - 2)}.0`,
+    minVersion:
+      lines[0] ??
+      (semver.lt(releaseLine(serviceVersion), CLIENT_POLICY_FLOOR)
+        ? CLIENT_POLICY_FLOOR
+        : releaseLine(serviceVersion)),
     maxVersionExclusive: `${version.major}.${version.minor + 1}.0`,
   }
 }
@@ -79,30 +96,21 @@ export function compatibilityAdvice(
 /** Retain these wire identities and handlers until their lines leave the window.
  * Historical lines require explicit entries; the service's own line uses its
  * current protocol identity. Unknown historical protocols fail closed. */
-export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = {
-  // v1.0.x shipped protocol 4; protocol 5+ requires the next minor line.
-  '1.0': '4',
-  // v1.1.x shipped protocol 6; retain it when this line becomes historical.
-  '1.1': '6',
-  // v1.2.x shipped protocol 6; retain it when this line becomes historical.
-  '1.2': '6',
-  '0.9': '3',
-  '0.10': '3',
-  '0.11': '3',
-  '0.12': '3',
-  // v0.13.0 shipped protocol 3. Protocol 4 requires the next minor line.
-  '0.13': '3',
-  // v0.14.0 introduced protocol 4; retain it when this line becomes historical.
-  '0.14': '4',
-}
+export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = Object.fromEntries(
+  RELEASED_CLIENTS.filter(
+    (entry) => entry.protocol && semver.gte(releaseLine(entry.version), CLIENT_POLICY_FLOOR),
+  ).map((entry) => [releaseLine(entry.version).split('.').slice(0, 2).join('.'), entry.protocol!]),
+)
 
 export function clientIdentityError(
   client: string | null,
   protocol: string | null,
   serviceVersion = AUTOBUILD_VERSION,
   serviceProtocol = REMOTE_STORE_PROTOCOL_VERSION,
+  now = Date.now(),
+  releases: readonly ReleasedClient[] = RELEASED_CLIENTS,
 ): string | undefined {
-  const range = supportedClientRange(serviceVersion)
+  const range = supportedClientRange(serviceVersion, now, releases)
   const service = releaseVersion(serviceVersion)!
   const advice = compatibilityAdvice(client, serviceVersion, range)
   const parsed = releaseVersion(client)
@@ -110,9 +118,17 @@ export function clientIdentityError(
     parsed &&
     (parsed.major === service.major && parsed.minor === service.minor
       ? serviceProtocol
-      : RELEASE_LINE_PROTOCOLS[`${parsed.major}.${parsed.minor}`])
-  if (!advice && expected !== undefined && protocol === expected) return undefined
-  return `remote store version mismatch: client Autobuild ${client ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${serviceVersion} protocol ${serviceProtocol}; ${advice ?? `supported clients ${formatClientRange(range)}; unsupported protocol identity`}`
+      : releases.find((entry) => releaseLine(entry.version) === releaseLine(parsed.version))
+          ?.protocol)
+  if (
+    parsed &&
+    semver.gte(releaseLine(parsed.version), CLIENT_POLICY_FLOOR) &&
+    !advice &&
+    expected !== undefined &&
+    protocol === expected
+  )
+    return undefined
+  return `remote store version mismatch: client Autobuild ${client ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${serviceVersion} protocol ${serviceProtocol}; ${advice ?? `supported clients ${formatClientRange(range)}; unsupported protocol identity`}; ${CLIENT_SUPPORT_POLICY}`
 }
 
 /** A successful server answer cannot be represented by this client's reducer. */
@@ -131,37 +147,117 @@ export class ReducerValueIncompatibilityError extends Error {
   }
 }
 
-interface ReleasedReducerValues extends ReducerValueCatalog {
-  versions: Record<string, number>
-}
-
-/** Published releases whose clients accept only their own reducer version and
- * finished shape. Each catalog is frozen from its release and retained while
- * that release is in the supported window, like `RELEASE_LINE_PROTOCOLS`. Later
- * clients send `REDUCER_VALUE_PROJECTION_HEADER` and project for themselves. */
-const EXACT_REDUCER_VALUE_RELEASES: Readonly<Record<string, ReleasedReducerValues>> = {
-  '1.2.0': released120 as ReleasedReducerValues,
-}
-
-/** Answer an exact-version client as its release can read: project the canonical
+/** Answer a published client as its release can read: project the canonical
  * value onto the release's frozen shape and stamp the version it expects. A value
  * the release cannot represent is returned unchanged, so the client raises its
  * typed incompatibility error rather than misreading it. */
 export function reducerValueForClient<T extends { version: number; value: unknown }>(
-  client: { version: string | null; projects: boolean },
+  client: { version: string | null; projects: boolean; catalogIdentity?: string | null },
   reducer: string,
   answer: T,
 ): T {
+  // Source clients retain the package version between releases. Their catalog
+  // can require fields absent from that version's published contract.
+  if (client.projects && client.catalogIdentity) return answer
   const { version: release } = client
-  if (client.projects || release === null) return answer
-  if (!Object.hasOwn(EXACT_REDUCER_VALUE_RELEASES, release)) return answer
-  const catalog = EXACT_REDUCER_VALUE_RELEASES[release]!
+  if (release === null) return answer
+  const published = RELEASED_CLIENTS.find((entry) => entry.version === release)
+  if (!published?.contract) return answer
+  const catalog = RELEASED_REDUCER_VALUES[published.contract]
+  if (!catalog) return answer
   if (!Object.hasOwn(catalog.versions, reducer)) return answer
-  const projected = projectReducerValue(reducer, answer.value, catalog)
+  const projected = projectReleasedValue(reducer, answer.value, catalog)
   if ('path' in projected) return answer
   return {
     ...answer,
     version: catalog.versions[reducer]!,
     value: (projected as { value: unknown }).value,
   }
+}
+
+/** Only the optional display event may be omitted when a release predates its
+ * discriminant. Progress, sequence and required compatibility facts stay intact.
+ * The catalog-directed walk covers nested build state without reading history. */
+function projectReleasedValue(name: string, value: unknown, catalog: ReducerValueCatalog) {
+  const root = catalog.roots[name]
+  if (!root) return { path: '$', expected: 'known reducer' }
+  function adapt(id: string, input: unknown): unknown {
+    const shape = catalog.schemas[id]!
+    if (shape.kind === 'union') {
+      for (const member of shape.items as string[]) {
+        const candidate = adapt(member, input)
+        const result = projectReducerValue('candidate', candidate, {
+          ...catalog,
+          roots: { candidate: { value: member } },
+        })
+        if (!('path' in result)) return candidate
+      }
+      return input
+    }
+    if (shape.kind === 'array' && Array.isArray(input))
+      return input.map((item) => adapt(shape.items as string, item))
+    if (shape.kind !== 'object' || !input || typeof input !== 'object' || Array.isArray(input))
+      return input
+    const out = { ...input } as Record<string, unknown>
+    for (const [key, prop] of Object.entries(shape.props ?? {})) {
+      if (!(key in out)) continue
+      if (key === 'lastEvent' && prop.optional) {
+        const result = projectReducerValue('event', out[key], {
+          ...catalog,
+          roots: { event: { value: prop.type } },
+        })
+        const event = out[key]
+        function knowsType(id: string): boolean {
+          const variant = catalog.schemas[id]!
+          if (variant.kind === 'union') return (variant.items as string[]).some(knowsType)
+          const type = variant.props?.type
+          if (!type || !event || typeof event !== 'object' || !('type' in event)) return false
+          return !(
+            'path' in
+            projectReducerValue('type', event.type, {
+              ...catalog,
+              roots: { type: { value: type.type } },
+            })
+          )
+        }
+        if (
+          'path' in result &&
+          event &&
+          typeof event === 'object' &&
+          'type' in event &&
+          typeof event.type === 'string' &&
+          !knowsType(prop.type)
+        ) {
+          delete out[key]
+          continue
+        }
+      }
+      // seenTypes is the set of event types this reader can act on, rather
+      // than an event history. Retain its known members; compatibility facts
+      // and sequence/progress remain the server's canonical answer.
+      if (key === 'seenTypes' && Array.isArray(out[key])) {
+        const array = catalog.schemas[prop.type]!
+        if (array.kind === 'array') {
+          out[key] = (out[key] as unknown[]).filter(
+            (type) =>
+              typeof type !== 'string' ||
+              !(
+                'path' in
+                projectReducerValue('type', type, {
+                  ...catalog,
+                  roots: { type: { value: array.items as string } },
+                })
+              ),
+          )
+          continue
+        }
+      }
+      out[key] = adapt(prop.type, out[key])
+    }
+    if (shape.index)
+      for (const key of Object.keys(out))
+        if (!Object.hasOwn(shape.props ?? {}, key)) out[key] = adapt(shape.index, out[key])
+    return out
+  }
+  return projectReducerValue(name, adapt(root.value, value), catalog)
 }
