@@ -347,6 +347,16 @@ export const eventPayloadSchemas = {
     parent: z.string().min(1),
     outcome: z.enum(['covered', 'destination-changed']),
   }),
+  'node.restack-availability-observed': z.strictObject({
+    version: z.literal(1),
+    fingerprint: z.string().min(1),
+    branch: z.string().min(1),
+    parentBranch: z.string().min(1),
+    head: z.string().min(1),
+    parent: z.string().min(1),
+    base: z.string().min(1),
+    available: z.array(z.string()),
+  }),
   'node.parent-distance': z.strictObject({
     base: z.string().min(1),
     parent: z.string().min(1),

@@ -249,7 +249,11 @@ metadata never changes completeness or merge eligibility.
 Collecting nodes may intentionally trail their parent. They refresh before
 verification and merge, for queued dependency presence, on operator request,
 and after accepted re-parenting. Descendants need independent demand; presence
-requests follow only the minimal proven ancestor path. See
+requests follow only the minimal proven ancestor path. Unavailable immediate-parent
+identities remain pending; durable availability facts bound idle preparation across
+restart. Head, request, ancestry, alias and confirmed landing changes trigger a fresh
+assessment. Re-parenting to another branch explicitly disposes of old destination
+requests without claiming coverage. See
 [restacking](restacking.md#timing-and-evidence) for timing, requests and distance.
 
 ## Polling and status
