@@ -783,16 +783,19 @@ export function memoryRepositoryReadCounter(
     },
   })
   let buildRows = 0
+  const buildRowsBySlug = new Map<string, number>()
   let reducedCalls = 0
   let buildFactsCalls = 0
   const builds = Reflect.get(store, 'builds') as Map<string, { events: unknown[] }>
-  for (const build of builds.values()) {
+  for (const [slug, build] of builds) {
     const original = build.events.slice.bind(build.events)
     Object.defineProperty(build.events, 'slice', {
       configurable: true,
       value: (start?: number, end?: number) => {
         const selected = original(start, end)
         buildRows += selected.length
+        if (selected.length)
+          buildRowsBySlug.set(slug, (buildRowsBySlug.get(slug) ?? 0) + selected.length)
         return selected
       },
     })
@@ -807,6 +810,9 @@ export function memoryRepositoryReadCounter(
     get rows() {
       return rows
     },
+    get buildRowsBySlug() {
+      return new Map(buildRowsBySlug)
+    },
     get buildRows() {
       return buildRows
     },
@@ -819,6 +825,7 @@ export function memoryRepositoryReadCounter(
     reset() {
       rows = 0
       buildRows = 0
+      buildRowsBySlug.clear()
       reducedCalls = 0
       buildFactsCalls = 0
     },

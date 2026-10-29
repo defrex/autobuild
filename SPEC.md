@@ -2489,6 +2489,19 @@ actual destination, processing ancestors first. Unrelated siblings stay idle;
 changes absent from all ancestors cannot trigger a speculative replay. Tickets
 remain queued until presence is observed in their destination.
 
+A presence request whose identities are absent from its immediate parent remains
+pending while ancestors restack or reconcile. A durable availability observation
+allows unchanged idle ticks, including after restart, to skip repository preparation
+and native auto-merge cancellation. Exact node/parent heads, contribution base,
+request contents, accepted ancestry, foreign aliases and confirmed landing evidence
+invalidate that observation when they change; polling timestamps do not. Failed
+assessments never establish unavailability. Availability is not proof of destination
+coverage. Moving to another destination branch explicitly settles obsolete requests
+with `destination-changed`; losing identities on the same branch leaves them waiting.
+Native auto-merge is suspended with confirmed, reusable receipts only when replay
+is actionable, and is revalidated during recovery before rewrite effects.
+
+
 `ab restack <node>` (operator tool `builds.restack`, input `{repo, slug}`) records
 a durable request, coalescing pending demand. It refuses leaves, terminal nodes,
 and unopened nodes. Paused or blocked nodes wait for their normal safety gates.
@@ -2982,6 +2995,9 @@ restacking). Durable `node.restack-requested` facts retain operator/presence dem
 including destination, sampled parent, dependent ticket and required identities.
 Reservations freeze covered request ids; confirmed settlement acknowledges only
 that coverage, and `node.restack-satisfied` records coverage or destination change.
+`node.restack-availability-observed` retains a versioned semantic fingerprint, sampled
+branches/heads/base and available request IDs; it is an optimization fact, never
+positive presence proof.
 `target.distance` records advisory leaf distance with immutable destination and
 build tips; null count means unknown (a known count requires a head).
 `node.parent-distance` records immutable base/parent/branch and count (null when unknown).

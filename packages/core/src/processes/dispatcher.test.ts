@@ -11789,3 +11789,164 @@ test('failed preparation readback does not block sibling janitor or lease recove
     ),
   ).toEqual(['stuck'])
 })
+
+test.each([10, 1000])(
+  'unavailable presence assessments bound preparation across idle ticks and dispatcher restart (%i events)',
+  async (padding) => {
+    const forge = new FakeForge()
+    const parent = 'b'.repeat(40)
+    const head = 'c'.repeat(40)
+    forge.remoteBranches.set('main', parent)
+    forge.remoteBranches.set('ab-node/waiting', head)
+    forge.nodeComparisons.set('main...ab-node/waiting', 1)
+    let snapshots = 0
+    const snapshot = forge.rewrite.snapshot
+    forge.rewrite.snapshot = async (args) => {
+      snapshots++
+      return snapshot(args)
+    }
+    const dispatchForge = new Proxy(forge, {
+      get(target, key) {
+        if (key === 'snapshotBase')
+          return async () => {
+            snapshots++
+            return parent
+          }
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const exec: Exec = async (args) => ({
+      stdout: args.includes('rev-list') ? '1' : '',
+      stderr: '',
+      exitCode: 0,
+    })
+    const h = harness({ dispatchForge, exec, repoOrigin: 'https://github.com/acme/repo' })
+    await h.store.ensureRepo(REPO)
+    await h.store.createBuild({ slug: 'waiting', repo: REPO, branch: 'ab-node/waiting' })
+    await h.store.append('waiting', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+        ticket: { source: 'fake', id: 'WAIT' },
+      },
+    })
+    await h.store.append('waiting', {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: BASE_SHA },
+    })
+    // Exact sampled source mapping avoids manufacturing Git history in this fixture.
+    await h.store.append('waiting', {
+      actor: KERNEL,
+      type: 'node.inventory',
+      payload: {
+        head,
+        base: BASE_SHA,
+        builds: [],
+        foreign: [],
+      },
+    })
+    await h.store.append('waiting', {
+      actor: DISPATCHER,
+      type: 'node.restack-requested',
+      payload: {
+        id: 'nested',
+        reason: 'presence',
+        branch: 'main',
+        parent,
+        dependent: { source: 'fake', id: 'D' },
+        identities: ['build:ancestor-change'],
+      },
+    })
+    for (let i = 0; i < padding; i++)
+      await h.store.append('waiting', {
+        actor: KERNEL,
+        type: 'node.parent-distance',
+        payload: { base: BASE_SHA, parent, branch: 'main', count: 1 },
+      })
+    forge.setPrState(77, { state: 'open', mergeable: true })
+    const child = await seedBuild(h, {
+      slug: 'targeting-leaf',
+      pr: { number: 77, url: 'https://example/77', headSha: head },
+    })
+    await h.store.append(child, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'CHILD' },
+        repo: REPO,
+        baseBranch: 'ab-node/waiting',
+        target: { build: 'waiting', ticket: { source: 'fake', id: 'WAIT' } },
+      },
+    })
+    await h.store.append(child, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+    let claims = 0
+    const claim = h.store.claimNodeWriter.bind(h.store)
+    h.store.claimNodeWriter = async (...args) => {
+      claims++
+      return claim(...args)
+    }
+    const first = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(first.janitorDiagnostics).toEqual([])
+    expect(snapshots).toBe(2)
+    expect(claims).toBe(1)
+    const preparations = h.execCalls.filter(
+      (args) => args.includes('worktree') && args.includes('add'),
+    ).length
+    expect(preparations).toBe(1)
+    // Let ordinary polling reduce the checkpoint appended by the assessment.
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const { memoryRepositoryReadCounter } = await import('../testing/reduced-read-budget')
+    const counter = memoryRepositoryReadCounter(h.store as MemoryBuildStore, REPO)
+    const commands = h.execCalls.length
+    for (let n = 0; n < 3; n++) await h.dispatcher.tick({ acceptNewWork: false })
+    const restarted = harness({
+      store: h.store,
+      dispatchForge,
+      exec,
+      repoOrigin: 'https://github.com/acme/repo',
+    })
+    for (let n = 0; n < 3; n++) await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(counter.rows).toBe(0)
+    expect(counter.buildRows).toBe(0)
+    expect(counter.buildRowsBySlug.size).toBe(0)
+    expect(h.execCalls.slice(commands).filter((args) => args.includes('log'))).toHaveLength(0)
+    expect(forge.autoMergeCalls.filter((call) => !call.enabled)).toHaveLength(0)
+    expect(snapshots).toBe(2)
+    expect(claims).toBe(1)
+    expect(
+      h.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
+    ).toHaveLength(1)
+    expect(
+      restarted.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
+    ).toHaveLength(0)
+    // Confirmed evidence is relevant even when both Git heads stay unchanged.
+    await h.store.createBuild({ slug: 'new-proof', repo: REPO })
+    await h.store.append('new-proof', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: parent },
+    })
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(snapshots).toBe(4)
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(snapshots).toBe(4)
+    forge.remoteBranches.set('ab-node/waiting', 'd'.repeat(40))
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(snapshots).toBe(6)
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(snapshots).toBe(6)
+    expect(restarted.execCalls.filter((args) => args.includes('clone'))).toHaveLength(2)
+    const state = reduceBuild(await h.store.getEvents('waiting'))
+    expect(state.nodeRestack?.requests?.nested).toBeDefined()
+    expect(
+      (await h.store.getEvents('waiting')).filter(
+        (e) => e.type === 'node.restack-availability-observed',
+      ),
+    ).toHaveLength(3)
+  },
+)
