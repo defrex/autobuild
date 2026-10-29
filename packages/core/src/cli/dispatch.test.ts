@@ -12471,6 +12471,7 @@ for (const peer of [false, true]) {
   test(`once teardown releases only its own lease (peer=${peer})`, async () => {
     const fx = await makeFixture([], happyHandlers())
     try {
+      await fx.store.ensureRepo(fx.origin)
       if (peer) await fx.store.claimRepoLease(fx.origin, 'peer', 60000)
       await abDispatch({
         targetRepo: fx.checkout,
