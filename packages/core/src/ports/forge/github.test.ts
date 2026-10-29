@@ -2733,3 +2733,59 @@ test('trusted Git transient diagnostics are typed after credential redaction', a
     expect((failure as Error).message).not.toContain('secret-token')
   }
 })
+
+for (const entry of ['rewrite', 'kernelRewrite'] as const) {
+  for (const outcome of [
+    'success',
+    'lost',
+    'race',
+    'malformed',
+    'invalid',
+    'missing',
+    'policy',
+  ] as const) {
+    test(`${entry} creates remote-only archives: ${outcome}`, async () => {
+      const sha = 'a'.repeat(40)
+      const ref = `refs/autobuild/archive/probe/${sha}`
+      let published = false
+      let materialized = false
+      const forge = new GitHubForge({
+        repository: 'acme/app',
+        token: 'test-token',
+        exec: async (cmd) => {
+          expect(cmd[1]).not.toBe('push')
+          if (cmd[1] === 'fetch') materialized = true
+          return {
+            exitCode: cmd[1] === 'cat-file' && !materialized ? 1 : 0,
+            stdout: cmd[1] === 'ls-remote' && published ? `${sha}\t${ref}\n` : '',
+            stderr: '',
+          }
+        },
+        transport: async (method, path, opts) => {
+          expect(method).toBe('POST')
+          expect(path).toBe('repos/acme/app/git/refs')
+          expect(opts?.body).toEqual({ ref, sha })
+          if (outcome === 'missing' || outcome === 'policy')
+            throw new GitHubApiError(outcome === 'missing' ? 422 : 403, outcome)
+          if (outcome === 'invalid') return { status: 201, headers: {}, json: {} }
+          published = true
+          if (outcome === 'race') throw new GitHubApiError(422, 'already exists')
+          if (outcome === 'lost') throw new Error('lost acknowledgement')
+          return {
+            status: 201,
+            headers: {},
+            json: outcome === 'malformed' ? {} : { ref, object: { sha, type: 'commit' } },
+          }
+        },
+      })
+      const promise = forge[entry].archive({ workspacePath: '/ws', sha, ref })
+      if (outcome === 'missing' || outcome === 'policy' || outcome === 'invalid') {
+        await expect(promise).rejects.toThrow(ref)
+        expect(materialized).toBe(false)
+      } else {
+        await promise
+        expect(materialized).toBe(true)
+      }
+    })
+  }
+}
