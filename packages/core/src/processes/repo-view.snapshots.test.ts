@@ -94,3 +94,45 @@ test('cache loss and corrupt private cache rows recover output parity', async ()
     database.close()
   }
 })
+
+test('cold presence reads consume canonical witnessed values with zero idle event rows', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { memoryRepositoryReadCounter } = await import('../testing/reduced-read-budget')
+  const { DISPATCHER } = await import('../events/envelope')
+  const { RepoViewStore } = await import('./repo-view')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  for (const count of [10, 1000]) {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('repo')
+    for (let i = 0; i < count; i++) {
+      await store.createBuild({ slug: `historical-${i}`, repo: 'repo' })
+      await store.append(`historical-${i}`, {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: (i + 100).toString(16).padStart(40, '0') },
+      })
+    }
+    const payload = {
+      destination: 'root:main',
+      branch: 'main',
+      head: 'a'.repeat(40),
+      evidence: 'presence-v3:fixed',
+      identities: ['build:blocker'],
+      witness: { version: 1 as const, commits: ['a'.repeat(40)], identities: [] },
+    }
+    await store.appendRepo('repo', { actor: DISPATCHER, type: 'change-presence.observed', payload })
+    await readRepositoryFacts(store, 'repo')
+    const { readBuildDigests } = await import('../store/reduced-reads')
+    await readBuildDigests(store, 'repo')
+    const counter = memoryRepositoryReadCounter(store, 'repo')
+    for (let i = 0; i < 3; i++) {
+      const cold = new RepoViewStore(store, { repo: 'repo' })
+      await cold.startJournal()
+      expect(cold.repositoryFacts().presence['root:main']).toEqual(payload)
+    }
+    expect(counter.rows).toBe(0)
+    expect(counter.buildRows).toBe(0)
+    expect(counter.buildFactsCalls).toBe(0)
+    expect(counter.reducedCalls).toBe(3)
+  }
+})

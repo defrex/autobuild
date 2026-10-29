@@ -61,7 +61,10 @@ import {
   blockerBuild,
   missingChanges,
   presenceInputs,
-  observePresence,
+  presenceWitness,
+  projectPresence,
+  presenceEvidence,
+  destinationAliases,
   ownedContribution,
   type ChangeIdentity,
   type PresenceInputs,
@@ -6124,22 +6127,25 @@ export class Dispatcher {
     let observed = observations.get(destination)
     if (!observed) {
       const forge = this.kernelForge()
-      if (!forge.remoteBranchSha || (!forge.snapshotBase && !forge.kernelExec && !forge.rewrite))
-        throw new Error('forge cannot snapshot destination presence')
+      if (!forge.remoteBranchSha) throw new Error('forge cannot read destination head')
       const head = await forge.remoteBranchSha(branch)
-      const evidence = JSON.stringify({
-        version: 2,
-        revisions: [
-          ...inputs.entries
-            .filter(({ digest }) => digest.mergedSha || digest.nodeContribution)
-            .map(({ record, digest }) => [record.slug, digest.readinessChangeSeq]),
-          ...[...inputs.states].map(([slug, state]) => [slug, state.lastSeq]),
-        ].sort(),
-      })
+      const aliases = destinationAliases(inputs, target?.target.build)
       const cached = this.store.repositoryFacts().presence[destination]
-      if (cached?.head === head && cached.branch === branch && cached.evidence === evidence)
-        observed = cached
-      else
+      if (cached?.head === head && cached.branch === branch && cached.witness?.version === 1) {
+        const identities = projectPresence(cached.witness, inputs.landings, aliases)
+        const evidence = presenceEvidence(cached.witness, identities)
+        observed = { ...cached, identities }
+        if (cached.evidence !== evidence) {
+          await this.store.ensureRepo(this.deps.repo)
+          await this.store.appendRepo(this.deps.repo, {
+            actor: DISPATCHER,
+            type: 'change-presence.observed',
+            payload: { ...cached, identities, evidence },
+          })
+        }
+      } else {
+        if (!forge.snapshotBase && !forge.kernelExec && !forge.rewrite)
+          throw new Error('forge cannot snapshot destination presence')
         observed = await this.withKernelRepository(async (path) => {
           const destinationRef = `refs/autobuild/reconcile/${target?.target.build ?? 'presence'}/presence`
           let sampled: string
@@ -6178,13 +6184,13 @@ export class Dispatcher {
             sampled = resolved.stdout.trim()
           }
           if (sampled !== head) throw new Error('destination moved while sampling presence')
-          const identities = await observePresence(
+          const witness = await presenceWitness(
             { exec: forge.kernelExec ?? this.deps.exec, workspacePath: path },
             head,
-            inputs.landings,
-            inputs.aliases,
           )
-          const payload = { branch, destination, head, evidence, identities }
+          const identities = projectPresence(witness, inputs.landings, aliases)
+          const evidence = presenceEvidence(witness, identities)
+          const payload = { branch, destination, head, evidence, identities, witness }
           await this.store.ensureRepo(this.deps.repo)
           await this.store.appendRepo(this.deps.repo, {
             actor: DISPATCHER,
@@ -6193,6 +6199,7 @@ export class Dispatcher {
           })
           return payload
         })
+      }
       observations.set(destination, observed)
     }
     return observed!

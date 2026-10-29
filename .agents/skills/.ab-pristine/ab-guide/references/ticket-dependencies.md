@@ -77,6 +77,14 @@ parent history. An empty completed contribution is satisfied; missing evidence,
 an open or aborted node, or ambiguous newest build generations remain queued.
 Older successful generations are never substituted for the newest build.
 
+Destination observations retain versioned, head-bound Git witnesses (reachable
+commit SHAs and direct build trailers) and a fixed-length evidence digest. Current
+confirmed landings and aliases from only the destination's accepted ancestry are
+reapplied before reuse. Unrelated merged history and ready destinations do not
+invalidate this proof. Head changes require a fresh Git sample; legacy observations
+without witnesses refresh once rather than replaying repository history. Current
+readiness and newest-generation checks still apply before claim.
+
 - Same node: the blocking change merges directly into the target.
 - Ancestor: the change merges into an ancestor, then presence demand restacks only the required path to the target.
 - Sibling: the blocking node merges into their common ancestor, then presence demand reaches the target through the minimal ancestor path.

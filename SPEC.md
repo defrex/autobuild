@@ -2339,6 +2339,14 @@ is excluded. An empty completed node contributes nothing; missing or ambiguous
 completion evidence does not mean empty. The newest build generation is used,
 with ties diagnosed rather than falling back to older successful work.
 
+Destination observations retain versioned, head-bound Git witnesses (reachable
+commit SHAs and direct build trailers) and a fixed-length evidence digest. Current
+confirmed landings and aliases from only the destination's accepted ancestry are
+reapplied before reuse. Unrelated merged history and ready destinations do not
+invalidate this proof. Head changes require a fresh Git sample; legacy observations
+without witnesses refresh once rather than replaying repository history. Current
+readiness and newest-generation checks still apply before claim.
+
 Demand-driven restacking supplies ancestor changes to descendants. Sibling changes
 wait for their node to merge in the common ancestor and presence demand into the target;
 descendant changes wait for their node to merge into the target ancestor. Same-node
