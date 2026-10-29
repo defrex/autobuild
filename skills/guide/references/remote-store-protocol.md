@@ -413,10 +413,12 @@ state; cursor, progress, and compatibility facts remain canonical. The required
 `seenTypes` set retains the event types known to that released reader. Required values
 that cannot be represented retain typed incompatibility behavior. The request’s
 `x-autobuild-catalog-identity` may identify the generated finished-value catalog;
-any supplied catalog identity plus projection capability preserves the canonical answer,
-including an unrecognized source-client catalog. Source clients can share a published
+A recorded published catalog identity selects its frozen contract, even when the
+client advertises projection. An unrecognized catalog identity plus projection
+capability preserves the canonical answer. Source clients can share a published
 package version while requiring newer fields. Published clients without a catalog
-identity receive the frozen published contract. Clients never reconstruct named
+identity also receive the frozen published contract. Release preparation records
+the outgoing catalog header identity alongside the frozen contract. Clients never reconstruct named
 answers from raw events. Repository build-digest batches are likewise canonical:
 one repo-scoped GET returns the batch without client build discovery or per-build
 reducer requests. This does not change the explicit snapshot or event APIs.

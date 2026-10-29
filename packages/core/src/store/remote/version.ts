@@ -21,6 +21,6 @@ export const CATALOG_IDENTITY_HEADER = 'x-autobuild-catalog-identity'
 
 /** Reducer-value capability, independent of version: the client projects the
  * canonical value onto its own shape. The server still adapts published clients
- * without catalog identities to their frozen contracts when new variants would
- * defeat that projection. Source clients supplying identities retain canonical values. */
+ * with recorded catalog identities or no identity to their frozen contracts when new variants would
+ * defeat that projection. Source clients supplying unrecognized identities retain canonical values. */
 export const REDUCER_VALUE_PROJECTION_HEADER = 'x-autobuild-reducer-value-projection'

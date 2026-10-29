@@ -175,7 +175,17 @@ const supportedReleases = RELEASED_CLIENTS.filter((entry) =>
     `${entry.version.split('.').slice(0, 2).join('.')}.0`,
   ),
 )
-for (const release of supportedReleases) {
+// Model the first header-sending published line using an immutable old catalog.
+const matrixReleases = [
+  ...supportedReleases,
+  {
+    ...supportedReleases.at(-1)!,
+    version: '1.4.0',
+    projects: true,
+    catalogIdentity: 'frozen-published-1.4-catalog',
+  },
+]
+for (const release of matrixReleases) {
   test(`published ${release.version}: every named reducer fits its frozen acceptance contract`, () => {
     expect(release.protocol).toBeDefined()
     expect(release.contract).toBeDefined()
@@ -189,9 +199,14 @@ for (const release of supportedReleases) {
       const answer = { version: entry.reducer.version, cursor: 999, value }
       const before = JSON.stringify(answer)
       const adapted = reducerValueForClient(
-        { version: release.version, projects: release.projects ?? false },
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
         name,
         answer,
+        matrixReleases,
       )
       expect(projectReducerValue(name, adapted.value, catalog), name).toEqual({
         value: adapted.value,
@@ -204,9 +219,14 @@ for (const release of supportedReleases) {
     const broken = { version: 99, cursor: 7, value: null }
     expect(
       reducerValueForClient(
-        { version: release.version, projects: release.projects ?? false },
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
         'repositoryReadFacts',
         broken,
+        matrixReleases,
       ),
     ).toBe(broken)
     const unknown = { ...broken, value }
@@ -254,7 +274,7 @@ test('unrecognized source catalogs preserve canonical fields and event facts', (
 import { MemoryBuildStore } from '../memory'
 import { KERNEL } from '../../events/envelope'
 
-for (const release of supportedReleases)
+for (const release of matrixReleases)
   test(`published ${release.version}: new latest-event discriminants are omitted only from optional display fields, including nested state`, async () => {
     const catalog = RELEASED_REDUCER_VALUES[release.contract!]!
     const store = new MemoryBuildStore()
@@ -295,9 +315,14 @@ for (const release of supportedReleases)
       }
       const input = { ...answer, value: futureEvents(answer.value) }
       const projected = reducerValueForClient(
-        { version: release.version, projects: release.projects ?? false },
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
         reducer,
         input,
+        matrixReleases,
       )
       expect(projectReducerValue(reducer, projected.value, catalog)).toEqual({
         value: projected.value,
@@ -318,9 +343,14 @@ for (const release of supportedReleases)
     const broken = { version: 99, value: malformed }
     expect(
       reducerValueForClient(
-        { version: release.version, projects: release.projects ?? false },
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
         'build',
         broken,
+        matrixReleases,
       ),
     ).toBe(broken)
   })

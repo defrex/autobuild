@@ -187,12 +187,13 @@ All event-derived checkpoints include the combined read-catalog fingerprint in
 their keys, independently of numeric reducer versions. Snapshot envelopes validate
 that fingerprint; another catalog's rows remain untouched. Remote named values
 keep their strict three-field JSON body `{version, cursor, value}`. Clients sending
-both `x-autobuild-reducer-value-projection: 1` and a nonempty
+both `x-autobuild-reducer-value-projection: 1` and an unrecognized
 `x-autobuild-catalog-identity` receive the canonical answer, including source clients
 whose catalog identity differs from the service's. The client projects the value
 onto its own shape (`projectReducerValue` in `store/reducer-value-validation.ts`),
 dropping unknown properties, so reducer version skew alone is not an error.
-Published clients without a catalog identity receive answers projected onto their
+Published clients with a recorded published catalog identity, or without a catalog
+identity, receive answers projected onto their
 frozen released contracts in `store/remote/released-reducer-values/` and stamped
 with their released reducer versions, including projection-capable published clients.
 `reducerValueForClient` omits optional `lastEvent` fields with newer event variants,

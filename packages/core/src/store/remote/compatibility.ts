@@ -155,13 +155,23 @@ export function reducerValueForClient<T extends { version: number; value: unknow
   client: { version: string | null; projects: boolean; catalogIdentity?: string | null },
   reducer: string,
   answer: T,
+  releases = RELEASED_CLIENTS,
 ): T {
   // Source clients retain the package version between releases. Their catalog
   // can require fields absent from that version's published contract.
-  if (client.projects && client.catalogIdentity) return answer
+  if (
+    client.projects &&
+    client.catalogIdentity &&
+    !releases.some((entry) => entry.catalogIdentity === client.catalogIdentity)
+  )
+    return answer
   const { version: release } = client
   if (release === null) return answer
-  const published = RELEASED_CLIENTS.find((entry) => entry.version === release)
+  const published = releases.find((entry) =>
+    client.catalogIdentity
+      ? entry.catalogIdentity === client.catalogIdentity
+      : entry.version === release,
+  )
   if (!published?.contract) return answer
   const catalog = RELEASED_REDUCER_VALUES[published.contract]
   if (!catalog) return answer

@@ -19,7 +19,8 @@ interchangeable in both directions. Protocol changes require a new major.minor
 line and retained handlers for every line still in the supported client window.
 
 The release command automatically records the outgoing published client’s protocol
-identity, publication timestamp, and frozen reducer contract, recovering missing
+identity, outgoing catalog-header identity (when its client sends one), publication
+timestamp, and frozen reducer contract, recovering missing
 evidence from the integrity-checked npm artifact. It freezes the target’s generated
 finished shapes and reducer versions before running target-version gates. Never
 hand-edit historical contracts or publication dates. Dry-run prints these candidate

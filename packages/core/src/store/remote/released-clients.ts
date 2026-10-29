@@ -6,6 +6,8 @@ export interface ReleasedClient {
   publishedAt: string
   protocol?: string
   contract?: string
+  /** Header sent by the published client; absent for pre-header releases. */
+  catalogIdentity?: string
   projects?: boolean
   provenance: {
     registry?: string

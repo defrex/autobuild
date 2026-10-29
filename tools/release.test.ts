@@ -1525,7 +1525,11 @@ test('compatibility preparation freezes target artifacts, preserves dates, and r
     outgoing: '1.3.0',
     target: '1.4.0',
     now: '2026-10-30T12:00:00.000Z',
-    current: { catalog: { ...tinyCatalog, versions: { build: 2 } }, protocol: '6' },
+    current: {
+      catalog: { ...tinyCatalog, versions: { build: 2 } },
+      protocol: '6',
+      catalogIdentity: 'published-target-fingerprint',
+    },
   }
   const files = await prepareReleaseCompatibility(args)
   expect(files.map((file) => file.path)).toContain(
@@ -1536,7 +1540,14 @@ test('compatibility preparation freezes target artifacts, preserves dates, and r
   )
   expect(ledger[0].publishedAt).toBe('2026-10-28T20:17:06.230Z')
   expect(ledger[2].publishedAt).toBe(args.now)
+  expect(ledger[2].catalogIdentity).toBe(args.current.catalogIdentity)
   for (const file of files) await writeFile(join(fixture.root, file.path), file.content)
+  await expect(
+    prepareReleaseCompatibility({
+      ...args,
+      current: { ...args.current, catalogIdentity: 'changed' },
+    }),
+  ).rejects.toThrow('immutable release contract')
   const retry = await prepareReleaseCompatibility({ ...args, now: '2026-11-01T00:00:00.000Z' })
   expect(retry).toEqual([])
   await rm(join(fixture.root, COMPATIBILITY_ROOT, 'released-reducer-values/1.2.0.json'))
@@ -1553,7 +1564,7 @@ test('missing outgoing contract is recovered from published evidence, never curr
     outgoing: '1.3.0',
     target: '1.4.0',
     now: '2026-10-30T00:00:00.000Z',
-    current: { catalog: tinyCatalog, protocol: '6' },
+    current: { catalog: tinyCatalog, protocol: '6', catalogIdentity: 'target-fingerprint' },
     recover: async (_, version) => ({
       publication: pub(version, '2026-10-29T15:44:57.934Z'),
       catalog: historical,

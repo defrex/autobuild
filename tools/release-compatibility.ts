@@ -92,12 +92,23 @@ export async function recoverPublished(root: string, version: string): Promise<P
       await readFile(join(base, 'packages/core/src/store/reducer-value-shapes.json'), 'utf8'),
     )
     const client = await readFile(join(base, COMPATIBILITY_ROOT, 'client.ts'), 'utf8')
+    const sendsCatalogIdentity = client.includes(
+      '[CATALOG_IDENTITY_HEADER]: REDUCER_VALUE_CONTRACT_IDENTITY',
+    )
+    const publishedValidation = sendsCatalogIdentity
+      ? await import(
+          pathToFileURL(join(base, 'packages/core/src/store/reducer-value-validation.ts')).href
+        )
+      : undefined
     return {
       publication: {
         version,
         publishedAt: metadata.time[version]!,
         protocol: identity.REMOTE_STORE_PROTOCOL_VERSION,
         contract: `${version}.json`,
+        ...(publishedValidation && {
+          catalogIdentity: publishedValidation.REDUCER_VALUE_CONTRACT_IDENTITY,
+        }),
         projects: client.includes("[REDUCER_VALUE_PROJECTION_HEADER]: '1'"),
         provenance: { registry, ...entry.dist },
       },
@@ -125,7 +136,7 @@ export async function prepareReleaseCompatibility(input: {
   now: string
   recover?: (root: string, version: string) => Promise<PublishedEvidence>
   /** Offline seams exercise the same preparation with small frozen catalogs. */
-  current?: { catalog: ReleasedReducerValues; protocol: string }
+  current?: { catalog: ReleasedReducerValues; protocol: string; catalogIdentity: string }
 }): Promise<CompatibilityCandidate[]> {
   const { root, outgoing, target, now } = input
   const ledgerPath = `${COMPATIBILITY_ROOT}/released-clients.json`
@@ -165,7 +176,9 @@ export async function prepareReleaseCompatibility(input: {
     if (
       outgoingEntry &&
       (Date.parse(outgoingEntry.publishedAt) !== Date.parse(evidence.publication.publishedAt) ||
-        (outgoingEntry.protocol && outgoingEntry.protocol !== evidence.publication.protocol))
+        (outgoingEntry.protocol && outgoingEntry.protocol !== evidence.publication.protocol) ||
+        (outgoingEntry.catalogIdentity &&
+          outgoingEntry.catalogIdentity !== evidence.publication.catalogIdentity))
     )
       throw new Error('published evidence conflicts with immutable outgoing identity or date')
     const retainedContract =
@@ -195,6 +208,11 @@ export async function prepareReleaseCompatibility(input: {
       pathToFileURL(resolve(root, COMPATIBILITY_ROOT, 'version.ts')).href
     )
     current = {
+      catalogIdentity: (
+        await import(
+          pathToFileURL(resolve(root, 'packages/core/src/store/reducer-value-validation.ts')).href
+        )
+      ).REDUCER_VALUE_CONTRACT_IDENTITY,
       protocol: REMOTE_STORE_PROTOCOL_VERSION,
       catalog: {
         ...JSON.parse(
@@ -214,10 +232,12 @@ export async function prepareReleaseCompatibility(input: {
       },
     }
   }
+  if (!current.catalogIdentity) throw new Error('missing outgoing catalog header identity')
   const prior = releases.find((entry) => entry.version === target)
   if (prior) {
     if (
       prior.protocol !== current.protocol ||
+      prior.catalogIdentity !== current.catalogIdentity ||
       !prior.contract ||
       contractBytes(catalogs.get(prior.contract)) !== contractBytes(current.catalog)
     )
@@ -233,6 +253,7 @@ export async function prepareReleaseCompatibility(input: {
       protocol: current.protocol,
       contract,
       projects: true,
+      catalogIdentity: current.catalogIdentity,
       provenance: { tag: `v${target}` },
     })
     if (!equivalent) {
