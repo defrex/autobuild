@@ -1350,6 +1350,7 @@ a.rowhead {
 }
 
 .confirm-body input.project {
+  font-family: var(--mono);
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
