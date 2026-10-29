@@ -4372,6 +4372,18 @@ deltas and prior values retained across rotation.
 
 ### Hosted project deletion
 
+The browser requires the exact full repository identity in a transient dialog field;
+confirm stays disabled for empty or mismatched input and focus starts in the field.
+The handler independently binds that identity to the selected repository and its
+fresh validated preview. Only JSON `{deleted:true}` acknowledges completion.
+After any failed or unrecognized deletion response, the browser shows
+“Deletion outcome unknown; reload to check” and holds the row in its original slot
+without actions, even after dismissal. Only a complete successful discovery begun
+by Reload after the attempt settles it: absence removes the row, presence restores
+its authorized actions, and pending cleanup restores Finish deletion with a fresh
+preview and exact typing. An earlier or unsuccessful read cannot settle the outcome.
+The server's `{repo}` body and generation-bound If-Match contract are unchanged.
+
 The Projects web surface allows super users and organization owners to preview
 counts and permanently delete their authorized projects with the shared confirmation dialog.
 PostgreSQL fences the registration generation before physical blob cleanup and

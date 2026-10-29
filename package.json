@@ -165,6 +165,7 @@
     "dejavu-fonts-ttf": "2.37.0",
     "drizzle-kit": "^0.31.10",
     "git-format-staged": "4.0.1",
+    "happy-dom": "^21.0.4",
     "husky": "9.1.7",
     "typescript": "5.9.3"
   }
