@@ -90,7 +90,12 @@ client identifier belongs to the authorized ChatGPT registration. Reauthorizatio
 keeps identity and registration associated. Never copy the ambient Codex login.
 
 Exactly one owner refreshes each connection: the local dispatcher or the
-hosted refreshing secret. Credentials rotate atomically before delivery. Expired access tokens remain
+hosted refreshing secret. Both owners refresh only at or after the maximum of
+any provider earliest-refresh floor and their pre-expiry threshold. Local renewal
+uses a one-minute margin; hosted renewal uses ten minutes to tolerate a delayed
+five-minute tick. Before refresh is due, still-valid access is supplied unchanged.
+Expired access behind a future provider floor is never delivered.
+Credentials rotate atomically before delivery. Expired access tokens remain
 refreshable after dispatcher downtime; a live validator or dispatcher claim
 cannot be displaced. Only a proven dead process or a released claim permits
 a successor to own renewal.

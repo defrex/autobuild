@@ -300,7 +300,11 @@ export class PostgresProjectSecrets implements ProjectSecretsManagement, Project
           continue
         }
         if (r.kind === 'static' || refreshed.has(JSON.stringify([r.name, r.generation]))) continue
-        if ('expiresAt' in p && (p.earliestRefreshAt ?? p.expiresAt - 600_000) > this.now())
+        // Both near-expiry eligibility and the provider's refresh floor must be reached.
+        if (
+          'expiresAt' in p &&
+          Math.max(p.expiresAt - 600_000, p.earliestRefreshAt ?? 0) > this.now()
+        )
           continue
         if (!('state' in p) || (p.earliestRefreshAt ?? 0) > this.now())
           throw new ProjectSecretError('secret-unavailable')

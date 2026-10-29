@@ -447,3 +447,42 @@ test('only a proven dead owner can be reclaimed and uncertain refresh stays fail
     f.cleanup()
   }
 })
+
+for (const floorOffset of [undefined, -30000, 0, 30000]) {
+  test(`local refresh gates one-minute margin and provider floor: ${floorOffset}`, async () => {
+    const f = fixture()
+    try {
+      const expiresAt = 2_000_003_600_000
+      const threshold = expiresAt - 60000
+      const floor = floorOffset === undefined ? undefined : threshold + floorOffset
+      const due = Math.max(threshold, floor ?? 0)
+      f.credentials.install('plan', descriptor, {
+        ...state,
+        expiresAt,
+        earliestRefreshAt: floor,
+      })
+      let calls = 0
+      const owner = new LocalAccountOwner(f.credentials, async (saved) => {
+        calls++
+        expect(saved.refreshToken).toBe(state.refreshToken)
+        return {
+          ...saved,
+          accessToken: 'renewed',
+          refreshToken: 'rotated',
+          expiresAt: due + 3600000,
+        }
+      })
+      owner.claim('plan')
+      for (const now of [threshold - 300000, due - 1]) {
+        expect(await owner.tick({ plan: descriptor }, now)).toEqual({ CHATGPT: state.accessToken })
+        expect(calls).toBe(0)
+      }
+      expect(await owner.tick({ plan: descriptor }, due)).toEqual({ CHATGPT: 'renewed' })
+      expect(await owner.tick({ plan: descriptor }, due + 1)).toEqual({ CHATGPT: 'renewed' })
+      expect(calls).toBe(1)
+      owner.release('plan')
+    } finally {
+      f.cleanup()
+    }
+  })
+}
