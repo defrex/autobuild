@@ -2093,6 +2093,8 @@ revision and keeps any open PR. A build's spec can therefore change under it:
 phase runs after the revision read the new revision, while historical runs
 remain readable at the revision they actually saw.
 
+If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
+
 Operators may explicitly revise an opened idle collecting node or a node blocked on failed
 integration verification without an escalation. Use
 `ab answer <node> --revise-spec replacement.md` or, after amending its ticket,
@@ -2109,7 +2111,8 @@ Active verification/reconcile or writer work, restack/reparent work, pause,
 pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
-restart from `plan`.
+restart from `plan` after any unfinished reconcile resumes under the revised
+spec and its publication is confirmed.
 
 Every command requires an applicable target in this repository. Pause and
 resume require an active build; abort and hold also accept queued builds.

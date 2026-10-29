@@ -689,6 +689,8 @@ raises an `escalation`; a human uses `ab answer --revise-spec` (or
 `--revise-spec-from-ticket`), the spec gets rev N+1, and the leaf restarts
 from `plan` (cheap — downstream was invalidated anyway).
 
+If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
+
 Operators may explicitly revise an opened idle collecting node or a node blocked on failed
 integration verification without an escalation. Use
 `ab answer <node> --revise-spec replacement.md` or, after amending its ticket,
@@ -705,7 +707,8 @@ Active verification/reconcile or writer work, restack/reparent work, pause,
 pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
-restart from `plan`.
+restart from `plan` after any unfinished reconcile resumes under the revised
+spec and its publication is confirmed.
 
 Caught preparation failures before an established build follow the durable
 claim recovery contract in §5; incomplete hosted snapshots never launch a build.
@@ -3557,6 +3560,8 @@ post-reconcile policy (default: re-run all applicable steps). A resolution the a
 risky — semantic conflicts, spec-relevant choices — escalates rather than
 guesses. Reconcile skips `code-review` by default (escalation covers the
 judgment cases; policy can force it).
+
+If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
 
 On each repeat conflict, the runner records a fresh authoritative base snapshot
 on `reconcile.progress-checked`, tied to that conflict and the most recently

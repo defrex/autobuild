@@ -78,6 +78,8 @@ pre-revision reviews, verification, and finalize completion do not satisfy the
 new run. Historical phase runs remain pinned to the revision they saw. An
 already-open pull request is retained and updated rather than duplicated.
 
+If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
+
 The two events make interrupted work safely resumable. If the answer was
 recorded but `spec.revised` was not, a repeated revision command publishes the
 body named by that earlier answer; it does not read or authorize a newly
@@ -104,4 +106,5 @@ Active verification/reconcile or writer work, restack/reparent work, pause,
 pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
-restart from `plan`.
+restart from `plan` after any unfinished reconcile resumes under the revised
+spec and its publication is confirmed.
