@@ -1617,6 +1617,18 @@ execution and unchanged-base progress budgets retain their existing accounting.
 
 ## Forge failure recovery
 
+Destination heads come only from the authoritative forge branch; dispatcher-host
+refs are never a fallback. Failed remote reads retain the accepted observation;
+classified rate limits use repository forge degradation and cooldown. Changed
+heads require immutable commit ancestry proof against the accepted target and
+the destination base already used by replay. Missing capability or failed proof
+defers new replay. A proven non-descendant records `target.rewritten` with branch,
+previous SHA and observed SHA, retains the accepted target, and raises watch/wait
+attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
+clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
+Upstream force-pushes are never adopted automatically. Accepted node reparenting
+starts a new branch scope; frozen transactions recover their retained inputs.
+
 `kernel/publication-retry.ts` selects eligibility from the publication ledger
 and shares the policy between `processes/build-runner.ts` and trusted
 `cli/publication-settlement.ts`. The lease sweep skips ineligible retained intents;

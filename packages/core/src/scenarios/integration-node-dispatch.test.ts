@@ -102,7 +102,7 @@ test('nodes open at full work capacity and abort immediately closes admission', 
   }
 })
 
-test('operator demand restacks nested nodes independently with owned foreign history and no agent sessions', async () => {
+test('operator demand advances root nodes but stops nested nodes at rewritten upstream history', async () => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   const h = await makeHarness({
@@ -153,15 +153,14 @@ test('operator demand restacks nested nodes independently with owned foreign his
           (event) => event.payload.sha === root,
         ),
       ).toHaveLength(1)
-      for (const r of nodes) {
-        expect(await git(['merge-base', '--is-ancestor', root, r.branch!], h.origin)).toBe('')
-        expect(await git(['show', `${r.branch}:foreign-a`], h.origin)).toBe('foreign-a')
+      expect(await git(['merge-base', '--is-ancestor', root, a.branch!], h.origin)).toBe('')
+      expect(await git(['show', `${a.branch}:foreign-a`], h.origin)).toBe('foreign-a')
+      for (const r of nodes)
         expect(reduceBuild(await h.events(r.slug)).pr?.number).toBe(before.get(r.slug)?.number)
-      }
-      expect(await git(['show', `${c.branch}:foreign-b`], h.origin)).toBe('foreign-b')
+      const rejected = reduceBuild(await h.events(b.slug)).targetRewrite
+      expect(rejected?.payload.branch).toBe(a.branch!)
+      expect(rejected?.payload.sha).toBe(await git(['rev-parse', a.branch!], h.origin))
       expect(reduceBuild(await h.events(a.slug)).nodeRestack?.inventory?.foreign).toHaveLength(1)
-      expect(reduceBuild(await h.events(b.slug)).nodeRestack?.inventory?.foreign).toHaveLength(1)
-      expect(reduceBuild(await h.events(c.slug)).nodeRestack?.inventory?.foreign).toHaveLength(0)
     }
     expect(h.launched).toHaveLength(0)
   } finally {

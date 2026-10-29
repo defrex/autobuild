@@ -1,3 +1,4 @@
+import { LocalGitForge } from '../ports/forge/local-git'
 import {
   temporaryDirectories as ownTempDirectories,
   temporaryOriginScratch,
@@ -198,6 +199,9 @@ async function makeFixture(
   const ids = sequentialIds()
   const store = new MemoryBuildStore({ clock })
   const forge = new FakeForge()
+  const served = new LocalGitForge({ repoRoot: origin })
+  forge.remoteBranchSha = (branch) => served.remoteBranchSha(branch)
+  forge.isCommitAncestor = (ancestor, descendant) => served.isCommitAncestor(ancestor, descendant)
   const recordPush = forge.pushBranch.bind(forge)
   forge.pushBranch = async (cwd, branch, sha) => {
     await recordPush(cwd, branch, sha)

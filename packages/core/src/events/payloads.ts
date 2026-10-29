@@ -39,7 +39,7 @@ import {
   type VerifyOutcome,
 } from '../ontology'
 
-const gitOid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+export const gitOid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
 export const reconcileTransactionSchema = z.strictObject({
   id: z.string().min(1),
   attempt: z.number().int().positive(),
@@ -1087,6 +1087,12 @@ export const eventPayloadSchemas = {
       count: z.number().int().nonnegative().nullable(),
     })
     .refine((sample) => sample.count === null || sample.head !== null),
+  'target.rewritten': z.strictObject({
+    branch: z.string().min(1),
+    previousSha: gitOid,
+    sha: gitOid,
+  }),
+  'target.rewrite-cleared': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
   'target.moved': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
   'restack.prepared': leafRestackSchema,
   'restack.replayed': z.strictObject({

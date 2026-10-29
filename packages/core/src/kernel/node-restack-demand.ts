@@ -3,6 +3,7 @@ import { integrationComplete, integrationFailed } from './integration-state'
 
 /** Existing reservations are recovery work, regardless of fresh demand. */
 export function nodeRestackDemand(state: BuildState): boolean {
+  if (state.targetRewrite && !state.nodeRestack?.active) return false
   return !!(
     state.nodeRestack?.active ||
     state.nodeRestack?.parentChange ||

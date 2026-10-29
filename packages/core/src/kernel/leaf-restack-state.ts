@@ -9,6 +9,7 @@ export interface LeafRestackState {
   completedAt?: number
   finalizedAt?: number
   target?: { seq: number; branch: string; sha: string }
+  targetRewrite?: EventPayload<'target.rewritten'>
   distance?: EventPayload<'target.distance'>
   active?: EventPayload<'restack.prepared'>
   replay?: EventPayload<'restack.replayed'>
@@ -29,6 +30,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         state.finalizedAt = event.seq
         break
       case 'node.parent-accepted':
+        delete state.targetRewrite
         delete state.distance
         delete state.target
         break
@@ -54,7 +56,14 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
       case 'target.distance':
         state.distance = event.payload
         break
+      case 'target.rewritten':
+        state.targetRewrite = event.payload
+        break
+      case 'target.rewrite-cleared':
+        delete state.targetRewrite
+        break
       case 'target.moved':
+        delete state.targetRewrite
         delete state.distance
         state.target = { seq: event.seq, ...event.payload }
         break
@@ -91,7 +100,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
   }
 }
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 5,
+  version: 6,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),

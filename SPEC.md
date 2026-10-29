@@ -1119,7 +1119,8 @@ The base-selection invariants make this safe with Git:
   samples are deduplicated; destination changes and rewrites invalidate samples.
   Sampling never provisions a workspace, renders Git reads, or gates restacking.
 - **Observation never mutates a running workspace.** `target.moved` records an
-  exact observed head, even during a session. Transactions freeze their target;
+  accepted remote head, even during a session. Non-descendant observations record
+  `target.rewritten` and attention without changing the accepted target. Transactions freeze their target;
   later observations coalesce into one follow-on transaction for the newest
   snapshot at the next eligible point. Session and execution settlement fence
   rewrites, and trusted publication waits for remote guest teardown.
@@ -2846,7 +2847,7 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
+| Leaf restacking | `target.moved {branch, sha}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `phase.deferred`, `phase.deferral-escalated` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
@@ -4150,6 +4151,18 @@ target shape `{kind, branch, ticket?, build?}`. Tree display labels are owned
 by the shared projection vocabulary and reused by terminal and CLI text.
 
 ## Forge failure recovery
+
+Destination heads come only from the authoritative forge branch; dispatcher-host
+refs are never a fallback. Failed remote reads retain the accepted observation;
+classified rate limits use repository forge degradation and cooldown. Changed
+heads require immutable commit ancestry proof against the accepted target and
+the destination base already used by replay. Missing capability or failed proof
+defers new replay. A proven non-descendant records `target.rewritten` with branch,
+previous SHA and observed SHA, retains the accepted target, and raises watch/wait
+attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
+clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
+Upstream force-pushes are never adopted automatically. Accepted node reparenting
+starts a new branch scope; frozen transactions recover their retained inputs.
 
 Leaf restack and reconcile publication retry classified transient forge or transport
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and

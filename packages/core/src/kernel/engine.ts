@@ -46,6 +46,7 @@ import { stalledChains, type FindingChain } from './stall'
 // ── The decision contract ────────────────────────────────────────────────────
 
 export type WaitReason =
+  | 'target-rewritten'
   | 'publication-retry'
   | 'verify-stage'
   | 'mixed-version'
@@ -227,6 +228,10 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   if (state.pendingCommands.some((c) => c.command === 'pause')) {
     return { kind: 'acknowledge', command: 'pause' }
   }
+
+  // Frozen transactions retain their original destination and may recover.
+  if (state.targetRewrite && !log.restack.active && !state.nodeRestack?.active)
+    return { kind: 'wait', reason: 'target-rewritten' }
 
   // ── 3. Escalations (§11, §15.6-B) ──────────────────────────────────────────
   // blocked ≡ any open (unanswered) escalation (§15.5).

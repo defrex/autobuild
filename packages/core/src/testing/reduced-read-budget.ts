@@ -1,3 +1,4 @@
+import { observeTarget } from '../kernel/target-observation'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -116,6 +117,16 @@ export async function reducedReadBudget(opts: {
       'historical-gate',
     ),
   )
+  const targetForge = new FakeForge()
+  const target = 'a'.repeat(40)
+  await observeTarget({
+    store,
+    forge: targetForge,
+    slug,
+    branch: 'main',
+    sha: target,
+    actor: KERNEL,
+  })
   const reset = () => {
     costs.events = 0
     costs.metadata = 0
@@ -187,6 +198,16 @@ export async function reducedReadBudget(opts: {
       reset()
       for (let n = 0; n < operations; n++) {
         await readBuildFacts(cold, slug)
+        expect(
+          await observeTarget({
+            store: cold,
+            forge: targetForge,
+            slug,
+            branch: 'main',
+            sha: target,
+            actor: KERNEL,
+          }),
+        ).toBe('unchanged')
         await readRepositoryFacts(cold, repo)
       }
       expect(costs.events).toBe(0)
