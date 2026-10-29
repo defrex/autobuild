@@ -69,6 +69,15 @@ export async function settlePendingPublication(
   let events = (await readBuildFacts(deps.store, slug)).value
   const request = events.publication.latestUncompletedRequest()
   if (request === undefined) return
+  // A rewrite head recorded lost left with its released workspace and exists
+  // nowhere to archive or push. Retrying it can only fail, and that failure
+  // would end every dispatcher tick; the recorded loss is terminal here.
+  if (
+    (request.payload.operation === 'restack' || request.payload.operation === 'reconcile') &&
+    request.payload.rewrite !== undefined &&
+    events.publication.lostRecorded(request)
+  )
+    return
 
   if (request.payload.operation === 'restack') {
     const record = await deps.store.getBuild(slug)
