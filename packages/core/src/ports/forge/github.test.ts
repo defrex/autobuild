@@ -2733,3 +2733,47 @@ test('trusted Git transient diagnostics are typed after credential redaction', a
     expect((failure as Error).message).not.toContain('secret-token')
   }
 })
+
+describe('immutable ancestry proof', () => {
+  const ancestor = 'a'.repeat(40)
+  const descendant = 'b'.repeat(40)
+  test.each(['ahead', 'identical', 'behind', 'diverged'])('%s comparison', async (status) => {
+    const { forge, calls } = makeForge([{ json: { status, ahead_by: 0, behind_by: 0 } }])
+    expect(await forge.isCommitAncestor(ancestor, descendant)).toBe(
+      status === 'ahead' || status === 'identical',
+    )
+    expect(paths(calls)).toEqual([`GET repos/acme/app/compare/${ancestor}...${descendant}`])
+  })
+  test.each([{}, { status: 'unknown' }, { ahead_by: 1, behind_by: 0 }])(
+    'malformed proof fails closed: %j',
+    async (json) => {
+      const { forge } = makeForge([{ json }])
+      await expect(forge.isCommitAncestor(ancestor, descendant)).rejects.toThrow()
+    },
+  )
+  test.each([404, 403, 429, 503])('HTTP %s is failure, never false ancestry', async (status) => {
+    const { forge } = makeForge([{ status }])
+    await expect(forge.isCommitAncestor(ancestor, descendant)).rejects.toThrow()
+  })
+  test('transport failures propagate', async () => {
+    const error = new Error('connection reset')
+    const forge = new GitHubForge({
+      repository: 'acme/app',
+      transport: async () => {
+        throw error
+      },
+    })
+    await expect(forge.isCommitAncestor(ancestor, descendant)).rejects.toThrow('connection reset')
+  })
+})
+
+test('exact ancestry comparisons share one wire read within a dispatcher scope', async () => {
+  const a = 'a'.repeat(40),
+    b = 'b'.repeat(40)
+  const { forge, calls } = makeForge([{ json: { status: 'ahead', ahead_by: 1, behind_by: 0 } }])
+  await forge.withReadScope(async () => {
+    expect(await forge.isCommitAncestor(a, b)).toBe(true)
+    expect(await forge.isCommitAncestor(a, b)).toBe(true)
+  })
+  expect(calls).toHaveLength(1)
+})

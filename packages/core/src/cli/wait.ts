@@ -226,6 +226,7 @@ function stateSatisfies(
       return (
         (state.kind === 'node' && integrationFailed(state)) ||
         state.janitor?.attention === true ||
+        !!state.targetRewrite ||
         awaitsConsent(state, restack) ||
         !!state.nodeRestack?.conflict ||
         !!(restack.active && restack.replay?.conflicted) ||

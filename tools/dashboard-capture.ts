@@ -588,13 +588,13 @@ mode = "auto"
     tickets: [],
   })
   await harness.store.ensureRepo(harness.origin)
-  harness.forge.remoteBranches.set('main', 'opening-sha')
+  harness.forge.remoteBranches.set('main', '1'.repeat(40))
   harness.forge.setPrState(91, { state: 'open', mergeable: null })
   for (const [index, label] of ['empty', 'with-pr', 'nested', 'aborted', 'unknown'].entries()) {
     const slug = `integration-${label}`
     harness.forge.remoteBranches.set(
       `ab-node/${slug}`,
-      label === 'with-pr' ? 'child-sha' : 'opening-sha',
+      label === 'with-pr' ? '2'.repeat(40) : '1'.repeat(40),
     )
     if (label === 'nested')
       harness.forge.nodeComparisons.set(
@@ -626,13 +626,13 @@ mode = "auto"
       payload: {
         branch: `ab-node/${slug}`,
         parent: 'main',
-        sha: 'opening-sha',
+        sha: '1'.repeat(40),
       },
     })
     await harness.store.append(slug, {
       actor: DISPATCHER,
       type: 'node.opened',
-      payload: { sha: 'opening-sha' },
+      payload: { sha: '1'.repeat(40) },
     })
     if (label === 'with-pr') {
       const original = 'b'.repeat(40)
@@ -644,8 +644,8 @@ mode = "auto"
           id: 'intent-replay',
           operation: 'restack',
           expected: original,
-          parent: 'opening-sha',
-          oldBase: 'opening-sha',
+          parent: '1'.repeat(40),
+          oldBase: '1'.repeat(40),
           archive: 'refs/archive/intent',
           changes: [{ sha: original }],
           upstreamBuilds: [],
@@ -655,7 +655,7 @@ mode = "auto"
       await harness.store.append(slug, {
         actor: KERNEL,
         type: 'node.item-prepared',
-        payload: { id: 'intent-replay', index: 0, base: 'opening-sha' },
+        payload: { id: 'intent-replay', index: 0, base: '1'.repeat(40) },
       })
       await harness.store.append(slug, {
         actor: KERNEL,
@@ -663,7 +663,7 @@ mode = "auto"
         payload: {
           id: 'intent-replay',
           index: 0,
-          base: 'opening-sha',
+          base: '1'.repeat(40),
           head: rewritten,
           dropped: false,
         },
@@ -690,7 +690,7 @@ mode = "auto"
       actor: DISPATCHER,
       type: 'node.inventory',
       payload: {
-        head: 'child-sha',
+        head: '2'.repeat(40),
         builds: [],
         foreign: label === 'with-pr' ? ['a'.repeat(40)] : [],
       },
@@ -700,8 +700,8 @@ mode = "auto"
       actor: DISPATCHER,
       type: 'node.compared',
       payload: {
-        parentSha: 'opening-sha',
-        headSha: label === 'with-pr' ? 'child-sha' : 'opening-sha',
+        parentSha: '1'.repeat(40),
+        headSha: label === 'with-pr' ? '2'.repeat(40) : '1'.repeat(40),
         ahead: label === 'with-pr' ? 1 : 0,
       },
     })
@@ -739,8 +739,21 @@ mode = "auto"
           : {}),
       },
     })
+    // Preserve the scripted enumeration-failure evidence until its retry;
+    // successful polling would replace it with the fixture's empty ticket list.
+    if (label === 'unknown')
+      await harness.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.janitor-attempt-failed',
+        payload: {
+          firstFailureAt: '2026-07-15T11:45:00.000Z',
+          attempt: 1,
+          message: 'ticket enumeration unavailable',
+          nextAttemptAt: '2027-01-01T00:00:00.000Z',
+        },
+      })
     if (label !== 'unknown') {
-      const parent = label === 'with-pr' ? 'b'.repeat(40) : 'opening-sha'
+      const parent = label === 'with-pr' ? 'b'.repeat(40) : '1'.repeat(40)
       if (label === 'with-pr')
         await harness.store.append(slug, {
           actor: DISPATCHER,
@@ -751,7 +764,7 @@ mode = "auto"
         actor: DISPATCHER,
         type: 'node.parent-distance',
         payload: {
-          base: 'opening-sha',
+          base: '1'.repeat(40),
           parent,
           branch: label === 'nested' ? 'ab-node/integration-with-pr' : 'main',
           count: label === 'with-pr' ? 3 : 0,
@@ -762,7 +775,7 @@ mode = "auto"
       await harness.store.append(slug, {
         actor: DISPATCHER,
         type: 'pr.opened',
-        payload: { pr: { number: 91, url: 'https://example.test/pr/91', headSha: 'child-sha' } },
+        payload: { pr: { number: 91, url: 'https://example.test/pr/91', headSha: '2'.repeat(40) } },
       })
     if (label === 'aborted')
       await harness.store.append(slug, { actor: DISPATCHER, type: 'build.aborted', payload: {} })
@@ -1969,12 +1982,23 @@ export async function captureDashboardFrames(
           payload: { message: 'forge publication unavailable' },
         })
       }
-      if (spec.id === 'integration-narrow')
+      if (spec.id === 'integration-narrow') {
         await harness.store.append('integration-unknown', {
           actor: DISPATCHER,
           type: 'build.janitor-recovered',
           payload: {},
         })
+        await harness.store.append('integration-unknown', {
+          actor: DISPATCHER,
+          type: 'build.janitor-attempt-failed',
+          payload: {
+            firstFailureAt: '2026-07-15T11:45:00.000Z',
+            attempt: 1,
+            message: 'ticket enumeration unavailable',
+            nextAttemptAt: '2027-01-01T00:00:00.000Z',
+          },
+        })
+      }
       const { lines, model } = await capturePaint(harness, spec)
       const rendered = renderDashboardFrameImage(lines, {
         columns: spec.columns,

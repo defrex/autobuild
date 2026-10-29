@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 /**
  * Drizzle schema for the local SQLite BuildStore (SPEC §7.1): simple,
  * normalized, boring. Lease + heartbeat are mutable liveness columns on
@@ -55,6 +56,9 @@ export const events = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.build, t.seq] }),
     index('events_type_build_seq').on(t.type, t.build, t.seq),
+    index('events_node_rewrite_previous')
+      .on(t.build, sql`json_extract(${t.payload}, '$.previous')`, t.seq)
+      .where(sql`${t.type} = 'node.rewritten'`),
   ],
 )
 

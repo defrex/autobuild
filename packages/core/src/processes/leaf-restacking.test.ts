@@ -112,7 +112,7 @@ for (const conflict of [false, true])
             payload: { branch: 'main', sha: target },
           })
         }
-        const forge = new LocalGitForge({ exec: bunExec })
+        const forge = new LocalGitForge({ exec: bunExec, repoRoot: cwd })
         let competingHead: string | undefined
         if (!remote && ((!conflict && recovery === 'none') || recovery === 'contention')) {
           const capability = forge.rewrite!
@@ -605,6 +605,31 @@ for (const conflict of [false, true])
           expect(refreshed.filter((event) => event.type === 'verify.config-captured')).toHaveLength(
             2,
           )
+          if (recovery === 'none') {
+            // A fresh authoritative snapshot can race the dispatcher poll.
+            // It must not start another replay behind the already used base.
+            await git(['checkout', '-q', 'main'])
+            const forward = await file('upstream', 'future\n')
+            await git(['checkout', '-q', BRANCH])
+            await store.append(BUILD, {
+              actor: KERNEL,
+              type: 'target.moved',
+              payload: { branch: 'main', sha: forward },
+            })
+            await git(['update-ref', 'refs/heads/main', base])
+            const before = (await store.getEvents(BUILD)).filter(
+              (e) => e.type === 'restack.prepared',
+            ).length
+            const previousHead = await git(['rev-parse', BRANCH])
+            await runner.step()
+            const rejected = (await readBuildFacts(store, BUILD)).value
+            expect(rejected.state.targetRewrite?.payload.sha).toBe(base)
+            expect(
+              (await store.getEvents(BUILD)).filter((e) => e.type === 'restack.prepared'),
+            ).toHaveLength(before)
+            expect(await git(['rev-parse', BRANCH])).toBe(previousHead)
+            expect(await runner.step()).toEqual({ kind: 'wait', reason: 'target-rewritten' })
+          }
         }
       } finally {
         await rm(cwd, { recursive: true, force: true })

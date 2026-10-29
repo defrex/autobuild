@@ -87,11 +87,17 @@ async function harness(toml = '') {
     stderr: '',
     exitCode: 0,
   })
+  const forge = new FakeForge()
+  forge.seedBranch('main', BASE_SHA)
   const dispatcher = new Dispatcher({
     store,
     tickets,
-    workspaces: new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' }),
-    forge: new FakeForge(),
+    workspaces: new FakeWorkspaceProvider({
+      root: '/ws',
+      mode: 'logical',
+      base: { source: 'remote', sha: BASE_SHA },
+    }),
+    forge,
     config,
     repo: REPO,
     exec,

@@ -593,3 +593,18 @@ for (const mode of ['open', 'gated', 'unknown', 'crash-after-push'] as const) {
     }
   })
 }
+
+test('ancestry uses the served repository, distinguishes rewinds, and refuses missing objects', async () => {
+  const { root, workspace, forge } = await fixture()
+  const base = await git(root, 'rev-parse', 'main')
+  const head = await git(workspace, 'rev-parse', 'HEAD')
+  expect(await forge.isCommitAncestor(base, head)).toBe(true)
+  expect(await forge.isCommitAncestor(head, base)).toBe(false)
+  expect(await forge.isCommitAncestor(base, base)).toBe(true)
+  await expect(forge.isCommitAncestor('f'.repeat(40), head)).rejects.toThrow(
+    'ancestry proof failed',
+  )
+  await expect(new LocalGitForge().isCommitAncestor(base, head)).rejects.toThrow(
+    'requires repoRoot',
+  )
+})
