@@ -20,6 +20,9 @@ export const ACCESS_SCENARIOS = [
   'projects-delete-owner',
   'projects-delete-pending',
   'projects-delete-failed',
+  'projects-delete-mismatch',
+  'projects-delete-match',
+  'projects-outcome-unknown',
   'projects-cleanup-owner',
   'projects-cleanup-super',
   'projects-cleanup-confirm',
@@ -132,6 +135,16 @@ export function accessFixture(id: string) {
               ? a.projects[1]
               : undefined
         }
+        deletionIdentity={
+          state === 'projects-delete-match' || state === 'projects-delete-pending'
+            ? a.projects[1]
+            : state === 'projects-delete-mismatch'
+              ? a.projects[0]
+              : ''
+        }
+        unknownDeletions={
+          state === 'projects-outcome-unknown' ? { [a.projects[0]!]: 100 } : undefined
+        }
         deletionPreview={{
           repo:
             state === 'projects-cleanup-confirm'
@@ -146,7 +159,7 @@ export function accessFixture(id: string) {
         pending={state === 'projects-delete-pending'}
         deletionError={
           state === 'projects-delete-failed'
-            ? 'Cleanup is unavailable. Retry to finish deleting this project.'
+            ? 'Deletion outcome unknown; reload to check'
             : undefined
         }
         unassigned={
