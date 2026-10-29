@@ -412,7 +412,7 @@ An unknown event variant in optional `lastEvent` is omitted, including nested bu
 state; cursor, progress, and compatibility facts remain canonical. The required
 `seenTypes` set retains the event types known to that released reader. Required values
 that cannot be represented retain typed incompatibility behavior. The request’s
-`x-autobuild-catalog-identity` may identify the generated finished-value catalog;
+`x-autobuild-catalog-identity` may identify the generated finished-value catalog.
 A recorded published catalog identity selects its frozen contract, even when the
 client advertises projection. An unrecognized catalog identity plus projection
 capability preserves the canonical answer. Source clients can share a published
