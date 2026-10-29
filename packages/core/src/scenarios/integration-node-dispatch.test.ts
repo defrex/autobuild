@@ -102,7 +102,7 @@ test('nodes open at full work capacity and abort immediately closes admission', 
   }
 })
 
-test('operator demand restacks nested nodes independently with owned foreign history and no agent sessions', async () => {
+test('operator demand advances nested nodes through kernel restacks', async () => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   const h = await makeHarness({
@@ -153,15 +153,16 @@ test('operator demand restacks nested nodes independently with owned foreign his
           (event) => event.payload.sha === root,
         ),
       ).toHaveLength(1)
-      for (const r of nodes) {
-        expect(await git(['merge-base', '--is-ancestor', root, r.branch!], h.origin)).toBe('')
-        expect(await git(['show', `${r.branch}:foreign-a`], h.origin)).toBe('foreign-a')
+      expect(await git(['merge-base', '--is-ancestor', root, a.branch!], h.origin)).toBe('')
+      expect(await git(['show', `${a.branch}:foreign-a`], h.origin)).toBe('foreign-a')
+      for (const r of nodes)
         expect(reduceBuild(await h.events(r.slug)).pr?.number).toBe(before.get(r.slug)?.number)
+      for (const child of [b, c]) {
+        expect(reduceBuild(await h.events(child.slug)).targetRewrite).toBeUndefined()
+        expect(await git(['merge-base', '--is-ancestor', root, child.branch!], h.origin)).toBe('')
       }
-      expect(await git(['show', `${c.branch}:foreign-b`], h.origin)).toBe('foreign-b')
+      expect(await git(['show', `${b.branch}:foreign-b`], h.origin)).toBe('foreign-b')
       expect(reduceBuild(await h.events(a.slug)).nodeRestack?.inventory?.foreign).toHaveLength(1)
-      expect(reduceBuild(await h.events(b.slug)).nodeRestack?.inventory?.foreign).toHaveLength(1)
-      expect(reduceBuild(await h.events(c.slug)).nodeRestack?.inventory?.foreign).toHaveLength(0)
     }
     expect(h.launched).toHaveLength(0)
   } finally {
@@ -1281,3 +1282,151 @@ for (const mode of ['success', 'bare', 'cas', 'lease', 'missing', 'check-only'] 
     }
   })
 }
+
+test('paused child crosses two durable kernel rewrites before its next demand', async () => {
+  const { git, commitAll } = await import('./harness')
+  const { join } = await import('node:path')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('A', { title: 'Parent node' }), kind: 'node' },
+      { ...readyTicket('B', { title: 'Paused child' }), kind: 'node', target: 'A' },
+    ],
+  })
+  const tick = async () => {
+    for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+  }
+  try {
+    await tick()
+    const nodes = await h.store.listBuilds()
+    const a = nodes.find((r) => r.ticket?.id === 'A')!
+    const b = nodes.find((r) => r.ticket?.id === 'B')!
+    for (const [node, file] of [
+      [a, 'parent-owned'],
+      [b, 'child-owned'],
+    ] as const) {
+      const ws = join(h.tmp, file)
+      await git(['worktree', 'add', ws, node.branch!], h.origin)
+      await Bun.write(join(ws, file), file)
+      await commitAll(ws, file)
+      await git(['worktree', 'remove', ws], h.origin)
+    }
+    await tick()
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: b.slug, user: 'operator' })
+    await tick()
+    const baseline = reduceBuild(await h.events(b.slug)).nodeRestack!.contributionBase!
+    await controlBuild({ store: h.store, repo: h.origin, slug: b.slug, action: { kind: 'pause' } })
+    await tick()
+    for (const round of [1, 2]) {
+      await Bun.write(join(h.origin, `root-${round}`), `root ${round}`)
+      await commitAll(h.origin, `root ${round}`)
+      await requestNodeRestack({ store: h.store, repo: h.origin, slug: a.slug, user: 'operator' })
+      await tick()
+      if (round === 1) {
+        const ws = join(h.tmp, 'sibling-landing')
+        await git(['worktree', 'add', ws, a.branch!], h.origin)
+        await Bun.write(join(ws, 'sibling-owned'), 'sibling-owned')
+        await commitAll(ws, 'sibling lands between parent restacks')
+        await git(['worktree', 'remove', ws], h.origin)
+        await tick()
+      }
+    }
+    const parentHead = await git(['rev-parse', a.branch!], h.origin)
+    expect(ofType(await h.events(a.slug), 'node.rewritten')).toHaveLength(2)
+    await controlBuild({ store: h.store, repo: h.origin, slug: b.slug, action: { kind: 'resume' } })
+    await tick()
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: b.slug, user: 'operator' })
+    await tick()
+    const state = reduceBuild(await h.events(b.slug))
+    expect(state.targetRewrite).toBeUndefined()
+    expect(state.nodeRestack?.contributionBase).toBe(parentHead)
+    const move = ofType(await h.events(b.slug), 'target.moved').find(
+      (e) => e.payload.sha === parentHead,
+    )!
+    expect(move.payload.lineage?.find((p) => p.from === baseline)?.receipts).toHaveLength(2)
+    for (const file of ['parent-owned', 'child-owned', 'sibling-owned', 'root-1', 'root-2'])
+      expect(await git(['show', `${b.branch}:${file}`], h.origin)).toBe(
+        file.startsWith('root-') ? file.replace('-', ' ') : file,
+      )
+    expect(h.launched).toHaveLength(0)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('leaf verify entry uses recorded kernel lineage after its parent restacks during implement', async () => {
+  const { git, commitAll } = await import('./harness')
+  const { join } = await import('node:path')
+  const happy = happyHandlers()
+  let parentSlug = ''
+  let parentBranch = ''
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: {
+      ...happy,
+      implement: async (cli) => {
+        await happy.implement!({
+          ...cli,
+          run: async (argv) => {
+            if (argv[0] === 'done') {
+              for (const round of [1, 2]) {
+                await Bun.write(join(h.origin, 'new-root'), `new root ${round}`)
+                await commitAll(h.origin, `advance root ${round} while leaf implements`)
+                await requestNodeRestack({
+                  store: h.store,
+                  repo: h.origin,
+                  slug: parentSlug,
+                  user: 'operator',
+                })
+                for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+                if (round === 1) {
+                  const ws = join(h.tmp, 'sibling-landing')
+                  await git(['worktree', 'add', ws, parentBranch], h.origin)
+                  await Bun.write(join(ws, 'sibling-owned'), 'sibling')
+                  await commitAll(ws, 'sibling lands while leaf implements')
+                  await git(['worktree', 'remove', ws], h.origin)
+                  for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+                }
+              }
+            }
+            return cli.run(argv)
+          },
+        })
+      },
+    },
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Moving parent' }), kind: 'node' },
+      { ...readyTicket('LEAF', { title: 'Implementing child' }), target: 'NODE' },
+    ],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'NODE')!
+    parentSlug = node.slug
+    parentBranch = node.branch!
+    const ws = join(h.tmp, 'parent-owned')
+    await git(['worktree', 'add', ws, parentBranch], h.origin)
+    await Bun.write(join(ws, 'parent-owned'), 'owned')
+    await commitAll(ws, 'parent owned contribution')
+    await git(['worktree', 'remove', ws], h.origin)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    const child = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'LEAF')!
+    await h.runLatest()
+    const events = await h.events(child.slug)
+    expect(reduceBuild(events).targetRewrite).toBeUndefined()
+    expect(reduceBuild(events).pr).toBeDefined()
+    expect(ofType(events, 'target.moved').some((e) => e.payload.lineage?.length)).toBe(true)
+    expect(ofType(events, 'restack.completed').at(-1)?.payload.targetBase).toBe(
+      await git(['rev-parse', parentBranch], h.origin),
+    )
+    const head = reduceBuild(events).pr!.headSha
+    expect(await git(['show', `${head}:parent-owned`], h.origin)).toBe('owned')
+    expect(await git(['show', `${head}:new-root`], h.origin)).toBe('new root 2')
+    expect(await git(['show', `${head}:sibling-owned`], h.origin)).toBe('sibling')
+    expect(h.cliErrors).toEqual([])
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)

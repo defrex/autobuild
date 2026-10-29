@@ -18,7 +18,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 21
+export const SCHEMA_VERSION = 22
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -896,7 +896,13 @@ export const SCHEMA_V20_CHECKSUM = new Bun.CryptoHasher('sha256')
   .digest('hex')
 export const DISPATCHER_CREDENTIAL_INDEX_DDL = `CREATE INDEX IF NOT EXISTS dispatcher_credentials_expiry ON project_credentials (repo, expires_at, id) WHERE purpose = 'dispatcher';
 CREATE INDEX IF NOT EXISTS dispatcher_credentials_revoked ON project_credentials (repo, revoked_at, id) WHERE purpose = 'dispatcher';`
-export const SCHEMA_DDL = `${SCHEMA_V20_DDL}\n${DISPATCHER_CREDENTIAL_INDEX_DDL}`
+export const SCHEMA_V21_DDL = `${SCHEMA_V20_DDL}\n${DISPATCHER_CREDENTIAL_INDEX_DDL}`
+export const SCHEMA_V21_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V21_DDL)
+  .digest('hex')
+export const NODE_REWRITE_INDEX_DDL = `CREATE INDEX IF NOT EXISTS events_node_rewrite_previous
+  ON events (build, (payload->>'previous'), seq) WHERE type = 'node.rewritten';`
+export const SCHEMA_DDL = `${SCHEMA_V21_DDL}\n${NODE_REWRITE_INDEX_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -1665,6 +1671,7 @@ export async function migratePostgres(
       await tx.unsafe(PROJECT_LIFECYCLE_DDL)
       await tx.unsafe(PROJECT_ADMISSION_INDEX_DDL)
       await tx.unsafe(DISPATCHER_CREDENTIAL_INDEX_DDL)
+      await tx.unsafe(NODE_REWRITE_INDEX_DDL)
       await tx.unsafe(TICKET_SCHEMA_V2_DDL)
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
@@ -1717,6 +1724,8 @@ export async function migratePostgres(
           if (marker.checksum !== SCHEMA_CHECKSUM) {
             throw schemaError(`marker is incompatible: ${checksumMismatchCause(SCHEMA_VERSION)}`)
           }
+        } else if (version === 21 && marker.checksum === SCHEMA_V21_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 20 && marker.checksum === SCHEMA_V20_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {
