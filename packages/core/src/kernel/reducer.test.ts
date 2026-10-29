@@ -1090,6 +1090,36 @@ describe('reduceBuild: abort — accepted intent vs acknowledged (D2)', () => {
 })
 
 describe('reduceBuild: spec revision (§6.3)', () => {
+  test('unfinished reconcile survives a revision and clears only on completion', () => {
+    const writes: EventWrite[] = [
+      ...prelude(),
+      ev('reconcile.started', { attempt: 3, baseSha: 'frozen-target' }),
+      ev('escalation.raised', {
+        id: 'replay',
+        phase: 'reconcile',
+        source: 'agent',
+        question: 'Revise?',
+      }),
+      ev('escalation.answered', { id: 'replay', answer: 'Revised', resolution: 'revise-spec' }),
+      ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 6 }),
+    ]
+    expect(reduceBuild(toLog(writes)).currentPhase).toEqual({
+      phase: 'reconcile',
+      attempt: 3,
+      seq: 5,
+    })
+    writes.push(
+      ev('reconcile.completed', {
+        mergeCommit: 'resolved',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+    )
+    const completed = reduceBuild(toLog(writes))
+    expect(completed.currentPhase).toBeUndefined()
+    expect(completed.specRev).toBe(1)
+    expect(completed.restartSince).toBe(8)
+  })
+
   const log = toLog([
     ...prelude(), // spec.imported rev 0
     ev('plan.started', { round: 1 }),
