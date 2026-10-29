@@ -284,7 +284,10 @@ The default watch reports actionable conditions only:
   for five minutes in one run. A successful tick, new run, or matching stop
   ends the episode. Source grace and cooldown-driven failures do not start
   this clock; after grace, the first qualifying failure starts a new five-minute
-  interval. Each persistence episode is reported once.
+  interval. Each persistence episode is reported once. Unavailable failure writes delay durable visibility:
+  watch keeps running, warns locally and reports one bounded unreported window
+  on recovery. These local warnings do not start the durable attention clock
+  retroactively. Explicit stops still stop dispatch.
 
 Repository conditions are included with no slugs or with `--repository`.
 Routine outcomes and self-healing failures are silent. Repeatable
