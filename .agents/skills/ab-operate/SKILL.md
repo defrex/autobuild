@@ -219,7 +219,8 @@ Read events with a cursor or a small `--events` count; logs are long.
   Idle collecting or verification-failed nodes need no escalation and recollect
   for verification on the same head; children and contributions remain intact.
   Active work, pause, pending controls and merge intent refuse revision. Leaves
-  require an escalation and restart from plan. Run `ab help answer` for the full menu.
+  require an escalation and restart from plan after any unfinished reconcile
+  resumes under the revised spec and its publication is confirmed. Run `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
   hold and release the whole repository. Pause immediately interrupts live agent
   sessions and acknowledges after they stop. Resume continues the same native
@@ -302,7 +303,8 @@ that does the job, and say what you are doing before you do it:
   review-round ceiling, or a revise-spec resolution. Eligible idle collecting or
   verification-failed nodes accept body/ticket spec revision without an escalation;
   the caller supplies the amended body for ticket origin. The node recollects and
-  verifies; leaves require an escalation and restart from plan.
+  verifies; leaves require an escalation and restart from plan after any unfinished reconcile
+  resumes under the revised spec and its publication is confirmed.
 - `tickets.list`, `tickets.get` — read the ticket queue and one ticket. A long
   queue pages with `limit`, `offset` and `order`; `total` counts every match.
 - `tickets.create` — file a new ticket from a conversation.

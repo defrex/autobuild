@@ -35,6 +35,8 @@ bun ab answer <slug> --revise-spec revised-spec.md
 | `plan ⇄ plan-review` | planner proposes a plan | the spec |
 | `implement ⇄ code-review` | implementer makes local commits | the spec and plan |
 
+If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
+
 Either reviewer approves, requests revisions with structured findings, or escalates a question.
 
 - **Sessions.** Each phase gets its own session; the producer keeps it across a loop's rounds, and each reviewer round starts fresh.

@@ -289,4 +289,5 @@ Active verification/reconcile or writer work, restack/reparent work, pause,
 pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
-restart from `plan`.
+restart from `plan` after any unfinished reconcile resumes under the revised
+spec and its publication is confirmed.

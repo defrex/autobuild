@@ -394,6 +394,14 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // ── 4. Spec (§6.3: dispatch owns the import; `spec` is not a phase §5) ─────
   if (state.specRev === undefined) return { kind: 'wait', reason: 'awaiting-spec' }
 
+  // A revised contract invalidates approvals, but an unfinished replay still
+  // belongs to its reconcile occurrence. Publish it before opening the new
+  // plan loop so no other phase inherits its detached/conflicted workspace.
+  if (state.currentPhase?.phase === 'reconcile' && state.currentPhase.seq < log.restartSeq) {
+    const attempt = state.currentPhase.attempt ?? state.reconcileAttempts
+    return { kind: 'run-phase', phase: 'reconcile', round: attempt, reconcile: { attempt } }
+  }
+
   // ── Shared routing inputs ──────────────────────────────────────────────────
 
   // dismiss-finding contributes the raised escalation's refs to the dismissed
