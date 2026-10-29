@@ -335,3 +335,48 @@ test('an acknowledged sibling deletion leaves an empty slot while another outcom
     expect(document.querySelector('[data-project]')).toBeNull()
   })
 })
+
+for (const reload of ['success', 'failure'])
+  test(`acknowledged deletion stays hidden during a held reload and after ${reload}`, async () => {
+    await harness(async ({ document, click, type, intercept, setProjects }) => {
+      let settle!: (response: Response) => void
+      const discovery = new Promise<Response>((resolve) => {
+        settle = resolve
+      })
+      intercept((path, options) => {
+        if (options?.method === 'DELETE') return Promise.resolve(Response.json({ deleted: true }))
+        if (path.endsWith('/orgs')) return discovery
+        return undefined
+      })
+      await click('Delete…', document.querySelector('[data-project]')!)
+      await type(one)
+      await click('Delete project')
+      for (let turn = 0; turn < 50 && document.querySelector('dialog[open]'); turn++)
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+      expect(document.querySelector('dialog[open]')).toBeNull()
+      const visible = () =>
+        Array.from(document.querySelectorAll('[data-project]')).map((row) =>
+          row.getAttribute('data-project'),
+        )
+      expect(visible()).toEqual([two])
+      setProjects([two])
+      await act(async () => {
+        settle(
+          reload === 'success'
+            ? Response.json({ organizations: [org], isSuperUser: false })
+            : new Response('offline', { status: 500 }),
+        )
+      })
+      expect(visible()).toEqual([two])
+      expect(document.querySelector('[data-project]')!.textContent).toContain('Delete…')
+      if (reload === 'success') {
+        // A later connection with the same name is a fresh project again.
+        intercept(() => undefined)
+        setProjects([one, two])
+        await click('Reload')
+        expect(visible()).toEqual([one, two])
+      }
+    })
+  })

@@ -44,10 +44,14 @@ export function ProjectsClient({
     [isSuperUser],
   )
   const state = useAccess(load)
+  const appliedDiscovery = useRef<Management | undefined>(undefined)
   // Hide only until discovery acknowledges the completed purge. A later
   // reconnection with the same repository name must be visible again.
   useEffect(() => {
-    if (state.data && !frozen) setHidden([])
+    if (state.data && !frozen && state.data !== appliedDiscovery.current) {
+      appliedDiscovery.current = state.data
+      setHidden([])
+    }
   }, [state.data, frozen])
   const sourceOf = (repo: string | undefined) =>
     state.data?.pendingDeletions.includes(repo ?? '')
