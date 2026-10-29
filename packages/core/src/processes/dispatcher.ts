@@ -1,3 +1,4 @@
+import { proveTargetLineage } from '../kernel/target-lineage'
 import { assertTargetOid, observeTarget } from '../kernel/target-observation'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import type { TicketPreparation } from '../kernel/ticket-preparation'
@@ -2721,6 +2722,15 @@ export class Dispatcher {
           branch,
           sha,
           actor: DISPATCHER,
+          proveRewrite: (node, from) =>
+            proveTargetLineage({
+              store: this.store,
+              forge: this.deps.forge,
+              node,
+              from,
+              branch,
+              sha,
+            }),
         })) !== 'unchanged'
       )
     } catch (error) {

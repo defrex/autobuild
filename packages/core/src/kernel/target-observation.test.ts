@@ -176,3 +176,78 @@ test('unchanged accepted tips and repeated rejected pairs require no ancestry re
   await observe(A)
   expect(proofs).toBe(2)
 })
+
+test('scoped replay consumes recorded lineage and rejects a new external rewrite', async () => {
+  const { store, forge, observe } = await fixture()
+  const receipt = { id: 'parent-tx', previous: A, head: C }
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'fake',
+      ref: '/ws',
+      branch: 'ab/test',
+      base: { source: 'remote', sha: B },
+    },
+  })
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'target.moved',
+    payload: {
+      branch: 'main',
+      sha: C,
+      lineage: [{ node: 'parent', from: B, receipts: [receipt] }],
+    },
+  })
+  const scoped = store.scopeBuild(BUILD)
+  expect(scoped.getNodeRewrite).toBeUndefined()
+  expect(
+    await observeTarget({
+      store: scoped,
+      forge,
+      slug: BUILD,
+      branch: 'main',
+      sha: C,
+      enforceUsedBaseline: true,
+      actor: KERNEL,
+    }),
+  ).toBe('unchanged')
+  expect(await observe(A)).toBe('rejected')
+})
+
+test('dispatcher retries a previously rejected pair when its receipt becomes durable', async () => {
+  const { store, forge } = await fixture()
+  const { DISPATCHER } = await import('../events/envelope')
+  // The target is frozen to a node at claim.
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      repo: 'repo',
+      ticket: { source: 'fake', id: 'child' },
+      baseBranch: 'main',
+      target: { ticket: { source: 'fake', id: 'parent' }, build: 'parent' },
+    },
+  })
+  let published = false
+  const observe = () =>
+    observeTarget({
+      store,
+      forge,
+      slug: BUILD,
+      branch: 'main',
+      sha: C,
+      actor: DISPATCHER,
+      proveRewrite: async (node, from) =>
+        published ? { node, from, receipts: [{ id: 'tx', previous: B, head: C }] } : undefined,
+    })
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'target.moved',
+    payload: { branch: 'main', sha: B },
+  })
+  expect(await observe()).toBe('rejected')
+  published = true
+  expect(await observe()).toBe('moved')
+  expect((await readBuildFacts(store, BUILD)).value.state.targetRewrite).toBeUndefined()
+})

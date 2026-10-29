@@ -2647,6 +2647,40 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('append', () => {
+      test('rewrite receipt point lookup covers every atomic append path', async () => {
+        await withStore(factory, undefined, async (store) => {
+          if (!store.getNodeRewrite) return
+          const slug = 'rewrite-index'
+          await store.createBuild(sampleBuildInput(slug))
+          const previous = 'a'.repeat(40)
+          const receipt = { id: 'tx', previous, head: 'b'.repeat(40) }
+          const write = { actor: KERNEL, type: 'node.rewritten', payload: receipt } as const
+          expect(await store.getNodeRewrite(slug, previous)).toBeNull()
+          await store.append(slug, write)
+          expect(await store.getNodeRewrite(slug, previous)).toEqual(receipt)
+          const next = { ...write, payload: { ...receipt, id: 'tx-2' } }
+          expect(await store.appendIfCurrent(slug, 0, next)).toBeNull()
+          expect(await store.getNodeRewrite(slug, previous)).toEqual(receipt)
+          await store.appendIfCurrent(slug, 1, next)
+          expect((await store.getNodeRewrite(slug, previous))?.id).toBe('tx-2')
+          await store.appendWithArtifacts(slug, [], () => ({
+            ...write,
+            payload: { ...receipt, id: 'tx-3' },
+          }))
+          expect((await store.getNodeRewrite(slug, previous))?.id).toBe('tx-3')
+          await store.appendWithArtifactsIfCurrent(slug, 3, [], () => ({
+            ...write,
+            payload: { ...receipt, id: 'tx-4' },
+          }))
+          const copy = await store.getNodeRewrite(slug, previous)
+          expect(copy?.id).toBe('tx-4')
+          expect(await store.getNodeRewrite(slug)).toEqual(copy)
+          copy!.id = 'mutated'
+          expect((await store.getNodeRewrite(slug, previous))?.id).toBe('tx-4')
+          await expect(store.getNodeRewrite('unknown', previous)).rejects.toThrow()
+        })
+      })
+
       test('assigns seq 1..n per build, independently across builds (§15.1)', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('seq-a'))

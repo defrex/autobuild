@@ -389,6 +389,11 @@ export interface BuildStore {
    * sole authority, so there is nothing to refresh or invalidate. The
    * derivation is the shared `reduceBuildDigest` (store/digest.ts), so every
    * adapter answers identical results for identical logs. */
+  /** Indexed kernel publication receipt keyed by node and previous head.
+   * Omitting previous returns the latest receipt, also indexed. One bounded
+   * record; absent capability fails closed. Never scans history. */
+  getNodeRewrite?(slug: string, previous?: string): Promise<EventPayload<'node.rewritten'> | null>
+
   getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>>
 
   putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta>

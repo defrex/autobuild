@@ -2658,17 +2658,14 @@ and `tickets.unblock` with the revision from `tickets.get` or `tickets.list`.
 
 ## Forge failure recovery
 
-Destination heads come only from the authoritative forge branch; dispatcher-host
-refs are never a fallback. Failed remote reads retain the accepted observation;
-classified rate limits use repository forge degradation and cooldown. Changed
-heads require immutable commit ancestry proof against the accepted target and
-the destination base already used by replay. Missing capability or failed proof
-defers new replay. A proven non-descendant records `target.rewritten` with branch,
-previous SHA and observed SHA, retains the accepted target, and raises watch/wait
-attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
-clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
-Upstream force-pushes are never adopted automatically. Accepted node reparenting
-starts a new branch scope; frozen transactions recover their retained inputs.
+Destination observation uses authoritative remote tips and fails closed on read
+or ancestry errors. External rewrites retain the accepted target and raise
+`target.rewritten` attention. Kernel node restacks instead require durable
+guarded publication receipts: the dispatcher proves at most 64 indexed hops per
+baseline and records them in `target.moved.lineage` for scoped runners. Missing
+proof or a longer gap still raises attention. See
+[destination observation and replay](references/restacking.md) for admission,
+recovery and read-cost bounds.
 
 Leaf restack and reconcile publication retry classified transient forge or transport
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and

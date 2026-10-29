@@ -1622,12 +1622,27 @@ refs are never a fallback. Failed remote reads retain the accepted observation;
 classified rate limits use repository forge degradation and cooldown. Changed
 heads require immutable commit ancestry proof against the accepted target and
 the destination base already used by replay. Missing capability or failed proof
-defers new replay. A proven non-descendant records `target.rewritten` with branch,
+defers new replay. A non-descendant without kernel lineage records
+`target.rewritten` with branch,
 previous SHA and observed SHA, retains the accepted target, and raises watch/wait
 attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
 clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
 Upstream force-pushes are never adopted automatically. Accepted node reparenting
 starts a new branch scope; frozen transactions recover their retained inputs.
+
+Kernel restacks of a node are admitted through durable guarded publication
+receipts, not treated as external force-pushes. The dispatcher walks an index
+keyed by node and previous head, at most 64 point lookups from each child
+baseline; cost depends on the rewrite gap, never journal length or total receipts.
+A latest-publication bridge also requires immutable ancestry from the baseline
+to the receipt's previous head and from its published head to the observed tip.
+The proven receipts travel in `target.moved.lineage`; build-scoped runners use
+that recorded proof without reading another build. Missing receipts or a gap
+over 64 still record `target.rewritten` and raise attention. Each hop makes at
+most one immutable ancestry comparison; the latest-publication bridge adds at
+most two comparisons and one indexed latest-receipt lookup. Unchanged accepted
+polls read no receipts or event rows.
+
 
 `kernel/publication-retry.ts` selects eligibility from the publication ledger
 and shares the policy between `processes/build-runner.ts` and trusted

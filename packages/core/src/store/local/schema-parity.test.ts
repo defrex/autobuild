@@ -121,11 +121,10 @@ function ddlColumns(db: Database, tableName: string): DdlColumn[] {
   return db.query(`PRAGMA table_info('${tableName}')`).all() as DdlColumn[]
 }
 
-/** Index columns are plain column references in this schema; a SQL expression
- * would need different handling on the DDL side, so fail loudly instead of
- * comparing an empty name. */
+/** PRAGMA reports expression slots without names. Their position is checked
+ * here; the rewrite-index query-plan assertion also pins its expression. */
 function columnName(c: IndexColumn): string {
-  if (!('name' in c)) throw new Error('index over a SQL expression is not parity-checked')
+  if (!('name' in c)) return '<expression>'
   return c.name
 }
 
@@ -159,7 +158,7 @@ function ddlIndexes(db: Database, tableName: string): IndexSpec[] {
         db.query(`PRAGMA index_info('${name}')`).all() as Array<{ name: string; seqno: number }>
       )
         .sort((a, b) => a.seqno - b.seqno)
-        .map((c) => c.name)
+        .map((c) => c.name ?? '<expression>')
         .join(','),
       unique: unique === 1,
       partial: partial === 1,
@@ -330,6 +329,22 @@ describe('schema/DDL parity (real tree)', () => {
           ),
         ).toEqual([])
       }
+    } finally {
+      db.close()
+    }
+  })
+
+  test('rewrite receipt lookup uses the bounded expression index', () => {
+    const db = memoryDb(BOOTSTRAP_DDL)
+    try {
+      const plan = db
+        .query(`EXPLAIN QUERY PLAN SELECT payload FROM events
+        WHERE type = 'node.rewritten' AND build = ?
+          AND json_extract(payload, '$.previous') = ?
+        ORDER BY seq DESC LIMIT 1`)
+        .all('node', 'a'.repeat(40))
+      expect(JSON.stringify(plan)).toContain('events_node_rewrite_previous')
+      expect(JSON.stringify(plan)).not.toContain('SCAN events')
     } finally {
       db.close()
     }

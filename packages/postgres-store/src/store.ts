@@ -354,6 +354,24 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
+  async getNodeRewrite(slug: string, previous?: string) {
+    if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
+    const rows: Row[] = await this.run((q) =>
+      previous === undefined
+        ? q`SELECT payload FROM events WHERE type = 'node.rewritten'
+          AND build = ${slug} ORDER BY seq DESC LIMIT 1`
+        : q`SELECT payload FROM events WHERE type = 'node.rewritten'
+          AND build = ${slug} AND payload->>'previous' = ${previous}
+          ORDER BY seq DESC LIMIT 1`,
+    )
+    return rows[0]
+      ? (json(rows[0].payload) as Extract<
+          import('@defrex/autobuild/plugin-sdk').AbEvent,
+          { type: 'node.rewritten' }
+        >['payload'])
+      : null
+  }
+
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
     const records = await this.run(async (q) => {
       const rows: Row[] =

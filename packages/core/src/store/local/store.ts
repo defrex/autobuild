@@ -41,7 +41,7 @@ import {
   type EventEnvelope,
   type EventWrite,
 } from '../../events/catalog'
-import type { EventType } from '../../events/payloads'
+import { eventPayloadSchemas, type EventType } from '../../events/payloads'
 import {
   prepareRepositoryEventWrite as validateRepositoryEventWrite,
   type RepositoryEvent,
@@ -326,6 +326,8 @@ export const BOOTSTRAP_DDL = [
     parts TEXT NOT NULL,
     PRIMARY KEY (stream, seq)
   )`,
+  `CREATE INDEX IF NOT EXISTS events_node_rewrite_previous ON events
+    (build, json_extract(payload, '$.previous'), seq) WHERE type = 'node.rewritten'`,
   REPO_CHANGE_DDL,
 ] as const
 
@@ -702,6 +704,24 @@ export class SqliteBuildStore implements BuildStore {
       .orderBy(asc(builds.createdAt), asc(builds.slug))
       .all()
     return rows.map((row) => this.toRecord(row))
+  }
+
+  async getNodeRewrite(slug: string, previous?: string) {
+    this.requireBuild(slug)
+    const row = (
+      previous === undefined
+        ? this.sqlite
+            .query(`SELECT payload FROM events
+          WHERE type = 'node.rewritten' AND build = ? ORDER BY seq DESC LIMIT 1`)
+            .get(slug)
+        : this.sqlite
+            .query(`SELECT payload FROM events
+          WHERE type = 'node.rewritten' AND build = ?
+            AND json_extract(payload, '$.previous') = ?
+          ORDER BY seq DESC LIMIT 1`)
+            .get(slug, previous)
+    ) as { payload: string } | null
+    return row ? eventPayloadSchemas['node.rewritten'].parse(JSON.parse(row.payload)) : null
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {

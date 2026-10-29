@@ -1119,8 +1119,9 @@ The base-selection invariants make this safe with Git:
   samples are deduplicated; destination changes and rewrites invalidate samples.
   Sampling never provisions a workspace, renders Git reads, or gates restacking.
 - **Observation never mutates a running workspace.** `target.moved` records an
-  accepted remote head, even during a session. Non-descendant observations record
-  `target.rewritten` and attention without changing the accepted target. Transactions freeze their target;
+  accepted remote head, even during a session. Non-descendant observations without
+  indexed kernel publication lineage record `target.rewritten` and attention
+  without changing the accepted target. Transactions freeze their target;
   later observations coalesce into one follow-on transaction for the newest
   snapshot at the next eligible point. Session and execution settlement fence
   rewrites, and trusted publication waits for remote guest teardown.
@@ -2847,7 +2848,7 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
+| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `phase.deferred`, `phase.deferral-escalated` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
@@ -4157,12 +4158,26 @@ refs are never a fallback. Failed remote reads retain the accepted observation;
 classified rate limits use repository forge degradation and cooldown. Changed
 heads require immutable commit ancestry proof against the accepted target and
 the destination base already used by replay. Missing capability or failed proof
-defers new replay. A proven non-descendant records `target.rewritten` with branch,
+defers new replay. A non-descendant without kernel lineage records
+`target.rewritten` with branch,
 previous SHA and observed SHA, retains the accepted target, and raises watch/wait
 attention. Repeated rewrite pairs are deduplicated. Returning to a safe target
 clears attention (`target.rewrite-cleared` when the accepted tip is unchanged).
 Upstream force-pushes are never adopted automatically. Accepted node reparenting
 starts a new branch scope; frozen transactions recover their retained inputs.
+
+Kernel restacks of a node are admitted through durable guarded publication
+receipts, not treated as external force-pushes. The dispatcher walks an index
+keyed by node and previous head, at most 64 point lookups from each child
+baseline; cost depends on the rewrite gap, never journal length or total receipts.
+A latest-publication bridge also requires immutable ancestry from the baseline
+to the receipt's previous head and from its published head to the observed tip.
+The proven receipts travel in `target.moved.lineage`; build-scoped runners use
+that recorded proof without reading another build. Missing receipts or a gap
+over 64 still record `target.rewritten` and raise attention. Each hop makes at
+most one immutable ancestry comparison; the latest-publication bridge adds at
+most two comparisons and one indexed latest-receipt lookup. Unchanged accepted
+polls read no receipts or event rows.
 
 Leaf restack and reconcile publication retry classified transient forge or transport
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and

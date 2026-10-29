@@ -162,6 +162,8 @@ interface BuildState {
     heartbeatAt?: string
   }
   lease?: Lease
+  latestRewrite?: import('../events/payloads').EventPayload<'node.rewritten'>
+  rewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'>>
   events: AbEvent[]
   /** kind → deposits in revision order (index = revision; 0-based, §6.3). */
   artifacts: Map<string, ArtifactMeta[]>
@@ -355,6 +357,13 @@ export class MemoryBuildStore implements BuildStore {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
   }
 
+  async getNodeRewrite(slug: string, previous?: string) {
+    const state = this.state(slug)
+    return structuredClone(
+      (previous === undefined ? state.latestRewrite : state.rewrites?.get(previous)) ?? null,
+    )
+  }
+
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
     return readPersistedBuildDigests(this, repo)
   }
@@ -372,6 +381,13 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    if (envelope.type === 'node.rewritten') {
+      const receipt =
+        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.rewrites ??= new Map()
+      state.rewrites.set(receipt.previous, structuredClone(receipt))
+      state.latestRewrite = structuredClone(receipt)
+    }
     this.advanceRepo(state.record.repo)
     state.record.updatedAt = envelope.ts
     return envelope
@@ -400,6 +416,13 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    if (envelope.type === 'node.rewritten') {
+      const receipt =
+        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.rewrites ??= new Map()
+      state.rewrites.set(receipt.previous, structuredClone(receipt))
+      state.latestRewrite = structuredClone(receipt)
+    }
     this.advanceRepo(state.record.repo)
     state.record.updatedAt = envelope.ts
     return envelope
@@ -470,6 +493,13 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    if (envelope.type === 'node.rewritten') {
+      const receipt =
+        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.rewrites ??= new Map()
+      state.rewrites.set(receipt.previous, structuredClone(receipt))
+      state.latestRewrite = structuredClone(receipt)
+    }
     this.advanceRepo(state.record.repo)
     state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }
@@ -543,6 +573,13 @@ export class MemoryBuildStore implements BuildStore {
       compatibility: validated.compatibility,
     } as EventEnvelope<T>
     state.events.push(structuredClone(envelope) as AbEvent)
+    if (envelope.type === 'node.rewritten') {
+      const receipt =
+        envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.rewrites ??= new Map()
+      state.rewrites.set(receipt.previous, structuredClone(receipt))
+      state.latestRewrite = structuredClone(receipt)
+    }
     this.advanceRepo(state.record.repo)
     state.record.updatedAt = ts
     return { event: envelope, artifacts: structuredClone(deposited) }

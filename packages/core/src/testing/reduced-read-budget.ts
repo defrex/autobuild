@@ -1,3 +1,5 @@
+import { proveTargetLineage } from '../kernel/target-lineage'
+import { nodeRestackLog } from '../kernel/generators/node-restack-log'
 import { observeTarget } from '../kernel/target-observation'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -415,6 +417,70 @@ export async function reducedReadBudget(opts: {
     expect(JSON.parse(polled[0]!).observation.pr.number).toBe(7)
     expect(costs.events).toBeLessThanOrEqual(2)
     expect(costs.metadata).toBeLessThan(50)
+  }
+}
+
+/** Same SQL-instrumented harness, with indexed receipt reads rather than a
+ * growing reduced receipt map. Both warmed and fresh processes pay per gap. */
+export async function targetLineageReadBudget(opts: {
+  store: BuildStore
+  costs: ReducedReadCosts
+  fresh: () => Promise<BuildStore>
+}) {
+  const { store, costs } = opts
+  const node = 'lineage-budget'
+  const oid = (n: number) => n.toString(16).padStart(40, '0')
+  await store.createBuild({ slug: node, repo, branch: 'ab-node/lineage-budget' })
+  const log = nodeRestackLog()
+  for (const event of log.slice(0, 2)) await store.append(node, event)
+  for (let i = 1; i <= 3; i++)
+    for (const event of log.slice(2)) {
+      const payload = JSON.parse(
+        JSON.stringify(event.payload)
+          .replaceAll('node-tx', `tx-${i}`)
+          .replaceAll('a'.repeat(40), oid(i))
+          .replaceAll('c'.repeat(40), oid(i + 1)),
+      )
+      await store.append(node, { actor: event.actor, type: event.type, payload })
+    }
+  const forge = new FakeForge()
+  for (let i = 1; i <= 4; i++) forge.seedCommit(oid(i))
+  const bytes = new Map<number, number>()
+  let paddingEvents = 0
+  let paddingTransaction = 100
+  for (const length of [100, 10_000]) {
+    // Grow receipt count as well as journal length. Every padding publication
+    // is a complete valid transaction with a disjoint previous-head key.
+    while (paddingEvents < length) {
+      const id = paddingTransaction++
+      for (const event of log.slice(2)) {
+        const payload = JSON.parse(
+          JSON.stringify(event.payload)
+            .replaceAll('node-tx', `padding-${id}`)
+            .replaceAll('a'.repeat(40), oid(id * 2))
+            .replaceAll('c'.repeat(40), oid(id * 2 + 1)),
+        )
+        await store.append(node, { actor: event.actor, type: event.type, payload })
+        paddingEvents++
+      }
+    }
+    for (const reader of [store, await opts.fresh()])
+      for (const gap of [1, 3]) {
+        costs.events = costs.metadata = costs.bytes = 0
+        const proof = await proveTargetLineage({
+          store: reader,
+          forge,
+          node,
+          branch: 'ab-node/lineage-budget',
+          from: oid(4 - gap),
+          sha: oid(4),
+        })
+        expect(proof?.receipts).toHaveLength(gap)
+        expect(costs.events).toBe(gap)
+        expect(costs.metadata).toBeLessThan(12)
+        if (length === 100) bytes.set(gap, costs.bytes)
+        else expect(costs.bytes).toBeLessThanOrEqual(bytes.get(gap)! + 100)
+      }
   }
 }
 

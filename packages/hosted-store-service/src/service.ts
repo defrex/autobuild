@@ -212,6 +212,7 @@ const storeResourceRoutes = new Set([
   'POST artifacts',
   'GET artifact-list',
   'GET artifact-meta',
+  'GET node-rewrite',
   // Repo-scoped batch read of build digests (AUT-487); handled by the store
   // server before the repo-existence gate, so an unknown repo is still
   // classified here and answers 200 from build records.

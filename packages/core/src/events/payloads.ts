@@ -1093,7 +1093,23 @@ export const eventPayloadSchemas = {
     sha: gitOid,
   }),
   'target.rewrite-cleared': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
-  'target.moved': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
+  'target.moved': z.strictObject({
+    branch: z.string().min(1),
+    sha: gitOid,
+    lineage: z
+      .array(
+        z.strictObject({
+          node: z.string().min(1),
+          from: gitOid,
+          receipts: z
+            .array(z.strictObject({ id: z.string().min(1), previous: gitOid, head: gitOid }))
+            .min(1)
+            .max(64),
+        }),
+      )
+      .max(2)
+      .optional(),
+  }),
   'restack.prepared': leafRestackSchema,
   'restack.replayed': z.strictObject({
     id: z.string().min(1),

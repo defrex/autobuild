@@ -1,3 +1,4 @@
+import { nodeRewriteWireSchema } from '@defrex/autobuild/remote-store'
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
 import { CATALOG_IDENTITY_HEADER } from '@defrex/autobuild/remote-store'
@@ -1190,6 +1191,19 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           meta: artifact.meta,
           contentBase64: encodeBase64(artifact.content),
         })
+      }
+      case 'GET node-rewrite': {
+        if (scope?.kind === 'delegated' && scope.delegation.kind.startsWith('build'))
+          throw new RequestError(403, 'auth', 'repository authority required')
+        const previous = url.searchParams.get('previous')
+        if (previous !== null && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(previous))
+          throw new RequestError(400, 'validation', 'previous must be a commit OID')
+        if (!store.getNodeRewrite)
+          return fail(501, 'unsupported-operation', 'rewrite index unsupported')
+        return json(
+          200,
+          nodeRewriteWireSchema.parse(await store.getNodeRewrite(slug, previous ?? undefined)),
+        )
       }
       case 'GET artifact-meta': {
         const kind = url.searchParams.get('kind')
