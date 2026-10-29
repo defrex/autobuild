@@ -131,12 +131,16 @@ export async function renewLocalAccounts(
   }
 }
 
-/** Inspect transferability without claiming ownership or consuming refresh state. */
+/** Inspect transferability without claiming ownership or consuming refresh state.
+ * Startup may allow a live peer solely for the pre-lease presence check; actual
+ * resolution must still claim after acquiring the repository lease.
+ */
 export function inspectLocalAccountEnvironment(
   credentials: LocalCredentials,
   accounts: Accounts,
   env: Readonly<Record<string, string | undefined>>,
   predecessorPid?: number,
+  allowLivePeer = false,
 ): Record<string, string | undefined> {
   const available = { ...env }
   for (const [name, descriptor] of Object.entries(accounts)) {
@@ -145,6 +149,7 @@ export function inspectLocalAccountEnvironment(
       const record = credentials.load(name)
       if (!record) continue
       const ownerAvailable =
+        allowLivePeer ||
         !record.owner ||
         ownerProcessEnded(record.ownerPid) ||
         (predecessorPid !== undefined && record.ownerPid === predecessorPid)

@@ -13,9 +13,13 @@ and agent verify/finalize steps. Unused declared accounts do not block dispatch;
 `ab init --validate` still checks them for readiness. Availability means a
 nonempty configured environment variable or a matching, safely owned local
 refreshing login (`bun ab accounts login NAME --local`). A failed, unsafe,
-mismatched or live foreign-owned local record fails closed. An external access
+mismatched local record fails closed. Startup inspects a ready login owned by a
+live peer without claiming it, so a second dispatcher can yield to the repository
+lease holder; execution claims the login only after acquiring the lease. An external access
 token remains usable when no local login record exists. Startup checks presence,
-without inference or provider validation. Missing sources produce one error with
+without inference or provider validation. Local worktree Claude execution can
+also use the host login without a configured token; sandbox and hosted execution
+require the configured credential slot. Missing sources produce one error with
 all account names, variable names and remedies, before any work is claimed.
 
 Successor preflight checks the same sources without claiming or refreshing the

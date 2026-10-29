@@ -93,7 +93,9 @@ taking the repository lease. Unused declared accounts do not block startup.
 Read the aggregate error: supply the named environment slot, renew Claude with
 `claude setup-token`, replace a Kimi membership key, or sign in ChatGPT with
 `ab accounts login NAME --local`. A safely owned local refreshing login counts;
-a failed, mismatched, unsafe or live foreign-owned record fails closed.
+a failed, mismatched or unsafe record fails closed. Startup inspects live peer-owned
+logins without claiming them, allowing the losing dispatcher to yield; execution
+claims only after the repository lease is held.
 Successor preflight refusal keeps the predecessor active and reports upgrade
 attention; it never claims or rotates the predecessor's credentials.
 

@@ -193,7 +193,12 @@ async function runGenerationPreflight(
             env,
             predecessorPid,
           )
-          const missing = missingAccountCredentials(accounts, available)
+          const missing = missingAccountCredentials(
+            accounts,
+            available,
+            'environment',
+            config.workspace.provider,
+          )
           if (missing.length) throw new MissingAccountCredentialsError(missing)
           if (facts.stopRequest || facts.stop)
             throw new Error('predecessor stopped during preflight')
@@ -229,7 +234,12 @@ async function runGenerationPreflight(
           accounts,
           env,
         )
-        const missing = missingAccountCredentials(accounts, available)
+        const missing = missingAccountCredentials(
+          accounts,
+          available,
+          'environment',
+          config.workspace.provider,
+        )
         if (missing.length) {
           await failure(new MissingAccountCredentialsError(missing).message)
           return false

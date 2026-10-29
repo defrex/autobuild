@@ -13,10 +13,19 @@ export function missingAccountCredentials(
   accounts: Accounts,
   env: Readonly<Record<string, string | undefined>>,
   source: MissingAccountCredential['source'] = 'environment',
+  workspaceProvider = 'vercel-sandbox',
 ): MissingAccountCredential[] {
   return Object.entries(accounts)
     .sort(([a], [b]) => a.localeCompare(b))
-    .filter(([, descriptor]) => !env[descriptor.credentialEnv])
+    .filter(
+      ([, descriptor]) =>
+        !env[descriptor.credentialEnv] &&
+        !(
+          source === 'environment' &&
+          workspaceProvider !== 'vercel-sandbox' &&
+          descriptor.kind === 'claude-subscription'
+        ),
+    )
     .map(([name, descriptor]) => ({
       name,
       descriptor,

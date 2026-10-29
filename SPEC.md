@@ -4369,8 +4369,13 @@ including internal roles and agent verify/finalize runners; unused descriptors
 remain readiness targets only. Local dispatch refuses missing selected sources
 before acquiring the repository lease. A nonempty environment slot counts when
 no local login record exists; a matching safely owned refreshing local record
-may supply it, while failed, mismatched, unsafe or live foreign ownership fails
-closed. Presence checks make no inference request. Successor preflight inspects
+may supply it, while failed, mismatched or unsafe records fail closed. Startup
+inspects ready peer-owned records without claiming them, allowing a losing
+invocation to yield to the repository lease holder. Execution ownership is
+claimed only after acquiring that lease; foreign ownership then fails closed.
+Local worktree Claude routes can use the host login without a named token;
+sandbox and hosted routes require the configured slot. Presence checks make no
+inference request. Successor preflight inspects
 transferable predecessor ownership without claiming or rotating it; missing
 sources refuse yield and retain the running generation with upgrade attention.
 Actual successor admission checks again.

@@ -12504,6 +12504,16 @@ describe('account credentials precede local repository authority', () => {
           '[roles.default]\naccount = "primary"\nalternates = [{ account = "backup" }]',
         ) +
         `
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 2700
+[workspace.config.runtimeProvisioning.claude]
+install = "true"
+preflight = "true"
+[workspace.config.runtimeProvisioning.codex]
+install = "true"
+preflight = "true"
 [accounts.primary]
 kind = "claude-subscription"
 credentialEnv = "PRIMARY_TOKEN"
@@ -12548,5 +12558,80 @@ credentialEnv = "UNUSED_TOKEN"
         await f.cleanup()
       }
     })
+  }
+})
+
+test('startup inspects peer-owned credentials and yields without renewal or claim', async () => {
+  const f = await makeFixture(
+    [],
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML.replace('runtime = "claude"', 'runtime = "codex"\naccount = "personal"') +
+      `
+[accounts.personal]
+kind = "chatgpt-subscription"
+credentialEnv = "CHATGPT"
+`,
+  )
+  try {
+    const wiring = f.wire()
+    wiring.runtimes.codex = {
+      ...wiring.runtimes.claude!,
+      servesModels: ['gpt-'],
+      defaultModel: 'gpt-5',
+    }
+    let inspected = false
+    wiring.inspectAccounts = () => {
+      inspected = true
+      return { CHATGPT: 'local-refreshing-source' }
+    }
+    wiring.renewAccounts = async () => {
+      throw new Error('must not claim before lease')
+    }
+    wiring.store.claimRepoLease = async () => false
+    await abDispatch({
+      targetRepo: f.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      wire: () => wiring,
+    })
+    expect(inspected).toBe(true)
+  } finally {
+    await f.cleanup()
+  }
+})
+
+test('worktree Claude host login reaches the lease without a named token', async () => {
+  const f = await makeFixture(
+    [],
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML +
+      `
+[accounts.personal]
+kind = "claude-subscription"
+credentialEnv = "CLAUDE_TOKEN"
+`,
+  )
+  try {
+    const wiring = f.wire()
+    let claims = 0
+    wiring.store.claimRepoLease = async () => {
+      claims++
+      return false
+    }
+    await abDispatch({
+      targetRepo: f.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      wire: () => wiring,
+    })
+    expect(claims).toBe(1)
+  } finally {
+    await f.cleanup()
   }
 })

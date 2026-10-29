@@ -1,3 +1,4 @@
+import { missingAccountCredentials } from './availability'
 import { test, expect } from 'bun:test'
 import { mkdtempSync, rmSync, chmodSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -531,6 +532,12 @@ test('handoff inspection recognizes only the actual predecessor and never claims
           .CHATGPT,
       ),
     ).toBe(true)
+    expect(
+      Boolean(
+        inspectLocalAccountEnvironment(f.credentials, { plan: descriptor }, {}, undefined, true)
+          .CHATGPT,
+      ),
+    ).toBe(true)
     expect(f.credentials.load('plan')).toEqual(before)
     owner.release('plan')
   } finally {
@@ -559,4 +566,11 @@ test('unused descriptors remain redacted and available transforms survive route 
   )
   expect(JSON.stringify(withUnused.policy)).toContain(accountPlaceholder('unused'))
   expect(accountPolicy('allow-all', accounts, {}).missing).toHaveLength(2)
+})
+
+test('Claude admission follows local host-login and sandbox execution semantics', () => {
+  const accounts = { personal: { kind: 'claude-subscription' as const, credentialEnv: 'CLAUDE' } }
+  expect(missingAccountCredentials(accounts, {}, 'environment', 'git-worktree')).toEqual([])
+  expect(missingAccountCredentials(accounts, {}, 'environment', 'vercel-sandbox')).toHaveLength(1)
+  expect(missingAccountCredentials(accounts, {}, 'project-secrets', 'git-worktree')).toHaveLength(1)
 })

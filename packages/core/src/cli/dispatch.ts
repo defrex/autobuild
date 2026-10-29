@@ -1,3 +1,4 @@
+import { inspectLocalAccountEnvironment } from '../accounts/local-owner'
 import {
   applyProjectAccountSnapshot,
   missingAccountCredentials,
@@ -310,6 +311,7 @@ interface ResumePrompt {
 /** The real adapters the loop drives — resolved by `wire` (default: the
  * production ports; tests inject fakes). */
 export interface DispatchWiring {
+  inspectAccounts?: () => Record<string, string | undefined>
   renewAccounts?: (authority?: { repo: string; run: string }) => Promise<void>
   releaseAccounts?: () => Promise<void>
 
@@ -648,6 +650,8 @@ async function defaultWire(
   return {
     store: opened.store,
     renewAccounts,
+    inspectAccounts: () =>
+      inspectLocalAccountEnvironment(credentials, accounts, opts.env, undefined, true),
     releaseAccounts,
     tickets,
     forge,
@@ -955,11 +959,12 @@ class DispatchLoop {
     })
   }
 
-  private missingAccounts() {
+  private missingAccounts(env = this.opts.env) {
     return missingAccountCredentials(
       selectedExecutionAccounts(this.currentConfig().config),
-      this.opts.env,
+      env,
       this.opts.repository ? 'project-secrets' : 'environment',
+      this.currentConfig().config.workspace.provider,
     )
   }
 
@@ -4695,8 +4700,7 @@ class DispatchLoop {
     // Before the `--once` branch, so both modes report it exactly once.
     this.reportRoleDiagnostics()
     if (!this.opts.repository) {
-      await this.wiring.renewAccounts?.()
-      const missing = this.missingAccounts()
+      const missing = this.missingAccounts(this.wiring.inspectAccounts?.() ?? this.opts.env)
       if (missing.length) throw new MissingAccountCredentialsError(missing)
     }
     // Repository supervisor lease (§12): two invocations for one repository

@@ -964,7 +964,9 @@ step as failed and file an observation while the green build continues.
 Local dispatch refuses missing selected primary/alternate credentials before
 claiming the repository lease. Selected internal and agent-step routes count;
 unused descriptors are readiness-only. Sources are nonempty environment slots
-or safely owned local refreshing logins. Successor preflight inspects transferable
+or safely owned local refreshing logins. Local worktree Claude routes can use
+the host login without a token; sandbox and hosted routes require the slot.
+Startup inspects local records without claiming them before the repository lease. Successor preflight inspects transferable
 sources without taking ownership; a missing source keeps the predecessor active
 and raises upgrade attention. Config reloads hold account-dependent launches.
 Hosted account slots use project secrets exclusively, including empty snapshots:
