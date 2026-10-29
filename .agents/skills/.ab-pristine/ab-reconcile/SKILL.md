@@ -74,6 +74,12 @@ do not repeat `ab done` after success. Post-reconcile verification follows the
 captured policy and begins a fresh cycle after confirmed publication. A conflict
 at initial verify entry still requires initial checks regardless of that policy.
 
+A leaf replay resumed after a spec revision uses the revised spec as its
+contract. Its historical plan and implement notes describe the retained change;
+they cannot override that contract. After confirmed publication the build
+restarts planning, implementation and review before verification, rather than
+entering the ordinary post-reconcile verification cycle directly.
+
 ## When not to resolve
 
 Escalate semantic conflicts, incompatible or deleted branch history, or choices

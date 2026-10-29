@@ -3170,6 +3170,81 @@ describe('decideNext: spec revision restart (§6.3)', () => {
     ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 15 }), // 17
   ]
 
+  for (const origin of ['verify-entry', 'post-pr'] as const) {
+    test(`revision resumes the unfinished ${origin} reconcile before replanning`, () => {
+      const writes: EventWrite[] = [
+        ...prelude(),
+        ...planApproved(),
+        ...implementRound(1, 'original-change'),
+        ...codeReview(1, 'approve'),
+        ...(origin === 'post-pr' ? [ev('pr.conflicted', { baseSha: 'new-base' })] : []),
+        ev('reconcile.started', { attempt: 2, baseSha: 'new-base' }),
+        ev('escalation.raised', {
+          id: 'replay',
+          phase: 'reconcile',
+          source: 'agent',
+          question: 'Revise contract?',
+        }),
+      ]
+      const escalation = writes.length
+      expect(decide(writes)).toEqual(wait('blocked'))
+      writes.push(
+        ev('escalation.answered', { id: 'replay', answer: 'Revised.', resolution: 'revise-spec' }),
+      )
+      expect(decide(writes)).toEqual(wait('awaiting-spec'))
+      writes.push(ev('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation }))
+      const expected: Decision = {
+        kind: 'run-phase',
+        phase: 'reconcile',
+        round: 2,
+        reconcile: { attempt: 2 },
+      }
+      expect(decide(writes)).toEqual(expected)
+      expect(decide(writes)).toEqual(expected)
+      const log = toLog(writes)
+      checkIncremental(buildReducer, log)
+      const state = reduceBuild(log)
+      const restoredState = buildReducer.finish(
+        JSON.parse(JSON.stringify(buildReducer.advance(buildReducer.initial(), log))),
+      )
+      const restoredIndex = logIndexReducer.finish(
+        JSON.parse(JSON.stringify(logIndexReducer.advance(logIndexReducer.initial(), log))),
+      )
+      expect(decideNextFromFacts(restoredState, restoredIndex, config)).toEqual(expected)
+      expect(state.currentPhase).toMatchObject({ phase: 'reconcile', attempt: 2 })
+      expect(state.specRev).toBe(1)
+      writes.push(
+        ev('escalation.raised', {
+          id: 'again',
+          phase: 'reconcile',
+          source: 'agent',
+          question: 'Revise again?',
+        }),
+      )
+      const secondEscalation = writes.length
+      writes.push(
+        ev('escalation.answered', {
+          id: 'again',
+          answer: 'Revised again.',
+          resolution: 'revise-spec',
+        }),
+      )
+      expect(decide(writes)).toEqual(wait('awaiting-spec'))
+      writes.push(
+        ev('spec.revised', { artifact: { kind: 'spec', rev: 2 }, escalation: secondEscalation }),
+      )
+      expect(decide(writes)).toEqual(expected)
+      writes.push(
+        ev('reconcile.completed', {
+          mergeCommit: 'resolved',
+          artifact: { kind: 'reconcile-notes', rev: 0 },
+        }),
+      )
+      expect(reduceBuild(toLog(writes)).currentPhase).toBeUndefined()
+      expect(decide(writes)).toEqual(runPhase('plan', 2))
+    })
+  }
+
   test('revise-spec parks the build until spec.revised lands', () => {
     expect(decide(preRestart)).toEqual(wait('blocked'))
     expect(decide(revised.slice(0, revised.length - 1))).toEqual(wait('awaiting-spec'))

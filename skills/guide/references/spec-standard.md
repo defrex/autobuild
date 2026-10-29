@@ -131,7 +131,8 @@ The spec is the build's contract artifact (kind `spec`, revision 0).
 Every downstream reviewer approves conformance to its pinned revision.
 For leaves, a phase that discovers the spec itself is wrong raises an
 escalation (`ab escalate`); a human answers, the spec gets revision N+1,
-and the leaf restarts from `plan`.
+and the leaf restarts from `plan` after any unfinished reconcile resumes under
+the revised spec and its publication is confirmed.
 
 Operators may explicitly revise an opened idle collecting node or a node blocked on failed
 integration verification without an escalation. Use
@@ -149,4 +150,5 @@ Active verification/reconcile or writer work, restack/reparent work, pause,
 pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
-restart from `plan`.
+restart from `plan` after any unfinished reconcile resumes under the revised
+spec and its publication is confirmed.

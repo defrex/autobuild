@@ -14,7 +14,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, join, resolve } from 'node:path'
 import { controlBuild } from '../cli/build-control'
 import { projectBuild } from '../cli/dashboard/model'
 import { resolveHarvestCliEnv } from '../cli/env'
@@ -1091,6 +1091,153 @@ test('reason-bearing auto-merge deferral leaves finalize awaiting PR, dedupes, a
 }, 30_000)
 
 // ── a2. Reconcile refreshes a moved base at execution time (§15.7) ──────────
+
+test.each(['verify-entry', 'post-pr'] as const)(
+  'revised %s replay publishes before fresh planning',
+  async (origin) => {
+    const handlers = happyHandlers()
+    let turns = 0
+    let retained: unknown
+    let originalHead = ''
+    let workspace = ''
+    const revisedBody = `${CONFORMING_BODY}\nPreserve both audit and throttle behavior.\n`
+    const cleanPhase = async (ws: string) => {
+      expect(await git(['symbolic-ref', '--short', 'HEAD'], ws)).toBe(BRANCH)
+      expect(await git(['ls-files', '-u'], ws)).toBe('')
+      for (const name of ['CHERRY_PICK_HEAD', 'MERGE_HEAD', 'rebase-merge', 'rebase-apply']) {
+        const path = await git(['rev-parse', '--git-path', name], ws)
+        expect(existsSync(resolve(ws, path))).toBe(false)
+      }
+    }
+    for (const phase of ['plan', 'plan-review', 'implement'] as const) {
+      const normal = handlers[phase]!
+      handlers[phase] = async (cli) => {
+        workspace = cli.ws
+        if (turns === 2) await cleanPhase(cli.ws)
+        if (phase === 'implement' && turns === 2) {
+          await writeFileIn(cli.ws, 'revised.txt', 'additional revised implementation\n')
+          await commitAll(cli.ws, 'Implement revised contract')
+          const notes = await writeFileIn(
+            cli.ws,
+            '.ab/revised-implement.md',
+            'Added revised behavior.\n',
+          )
+          await cli.run(['done', '--notes', notes])
+        } else await normal(cli)
+        if (phase === 'implement' && turns === 0) {
+          originalHead = await git(['rev-parse', 'HEAD'], cli.ws)
+          if (origin === 'verify-entry')
+            await h.advanceRemote({ 'rate-limit.txt': 'base audit behavior\n' }, 'advance base')
+        }
+      }
+    }
+    handlers.reconcile = async (cli) => {
+      await cli.run(['context'])
+      const manifest = JSON.parse(
+        await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+      )
+      expect(await git(['ls-files', '-u'], cli.ws)).not.toBe('')
+      expect(await git(['rev-parse', 'CHERRY_PICK_HEAD'], cli.ws)).not.toBe('')
+      turns++
+      if (turns === 1) {
+        retained = manifest.replay
+        expect(retained).toBeDefined()
+        expect(await git(['rev-parse', `refs/heads/${BRANCH}`], cli.ws)).toBe(originalHead)
+        await cli.run(['escalate', 'Need a revised contract for this conflict'])
+        return
+      }
+      expect(turns).toBe(2)
+      expect(manifest.replay).toEqual(retained)
+      expect(await readFile(join(cli.ws, cli.env.contextDir!, 'spec.md'), 'utf8')).toBe(revisedBody)
+      await writeFileIn(
+        cli.ws,
+        'rate-limit.txt',
+        'base audit behavior preserved\nfeature throttle after 5 preserved\n',
+      )
+      await git(['add', 'rate-limit.txt'], cli.ws)
+      await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
+      const notes = await writeFileIn(
+        cli.ws,
+        '.ab/revised-reconcile.md',
+        'Preserved both behaviors.\n',
+      )
+      await cli.run(['done', '--notes', notes])
+    }
+    const h = await track(
+      makeHarness({
+        handlers,
+        tickets: [readyTicket('T-1')],
+        configToml: CONFIG_TOML.replace('[verify]\n', '[verify]\nafterReconcile = false\n'),
+      }),
+    )
+    await h.dispatcher.tick()
+    await h.runLatest()
+    if (origin === 'post-pr') {
+      originalHead = await git(['rev-parse', `refs/heads/${BRANCH}`], workspace)
+      h.clock.advance(3_600_001)
+      h.forge.setPrState(1, { state: 'open', mergeable: false })
+      await h.dispatcher.tick()
+      await h.advanceRemote({ 'rate-limit.txt': 'base audit behavior\n' }, 'advance base')
+      await h.runLatest()
+    }
+    expect(turns).toBe(1)
+    const replacement = await writeFileIn(workspace, '.ab/replacement-spec.md', revisedBody)
+    const errors: string[] = []
+    const code = await runCli(['answer', SLUG, '--revise-spec', replacement], {
+      workspacePath: h.origin,
+      processEnv: { USER: 'operator' },
+      // The harness dispatcher keys builds by checkout path; expose that
+      // same identity to the sessionless CLI's origin lookup.
+      exec: async (args, opts) =>
+        args.join(' ') === 'git remote get-url origin'
+          ? { stdout: h.origin, stderr: '', exitCode: 0 }
+          : spawnExec(args, opts),
+      openStore: () =>
+        new Proxy(h.store, {
+          get(target, key) {
+            if (key === 'close') return async () => {}
+            const value = Reflect.get(target, key, target)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        }),
+      stdout: () => {},
+      stderr: (line) => errors.push(line),
+    })
+    expect(errors).toEqual([])
+    expect(code).toBe(0)
+    h.clock.advance(3_600_001)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    expect(h.cliErrors).toEqual([])
+    expect(turns).toBe(2)
+    await cleanPhase(workspace)
+    const events = await h.events(SLUG)
+    const revision = ofType(events, 'spec.revised')[0]!
+    const completion = ofType(events, 'reconcile.completed')[0]!
+    expect(completion.seq).toBeGreaterThan(revision.seq)
+    expect(ofType(events, 'plan.started').at(-1)!.seq).toBeGreaterThan(completion.seq)
+    expect(
+      ofType(events, 'verify.started')
+        .filter((e) => e.seq > revision.seq)
+        .every((e) => e.seq > completion.seq),
+    ).toBe(true)
+    const revisedChecks = ofType(events, 'verify.started').filter((e) => e.seq > revision.seq)
+    expect(revisedChecks).toHaveLength(1)
+    expect(revisedChecks[0]!.seq).toBeGreaterThan(ofType(events, 'code-review.verdict').at(-1)!.seq)
+    expect(await git(['show', 'HEAD:revised.txt'], workspace)).toContain(
+      'additional revised implementation',
+    )
+    expect(
+      await git(['show', '-s', '--format=%B', reconcileHead(completion.payload)], workspace),
+    ).toContain(`Autobuild-Build: ${SLUG}`)
+    expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(
+      await git(['rev-parse', 'HEAD'], workspace),
+    )
+    expect(ofType(events, 'reconcile.started')).toHaveLength(1)
+    expect(await git(['show', 'HEAD:rate-limit.txt'], workspace)).toContain('throttle')
+  },
+  30_000,
+)
 
 test('a2. reconcile replays one change onto the current base after conflict detection', async () => {
   let suppliedBase: string | undefined

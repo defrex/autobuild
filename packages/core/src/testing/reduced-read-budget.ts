@@ -1,3 +1,4 @@
+import { decideNextFromFacts } from '../kernel/engine'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -116,6 +117,41 @@ export async function reducedReadBudget(opts: {
       'historical-gate',
     ),
   )
+  const revisedSlug = 'revised-reconcile-budget'
+  const revisedRepo = `${repo}/revised`
+  await store.ensureRepo(revisedRepo)
+  await store.createBuild({ slug: revisedSlug, repo: revisedRepo })
+  await store.append(revisedSlug, {
+    actor: DISPATCHER,
+    type: 'spec.imported',
+    payload: { artifact: { kind: 'spec', rev: 0 }, ticket: { source: 'file', id: revisedSlug } },
+  })
+  await store.append(revisedSlug, {
+    actor: KERNEL,
+    type: 'reconcile.started',
+    payload: { attempt: 1, baseSha: 'base' },
+  })
+  const escalation = await store.append(revisedSlug, {
+    actor: KERNEL,
+    type: 'escalation.raised',
+    payload: {
+      id: 'revision',
+      source: 'policy',
+      policyCause: 'phase-attempt-limit',
+      phase: 'reconcile',
+      question: 'Revise?',
+    },
+  })
+  await store.append(revisedSlug, {
+    actor: humanActor('human'),
+    type: 'escalation.answered',
+    payload: { id: 'revision', answer: 'Revised', resolution: 'revise-spec' },
+  })
+  await store.append(revisedSlug, {
+    actor: KERNEL,
+    type: 'spec.revised',
+    payload: { artifact: { kind: 'spec', rev: 1 }, escalation: escalation.seq },
+  })
   const reset = () => {
     costs.events = 0
     costs.metadata = 0
@@ -125,6 +161,11 @@ export async function reducedReadBudget(opts: {
   for (const length of [32, 256]) {
     for (let i = 0; i < length; i++) {
       await store.append(slug, {
+        actor: humanActor('human'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+      await store.append(revisedSlug, {
         actor: humanActor('human'),
         type: 'build.auto-merge-requested',
         payload: {},
@@ -169,6 +210,7 @@ export async function reducedReadBudget(opts: {
     // Warm persisted values independently of any consumer instance.
     await readBuildStreamSeed(store, slug)
     await readBuildFacts(store, slug)
+    await readBuildFacts(store, revisedSlug)
     await readRepositoryFacts(store, repo)
     await readForgeHealth(store, repo)
     await readBuildDigests(store, repo)
@@ -187,6 +229,13 @@ export async function reducedReadBudget(opts: {
       reset()
       for (let n = 0; n < operations; n++) {
         await readBuildFacts(cold, slug)
+        const revised = (await readBuildFacts(cold, revisedSlug)).value
+        expect(decideNextFromFacts(revised.state, revised.log, config)).toEqual({
+          kind: 'run-phase',
+          phase: 'reconcile',
+          round: 1,
+          reconcile: { attempt: 1 },
+        })
         await readRepositoryFacts(cold, repo)
       }
       expect(costs.events).toBe(0)

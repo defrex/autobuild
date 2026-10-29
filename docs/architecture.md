@@ -1407,6 +1407,8 @@ commit in the existing branch's history. Comparison uses reachability, so an
 advanced parent never makes an empty node nonempty. The janitor opens PRs lazily
 and reuses terminal cleanup without leaf reconcile or auto-merge.
 
+If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
+
 ### Leaf and reconcile restacking
 
 The kernel prepares a detached replay of one net build change on the base frozen
@@ -1736,7 +1738,8 @@ Active verification/reconcile or writer work, restack/reparent work, pause,
 pending controls, merge intent and ended PRs refuse the no-escalation path.
 A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
-restart from `plan`.
+restart from `plan` after any unfinished reconcile resumes under the revised
+spec and its publication is confirmed.
 
 Verification stages are planned purely in `kernel/verify-stages.ts`, shared by
 leaf and integration decisions in `kernel/engine.ts`. The build runner keeps
