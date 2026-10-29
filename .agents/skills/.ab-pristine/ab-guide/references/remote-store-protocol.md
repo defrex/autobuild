@@ -40,7 +40,7 @@ headers, or available backend.
   `[store] url` (in that precedence order, before the local default); the shipped client appends the routes below.
 - Every `/builds`, `/repos`, and `/sessions` request sends
   `X-Autobuild-Version` with the exact client package version and
-  `X-Autobuild-Protocol-Version` with the remote protocol version (`6` in this
+  `X-Autobuild-Protocol-Version` with the remote protocol version (`7` in this
   distribution). Before authentication,
   body parsing, or resource lookup, the server validates the release-line window and known protocol identity.
   Unsupported or missing values receive `409 {"kind":"conflict","error":"…"}`;
@@ -314,7 +314,7 @@ it to exist. An unknown build returns `404 not-found`.
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
 | `appendIfCurrent` | `POST /builds/{slug}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + build event envelope; stream advanced: `200 null` |
-| `getEvents` | `GET /builds/{slug}/events?since={n}&wait={s}` | optional `since` query value, parsed below; absence defaults to `0`. Optional `wait` in whole seconds, parsed per the event-wait rules below | `200` + envelopes whose `seq` is strictly greater than parsed `since`, in increasing sequence order |
+| `getBuildEventPage` / `getEvents` | `GET /builds/{slug}/events?since={n}&wait={s}` | optional `since` query value, parsed below; absence defaults to `0`. Optional `wait` in whole seconds, parsed per the event-wait rules below | `200 {events, cursor, hasMore}`; at most 256 events with `seq > since`, in increasing sequence order; optional `through` freezes the upper boundary |
 | `appendWithArtifactsIfCurrent` | `POST /builds/{slug}/deposits/conditional` | atomic deposit request plus `expectedSeq` | `201` + `{event, artifacts}`, or `200` + `null` on stale head |
 | `appendWithArtifacts` | `POST /builds/{slug}/deposits` | atomic deposit request | `201` + `{event, artifacts}` |
 | `getReducerSnapshot` | `GET /builds/{slug}/snapshots/{reducer}?version={n}` | required `version` query value, a positive integer; `reducer` is a registry name (`^[A-Za-z][A-Za-z0-9._-]{0,63}$`) | `200` + `{"version", "cursor", "state"}` or `200 null` when absent, written by another reducer version, or ahead of the build log's tail; an unknown build is `404`, which the shipped client also maps to `null` |
@@ -340,13 +340,11 @@ one caller can succeed for a given current sequence. A comparison miss returns
 timestamps. An unknown build remains `404 not-found`; malformed or negative
 `expectedSeq` is `400 validation`.
 
-For a present `since` or `rev`, the server applies JavaScript
-`Number(rawValue)` and accepts the result only when `Number.isInteger` is true.
-Consequently hexadecimal and exponent forms such as `0x10` and `1e1`,
-whitespace-padded values, and empty or whitespace-only values are accepted;
-empty and whitespace-only values convert to `0`. Values converting to `NaN`, infinity, or a
-non-integral number produce `400 validation`. An absent `since` defaults to
-`0`. An absent `rev` selects the latest artifact, but a present empty `rev=`
+Event cursors (`since`, `through`, `cursor`, and `before`) accept ASCII digits
+only and must represent safe nonnegative integers. Missing `since` defaults
+to zero. Invalid forms return `400 validation`. Artifact `rev` retains its
+JavaScript `Number(rawValue)` integer parsing.
+An absent `rev` selects the latest artifact, but a present empty `rev=`
 selects revision `0`. Sequence filtering is always strict `>`, so a client can
 pass the last sequence it has processed without receiving it again. Artifact
 revisions are nonnegative; a requested revision that does not exist, including
@@ -487,6 +485,79 @@ newer than its store replays the log with no error, and a client older than its
 store never calls the routes. Authentication and transport failures still
 surface normally. Snapshot authorization follows the owning project, exactly as for events.
 
+### Hosted event bounds and exact resume
+
+Protocol **7** introduces build pages with a fixed limit of **256**. Each
+`GET /builds/{slug}/events?since=N` returns `{events, cursor, hasMore}`.
+The cursor is the last returned sequence, or N for an empty page. Follow it
+while `hasMore` is true to request explicit build history; optional `through`
+freezes the head for absence checks. The remote array method `getEvents`
+requests one page and returns its array only when `hasMore` is false. Otherwise
+it throws `IncompleteEventReadError` with requested cursor, continuation cursor
+and page limit. It never silently returns a prefix or concatenates history.
+Legacy build-event clients must upgrade to protocol 7; the service refuses their build-event route instead of returning a different successful envelope.
+
+Repository event reads retain their array response but enforce a **1,000**
+sequence-position tail window. A cursor is eligible exactly when
+`since >= max(0, head - 1000)`, inclusive. The service probes the indexed head
+and refuses an expired cursor before selecting event envelopes, reading zero
+event rows. It freezes that head as the query's upper boundary, so concurrent
+appends cannot expand the response. Each held-read retry rechecks eligibility
+at the existing one-second database cadence; disconnect cancellation and the
+30-second wait ceiling are unchanged. Authorization and missing-resource checks
+precede the head probe and error details.
+
+The refusal is HTTP 409 with
+`{kind: "cursor-too-old", error, scope, requestedCursor, head, oldestCursor}`.
+`scope` is `{kind:"build", slug}` or `{kind:"repo", repo}`. Watch and wait
+resume positions use the same 1,000-position window for both kinds. They exit
+on this typed error, instructing the operator to re-arm without `--since` and
+reconcile repository/build status. The expired historical gap is unavailable;
+no client retries it from zero or silently baselines it.
+
+`GET /builds/{slug}/stream-seed?cursor=N` and
+`GET /repos/{repo}/stream-seed?cursor=N` return the exact finished seed at N as
+`{version, cursor, value}`. The server owns the accumulator. It checks expiry
+before canonical catch-up, then returns a checkpoint including event N; clients
+read only events strictly after N. Missing historical positions or corrupt stored
+state return typed `checkpoint-integrity` (HTTP 500).
+
+During deployment overlap or rollback, a pre-checkpoint server may advance a
+valid canonical row without checkpoint coverage. Under the seed lock, the new
+server repairs it from the highest checkpoint at or below that row, reading only
+the uncovered suffix and publishing the canonical value and checkpoints atomically.
+Only when no checkpoint exists does legacy adoption refold from zero.
+
+The PostgreSQL migration command performs one explicit resumable adoption fold
+for existing scopes in batches of at most 256 events, storing progress durably.
+Its global completion marker prevents subsequent migrations from enumerating
+scopes. New scopes initialize lazily. Never bootstrap a production store as
+part of agent verification. Later reducer/catalog identity changes may rebuild
+once per scope/identity under a database lock with a post-lock cache recheck.
+The current canonical value and its trailing 1,001 accumulator checkpoints
+commit atomically; checkpoint capture reads no additional events. That first
+canonical rebuild costs L rows for a length-L log. Later requests, including
+fresh processes, reuse durable state and read only deltas. Ready-seed resume
+costs O(G) for a G-event gap; unchanged reads select zero event rows. Appends
+never acquire the checkpoint lock or depend on seed availability.
+
+Two generations per scope remain live, ordered by durable first admission.
+Admitting a third retires the oldest and deletes its checkpoints/cache. Permanent
+indexed tombstones prevent that identity from being re-admitted, including
+catalog-only changes within a release. Refusal is typed
+`retired-seed-generation` (HTTP 409): upgrade or restart, re-arm without
+`--since` and reconcile status. Immediate-previous-runtime rollback keeps its
+live generation; older retired runtimes cannot evict newer generations.
+Ordinary reducer upgrades preserve in-window cursors and exact episode suppression
+without an upgrader, second replay, or fresh attachment.
+
+`GET /repos/{repo}/harvest-history?before=N` is explicit filtered history:
+it returns up to 256 matching `harvest.*` events in descending sequence order,
+with exclusive `before`, `cursor`, and `hasMore`. It uses a reverse indexed
+seek, independent of unrelated journal length. `ab harvest status --events N`
+pages matching events and presents its last N in chronological order. There
+is no arbitrary predicate or general repository-history bypass.
+
 ### The event-read bounded wait
 
 Both event reads (`getEvents` and, symmetrically, the `getRepoEvents` read of
@@ -494,11 +565,13 @@ section 4) accept an optional `wait` parameter in whole seconds. When at least
 one event with `seq` strictly greater than parsed `since` already exists, the
 response is returned immediately, exactly as without `wait`. Otherwise the
 server may hold the request until such an event is appended or the bound
-elapses, whichever comes first; at the bound it answers `200 []`. Omitting
+elapses, whichever comes first. At the bound, repository reads answer `200 []`;
+build reads answer `200 {"events": [], "cursor": N, "hasMore": false}`,
+where N is the requested `since` cursor. Omitting
 `wait` (or `wait=0`) is byte-identical behavior to the immediate form.
 
 `wait` is parsed with a dedicated digits-only grammar — one or more ASCII
-digits — deliberately stricter than the lenient `since`/`rev` conversion above:
+digits — deliberately stricter than the lenient `rev` conversion above:
 empty, whitespace-padded, hexadecimal, signed, and non-integral values are `400
 validation`, not coerced. Values above the server's documented ceiling are
 clamped to it, never rejected; implementation-dependent examples are 30
@@ -529,7 +602,7 @@ without a journal record, or a repository without builds.
 | `ensureRepo` | `POST /repos` | `{"repo": string}` with a nonempty id | `200` + `RepositoryRecord`; idempotently returns the existing record |
 | `getRepo` | `GET /repos/{repo}` | none | `200` + `RepositoryRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendRepo` | `POST /repos/{repo}/events` | event write | `201` + repository event envelope |
-| `getRepoEvents` | `GET /repos/{repo}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + envelopes with `seq >` parsed `since`, in increasing sequence order |
+| `getRepoEvents` | `GET /repos/{repo}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + envelopes with `seq > since`, up to the frozen head; `409 cursor-too-old` below `max(0, head - 1000)` |
 | `getRepoStateEvents` | `GET /repos/{repo}/state-events` | none | `200` + the bounded repository-journal subset (AUT-489): every durable event type (`ticket-preparation.*`, `harvest.*`, `orchestrator.sandbox.*`, the three dispatcher setting types, and cross-generation handoff correlation facts: target-prepared, yield-requested, upgrade-failed, handoff-started, terminal-released, takeover, drain-deadline, drain-settled and handoff-completed) plus, when the journal has one, the tail from the latest `dispatcher.run-started`, in increasing sequence order; served inside the repository-existence gate like `GET events`, so an unknown repository is `404` |
 | `getReducerSnapshot` (repo scope) | `GET /repos/{repo}/snapshots/{reducer}?version={n}` | required `version` query value, a positive integer; `reducer` is a registry name (`^[A-Za-z][A-Za-z0-9._-]{0,63}$`) | `200` + `{"version", "cursor", "state"}` or `200 null` when absent, written by another reducer version, ahead of the journal's tail, or the repository has no journal record; an unknown repository is `404`, which the shipped client also maps to `null` |
 | `putReducerSnapshot` (repo scope) | `PUT /repos/{repo}/snapshots/{reducer}` | `{"version": int >= 1, "cursor": int >= 0, "state": JSON}`, at most 16 MiB (`413` above) | `200 {"written": boolean}`; the stored cursor never decreases, so a write at an equal or lower cursor (or an equal cursor at an equal or lower version) and one past the journal's tail answer `written: false` |
@@ -862,7 +935,7 @@ session-attribution dimension — stream parts have no actor.
 | `listStreams` | `GET /builds/{slug}/streams` and `GET /repos/{repo}/streams` | none | `200` + `StreamRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getStream` | `GET /builds/{slug}/streams/{id}` and `GET /repos/{repo}/streams/{id}` | none | `200` + `StreamRecord`; `404` when unknown **or** scoped to another resource |
 | `appendStreamParts` | `POST /builds/{slug}/streams/{id}/chunks` and `POST /repos/{repo}/streams/{id}/chunks` | `{"parts": [ { "type": nonempty string, … } ]}`, nonempty | `201` + `StreamChunk` |
-| `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) parsed leniently like the `since` of section 3; `wait` (whole seconds) parsed by the digits-only grammar of section 3's event-wait rules — one or more ASCII digits, anything else `400 validation` per section 9 — and clamped to the 30-second stream ceiling below | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
+| `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) must be one or more ASCII digits representing a safe nonnegative integer; invalid values are `400 validation`; `wait` (whole seconds) parsed by the digits-only grammar of section 3's event-wait rules — one or more ASCII digits, anything else `400 validation` per section 9 — and clamped to the 30-second stream ceiling below | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
 | `closeStream` | `POST /builds/{slug}/streams/{id}/close` and `POST /repos/{repo}/streams/{id}/close` | `{"outcome": "completed" \| "aborted"}` | `200` + the closed `StreamRecord` |
 
 Because a stream id is globally unique but names no scope, a conforming server
@@ -875,6 +948,10 @@ routes, which resolve the stream's own scope and then authorize against it:
 | `appendStreamParts` | `POST /streams/{id}/chunks` | |
 | `readStream` | `GET /streams/{id}/chunks?since={n}&wait={n}` | |
 | `closeStream` | `POST /streams/{id}/close` | |
+
+Both scoped and top-level chunk reads use the same `since` grammar: omission
+defaults to zero; empty, whitespace-padded, hexadecimal, signed, fractional,
+and unsafe-integer values receive `400 validation`.
 
 On both route families, a stream that does not exist and one scoped to a
 different resource are the same `404 not-found` (`unknown stream "…"`), so no
@@ -901,8 +978,8 @@ Read wait semantics: when no newer chunk exists and the stream is open, the
 server may hold the request up to the parsed `wait` bound in whole seconds,
 returning as soon as a chunk is appended or the stream closes, and no later
 than the bound. A `wait` above 30 seconds is clamped to 30. Reads of a closed
-stream never wait. A server may return before the bound at any time. Unlike
-`since`, the `wait` value follows the strict digits grammar of section 3's
+stream never wait. A server may return before the bound at any time. The
+`wait` value follows the strict digits grammar of section 3's
 event-wait rules (a value that is not one or more ASCII digits is `400`
 `validation` per section 9), with the 30-second stream ceiling as its clamp.
 
@@ -1145,11 +1222,14 @@ Conforming servers map failures as follows:
 
 | Status | `kind` | Meaning |
 |---:|---|---|
-| `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, a `since`/`rev` value whose JavaScript `Number` conversion is not an integer, or a `wait` value that is not one or more ASCII digits |
+| `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, an event cursor that is not ASCII digits representing a safe nonnegative integer, a `rev` value whose JavaScript `Number` conversion is not an integer, or a `wait` value that is not one or more ASCII digits |
 | `401` | `auth` | Missing bearer credentials or an invalid, malformed, badly signed, or expired token |
 | `403` | `auth` | Wrong project, project not registered, or disallowed credential purpose |
 | `404` | `not-found` | Unknown route, unsupported method, unknown build, unknown repository, unknown session, or an unknown or foreign-scoped stream |
 | `409` | `conflict` | Missing/mismatched package or protocol identity, duplicate build creation, appending to a closed stream (`stream "…" is closed`), or a backing conflict reported as already existing |
+| `409` | `cursor-too-old` | Requested event cursor precedes the retained resume window; includes `head` and `oldestCursor` |
+| `409` | `retired-seed-generation` | Reducer generation was retired; upgrade or restart, re-arm and reconcile status |
+| `500` | `checkpoint-integrity` | Required exact checkpoint is missing, corrupt or could not be published |
 | `413` | `validation` | Decoded artifact or serialized stream batch exceeds the configured ceiling; a ticket-asset request or response exceeds the deployment's request ceiling; the message names the ceiling |
 | `422` | `validation` | `EventValidationError` from build, repository, or session catalog validation, or a ticket-asset validation failure (including the 25 MiB limit); its message is preserved verbatim |
 | `501` | `unsupported-operation` | Optional latest artifact metadata capability is unavailable on the backing adapter |
@@ -1272,7 +1352,7 @@ Four shipped behaviors do not add `BuildStore` routes:
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
   returns `200 {"ok":true,"autobuildVersion":"1.1.0",
-  "protocolVersion":"6", "supportedClientRange":{"minVersion":"1.0.0",
+  "protocolVersion":"7", "supportedClientRange":{"minVersion":"1.0.0",
   "maxVersionExclusive":"1.2.0"}}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check. The example shows the 1.1 release identity.
 
