@@ -823,6 +823,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'POST tick/finish': {
         const body = await readBody(req, finishRepoTickBodySchema)
+        for (const event of body.events) validateRepoAdmission(event)
         const events = body.events.map((event) => ({
           ...event,
           actor: enforceVia(scope, event.actor),

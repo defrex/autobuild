@@ -1361,7 +1361,7 @@ test('harvest suspension closes the old phase immediately while runner authority
   expect((await f.server.fetch(request(`${base}/events`, old))).status).toBe(401)
 })
 
-test('hosted admission validates cooldowns before append or atomic artifact deposit for every authority', async () => {
+test('hosted admission validates cooldowns before append, deposit or tick finish for every authority', async () => {
   const f = await fixture()
   const admin = mintToken(secret, {
     version: 1,
@@ -1401,6 +1401,34 @@ test('hosted admission validates cooldowns before append or atomic artifact depo
       expect(response.status).toBe(token === f.token ? 403 : 400)
       expect(await f.store.listRepoArtifacts(A)).toEqual(artifacts)
       expect(await f.store.getRepoEvents(A)).toEqual(before)
+      if (token !== f.token) {
+        const holder = 'admission-test'
+        expect(await f.store.claimRepoLease(A, holder, 60_000)).toBe(true)
+        const startedAt = await f.store.beginRepoTick(A, holder)
+        const tick = (await f.store.getRepo(A))?.tick
+        const response = await f.server.fetch(
+          request(`/repos/${encodeURIComponent(A)}/tick/finish`, token, {
+            holder,
+            completion: { outcome: 'failed', error: 'test failure' },
+            events: [
+              {
+                actor: { kind: 'dispatcher' },
+                type: 'dispatcher.tick-started',
+                payload: { run: holder, startedAt },
+              },
+              { ...event, actor: { kind: 'dispatcher' } },
+            ],
+          }),
+        )
+        expect(response.status).toBe(400)
+        expect(await response.json()).toMatchObject({
+          kind: 'validation',
+          error: expect.stringContaining('resetAt'),
+        })
+        expect(await f.store.getRepoEvents(A)).toEqual(before)
+        expect(await f.store.listRepoArtifacts(A)).toEqual(artifacts)
+        expect((await f.store.getRepo(A))?.tick).toEqual(tick)
+      }
     }
   }
   for (const offset of [-1000, 86400000]) {
