@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { TicketRef } from '../ontology'
 import type { BuildRecord, BuildDigest } from '../store/types'
 import type { CurrentBuildFacts } from '../store/reduced-reads'
@@ -102,22 +103,81 @@ export async function observePresence(
   aliases = new Map<string, string>(),
   includeForeign = false,
 ): Promise<ChangeIdentity[]> {
+  return projectPresence(await presenceWitness(git, head), landings, aliases, includeForeign)
+}
+
+export interface PresenceWitness {
+  version: 1
+  commits: string[]
+  identities: `build:${string}`[]
+}
+
+export async function presenceWitness(git: NodeGit, head: string): Promise<PresenceWitness> {
   const commits = await history(git, [head])
+  return {
+    version: 1,
+    commits: [...new Set(commits.map((commit) => commit.sha))].sort(),
+    identities: [
+      ...new Set(
+        commits.flatMap((commit) =>
+          buildTrailers(commit.message).map((slug) => `build:${slug}` as const),
+        ),
+      ),
+    ].sort(),
+  }
+}
+
+export function presenceEvidence(witness: PresenceWitness, identities: ChangeIdentity[]): string {
+  return `presence-v3:${createHash('sha256')
+    .update(
+      JSON.stringify([
+        witness.version,
+        [...new Set(witness.commits)].sort(),
+        normalizeIdentities(witness.identities),
+        normalizeIdentities(identities),
+      ]),
+    )
+    .digest('hex')}`
+}
+
+export function projectPresence(
+  witness: PresenceWitness,
+  landings: LandingEvidence[],
+  aliases = new Map<string, string>(),
+  includeForeign = false,
+): ChangeIdentity[] {
   const proofs: ChangeIdentity[] = []
-  const result: ChangeIdentity[] = []
+  const result: ChangeIdentity[] = [...witness.identities]
   const relevantForeign = new Set(
     landings
       .flatMap((landing) => landing.contribution ?? [])
       .filter((id) => id.startsWith('foreign:')),
   )
-  for (const commit of commits) {
-    for (const build of buildTrailers(commit.message)) result.push(`build:${build}`)
-    const foreign: ChangeIdentity = `foreign:${originalForeign(commit.sha, aliases)}`
-    proofs.push(foreign, `foreign:${commit.sha}`)
-    if (includeForeign || aliases.has(commit.sha) || relevantForeign.has(foreign))
-      result.push(foreign)
+  for (const sha of witness.commits) {
+    const foreign: ChangeIdentity = `foreign:${originalForeign(sha, aliases)}`
+    proofs.push(foreign, `foreign:${sha}`)
+    if (includeForeign || aliases.has(sha) || relevantForeign.has(foreign)) result.push(foreign)
   }
   return expandLandings(result, proofs, landings)
+}
+
+/** Only aliases belonging to this destination's accepted ancestry are relevant. */
+export function destinationAliases(
+  inputs: PresenceInputs,
+  destination?: string,
+): Map<string, string> {
+  const aliases = new Map<string, string>()
+  const seen = new Set<string>()
+  while (destination) {
+    if (seen.has(destination)) throw new Error('cyclic destination ancestry')
+    seen.add(destination)
+    const state = inputs.states.get(destination)
+    if (!state) throw new Error('missing destination ancestry')
+    for (const [sha, original] of Object.entries(state.nodeRestack?.foreignAliases ?? {}))
+      aliases.set(sha, original)
+    destination = state.target?.build
+  }
+  return aliases
 }
 
 /** Reconstruct a historical node contribution only from its retained source

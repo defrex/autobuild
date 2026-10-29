@@ -782,12 +782,45 @@ export function memoryRepositoryReadCounter(
       return selected
     },
   })
+  let buildRows = 0
+  let reducedCalls = 0
+  let buildFactsCalls = 0
+  const builds = Reflect.get(store, 'builds') as Map<string, { events: unknown[] }>
+  for (const build of builds.values()) {
+    const original = build.events.slice.bind(build.events)
+    Object.defineProperty(build.events, 'slice', {
+      configurable: true,
+      value: (start?: number, end?: number) => {
+        const selected = original(start, end)
+        buildRows += selected.length
+        return selected
+      },
+    })
+  }
+  const getReducerValue = store.getReducerValue.bind(store)
+  store.getReducerValue = async (scope, request) => {
+    reducedCalls++
+    if (scope.kind === 'build' && request.reducer === 'buildReadFacts') buildFactsCalls++
+    return getReducerValue(scope, request)
+  }
   return {
     get rows() {
       return rows
     },
+    get buildRows() {
+      return buildRows
+    },
+    get reducedCalls() {
+      return reducedCalls
+    },
+    get buildFactsCalls() {
+      return buildFactsCalls
+    },
     reset() {
       rows = 0
+      buildRows = 0
+      reducedCalls = 0
+      buildFactsCalls = 0
     },
   }
 }
