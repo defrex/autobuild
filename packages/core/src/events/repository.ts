@@ -679,9 +679,26 @@ export const ticketSourceHealthEventPayloadSchemas = {
   }),
 } as const
 
+const presenceWitnessSchema = z.strictObject({
+  version: z.literal(1),
+  commits: z
+    .array(z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/))
+    .refine(
+      (ids) => ids.every((id, index) => index === 0 || ids[index - 1]! < id),
+      'commits must be sorted and unique',
+    ),
+  identities: z
+    .array(z.templateLiteral(['build:', z.string().regex(/^[a-z0-9][a-z0-9-]*$/)]))
+    .refine(
+      (ids) => ids.every((id, index) => index === 0 || ids[index - 1]! < id),
+      'identities must be sorted and unique',
+    ),
+})
+
 /** Head-bound admission evidence. Historical observations remain append-only. */
 export const changePresenceEventPayloadSchemas = {
   'change-presence.observed': z.strictObject({
+    witness: presenceWitnessSchema.optional(),
     branch: z.string().min(1),
     destination: z.string().min(1),
     head: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
