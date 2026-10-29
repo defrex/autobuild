@@ -1,3 +1,7 @@
+import { Dispatcher } from './dispatcher'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import { FakeForge } from '../ports/forge/fake'
+import { manualClock } from '../testing/fixed'
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -14,6 +18,7 @@ import {
   harvestProposalKey,
   makeHarvestScanPacket,
   reconcileHarvestLedger,
+  loadScanPacket,
   scanUnclaimedObservations,
 } from './harvest'
 import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../ports/runner/fake'
@@ -62,7 +67,11 @@ async function seedObservation(
 
 function config(
   threshold = 2,
-  policy: { maxReviewRounds?: number; stallRounds?: number; harvestMaxDrift?: number } = {},
+  policy: {
+    maxReviewRounds?: number
+    stallRounds?: number
+    harvestMaxDrift?: number
+  } = {},
   /** Extra `[tickets]` lines, e.g. `proposalState = "Ready"`. */
   tickets: string[] = [],
 ) {
@@ -138,7 +147,44 @@ async function seedOpenRun(opts: {
   )
 
   const proposals = opts.makeProposals?.(scan.observations) ?? proposalSet(scan.observations)
-  if (stage === 'started') return { run, proposals }
+  if (stage === 'started') {
+    const clock = manualClock()
+    for (let i = 0; i < 3; i++) {
+      await new Dispatcher({
+        store,
+        repo: '/repo',
+        config: config(),
+        tickets,
+        ids,
+        clock,
+        forge: new FakeForge(),
+        workspaces: new FakeWorkspaceProvider({
+          root: workspace,
+          mode: 'logical',
+        }),
+        launchRunner: async () => 'scheduled',
+        exec: async () => {
+          throw new Error('observation must not invoke git')
+        },
+      }).observeReady()
+      clock.advance(60_000)
+    }
+    const events = await store.getRepoEvents('/repo')
+    expect(
+      events.filter((event) => event.type === 'dispatcher.ticket-scan-completed'),
+    ).toHaveLength(1)
+    const started = events.find(
+      (event) => event.type === 'harvest.started' && event.payload.run === run,
+    )!
+    expect(
+      await loadScanPacket(
+        store,
+        '/repo',
+        (started.payload as { scan: { kind: string; rev: number } }).scan,
+      ),
+    ).toEqual(packet)
+    return { run, proposals }
+  }
 
   const proposalFile = join(workspace, '.ab', `${stage}-proposals.json`)
   const synthEnv = {
@@ -149,7 +195,12 @@ async function seedOpenRun(opts: {
     round: 1,
     session: 'hs_old',
   }
-  await buildHarvestContext({ store, workspacePath: workspace, ids, env: synthEnv })
+  await buildHarvestContext({
+    store,
+    workspacePath: workspace,
+    ids,
+    env: synthEnv,
+  })
   await writeFile(proposalFile, JSON.stringify(proposals))
   await submitHarvestProposals(
     { store, workspacePath: workspace, ids, env: synthEnv },
@@ -403,7 +454,12 @@ describe('HarvestRunner', () => {
       labels: [HARVEST_PROPOSAL_LABEL],
     })
     expect(tickets.claims).toEqual([])
-    expect(await tickets.listReady({ state: 'Ready', labels: [HARVEST_PROPOSAL_LABEL] })).toEqual({
+    expect(
+      await tickets.listReady({
+        state: 'Ready',
+        labels: [HARVEST_PROPOSAL_LABEL],
+      }),
+    ).toEqual({
       tickets: [],
       diagnostics: [],
     })
@@ -717,7 +773,13 @@ describe('HarvestRunner', () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const tickets = new FakeTicketSource()
     const ids = sequentialIds()
-    const seeded = await seedOpenRun({ store, tickets, ids, workspace, stage: 'reviewed' })
+    const seeded = await seedOpenRun({
+      store,
+      tickets,
+      ids,
+      workspace,
+      stage: 'reviewed',
+    })
     const neverRun = new ScriptedAgentRunner({
       script: () => {
         throw new Error('an approved run files without another agent')
@@ -746,7 +808,10 @@ describe('HarvestRunner', () => {
     })
     // Still only proposed: the harvester never claims what it files.
     expect(tickets.claims).toEqual([])
-    const ready = await tickets.listReady({ state: 'Ready', labels: [HARVEST_PROPOSAL_LABEL] })
+    const ready = await tickets.listReady({
+      state: 'Ready',
+      labels: [HARVEST_PROPOSAL_LABEL],
+    })
     expect(ready.tickets.map((ticket) => ticket.ref.id)).toEqual(['fake-1'])
   })
 
@@ -802,7 +867,10 @@ describe('HarvestRunner', () => {
     expect(tickets.dependencyQueries).toEqual([['fake-8']])
     const state = reduceHarvest(await store.getRepoEvents('/repo'))
     expect(state.latest?.run).toBe(seeded.run)
-    expect(state.latest?.filed[0]?.blockers).toEqual({ declared: ['fake-8'], derived: [] })
+    expect(state.latest?.filed[0]?.blockers).toEqual({
+      declared: ['fake-8'],
+      derived: [],
+    })
   })
 
   test('refreshes observation origins at filing and records derived provenance in the report', async () => {
@@ -886,7 +954,11 @@ describe('HarvestRunner', () => {
       labels: [],
     }
     const tickets = new FakeTicketSource([origin])
-    await store.createBuild({ slug: 'resume-reviewed', repo: '/repo', ticket: origin.ref })
+    await store.createBuild({
+      slug: 'resume-reviewed',
+      repo: '/repo',
+      ticket: origin.ref,
+    })
     const ids = sequentialIds()
     await seedOpenRun({ store, tickets, ids, workspace, stage: 'reviewed' })
     await tickets.transition('origin-1', 'Done')
@@ -932,7 +1004,9 @@ describe('HarvestRunner', () => {
       stage: 'reviewed',
       makeProposals: (observations) => {
         const set = proposalSet(observations)
-        return { proposals: [{ ...set.proposals[0]!, blockedBy: ['fake-404'] }] }
+        return {
+          proposals: [{ ...set.proposals[0]!, blockedBy: ['fake-404'] }],
+        }
       },
     })
     const neverRun = new ScriptedAgentRunner({
@@ -1021,7 +1095,9 @@ describe('HarvestRunner', () => {
       runs: [],
     })
     expect(agentCalls).toBe(0)
-    expect(await makeRunner('still-paused').run()).toEqual({ outcome: 'parked' })
+    expect(await makeRunner('still-paused').run()).toEqual({
+      outcome: 'parked',
+    })
     expect(agentCalls).toBe(0)
 
     await store.appendRepo('/repo', {
@@ -1044,7 +1120,13 @@ describe('HarvestRunner', () => {
       const tickets = new FakeTicketSource()
       const ids = sequentialIds()
       const uuids = countingUuids()
-      const seeded = await seedOpenRun({ store, tickets, ids, workspace, stage })
+      const seeded = await seedOpenRun({
+        store,
+        tickets,
+        ids,
+        workspace,
+        stage,
+      })
       let producers = 0
       let reviewers = 0
       const scripted = new ScriptedAgentRunner({
@@ -1680,7 +1762,11 @@ harvestThreshold = 1
     ])
     expect(starts[1]?.payload).toMatchObject({
       substitution: {
-        failed: { index: 0, error: 'primary unavailable', cause: 'availability' },
+        failed: {
+          index: 0,
+          error: 'primary unavailable',
+          cause: 'availability',
+        },
         selectedIndex: 1,
       },
     })
@@ -1813,7 +1899,11 @@ harvestThreshold = 1
             findings,
             JSON.stringify([{ severity: 'important', summary: 'Needs another round' }]),
           )
-          await submitHarvestVerdict(deps, { verdict: 'revise', notes, findings })
+          await submitHarvestVerdict(deps, {
+            verdict: 'revise',
+            notes,
+            findings,
+          })
         }
         return defaultTurnResult('done')
       },
@@ -2548,7 +2638,12 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     return async ({ opts, turn }) => {
       opts.stream?.append([{ type: 'data-ab-prompt', data: { text: `${opts.skill}@${turn}` } }])
       const env = resolveHarvestCliEnv(opts.env)
-      const ctx = { store: deps.store, env, workspacePath: workspace, ids: deps.ids }
+      const ctx = {
+        store: deps.store,
+        env,
+        workspacePath: workspace,
+        ids: deps.ids,
+      }
       await buildHarvestContext(ctx)
       if (opts.skill === 'ab-harvest') {
         const observations = JSON.parse(
@@ -2626,7 +2721,11 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
             uuids: randomUuids(),
             clock: steppingClock(),
             instance,
-            opts: { heartbeatMs: 100_000, maxSessionAttempts: 2, maxRecoveryAttempts: 1 },
+            opts: {
+              heartbeatMs: 100_000,
+              maxSessionAttempts: 2,
+              maxRecoveryAttempts: 1,
+            },
           }).run()
 
         expect((await run('first')).outcome).toBe('failed')
@@ -2760,7 +2859,9 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     const deps = { store, ids: sequentialIds() }
     const opened: string[] = []
     const diagnostics: string[] = []
-    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    const scripted = new ScriptedAgentRunner({
+      script: happyScript(workspace, deps),
+    })
     await seedObservation(store, 'one', 'first')
     const result = await new HarvestRunner({
       store,
@@ -2782,7 +2883,10 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
       uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'instance',
-      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+      opts: {
+        heartbeatMs: 100_000,
+        onDiagnostic: (message) => diagnostics.push(message),
+      },
     }).run()
     expect(result.outcome).toBe('completed')
     expect(diagnostics).toEqual([])
@@ -2873,7 +2977,11 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
               findings,
               JSON.stringify([{ severity: 'important', summary: 'Make the title specific' }]),
             )
-            await submitHarvestVerdict(ctx, { verdict: 'revise', notes, findings })
+            await submitHarvestVerdict(ctx, {
+              verdict: 'revise',
+              notes,
+              findings,
+            })
           } else {
             await submitHarvestVerdict(ctx, { verdict: 'approve', notes })
           }
@@ -2902,7 +3010,10 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
       uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'instance',
-      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+      opts: {
+        heartbeatMs: 100_000,
+        onDiagnostic: (message) => diagnostics.push(message),
+      },
     }).run()
     expect(result.outcome).toBe('completed')
     expect(diagnostics).toEqual([])
@@ -2946,7 +3057,9 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const deps = { store, ids: sequentialIds() }
     const diagnostics: string[] = []
-    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    const scripted = new ScriptedAgentRunner({
+      script: happyScript(workspace, deps),
+    })
     await seedObservation(store, 'one', 'first')
     const result = await new HarvestRunner({
       store,
@@ -2959,7 +3072,10 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
       uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'instance',
-      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+      opts: {
+        heartbeatMs: 100_000,
+        onDiagnostic: (message) => diagnostics.push(message),
+      },
     }).run()
     expect(result.outcome).toBe('completed')
     expect(diagnostics).toEqual([])
@@ -2981,7 +3097,9 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const deps = { store, ids: sequentialIds() }
     const diagnostics: string[] = []
-    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    const scripted = new ScriptedAgentRunner({
+      script: happyScript(workspace, deps),
+    })
     await seedObservation(store, 'one', 'first')
     const result = await new HarvestRunner({
       store,
@@ -3022,7 +3140,9 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const deps = { store, ids: sequentialIds() }
     const diagnostics: string[] = []
-    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    const scripted = new ScriptedAgentRunner({
+      script: happyScript(workspace, deps),
+    })
     await seedObservation(store, 'one', 'first')
 
     // Break the append primitive after the streams are created.
@@ -3056,7 +3176,10 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
       uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'instance',
-      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+      opts: {
+        heartbeatMs: 100_000,
+        onDiagnostic: (message) => diagnostics.push(message),
+      },
     }).run()
     // The run completes exactly as it would without streams.
     expect(result.outcome).toBe('completed')
@@ -3104,7 +3227,10 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
       uuids: randomUuids(),
       clock: steppingClock(),
       instance: 'instance',
-      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+      opts: {
+        heartbeatMs: 100_000,
+        onDiagnostic: (message) => diagnostics.push(message),
+      },
     }).run()
     expect(result.outcome).toBe('failed')
     expect(diagnostics).toEqual([])
@@ -3267,7 +3393,11 @@ for (const source of ['linear', 'hosted'] as const) {
               ? null
               : await backing.get(id === 'ticket-legacy' || id === 'eng-1' ? 'ENG-1' : id)
           return ticket
-            ? { ...ticket, ref: { source, id: ticket.ref.id }, resolved: lifecycle === 'resolved' }
+            ? {
+                ...ticket,
+                ref: { source, id: ticket.ref.id },
+                resolved: lifecycle === 'resolved',
+              }
             : null
         },
         dependencyStates: async (ids) => {
@@ -3344,7 +3474,10 @@ for (const source of ['linear', 'hosted'] as const) {
           ],
         }
         if (scenario.name === 'duplicate missing refs') {
-          packet.ledger.push({ ...packet.ledger[0]!, proposalKey: 'second-key' })
+          packet.ledger.push({
+            ...packet.ledger[0]!,
+            proposalKey: 'second-key',
+          })
         }
         await store.appendRepoWithArtifacts(
           '/repo',
@@ -3448,7 +3581,10 @@ for (const source of ['linear', 'hosted'] as const) {
           if (scenario.name === 'fresh retry') {
             lifecycle = 'unresolved'
             gets.length = 0
-            expect(await runner.run()).toMatchObject({ outcome: 'completed', launch: 'resumed' })
+            expect(await runner.run()).toMatchObject({
+              outcome: 'completed',
+              launch: 'resumed',
+            })
             expect(gets).toEqual(['ENG-1'])
             const retried = (await store.getRepoEvents('/repo')).find(
               (e) => e.type === 'harvest.completed',
@@ -3462,7 +3598,10 @@ for (const source of ['linear', 'hosted'] as const) {
           }
           return
         }
-        expect(result).toMatchObject({ outcome: 'completed', launch: 'resumed' })
+        expect(result).toMatchObject({
+          outcome: 'completed',
+          launch: 'resumed',
+        })
         expect(after.slice(0, before.length)).toEqual(before)
         const completed = after.find((e) => e.type === 'harvest.completed')
         if (completed?.type !== 'harvest.completed') throw new Error('missing completion')
@@ -3485,7 +3624,9 @@ for (const source of ['linear', 'hosted'] as const) {
         expect((await tickets.listReady({})).tickets).toHaveLength(mixed ? 2 : 1)
         if (mixed) {
           expect(completed.payload.dispositions).toHaveLength(2)
-          expect(completed.payload.dispositions[1]).toMatchObject({ action: 'filed' })
+          expect(completed.payload.dispositions[1]).toMatchObject({
+            action: 'filed',
+          })
           expect(after.filter((e) => e.type === 'harvest.proposal.filed')).toHaveLength(1)
         }
       } finally {
@@ -3552,10 +3693,23 @@ describe('local harvest native suspension', () => {
                   const findings = join(workspace, '.ab/findings-input.json')
                   await writeFile(
                     findings,
-                    JSON.stringify([{ severity: 'important', summary: 'Clarify the proposal' }]),
+                    JSON.stringify([
+                      {
+                        severity: 'important',
+                        summary: 'Clarify the proposal',
+                      },
+                    ]),
                   )
-                  await submitHarvestVerdict(cli, { verdict: 'revise', notes, findings })
-                } else await submitHarvestVerdict(cli, { verdict: 'approve', notes })
+                  await submitHarvestVerdict(cli, {
+                    verdict: 'revise',
+                    notes,
+                    findings,
+                  })
+                } else
+                  await submitHarvestVerdict(cli, {
+                    verdict: 'approve',
+                    notes,
+                  })
               }
               return defaultTurnResult('done')
             },
@@ -3632,7 +3786,12 @@ describe('local harvest native suspension', () => {
     const stop = new AbortController()
     const runner = new ScriptedAgentRunner({
       script: async ({ opts }) => {
-        const cli = { store, env: resolveHarvestCliEnv(opts.env), workspacePath: workspace, ids }
+        const cli = {
+          store,
+          env: resolveHarvestCliEnv(opts.env),
+          workspacePath: workspace,
+          ids,
+        }
         await buildHarvestContext(cli)
         const observations = JSON.parse(
           await readFile(join(workspace, '.ab/observations.json'), 'utf8'),
@@ -3678,7 +3837,13 @@ test('a resumed alternate sharing the primary runner is not retained as the prim
   const store = new MemoryBuildStore({ clock: steppingClock() })
   const tickets = new FakeTicketSource()
   const ids = sequentialIds()
-  const { run } = await seedOpenRun({ store, tickets, ids, workspace, stage: 'started' })
+  const { run } = await seedOpenRun({
+    store,
+    tickets,
+    ids,
+    workspace,
+    stage: 'started',
+  })
   await store.appendRepo('/repo', {
     actor: KERNEL,
     type: 'harvest.step.started',
@@ -3735,7 +3900,11 @@ test('a resumed alternate sharing the primary runner is not retained as the prim
             findings,
             JSON.stringify([{ severity: 'important', summary: 'Make the title specific' }]),
           )
-          await submitHarvestVerdict(deps, { verdict: 'revise', notes, findings })
+          await submitHarvestVerdict(deps, {
+            verdict: 'revise',
+            notes,
+            findings,
+          })
         } else await submitHarvestVerdict(deps, { verdict: 'approve', notes })
       }
       return defaultTurnResult('done')
