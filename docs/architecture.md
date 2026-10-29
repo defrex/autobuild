@@ -1452,6 +1452,13 @@ live provider evidence.
 
 ### Descendant node restacking
 
+`kernel/node-restack-demand.ts` fingerprints semantic presence evidence for durable
+`node.restack-availability-observed` facts. The dispatcher checks this reduced value
+before repository preparation; transactions retain unavailable requests and explicitly
+settle obsolete destinations. Landing and ancestry changes invalidate waiting results
+even at unchanged Git heads. Targeting-leaf cancellation runs only at the actionable
+replay boundary using `landing-publication.ts` receipts, including recovery.
+
 `kernel/node-restack.ts` inventories the contribution above the durable previous
 base, proves foreign merge safety against the sampled parent's full identity set,
 and replays individual changes. `kernel/node-restack-state.ts` reduces writer

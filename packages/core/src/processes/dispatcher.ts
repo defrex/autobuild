@@ -19,7 +19,13 @@ import {
   migrationIdentity,
   historicalTicketIdentity,
 } from '../kernel/ticket-migrations'
-import { nodeRestackDemand, presenceRestackPath } from '../kernel/node-restack-demand'
+import { suspendNativeLanding } from '../kernel/landing-publication'
+import {
+  actionableRestackDemand,
+  restackAvailabilityFingerprint,
+  restackLandingKey,
+  presenceRestackPath,
+} from '../kernel/node-restack-demand'
 import {
   deferMixedVersion,
   mixedVersionDeferred,
@@ -61,6 +67,7 @@ import {
   blockerBuild,
   missingChanges,
   presenceInputs,
+  confirmedLandings,
   presenceWitness,
   projectPresence,
   presenceEvidence,
@@ -907,6 +914,12 @@ export class Dispatcher {
    * slug here defers to the continuation; it never blocks on it. */
   private readonly continuations = new Map<string, ProvisionContinuation>()
 
+  // Batched confirmed landing evidence is shared across nodes for this tick.
+  // Only durable availability facts authorize the shortcut after restart.
+  private availabilityLandings?: ReturnType<typeof confirmedLandings>
+  private availabilityLandingKey?: string
+  private availabilityEntries?: ReturnType<Dispatcher['repoBuildDigests']>
+
   /** The incremental repository view every stage reads and writes through
    * (AUT-647): `deps.store` itself when the caller already wrapped it. */
   private readonly store: RepoViewStore
@@ -961,6 +974,9 @@ export class Dispatcher {
 
   lastForgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
   async tick(opts: TickOpts = {}): Promise<TickReport> {
+    this.availabilityEntries = undefined
+    this.availabilityLandings = undefined
+    this.availabilityLandingKey = undefined
     const builds = new Map<string, number>()
     let total = 0
     let unattributed = 0
@@ -5510,12 +5526,35 @@ export class Dispatcher {
         forge.remoteBranchSha(state.baseBranch),
         forge.remoteBranchSha(record.branch),
       ])
+      this.availabilityEntries ??= this.repoBuildDigests()
+      const entries = await this.availabilityEntries
+      this.availabilityLandings ??= confirmedLandings(entries)
+      this.availabilityLandingKey ??= restackLandingKey(this.availabilityLandings)
+      const evidence = await presenceInputs(
+        this.store,
+        entries,
+        [record.slug],
+        this.availabilityLandings,
+      )
+      const fingerprint =
+        parent && head
+          ? restackAvailabilityFingerprint(
+              state,
+              record.branch,
+              state.baseBranch,
+              head,
+              parent,
+              evidence,
+              this.availabilityLandingKey,
+            )
+          : ''
+      const actionable = actionableRestackDemand(state, fingerprint)
       if (
-        (parent === state.nodeRestack?.contributionBase || !nodeRestackDemand(state)) &&
+        (parent === state.nodeRestack?.contributionBase || !actionable) &&
         state.nodeRestack?.distance?.parent === parent &&
         state.nodeRestack.distance.base === state.nodeRestack.contributionBase &&
         head === state.nodeRestack?.inventory?.head &&
-        !Object.keys(state.nodeRestack?.requests ?? {}).length
+        (!Object.keys(state.nodeRestack?.requests ?? {}).length || !actionable)
       )
         return
     }
@@ -5589,15 +5628,7 @@ export class Dispatcher {
       )
       if (result.exitCode !== 0) throw new Error(result.stderr)
       added = true
-      const parentHead = forge.remoteBranchSha
-        ? await forge.remoteBranchSha(state.baseBranch!)
-        : undefined
-      if (
-        state.nodeRestack?.active ||
-        (nodeRestackDemand(state) && parentHead !== state.nodeRestack?.contributionBase)
-      ) {
-        // Upgrade recovery: an old dispatcher may have left a native request
-        // armed. Cancel every targeting leaf before admitting a node rewrite.
+      const beforeReplay = async (operation: string) => {
         for (const child of await this.repoBuildDigests()) {
           if (child.digest.terminal || child.digest.kind === 'node') continue
           const childState = (await this.store.buildFacts(child.record.slug)).state
@@ -5607,11 +5638,10 @@ export class Dispatcher {
             childState.prState !== 'open'
           )
             continue
-          const cancelled = await forge.setAutoMerge(checkout, childState.pr.number, false)
-          if (cancelled.kind !== 'applied')
-            throw new Error(
-              `node restack waits for native auto-merge cancellation on ${child.record.slug}`,
-            )
+          await suspendNativeLanding(
+            { store: this.store, forge, slug: child.record.slug, workspacePath: checkout },
+            `node:${record.slug}:${operation}`,
+          )
         }
       }
       const outcome = await runNodeTransaction(
@@ -5622,6 +5652,7 @@ export class Dispatcher {
           exec: forge.kernelExec ?? this.deps.exec,
           workspacePath,
           holder,
+          beforeReplay,
           canWrite: async () => {
             if (await deferMixedVersion(this.store, record.slug)) return false
             if (this.outOfBudget(opts)) return false

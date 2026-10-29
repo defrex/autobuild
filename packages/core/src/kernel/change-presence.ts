@@ -218,6 +218,7 @@ export async function presenceInputs(
   store: { buildFacts(slug: string): Promise<CurrentBuildFacts> },
   entries: PresenceBuild[],
   destinations: Iterable<string> = [],
+  landings = confirmedLandings(entries),
 ): Promise<PresenceInputs> {
   const states = new Map<string, BuildState>()
   const aliases = new Map<string, string>()
@@ -231,6 +232,11 @@ export async function presenceInputs(
       aliases.set(sha, original)
     if (state.target) pending.push(state.target.build)
   }
+  return { entries, states, aliases, landings }
+}
+
+/** Shared once per dispatcher tick from the existing batched digest read. */
+export function confirmedLandings(entries: PresenceBuild[]): LandingEvidence[] {
   const landings: LandingEvidence[] = []
   for (const { record, digest } of entries) {
     if (!digest.mergedSha || digest.terminal === 'aborted' || digest.prClosed) continue
@@ -243,5 +249,5 @@ export async function presenceInputs(
         })
     } else landings.push({ slug: record.slug, sha: digest.mergedSha })
   }
-  return { entries, states, aliases, landings }
+  return landings
 }

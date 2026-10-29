@@ -1,4 +1,4 @@
-import { nodeRestackDemand } from './node-restack-demand'
+import { nodeRestackDemand, restackAvailabilityFingerprint } from './node-restack-demand'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
 import { observePresence, presenceInputs } from './change-presence'
@@ -18,6 +18,9 @@ import {
 } from './node-restack'
 
 export interface NodeTransactionDeps extends RestackDeps {
+  /** Confirm targeting-leaf native landing suspension before reservation and
+   * again when recovering a frozen replay. Operation identities survive restart. */
+  beforeReplay?: (operation: string) => Promise<void>
   holder: string
   /** Lifecycle and writer authority are rechecked at each effect boundary. */
   canWrite: () => Promise<boolean>
@@ -162,6 +165,29 @@ export async function runNodeTransaction(
         request.branch === input.parentBranch &&
         (request.identities ?? []).every((id) => new Set<string>(upstream).has(id)),
     )
+    const fingerprint = restackAvailabilityFingerprint(
+      state,
+      input.branch,
+      input.parentBranch,
+      expected,
+      parent,
+      evidence,
+    )
+    if (node?.availability?.fingerprint !== fingerprint)
+      await append({
+        actor: KERNEL,
+        type: 'node.restack-availability-observed',
+        payload: {
+          version: 1,
+          fingerprint,
+          branch: input.branch,
+          parentBranch: input.parentBranch,
+          head: expected,
+          parent,
+          base,
+          available: availableRequests.map((r) => r.id).sort(),
+        },
+      })
     const demanded = nodeRestackDemand({
       ...state,
       nodeRestack: {
@@ -183,6 +209,10 @@ export async function runNodeTransaction(
         })
       return 'idle'
     }
+    await deps.beforeReplay?.(input.id)
+    await authority(deps)
+    if ((await current(deps.store, deps.slug)).lastSeq !== revision)
+      throw new Error('node inputs changed during native cancellation')
     const frozen = await prepareNodeReplay(deps, { oldBase, oldHead: expected, parent }, evidence)
     // Preserve frozen source objects before the reservation can survive a
     // workspace loss. Archives also retain the previous boundary's history.
@@ -236,6 +266,8 @@ export async function runNodeTransaction(
     })
     return runNodeTransaction(deps, input)
   }
+  await deps.beforeReplay?.(active.id)
+  await authority(deps)
   const frozen = { ...active, oldHead: active.expected }
   assertSafeNodeReplay(frozen)
   const replayEvidence = {

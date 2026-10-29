@@ -19,6 +19,7 @@ export function sameParentRejection(
  * holder resumes these immutable inputs before admitting another operation. */
 export interface NodeRestackState {
   requests?: Record<string, EventPayload<'node.restack-requested'>>
+  availability?: EventPayload<'node.restack-availability-observed'>
   distance?: EventPayload<'node.parent-distance'>
   parentRequest?: EventPayload<'node.parent-requested'>
   parentChange?: EventPayload<'node.parent-accepted'>
@@ -49,6 +50,9 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         break
       case 'node.restack-satisfied':
         if (state.requests) delete state.requests[event.payload.id]
+        break
+      case 'node.restack-availability-observed':
+        state.availability = event.payload
         break
       case 'node.parent-distance':
         state.distance = event.payload
@@ -214,7 +218,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 7,
+  version: 8,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),
