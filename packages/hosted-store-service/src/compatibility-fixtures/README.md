@@ -1,3 +1,25 @@
+The support matrix now comes from the product publication ledger in
+`packages/core/src/store/remote/released-clients.json`, with a fixed test clock.
+The policy floor is 1.2. Pre-floor fixtures below are historical evidence only;
+their identities are refused by admission.
+
+`store-v1.2.0.ts` and `store-v1.3.0.ts` contain selected standalone schemas copied
+verbatim from those npm artifacts, with formatting normalized. Tarball URLs,
+SHA-512 integrity, and authoritative publication timestamps are in the ledger.
+Finished-value contracts are frozen separately under
+`packages/core/src/store/remote/released-reducer-values/`; the original 1.2.0
+catalog remains byte-for-byte unchanged. Tests require a wire fixture and
+frozen contract for every supported published release, and validate service
+answers against those frozen shapes instead of the current validator.
+
+Release preparation records future evidence automatically. Retire identities,
+fixtures, and contracts only after both two newer stable minor lines and 90
+days since the successor’s first stable publication. Keep publication facts to
+compute the window after removing obsolete handlers. Advance the fixed contract
+matrix clock to the retirement decision when pruning evidence; supported entries
+remain mandatory and retired entries need no catalog import. Prereleases do not start
+stable retirement clocks; patch releases do not reset them.
+
 These decoders are frozen from v0.9.0 (commit
 58268333ad4e2ea4b37f86a9086ec1324417623f). Runtime schema dependencies are
 frozen too; the store's type-only artifact metadata imports have no decoding

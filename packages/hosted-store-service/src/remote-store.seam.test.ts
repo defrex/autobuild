@@ -1,3 +1,4 @@
+import { RELEASED_CLIENTS } from '@defrex/autobuild/remote-store'
 /**
  * The seam test the remote store exists for (SPEC §7.2 adapter 2): the full
  * BuildStore contract runs against RemoteBuildStore → in-process HTTP →
@@ -1443,7 +1444,7 @@ test('position endpoint reads only the counter and supports build-only and unkno
 
 // Published releases still inside the installed service's supported client window.
 test.each(
-  [...new Set([AUTOBUILD_VERSION, '1.0.0-beta.0', '1.0.0', '1.1.0', '1.2.0'])].filter(
+  [...new Set([AUTOBUILD_VERSION, ...RELEASED_CLIENTS.map((entry) => entry.version)])].filter(
     (version) => classifyClient(version, supportedClientRange()) === 'supported',
   ),
 )('audit capability survives completion and clears on settlement for %s', async (version) => {
