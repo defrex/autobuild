@@ -1,5 +1,5 @@
 import { accountRemedy } from '../../config/accounts'
-import { accountEnvironment, accountSettings } from './account-env'
+import { accountEnvironment, withAccountSettings } from './account-env'
 import { hostname } from 'node:os'
 import {
   guardNativeHandle,
@@ -232,19 +232,21 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   async complete(input: OneShotCompletionInput): Promise<OneShotCompletionResult> {
     const env = accountEnvironment(sessionEnv(input.env), input.account, input.model)
     const args = this.baseArgs()
-    args.push(...accountSettings(env, input.account))
-    args.push('--tools', '', '--disallowedTools', 'mcp__*', '--no-session-persistence')
-    if (input.model !== undefined) args.push(CLAUDE_MODEL_ARG, input.model)
-    args.push(...(input.args ?? []), CLAUDE_PROMPT_BOUNDARY, input.prompt)
+    return await withAccountSettings(env, input.account, async (settingsArgs) => {
+      args.push(...settingsArgs)
+      args.push('--tools', '', '--disallowedTools', 'mcp__*', '--no-session-persistence')
+      if (input.model !== undefined) args.push(CLAUDE_MODEL_ARG, input.model)
+      args.push(...(input.args ?? []), CLAUDE_PROMPT_BOUNDARY, input.prompt)
 
-    const turn = await this.runPrompt({
-      args,
-      cwd: input.cwd,
-      env,
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      const turn = await this.runPrompt({
+        args,
+        cwd: input.cwd,
+        env,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      })
+      if (turn.failure !== undefined) throw new Error(turn.failure.message)
+      return { text: turn.text }
     })
-    if (turn.failure !== undefined) throw new Error(turn.failure.message)
-    return { text: turn.text }
   }
 
   async start(
@@ -441,38 +443,40 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     args.push(...(opts.args ?? []), CLAUDE_PROMPT_BOUNDARY, prompt)
 
     const env = accountEnvironment(sessionEnv(opts.env), opts.account, opts.model)
-    args.unshift(...accountSettings(env, opts.account))
-    const invocation: ClaudeCliInvocation = {
-      args,
-      cwd: opts.workspacePath,
-      env,
-      ...(signal !== undefined ? { signal } : {}),
-    }
-    if (opts.stream === undefined && opts.onNativeSession === undefined)
-      return this.runPrompt(invocation)
-    if (opts.stream === undefined) {
-      if (this.runCliStream !== undefined)
-        return this.runStreamingPrompt(invocation, undefined, observe)
-      const turn = await this.runPrompt(invocation)
-      for (const event of turn.events) await observeEvent(event)
-      return turn
-    }
+    return await withAccountSettings(env, opts.account, async (settingsArgs) => {
+      args.unshift(...settingsArgs)
+      const invocation: ClaudeCliInvocation = {
+        args,
+        cwd: opts.workspacePath,
+        env,
+        ...(signal !== undefined ? { signal } : {}),
+      }
+      if (opts.stream === undefined && opts.onNativeSession === undefined)
+        return this.runPrompt(invocation)
+      if (opts.stream === undefined) {
+        if (this.runCliStream !== undefined)
+          return this.runStreamingPrompt(invocation, undefined, observe)
+        const turn = await this.runPrompt(invocation)
+        for (const event of turn.events) await observeEvent(event)
+        return turn
+      }
 
-    // Streaming turn: translate while the CLI runs. Without an injected
-    // streaming boundary (offline fakes), the buffered path still translates
-    // after completion — degraded latency, same content.
-    const emitter = opts.stream
-    emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
-    let turn: ClaudeTurn
-    if (this.runCliStream !== undefined) {
-      turn = await this.runStreamingPrompt(invocation, emitter, observe)
-    } else {
-      turn = await this.runPrompt(invocation)
-      for (const event of turn.events) await observeEvent(event)
-      translateBufferedClaudeTurn(turn, (parts) => emitter?.append(parts))
-    }
-    this.emitTurnEnd(turn, emitter, signal)
-    return turn
+      // Streaming turn: translate while the CLI runs. Without an injected
+      // streaming boundary (offline fakes), the buffered path still translates
+      // after completion — degraded latency, same content.
+      const emitter = opts.stream
+      emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
+      let turn: ClaudeTurn
+      if (this.runCliStream !== undefined) {
+        turn = await this.runStreamingPrompt(invocation, emitter, observe)
+      } else {
+        turn = await this.runPrompt(invocation)
+        for (const event of turn.events) await observeEvent(event)
+        translateBufferedClaudeTurn(turn, (parts) => emitter?.append(parts))
+      }
+      this.emitTurnEnd(turn, emitter, signal)
+      return turn
+    })
   }
 
   /** Completed-turn, failed-turn, and cancelled-turn closing parts. */
@@ -559,7 +563,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     } catch (error) {
       if (error instanceof NativeObservationError) {
         controller.abort(error)
-        void handle.result.catch(() => {})
+        await handle.result.catch(() => {})
         throw error
       }
       // The result promise below still carries the CLI's exit and stderr.

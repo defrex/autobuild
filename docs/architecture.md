@@ -1819,6 +1819,12 @@ and leaving ambient login untouched.
 Hosted validation uses write-only metadata and states that the first hosted
 build is the live check; local validation makes a minimal runtime request.
 
+Selected Claude/Kimi credentials stay out of process arguments: each invocation
+uses a private 0700 directory and a regular 0600 settings file, removed after
+normal exit, launch failure or cancellation. The settings preserve selected-account
+authentication precedence over saved user/project settings. Remote settings and
+environments continue to contain placeholders only.
+
 Local sessions resolve host credentials after ambient merging. Remote sessions
 receive account placeholders; exact provider hostname and placeholder header
 matches broker real credentials on the host. Both Kimi endpoint and host derive
