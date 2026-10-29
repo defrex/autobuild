@@ -35,7 +35,9 @@ baseline; cost depends on the rewrite gap, never journal length or total receipt
 A latest-publication bridge also requires immutable ancestry from the baseline
 to the receipt's previous head and from its published head to the observed tip.
 The proven receipts travel in `target.moved.lineage`; build-scoped runners use
-that recorded proof without reading another build. Missing receipts or a gap
+that recorded proof without reading another build. Clearing attention for an
+unchanged accepted SHA retains newly proven lineage in `target.rewrite-cleared`.
+Missing receipts or a gap
 over 64 still record `target.rewritten` and raise attention. Each hop makes at
 most one immutable ancestry comparison; the latest-publication bridge adds at
 most two comparisons and one indexed latest-receipt lookup. Unchanged accepted

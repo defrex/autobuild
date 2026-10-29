@@ -104,7 +104,11 @@ export async function observeTarget(input: {
             payload: { branch, sha, ...(lineage.length ? { lineage } : {}) },
           }
         : rejected
-          ? { actor, type: 'target.rewrite-cleared', payload: { branch, sha } }
+          ? {
+              actor,
+              type: 'target.rewrite-cleared',
+              payload: { branch, sha, ...(lineage.length ? { lineage } : {}) },
+            }
           : undefined
     if (!write) return 'unchanged'
     if (!(await store.appendIfCurrent(slug, facts.cursor, write))) continue

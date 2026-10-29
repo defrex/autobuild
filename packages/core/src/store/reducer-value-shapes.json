@@ -19535,6 +19535,10 @@
         "sha": {
           "type": "2",
           "optional": false
+        },
+        "lineage": {
+          "type": "41",
+          "optional": true
         }
       }
     },

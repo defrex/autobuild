@@ -86,6 +86,12 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         state.targetRewrite = event.payload
         break
       case 'target.rewrite-cleared':
+        if (
+          event.payload.lineage &&
+          state.observedParent?.branch === event.payload.branch &&
+          state.observedParent.sha === event.payload.sha
+        )
+          state.observedParent.lineage = event.payload.lineage
         delete state.targetRewrite
         break
       case 'target.moved':

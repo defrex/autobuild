@@ -40,6 +40,19 @@ import {
 } from '../ontology'
 
 export const gitOid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+const targetLineageSchema = z
+  .array(
+    z.strictObject({
+      node: z.string().min(1),
+      from: gitOid,
+      receipts: z
+        .array(z.strictObject({ id: z.string().min(1), previous: gitOid, head: gitOid }))
+        .min(1)
+        .max(64),
+    }),
+  )
+  .max(2)
+
 export const reconcileTransactionSchema = z.strictObject({
   id: z.string().min(1),
   attempt: z.number().int().positive(),
@@ -1092,23 +1105,15 @@ export const eventPayloadSchemas = {
     previousSha: gitOid,
     sha: gitOid,
   }),
-  'target.rewrite-cleared': z.strictObject({ branch: z.string().min(1), sha: gitOid }),
+  'target.rewrite-cleared': z.strictObject({
+    branch: z.string().min(1),
+    sha: gitOid,
+    lineage: targetLineageSchema.optional(),
+  }),
   'target.moved': z.strictObject({
     branch: z.string().min(1),
     sha: gitOid,
-    lineage: z
-      .array(
-        z.strictObject({
-          node: z.string().min(1),
-          from: gitOid,
-          receipts: z
-            .array(z.strictObject({ id: z.string().min(1), previous: gitOid, head: gitOid }))
-            .min(1)
-            .max(64),
-        }),
-      )
-      .max(2)
-      .optional(),
+    lineage: targetLineageSchema.optional(),
   }),
   'restack.prepared': leafRestackSchema,
   'restack.replayed': z.strictObject({

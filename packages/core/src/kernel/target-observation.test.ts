@@ -251,3 +251,52 @@ test('dispatcher retries a previously rejected pair when its receipt becomes dur
   expect(await observe()).toBe('moved')
   expect((await readBuildFacts(store, BUILD)).value.state.targetRewrite).toBeUndefined()
 })
+
+test('clearing an unchanged target retains newly proven lineage for scoped recovery', async () => {
+  const { store, forge } = await fixture()
+  const { DISPATCHER } = await import('../events/envelope')
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      repo: 'repo',
+      ticket: { source: 'fake', id: 'child' },
+      baseBranch: 'main',
+      target: { ticket: { source: 'fake', id: 'parent' }, build: 'parent' },
+    },
+  })
+  // Upgrade/restart-shaped state: accepted tip predates publication of the
+  // used workspace boundary, and carries no lineage evidence yet.
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'target.moved',
+    payload: { branch: 'main', sha: C },
+  })
+  await store.append(BUILD, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'fake',
+      ref: '/ws',
+      branch: 'ab/test',
+      base: { source: 'remote', sha: B },
+    },
+  })
+  const input = {
+    store,
+    forge,
+    slug: BUILD,
+    branch: 'main',
+    sha: C,
+    actor: KERNEL,
+    enforceUsedBaseline: true,
+  }
+  expect(await observeTarget(input)).toBe('rejected')
+  const proof = { node: 'parent', from: B, receipts: [{ id: 'tx', previous: B, head: C }] }
+  expect(
+    await observeTarget({ ...input, actor: DISPATCHER, proveRewrite: async () => proof }),
+  ).toBe('cleared')
+  expect((await readBuildFacts(store, BUILD)).value.log.restack.target?.lineage).toEqual([proof])
+  expect(await observeTarget({ ...input, store: store.scopeBuild(BUILD) })).toBe('unchanged')
+  expect((await store.getEvents(BUILD)).filter((e) => e.type === 'target.moved')).toHaveLength(1)
+})

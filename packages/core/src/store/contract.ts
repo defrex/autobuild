@@ -2647,6 +2647,36 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('append', () => {
+      test('cleared targets retain bounded lineage in persisted reduced values', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const slug = 'target-proof'
+          await store.createBuild(sampleBuildInput(slug))
+          const sha = 'c'.repeat(40),
+            from = 'b'.repeat(40)
+          const lineage = [
+            { node: 'parent', from, receipts: [{ id: 'tx', previous: from, head: sha }] },
+          ]
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'target.moved',
+            payload: { branch: 'main', sha },
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'target.rewritten',
+            payload: { branch: 'main', sha, previousSha: from },
+          })
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'target.rewrite-cleared',
+            payload: { branch: 'main', sha, lineage },
+          })
+          const facts = (await readBuildFacts(store, slug)).value
+          expect(facts.log.restack.target?.lineage).toEqual(lineage)
+          expect(facts.state.targetRewrite).toBeUndefined()
+        })
+      })
+
       test('rewrite receipt point lookup covers every atomic append path', async () => {
         await withStore(factory, undefined, async (store) => {
           if (!store.getNodeRewrite) return

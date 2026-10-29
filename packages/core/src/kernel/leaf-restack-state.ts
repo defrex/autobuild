@@ -60,6 +60,12 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         state.targetRewrite = event.payload
         break
       case 'target.rewrite-cleared':
+        if (
+          event.payload.lineage &&
+          state.target?.branch === event.payload.branch &&
+          state.target.sha === event.payload.sha
+        )
+          state.target.lineage = event.payload.lineage
         delete state.targetRewrite
         break
       case 'target.moved':

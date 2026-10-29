@@ -2848,7 +2848,7 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
+| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `phase.deferred`, `phase.deferral-escalated` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
@@ -4173,7 +4173,9 @@ baseline; cost depends on the rewrite gap, never journal length or total receipt
 A latest-publication bridge also requires immutable ancestry from the baseline
 to the receipt's previous head and from its published head to the observed tip.
 The proven receipts travel in `target.moved.lineage`; build-scoped runners use
-that recorded proof without reading another build. Missing receipts or a gap
+that recorded proof without reading another build. Clearing attention for an
+unchanged accepted SHA retains newly proven lineage in `target.rewrite-cleared`.
+Missing receipts or a gap
 over 64 still record `target.rewritten` and raise attention. Each hop makes at
 most one immutable ancestry comparison; the latest-publication bridge adds at
 most two comparisons and one indexed latest-receipt lookup. Unchanged accepted
