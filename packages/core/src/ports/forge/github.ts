@@ -1,3 +1,4 @@
+import { gitOid } from '../../events/payloads'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   classifyGitNetworkFailure,
@@ -1891,15 +1892,26 @@ export class GitHubForge implements Forge {
   }
 
   private async compareShas(parentSha: string, headSha: string) {
-    const { owner, name } = await this.requireCoordinates()
-    return this.revalidate(
-      z.object({
-        ahead_by: z.number().int().nonnegative(),
-        behind_by: z.number().int().nonnegative(),
-      }),
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare/${encodeURIComponent(parentSha)}...${encodeURIComponent(headSha)}`,
-      'node comparison',
-    )
+    return this.memo(`comparison:${parentSha}:${headSha}`, async () => {
+      const { owner, name } = await this.requireCoordinates()
+      return this.revalidate(
+        z.object({
+          ahead_by: z.number().int().nonnegative(),
+          behind_by: z.number().int().nonnegative(),
+          status: z.enum(['ahead', 'behind', 'diverged', 'identical']).optional(),
+        }),
+        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare/${encodeURIComponent(parentSha)}...${encodeURIComponent(headSha)}`,
+        'commit comparison',
+      )
+    })
+  }
+
+  async isCommitAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    if (!gitOid.safeParse(ancestor).success || !gitOid.safeParse(descendant).success)
+      throw new Error('invalid ancestry OID')
+    const result = await this.compareShas(ancestor, descendant)
+    if (result.status === undefined) throw new Error('commit comparison omitted ancestry status')
+    return result.status === 'ahead' || result.status === 'identical'
   }
 
   async createNodeBranch(branch: string, sha: string): Promise<string> {

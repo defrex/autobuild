@@ -256,6 +256,7 @@ export interface BuildState {
   pr?: { number: number; url: string; headSha: string }
   prState?: PrLifecycle
   /** Readiness provenance, landing-bound consent and native application receipts. */
+  targetRewrite?: Extract<AbEvent, { type: 'target.rewritten' }>
   janitor?: {
     firstFailureAt: string
     attempt: number
@@ -423,6 +424,7 @@ export interface BuildAcc {
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   pr: BuildState['pr']
   prState?: PrLifecycle
+  targetRewrite?: Extract<AbEvent, { type: 'target.rewritten' }>
   janitor?: {
     firstFailureAt: string
     attempt: number
@@ -465,7 +467,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 26
+export const BUILD_REDUCER_VERSION = 27
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -629,12 +631,22 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       }
     if (event.type === 'build.janitor-failing' && acc.janitor) acc.janitor.attention = true
     if (event.type === 'build.janitor-recovered') delete acc.janitor
+    if (event.type === 'target.rewritten') acc.targetRewrite = event
+    if (
+      event.type === 'target.moved' ||
+      event.type === 'target.rewrite-cleared' ||
+      event.type === 'node.parent-accepted'
+    )
+      delete acc.targetRewrite
     advanceLanding(acc.landing, event)
     if (event.type.startsWith('integration.')) {
       acc.integration ??= {}
       advanceIntegration(acc.integration, event)
     }
-    if (event.type.startsWith('node.') || (acc.kind === 'node' && event.type === 'target.moved')) {
+    if (
+      event.type.startsWith('node.') ||
+      (acc.kind === 'node' && event.type.startsWith('target.'))
+    ) {
       acc.nodeRestack ??= { items: [] }
       advanceNodeRestack(acc.nodeRestack, [event])
     }
@@ -1321,6 +1333,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     reviewRoundCeilings: acc.reviewRoundCeilings,
     pr: acc.pr,
     prState: acc.prState,
+    targetRewrite: acc.targetRewrite,
     janitor: acc.janitor,
     landing: acc.landing,
     autoMerge: acc.autoMerge,

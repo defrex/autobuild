@@ -1,3 +1,4 @@
+import { gitOid } from '../../events/payloads'
 import { readinessChecks, type ForgeReadinessCheck } from './readiness'
 import { gitRewrite } from './git-rewrite'
 import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
@@ -57,7 +58,7 @@ export class LocalGitForge implements Forge {
   private readonly exec: Exec
   /** The repository the optional checkout-less read seam reads from. The
    * factory passes the served checkout; without it the capability is absent
-   * and callers retain their checkout/git fallbacks. */
+   * and callers defer authoritative reads. */
   private readonly repoRoot?: string
 
   constructor(opts: { exec?: Exec; repoRoot?: string } = {}) {
@@ -78,6 +79,20 @@ export class LocalGitForge implements Forge {
     )
     if (result.exitCode !== 0) throw new Error(`local-git: unknown remote branch ${branch}`)
     return result.stdout.trim()
+  }
+
+  async isCommitAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    if (!this.repoRoot) throw new Error('local-git ancestry requires repoRoot')
+    if (!gitOid.safeParse(ancestor).success || !gitOid.safeParse(descendant).success)
+      throw new Error('invalid ancestry OID')
+    const result = await this.command(
+      ['merge-base', '--is-ancestor', ancestor, descendant],
+      this.repoRoot,
+      true,
+    )
+    if (result.exitCode === 0) return true
+    if (result.exitCode === 1) return false
+    throw new Error(`local-git ancestry proof failed: ${result.stderr.trim()}`)
   }
 
   async createNodeBranch(branch: string, sha: string): Promise<string> {

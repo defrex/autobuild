@@ -65,7 +65,23 @@ export function leafRestackLog(): AbEvent[] {
     {
       type: 'target.moved',
       actor: KERNEL,
-      payload: { branch: 'main', sha: leafTransaction.targetBase },
+      payload: {
+        branch: 'main',
+        sha: leafTransaction.targetBase,
+        lineage: [
+          {
+            node: 'parent',
+            from: leafTransaction.oldBase,
+            receipts: [
+              {
+                id: 'parent-restack',
+                previous: leafTransaction.oldBase,
+                head: leafTransaction.targetBase,
+              },
+            ],
+          },
+        ],
+      },
     },
     {
       type: 'target.distance',

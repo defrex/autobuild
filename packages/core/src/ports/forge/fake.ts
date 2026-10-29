@@ -450,6 +450,28 @@ export class FakeForge implements Forge {
     this.files.set(`${ref}\0${path}`, content)
   }
 
+  private readonly commitParents = new Map<string, string[]>()
+
+  seedCommit(sha: string, parents: string[] = []): void {
+    this.commitParents.set(sha, parents)
+  }
+
+  async isCommitAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    if (ancestor === descendant) return true
+    const pending = [descendant]
+    const seen = new Set<string>()
+    while (pending.length) {
+      const sha = pending.pop()!
+      if (sha === ancestor) return true
+      if (seen.has(sha)) continue
+      seen.add(sha)
+      const parents = this.commitParents.get(sha)
+      if (!parents) throw new Error(`FakeForge: unknown ancestry for ${sha}`)
+      pending.push(...parents)
+    }
+    return false
+  }
+
   async remoteBranchSha(branch: string): Promise<string> {
     const sha = this.remoteBranches.get(branch)
     if (sha === undefined) throw new Error(`FakeForge: unknown remote branch ${branch}`)
