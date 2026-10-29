@@ -748,6 +748,14 @@ full gate inspection and refreshed durable consent/engine eligibility precede
 any repair. Body comparison tolerates provider trimming of trailing whitespace
 while preserving the complete headline, body content, and squash method.
 
+Destination observations retain versioned, head-bound Git witnesses (reachable
+commit SHAs and direct build trailers) and a fixed-length evidence digest. Current
+confirmed landings and aliases from only the destination's accepted ancestry are
+reapplied before reuse. Unrelated merged history and ready destinations do not
+invalidate this proof. Head changes require a fresh Git sample; legacy observations
+without witnesses refresh once rather than replaying repository history. Current
+readiness and newest-generation checks still apply before claim.
+
 Optional `Forge.readCommitMessage` and `Forge.containsBuild` capabilities expose
 actual merged messages and exact trailer presence in reachable branch history.
 The janitor records optional `pr.merged.buildTrailerPresent` for normal and abort
