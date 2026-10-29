@@ -472,6 +472,14 @@ export function scopeLocalStoreToPhaseSession(
       own('claimRepoLease', 'repo', repo)
       return store.claimRepoLease(repo, holder, ttlMs)
     },
+    async getRepoTicketScanCheckpoint(repo: string) {
+      own('getRepoTicketScanCheckpoint', 'repo', repo)
+      throw new Error('phase sessions cannot read repository scan checkpoints')
+    },
+    async compareAndSetRepoTicketScanCheckpoint(repo: string) {
+      own('compareAndSetRepoTicketScanCheckpoint', 'repo', repo)
+      throw new Error('phase sessions cannot update repository scan checkpoints')
+    },
     async beginRepoTick(repo: string) {
       own('beginRepoTick', 'repo', repo)
       throw new Error('phase sessions cannot begin repository ticks')

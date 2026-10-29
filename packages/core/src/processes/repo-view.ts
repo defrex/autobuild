@@ -558,6 +558,14 @@ export class RepoViewStore implements BuildStore {
   ): Promise<TicketAssetMeta | null> {
     return this.backing.removeTicketAsset(repo, ticketId, kind, name)
   }
+  getRepoTicketScanCheckpoint(...args: Parameters<BuildStore['getRepoTicketScanCheckpoint']>) {
+    return this.backing.getRepoTicketScanCheckpoint(...args)
+  }
+  compareAndSetRepoTicketScanCheckpoint(
+    ...args: Parameters<BuildStore['compareAndSetRepoTicketScanCheckpoint']>
+  ) {
+    return this.backing.compareAndSetRepoTicketScanCheckpoint(...args)
+  }
   beginRepoTick(repo: string, holder: string) {
     return this.backing.beginRepoTick(repo, holder)
   }

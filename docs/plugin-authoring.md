@@ -141,6 +141,16 @@ A plugin relying on a capability declares an `apiVersion` range containing its v
 - **1.8** Forge failure classification and request observers.
 - **1.9** Optional native ticket-source paging (`listPage`); older sources retain operator slicing.
 
+Custom store implementations must support exact-repository
+`getRepoTicketScanCheckpoint` and atomic
+`compareAndSetRepoTicketScanCheckpoint` (including the absent-row race). Store
+one fixed-size validated `{startedAt, anchor}` value per repository and remove
+it with the repository. This advisory scan timing must not mutate journal high
+water, change position or event-derived facts. Unknown reads return null without
+creating a repository; unsupported remote endpoints fail explicitly and never
+replay events. Every cadence decision costs one metadata read and every
+successful scan at most one CAS, independent of history length.
+
 ## 2. Create a repository-local module
 
 ```text
