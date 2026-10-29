@@ -18,6 +18,7 @@ import {
   supportedClientRangeSchema,
 } from './compatibility'
 import { stampCompatibility, buildEventPolicy, repositoryEventPolicy } from '../../events/policy'
+import { REDUCER_VALUE_CONTRACT_IDENTITY } from '../reducer-value-validation'
 import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
 import { CATALOG_IDENTITY_HEADER, REDUCER_VALUE_PROJECTION_HEADER } from './version'
 import { projectReducerValue } from '../reducer-value-validation'
@@ -814,6 +815,7 @@ export class RemoteBuildStore implements BuildStore {
     const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
     const response = await this.raw('POST', `${root}/reducer-values`, request, undefined, {
       [REDUCER_VALUE_PROJECTION_HEADER]: '1',
+      [CATALOG_IDENTITY_HEADER]: REDUCER_VALUE_CONTRACT_IDENTITY,
     })
     if (!response.ok) throw await this.toError(response)
     let body: unknown
