@@ -5792,86 +5792,173 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('watch retains the last complete observation measurement when a later tick cannot scan', async () => {
+  test('watch refreshes observation counts across recording, claiming and settlement', async () => {
     const config = DISPATCH_CONFIG_TOML.replace(
       'stallRounds = 3',
-      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
+      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 0',
     )
     const fx = await makeFixture([], happyHandlers(), config, steppingClock())
     const term = fakeTerminal()
     const stop = new AbortController()
-    const source = 'pressure-carry-over'
-    const originalListBuilds = fx.store.listBuilds.bind(fx.store)
-    const originalGetDigests = fx.store.getRepoBuildDigests.bind(fx.store)
-    let failReads = false
-    let sleeps = 0
-    fx.store.listBuilds = async () => {
-      if (failReads) throw new Error('pressure scan unavailable')
-      return originalListBuilds()
-    }
-    fx.store.getRepoBuildDigests = async (repo: string) => {
-      if (failReads) throw new Error('pressure scan unavailable')
-      return originalGetDigests(repo)
-    }
+    const source = 'successive-observations'
+    let ticks = 0
+    const record = () =>
+      fx.store.append(source, {
+        actor: agentActor('implement', 'successive-session'),
+        type: 'observation.recorded',
+        // Deliberately reuse the payload id: identity is build plus sequence.
+        payload: { id: 'reused-id', kind: 'followup', summary: 'new observation' },
+      })
     try {
       await fx.store.createBuild({ slug: source, repo: fx.origin })
-      for (let index = 1; index <= 2; index += 1) {
-        await fx.store.append(source, {
-          actor: agentActor('implement', `s_carry_${index}`),
-          type: 'observation.recorded',
-          payload: {
-            id: `obs-carry-${index}`,
-            kind: 'followup',
-            summary: `carry observation ${index}`,
-          },
-        })
-      }
-      await fx.store.createBuild({ slug: 'carry-merged', repo: fx.origin })
-      await fx.store.append('carry-merged', {
-        actor: DISPATCHER,
-        type: 'pr.merged',
-        payload: { sha: 'carry-merged-sha' },
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.paused',
+        payload: {},
       })
-      await fx.store.append('carry-merged', {
-        actor: DISPATCHER,
-        type: 'build.completed',
-        payload: { outcome: 'merged' },
-      })
-
       await abDispatch({
         targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
         stderr: (line) => fx.err.push(line),
-        intervalMs: 1,
         signal: stop.signal,
-        sleep: async () => {
-          sleeps += 1
-          if (sleeps === 1) {
-            await waitFor(() => {
-              return latestDashboardFrame(term).includes('observations 2')
-            })
-            failReads = true
-            return
-          }
-          stop.abort()
-        },
-        wire: fx.wire,
         terminal: term,
+        wire: fx.wire,
+        sleep: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+          const expected = [0, 1, 0, 0, 1][ticks]!
+          await waitFor(() => latestDashboardFrame(term).includes(`observations ${expected}/7`))
+          ticks++
+          if (ticks === 1) await record()
+          if (ticks === 2)
+            await fx.store.appendRepo(fx.origin, {
+              actor: KERNEL,
+              type: 'harvest.started',
+              payload: {
+                run: 'successive-claim',
+                observations: [{ build: source, seq: 1 }],
+                scan: { kind: 'harvest-scan', rev: 0 },
+              },
+            })
+          if (ticks === 3)
+            await fx.store.appendRepo(fx.origin, {
+              actor: KERNEL,
+              type: 'harvest.completed',
+              payload: {
+                run: 'successive-claim',
+                dispositions: [
+                  {
+                    occurrence: { build: source, seq: 1 },
+                    action: 'suppressed',
+                    proposalKey: 'successive-proposal',
+                  },
+                ],
+                report: { kind: 'harvest-report', rev: 1 },
+              },
+            })
+          if (ticks === 4) await record()
+          if (ticks === 5) stop.abort()
+        },
       })
-
-      const frame = latestDashboardFrame(term)
-      expect(frame).toContain('observations 2/7')
-      expect(frame).not.toContain('observations 0/7')
-      expect(frame).not.toMatch(/\bdrift\b/i)
-      expect(frame).toContain('pressure scan unavailable')
+      expect(ticks).toBe(5)
       expect(fx.err).toEqual([])
     } finally {
       stop.abort()
       await fx.cleanup()
     }
   }, 30_000)
+
+  for (const failingRead of ['getRepoBuildDigests', 'repositoryReadFacts'] as const) {
+    test(`watch retains the last complete observation measurement when a later tick cannot scan (${failingRead})`, async () => {
+      const config = DISPATCH_CONFIG_TOML.replace(
+        'stallRounds = 3',
+        'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
+      )
+      const fx = await makeFixture([], happyHandlers(), config, steppingClock())
+      const term = fakeTerminal()
+      const stop = new AbortController()
+      const source = 'pressure-carry-over'
+      const originalGetDigests = fx.store.getRepoBuildDigests.bind(fx.store)
+      let failReads = false
+      let sleeps = 0
+      const originalReduced = fx.store.getReducerValue.bind(fx.store)
+      fx.store.getReducerValue = async (...args) => {
+        if (
+          failReads &&
+          failingRead === 'repositoryReadFacts' &&
+          args[1].reducer === 'repositoryReadFacts'
+        )
+          throw new Error('pressure scan unavailable')
+        return originalReduced(...args)
+      }
+      fx.store.getRepoBuildDigests = async (repo: string) => {
+        if (failReads && failingRead === 'getRepoBuildDigests')
+          throw new Error('pressure scan unavailable')
+        return originalGetDigests(repo)
+      }
+      try {
+        await fx.store.createBuild({ slug: source, repo: fx.origin })
+        for (let index = 1; index <= 2; index += 1) {
+          await fx.store.append(source, {
+            actor: agentActor('implement', `s_carry_${index}`),
+            type: 'observation.recorded',
+            payload: {
+              id: `obs-carry-${index}`,
+              kind: 'followup',
+              summary: `carry observation ${index}`,
+            },
+          })
+        }
+        await fx.store.createBuild({ slug: 'carry-merged', repo: fx.origin })
+        await fx.store.append('carry-merged', {
+          actor: DISPATCHER,
+          type: 'pr.merged',
+          payload: { sha: 'carry-merged-sha' },
+        })
+        await fx.store.append('carry-merged', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+
+        await abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          intervalMs: 1,
+          signal: stop.signal,
+          sleep: async () => {
+            sleeps += 1
+            if (sleeps === 1) {
+              await waitFor(() => {
+                return latestDashboardFrame(term).includes('observations 2')
+              })
+              failReads = true
+              return
+            }
+            failReads = false
+            stop.abort()
+          },
+          wire: fx.wire,
+          terminal: term,
+        })
+
+        const frame = latestDashboardFrame(term)
+        expect(frame).toContain('observations 2/7')
+        expect(frame).not.toContain('observations 0/7')
+        expect(frame).not.toMatch(/\bdrift\b/i)
+        expect(frame).toContain('pressure scan unavailable')
+        expect(fx.err).toEqual([])
+      } finally {
+        stop.abort()
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
 
   test('watch samples a missing journal record as an empty journal, not a stale scan (AUT-524)', async () => {
     const config = DISPATCH_CONFIG_TOML.replace(
@@ -11230,92 +11317,95 @@ test('unfocused frontend leaves the supervised kernel ticking and running a read
 }, 30_000)
 for (const intake of [true, false]) {
   for (const hosted of [true, false]) {
-    test(`warmed idle tick makes exactly six backing calls (intake=${intake}, hosted=${hosted})`, async () => {
-      const clock = manualClock()
-      const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
-      await fx.store.ensureRepo(fx.origin)
-      await fx.store.appendRepo(fx.origin, {
-        actor: DISPATCHER,
-        type: 'dispatcher.handoff-started',
-        payload: {
-          correlation: 'historical-remote',
-          run: 'historical-predecessor',
-          lineage: 'old-launcher',
-          from: RUNTIME_IDENTITY,
-          to: RUNTIME_IDENTITY,
-          root: '/cache',
-          cacheId: 'old',
-          target: { mode: 'installed', key: 'old', source: '/old' },
-          remoteBuilds: Array.from({ length: 100 }, (_, i) => ({
-            slug: `finished-${i}`,
-            instance: `old-${i}`,
-          })),
-        },
-      })
-      const stop = new AbortController()
-      const calls: string[] = []
-      let measuring = false
-      let ticks = 0
-      const store = new Proxy(fx.store, {
-        get(target, key) {
-          const value = Reflect.get(target, key)
-          if (typeof value !== 'function') return value
-          return (...args: unknown[]) => {
-            if (measuring) calls.push(String(key))
-            return value.apply(target, args)
-          }
-        },
-      })
-      try {
-        await abDispatch({
-          targetRepo: fx.checkout,
-          kernelRunId: 'idle-count',
-          env: {},
-          exec: spawnExec,
-          wire: () => {
-            const wiring = fx.wire()
-            if (hosted) {
-              wiring.workspaces = Object.assign(wiring.workspaces, {
-                harvestExecution: {
-                  start: async () => {
-                    throw new Error('quiet tick provisioned harvest')
-                  },
-                } as unknown as HarvestExecution,
-              })
-            }
-            return { ...wiring, store }
-          },
-          intake,
-          signal: stop.signal,
-          stdout: () => {},
-          stderr: (line) => fx.err.push(line),
-          sleep: async () => {
-            // Include the asynchronous launch gate and any work it initiates.
-            await new Promise((resolve) => setTimeout(resolve, 0))
-            if (++ticks === 1) {
-              measuring = true
-              return
-            }
-            measuring = false
-            expect(calls).toEqual([
-              'beginRepoTick',
-              'getRepo',
-              'getReducerValue',
-              'listBuilds',
-              'getRepoBuildDigests',
-              'finishRepoTick',
-            ])
-            stop.abort()
+    for (const interactive of [false, true]) {
+      test(`warmed idle tick makes exactly six backing calls (intake=${intake}, hosted=${hosted}, interactive=${interactive})`, async () => {
+        const clock = manualClock()
+        const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+        await fx.store.ensureRepo(fx.origin)
+        await fx.store.appendRepo(fx.origin, {
+          actor: DISPATCHER,
+          type: 'dispatcher.handoff-started',
+          payload: {
+            correlation: 'historical-remote',
+            run: 'historical-predecessor',
+            lineage: 'old-launcher',
+            from: RUNTIME_IDENTITY,
+            to: RUNTIME_IDENTITY,
+            root: '/cache',
+            cacheId: 'old',
+            target: { mode: 'installed', key: 'old', source: '/old' },
+            remoteBuilds: Array.from({ length: 100 }, (_, i) => ({
+              slug: `finished-${i}`,
+              instance: `old-${i}`,
+            })),
           },
         })
-        expect(ticks).toBe(2)
-        expect(fx.err).toEqual([])
-        expect(fx.agents.sessions.size).toBe(0)
-      } finally {
-        stop.abort()
-        await fx.cleanup()
-      }
-    })
+        const stop = new AbortController()
+        const calls: string[] = []
+        let measuring = false
+        let ticks = 0
+        const store = new Proxy(fx.store, {
+          get(target, key) {
+            const value = Reflect.get(target, key)
+            if (typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              if (measuring) calls.push(String(key))
+              return value.apply(target, args)
+            }
+          },
+        })
+        try {
+          await abDispatch({
+            targetRepo: fx.checkout,
+            kernelRunId: 'idle-count',
+            env: {},
+            exec: spawnExec,
+            wire: () => {
+              const wiring = fx.wire()
+              if (hosted) {
+                wiring.workspaces = Object.assign(wiring.workspaces, {
+                  harvestExecution: {
+                    start: async () => {
+                      throw new Error('quiet tick provisioned harvest')
+                    },
+                  } as unknown as HarvestExecution,
+                })
+              }
+              return { ...wiring, store }
+            },
+            intake,
+            terminal: interactive ? fakeTerminal() : undefined,
+            signal: stop.signal,
+            stdout: () => {},
+            stderr: (line) => fx.err.push(line),
+            sleep: async () => {
+              // Include the asynchronous launch gate and any work it initiates.
+              await new Promise((resolve) => setTimeout(resolve, 0))
+              if (++ticks === 1) {
+                measuring = true
+                return
+              }
+              measuring = false
+              expect(calls).toEqual([
+                'beginRepoTick',
+                'getRepo',
+                'getReducerValue',
+                'listBuilds',
+                'getRepoBuildDigests',
+                'finishRepoTick',
+              ])
+              stop.abort()
+            },
+          })
+          expect(ticks).toBe(2)
+          expect(fx.err).toEqual([])
+          expect(fx.agents.sessions.size).toBe(0)
+        } finally {
+          stop.abort()
+          await fx.cleanup()
+        }
+      })
+    }
   }
 }
 
