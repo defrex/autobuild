@@ -11734,6 +11734,9 @@ for (const mode of [
   'invalid',
   'degraded',
   'failure-publication',
+  'publication-before-begin',
+  'publication-lost-response',
+  'outage-shutdown',
   'persistent',
 ] as const) {
   test(`watch survives repository read failure: ${mode}`, async () => {
@@ -11743,16 +11746,43 @@ for (const mode of [
     const get = fx.store.getReducerValue.bind(fx.store)
     const begin = fx.store.beginRepoTick.bind(fx.store)
     const append = fx.store.appendRepo.bind(fx.store)
+    const finish = fx.store.finishRepoTick.bind(fx.store)
+    const outage = [
+      'failure-publication',
+      'publication-before-begin',
+      'publication-lost-response',
+      'outage-shutdown',
+    ].includes(mode)
+    let reportingAttempts = 0
+    fx.store.finishRepoTick = async (...args) => {
+      if (outage && args[2].outcome === 'failed' && sleeps < 3) {
+        reportingAttempts++
+        throw new Error('report writes refused')
+      }
+      return finish(...args)
+    }
     let armed = false
     let failures = 0
     let sleeps = 0
     const warnings: string[] = []
     fx.store.beginRepoTick = async (...args) => {
+      if (mode === 'publication-before-begin' && sleeps === 0) {
+        armed = true
+        throw new Error('injected repository read failure')
+      }
       const result = await begin(...args)
       if (sleeps === 0 && mode !== 'degraded') armed = true
       return result
     }
     fx.store.appendRepo = async (...args) => {
+      if (outage && args[1].type === 'dispatcher.tick-failed') {
+        reportingAttempts++
+        if (sleeps < 3) throw new Error('report writes refused')
+        if (mode === 'publication-lost-response' && sleeps === 3) {
+          await append(...args)
+          throw new Error('report response lost')
+        }
+      }
       const result = await append(...args)
       if (
         mode === 'degraded' &&
@@ -11766,7 +11796,7 @@ for (const mode of [
       const result = await get(scope, request)
       if (armed && request.reducer === 'repositoryReadFacts') {
         failures++
-        if (mode !== 'persistent' && mode !== 'failure-publication') armed = false
+        if (mode !== 'persistent' && !outage) armed = false
         if (mode === 'invalid') {
           const value = structuredClone(result.value) as Record<string, unknown>
           value.settings = { intake: 'broken' }
@@ -11793,8 +11823,19 @@ for (const mode of [
         signal: stop.signal,
         intervalMs: 1,
         wire: fx.wire,
-        sleep: async () => {
+        sleep: async (ms) => {
           sleeps++
+          if (outage) {
+            if (sleeps <= (mode === 'publication-lost-response' ? 4 : 3))
+              expect(ms).toBeGreaterThanOrEqual(1000)
+            clock.advance(ms)
+            if (mode === 'outage-shutdown' || sleeps === 5) {
+              armed = false
+              stop.abort()
+            }
+            if (sleeps >= 3) armed = false
+            return
+          }
           if (mode === 'persistent' && sleeps === 7) {
             const attention = new RepositoryAttention()
             for (const event of await fx.store.getRepoEvents(fx.origin)) attention.fold(event)
@@ -11814,12 +11855,31 @@ for (const mode of [
       })
       const events = await fx.store.getRepoEvents(fx.origin)
       const failed = events.filter((event) => event.type === 'dispatcher.tick-failed')
-      expect(failed).toHaveLength(mode === 'persistent' ? 7 : 1)
-      expect(failures).toBeGreaterThan(0)
+      if (outage) {
+        expect(reportingAttempts).toBeGreaterThan(0)
+        expect(warnings).toContainEqual(
+          expect.stringContaining('tick failed: injected repository read failure'),
+        )
+        expect(warnings).toContainEqual(
+          expect.stringContaining('tick failure unreported: report writes refused'),
+        )
+        if (mode === 'outage-shutdown') {
+          expect(sleeps).toBe(1)
+          expect(failed).toHaveLength(0)
+        } else {
+          expect(failed).toHaveLength(mode === 'publication-lost-response' ? 2 : 1)
+          expect(failed[0]!.payload.error).toContain(
+            'original tick error: injected repository read failure',
+          )
+          expect(failed[0]!.payload.error).toContain('3 failures')
+        }
+      } else expect(failed).toHaveLength(mode === 'persistent' ? 7 : 1)
+      if (mode !== 'publication-before-begin') expect(failures).toBeGreaterThan(0)
       const attention = new RepositoryAttention()
       for (const event of events) attention.fold(event)
       expect(attention.pending(clock())).toEqual([])
-      expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+      if (mode !== 'outage-shutdown')
+        expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
       expect(events.filter((event) => event.type === 'dispatcher.run-started')).toHaveLength(1)
       expect(events.filter((event) => event.type === 'dispatcher.run-stopped')).toHaveLength(1)
       expect(events.find((event) => event.type === 'dispatcher.run-stopped')).toMatchObject({
@@ -11843,6 +11903,91 @@ for (const mode of [
     }
   }, 30_000)
 }
+
+for (const shutdown of [false, true])
+  test(`reporting outage preserves a peer's tick and lease (shutdown=${shutdown})`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const stop = new AbortController()
+    const finish = fx.store.finishRepoTick.bind(fx.store)
+    const append = fx.store.appendRepo.bind(fx.store)
+    let sleeps = 0
+    let deferredReports = 0
+    let peerTick: NonNullable<Awaited<ReturnType<typeof fx.store.getRepo>>>['tick']
+    fx.tickets.listReady = async () => {
+      throw new Error('tick unavailable')
+    }
+    fx.store.finishRepoTick = async () => {
+      if (sleeps === 0) throw new Error('report unavailable')
+      throw new Error('predecessor must never finish a peer tick')
+    }
+    fx.store.appendRepo = async (...args) => {
+      if (args[1].type === 'dispatcher.tick-failed') {
+        if (sleeps === 0) throw new Error('report unavailable')
+        deferredReports++
+      }
+      return append(...args)
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        plain: true,
+        wire: fx.wire,
+        intervalMs: 0,
+        signal: stop.signal,
+        sleep: async (ms) => {
+          expect(ms).toBe(1000)
+          expect(++sleeps).toBe(1)
+          clock.advance(3_600_000)
+          expect(await fx.store.claimRepoLease(fx.origin, 'peer', 3_600_000)).toBe(true)
+          await fx.store.beginRepoTick(fx.origin, 'peer')
+          peerTick = (await fx.store.getRepo(fx.origin))!.tick
+          if (shutdown) stop.abort()
+        },
+      })
+      const repo = (await fx.store.getRepo(fx.origin))!
+      expect(repo.lease?.holder).toBe('peer')
+      expect(repo.tick).toEqual(peerTick)
+      expect(deferredReports).toBe(shutdown ? 0 : 1)
+    } finally {
+      fx.store.finishRepoTick = finish
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+
+test('once retains the original tick error when failure publication is refused', async () => {
+  const fx = await makeFixture([], happyHandlers())
+  const original = new Error('original tick failure')
+  const finish = fx.store.finishRepoTick.bind(fx.store)
+  fx.tickets.listReady = async () => {
+    throw original
+  }
+  fx.store.finishRepoTick = async (...args) => {
+    if (args[2].outcome === 'failed') throw new Error('failure publication refused')
+    return finish(...args)
+  }
+  try {
+    await expect(
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        wire: fx.wire,
+      }),
+    ).rejects.toBe(original)
+  } finally {
+    await fx.cleanup()
+  }
+})
 
 test('dispatcher runtime persistence failure prevents claims and ticks', async () => {
   const fx = await makeFixture(readyTicket('T-runtime'), happyHandlers())
@@ -11963,7 +12108,14 @@ for (const scenario of [
       return appendBuild(...args)
     }
     const appendRepo = fx.store.appendRepo.bind(fx.store)
+    let refusedReports = 0
     fx.store.appendRepo = async (...args) => {
+      if (
+        scenario === 'read-error' &&
+        args[1].type === 'dispatcher.tick-failed' &&
+        refusedReports++ < 2
+      )
+        throw new Error('handoff reporting unavailable')
       if (args[1].type === 'dispatcher.handoff-started') {
         if (scenario === 'rejected') {
           await seedOpenHarvest(
@@ -12155,6 +12307,7 @@ for (const scenario of [
       await yielded.promise
       if (scenario === 'read-error' || scenario === 'uncommitted-read-error')
         expect(readFailures).toBe(1)
+      if (scenario === 'read-error') expect(refusedReports).toBe(2)
       if (scenario === 'uncommitted-read-error') expect(lostAcceptances).toBe(2)
       if (scenario === 'authorization-error') expect(authorizationFailures).toBe(2)
       const authorization = (await fx.store.getEvents(slug)).findLast(
@@ -12223,7 +12376,9 @@ for (const scenario of [
       const events = await fx.store.getRepoEvents(fx.origin)
       const accepted = events.find((event) => event.type === 'dispatcher.handoff-started')!
       expect(events.filter((event) => event.type === 'dispatcher.handoff-started')).toHaveLength(1)
-      if (scenario.endsWith('read-error') || scenario === 'authorization-error')
+      if (scenario === 'read-error')
+        expect(events.some((event) => event.type === 'dispatcher.tick-failed')).toBe(false)
+      else if (scenario.endsWith('read-error') || scenario === 'authorization-error')
         expect(events.some((event) => event.type === 'dispatcher.tick-failed')).toBe(true)
       expect(
         events.filter(
