@@ -163,6 +163,7 @@ interface BuildState {
   }
   lease?: Lease
   latestRewrite?: import('../events/payloads').EventPayload<'node.rewritten'>
+  earlierRewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'> | null>
   rewrites?: Map<string, import('../events/payloads').EventPayload<'node.rewritten'>>
   events: AbEvent[]
   /** kind → deposits in revision order (index = revision; 0-based, §6.3). */
@@ -357,10 +358,14 @@ export class MemoryBuildStore implements BuildStore {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.slug.localeCompare(b.slug))
   }
 
-  async getNodeRewrite(slug: string, previous?: string) {
+  async getNodeRewrite(slug: string, previous?: string, beforePrevious?: string) {
     const state = this.state(slug)
     return structuredClone(
-      (previous === undefined ? state.latestRewrite : state.rewrites?.get(previous)) ?? null,
+      (beforePrevious !== undefined
+        ? state.earlierRewrites?.get(beforePrevious)
+        : previous === undefined
+          ? state.latestRewrite
+          : state.rewrites?.get(previous)) ?? null,
     )
   }
 
@@ -384,6 +389,8 @@ export class MemoryBuildStore implements BuildStore {
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.earlierRewrites ??= new Map()
+      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
       state.rewrites ??= new Map()
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)
@@ -419,6 +426,8 @@ export class MemoryBuildStore implements BuildStore {
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.earlierRewrites ??= new Map()
+      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
       state.rewrites ??= new Map()
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)
@@ -496,6 +505,8 @@ export class MemoryBuildStore implements BuildStore {
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.earlierRewrites ??= new Map()
+      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
       state.rewrites ??= new Map()
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)
@@ -576,6 +587,8 @@ export class MemoryBuildStore implements BuildStore {
     if (envelope.type === 'node.rewritten') {
       const receipt =
         envelope.payload as import('../events/payloads').EventPayload<'node.rewritten'>
+      state.earlierRewrites ??= new Map()
+      state.earlierRewrites.set(receipt.previous, structuredClone(state.latestRewrite ?? null))
       state.rewrites ??= new Map()
       state.rewrites.set(receipt.previous, structuredClone(receipt))
       state.latestRewrite = structuredClone(receipt)

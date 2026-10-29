@@ -562,10 +562,10 @@ export class RemoteBuildStore implements BuildStore {
 
   private artifactMetaUnsupported = false
 
-  async getNodeRewrite(slug: string, previous?: string) {
+  async getNodeRewrite(slug: string, previous?: string, beforePrevious?: string) {
     return this.requestJson(
       'GET',
-      `${this.buildPath(slug)}/node-rewrite?${new URLSearchParams(previous === undefined ? {} : { previous })}`,
+      `${this.buildPath(slug)}/node-rewrite?${new URLSearchParams({ ...(previous === undefined ? {} : { previous }), ...(beforePrevious === undefined ? {} : { beforePrevious }) })}`,
       nodeRewriteWireSchema,
     )
   }

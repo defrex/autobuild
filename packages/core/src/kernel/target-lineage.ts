@@ -23,33 +23,43 @@ export async function proveTargetLineage(input: {
   if (!store.getNodeRewrite || !forge.isCommitAncestor) return undefined
   const record = await store.getBuild(node)
   if (record?.branch !== branch) return undefined
-  const receipts: TargetLineage['receipts'] = []
-  let head = from
-  for (let hop = 0; hop < MAX_TARGET_LINEAGE_HOPS; hop++) {
-    const receipt = await store.getNodeRewrite(node, head)
-    if (!receipt) break
+  // Exact chains remain a cheap point-lookup path, including when a newer
+  // publication raced this observation. Share the read cap with gap recovery.
+  let reads = 0
+  let forward = from
+  const exact: TargetLineage['receipts'] = []
+  while (reads < MAX_TARGET_LINEAGE_HOPS) {
+    reads++
+    const receipt = await store.getNodeRewrite(node, forward)
+    if (!receipt || receipt.previous !== forward || receipt.head === forward) break
     gitOid.parse(receipt.previous)
     gitOid.parse(receipt.head)
-    if (receipt.previous !== head || receipt.head === head) break
-    receipts.push(receipt)
-    head = receipt.head
-    if (head === sha || (await forge.isCommitAncestor(head, sha))) return { node, from, receipts }
+    exact.push(receipt)
+    forward = receipt.head
+    if (forward === sha || (await forge.isCommitAncestor(forward, sha)))
+      return { node, from, receipts: exact }
   }
-  // Latest-publication bridge: the child may have observed an ancestor of the
-  // frozen source (e.g. another child landed before this node was restacked).
-  // Prove both immutable sides; ownership alone is never sufficient.
-  if (receipts.length === MAX_TARGET_LINEAGE_HOPS) return undefined
-  const latest = await store.getNodeRewrite(node)
-  if (latest) {
-    gitOid.parse(latest.previous)
-    gitOid.parse(latest.head)
+  // Walk backwards from the latest guarded publication. Between receipts a
+  // sibling may land forward commits; prove each such immutable gap rather than
+  // requiring exact previous-head equality. Never infer a rewrite from ownership.
+  const receipts: TargetLineage['receipts'] = []
+  let head = sha
+  let beforePrevious: string | undefined
+  const seen = new Set<string>()
+  while (reads < MAX_TARGET_LINEAGE_HOPS) {
+    reads++
+    const receipt = await store.getNodeRewrite(node, undefined, beforePrevious)
+    if (!receipt || seen.has(receipt.id)) return undefined
+    seen.add(receipt.id)
+    gitOid.parse(receipt.previous)
+    gitOid.parse(receipt.head)
+    if (receipt.previous === receipt.head) return undefined
+    if (head !== receipt.head && !(await forge.isCommitAncestor(receipt.head, head)))
+      return undefined
+    receipts.unshift(receipt)
+    head = receipt.previous
+    if (from === head || (await forge.isCommitAncestor(from, head))) return { node, from, receipts }
+    beforePrevious = receipt.previous
   }
-  if (
-    latest &&
-    latest.previous !== latest.head &&
-    (from === latest.previous || (await forge.isCommitAncestor(from, latest.previous))) &&
-    (sha === latest.head || (await forge.isCommitAncestor(latest.head, sha)))
-  )
-    return { node, from, receipts: [latest] }
   return undefined
 }

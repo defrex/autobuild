@@ -5,7 +5,7 @@ import { proveTargetLineage } from './target-lineage'
 import { nodeRestackLog } from './generators/node-restack-log'
 
 const oid = (n: number) => n.toString(16).padStart(40, '0')
-async function fixture(count: number) {
+async function fixture(count: number, step = 1) {
   const store = new MemoryBuildStore()
   await store.createBuild({ slug: 'parent', repo: 'repo', branch: 'ab-node/parent' })
   const log = nodeRestackLog()
@@ -16,14 +16,14 @@ async function fixture(count: number) {
       const payload = JSON.parse(
         JSON.stringify(e.payload)
           .replaceAll('node-tx', `tx-${i}`)
-          .replaceAll('a'.repeat(40), oid(i))
-          .replaceAll('c'.repeat(40), oid(i + 1)),
+          .replaceAll('a'.repeat(40), oid((i - 1) * step + 1))
+          .replaceAll('c'.repeat(40), oid((i - 1) * step + 2)),
       )
       await store.append('parent', { actor: e.actor, type: e.type, payload })
     }
   }
   const forge = new FakeForge()
-  for (let i = 1; i <= count + 2; i++) forge.seedCommit(oid(i))
+  for (let i = 1; i <= count * step + 2; i++) forge.seedCommit(oid(i))
   const prove = (from: string, sha: string, branch = 'ab-node/parent') =>
     proveTargetLineage({ store, forge, node: 'parent', from, sha, branch })
   return { store, forge, prove }
@@ -60,4 +60,15 @@ test('latest publication bridge proves immutable ancestry on both sides', async 
     { id: 'tx-1', previous: oid(1), head: oid(2) },
   ])
   expect(await prove(oid(4), oid(3))).toBeUndefined()
+})
+
+test('crosses sibling forward landings between multiple guarded restacks', async () => {
+  const { forge, prove } = await fixture(3, 2)
+  forge.seedCommit(oid(3), [oid(2)])
+  forge.seedCommit(oid(5), [oid(4)])
+  forge.seedCommit(oid(7), [oid(6)])
+  expect((await prove(oid(1), oid(7)))?.receipts.map((r) => r.id)).toEqual(['tx-1', 'tx-2', 'tx-3'])
+  // Each forward gap is required; kernel ownership does not prove ancestry.
+  forge.seedCommit(oid(3), [])
+  expect(await prove(oid(1), oid(7))).toBeUndefined()
 })

@@ -2707,6 +2707,14 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(await store.getNodeRewrite(slug)).toEqual(copy)
           copy!.id = 'mutated'
           expect((await store.getNodeRewrite(slug, previous))?.id).toBe('tx-4')
+          expect((await store.getNodeRewrite(slug, undefined, previous))?.id).toBe('tx-3')
+          const later = { id: 'tx-5', previous: 'c'.repeat(40), head: 'd'.repeat(40) }
+          await store.append(slug, { ...write, payload: later })
+          expect(await store.getNodeRewrite(slug, undefined, later.previous)).toEqual({
+            ...receipt,
+            id: 'tx-4',
+          })
+          expect(await store.getNodeRewrite(slug, undefined, 'e'.repeat(40))).toBeNull()
           await expect(store.getNodeRewrite('unknown', previous)).rejects.toThrow()
         })
       })

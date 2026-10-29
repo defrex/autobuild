@@ -4168,17 +4168,20 @@ starts a new branch scope; frozen transactions recover their retained inputs.
 
 Kernel restacks of a node are admitted through durable guarded publication
 receipts, not treated as external force-pushes. The dispatcher walks an index
-keyed by node and previous head, at most 64 point lookups from each child
-baseline; cost depends on the rewrite gap, never journal length or total receipts.
-A latest-publication bridge also requires immutable ancestry from the baseline
-to the receipt's previous head and from its published head to the observed tip.
+keyed by node and previous head, at most 64 receipt lookups from each child
+baseline; cost is capped independently of journal length or total receipts.
+Exact links use point lookups. When forward child landings separate restacks,
+the dispatcher walks backwards from the latest publication with an indexed
+previous-receipt cursor. Every gap requires immutable ancestry from the earlier
+published head to the later receipt's previous head, as do the baseline and tip
+ends of the proof. Missing links never imply rewrite authority.
 The proven receipts travel in `target.moved.lineage`; build-scoped runners use
 that recorded proof without reading another build. Clearing attention for an
 unchanged accepted SHA retains newly proven lineage in `target.rewrite-cleared`.
 Missing receipts or a gap
 over 64 still record `target.rewritten` and raise attention. Each hop makes at
-most one immutable ancestry comparison; the latest-publication bridge adds at
-most two comparisons and one indexed latest-receipt lookup. Unchanged accepted
+most two immutable ancestry comparisons. The exact walk and gap recovery share
+the same 64-read cap, including unsuccessful lookups. Unchanged accepted
 polls read no receipts or event rows.
 
 Leaf restack and reconcile publication retry classified transient forge or transport

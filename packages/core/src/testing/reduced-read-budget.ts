@@ -464,6 +464,37 @@ export async function targetLineageReadBudget(opts: {
         paddingEvents++
       }
     }
+    const gapStart = 50_000 + length
+    for (let i = 0; i < 3; i++) {
+      for (const event of log.slice(2)) {
+        const payload = JSON.parse(
+          JSON.stringify(event.payload)
+            .replaceAll('node-tx', `gap-${length}-${i}`)
+            .replaceAll('a'.repeat(40), oid(gapStart + i * 2))
+            .replaceAll('c'.repeat(40), oid(gapStart + i * 2 + 1)),
+        )
+        await store.append(node, { actor: event.actor, type: event.type, payload })
+      }
+      forge.seedCommit(oid(gapStart + i * 2))
+      forge.seedCommit(oid(gapStart + i * 2 + 1))
+      if (i > 0) forge.seedCommit(oid(gapStart + i * 2), [oid(gapStart + i * 2 - 1)])
+    }
+    for (const reader of [store, await opts.fresh()]) {
+      costs.events = costs.metadata = costs.bytes = 0
+      const proof = await proveTargetLineage({
+        store: reader,
+        forge,
+        node,
+        branch: 'ab-node/lineage-budget',
+        from: oid(gapStart),
+        sha: oid(gapStart + 5),
+      })
+      expect(proof?.receipts).toHaveLength(3)
+      expect(costs.events).toBe(4) // exact first receipt, then three reverse cursor reads
+      expect(costs.metadata).toBeLessThan(12)
+      if (length === 100) bytes.set(0, costs.bytes)
+      else expect(costs.bytes).toBeLessThanOrEqual(bytes.get(0)! + 100)
+    }
     for (const reader of [store, await opts.fresh()])
       for (const gap of [1, 3]) {
         costs.events = costs.metadata = costs.bytes = 0

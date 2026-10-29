@@ -354,13 +354,19 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  async getNodeRewrite(slug: string, previous?: string) {
+  async getNodeRewrite(slug: string, previous?: string, beforePrevious?: string) {
     if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
     const rows: Row[] = await this.run((q) =>
-      previous === undefined
+      beforePrevious !== undefined
         ? q`SELECT payload FROM events WHERE type = 'node.rewritten'
+          AND build = ${slug} AND seq < (
+            SELECT seq FROM events WHERE type = 'node.rewritten' AND build = ${slug}
+              AND payload->>'previous' = ${beforePrevious} ORDER BY seq DESC LIMIT 1
+          ) ORDER BY seq DESC LIMIT 1`
+        : previous === undefined
+          ? q`SELECT payload FROM events WHERE type = 'node.rewritten'
           AND build = ${slug} ORDER BY seq DESC LIMIT 1`
-        : q`SELECT payload FROM events WHERE type = 'node.rewritten'
+          : q`SELECT payload FROM events WHERE type = 'node.rewritten'
           AND build = ${slug} AND payload->>'previous' = ${previous}
           ORDER BY seq DESC LIMIT 1`,
     )

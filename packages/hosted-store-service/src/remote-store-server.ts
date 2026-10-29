@@ -1196,13 +1196,18 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         if (scope?.kind === 'delegated' && scope.delegation.kind.startsWith('build'))
           throw new RequestError(403, 'auth', 'repository authority required')
         const previous = url.searchParams.get('previous')
+        const beforePrevious = url.searchParams.get('beforePrevious')
+        if (beforePrevious !== null && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(beforePrevious))
+          throw new RequestError(400, 'validation', 'beforePrevious must be a commit OID')
         if (previous !== null && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(previous))
           throw new RequestError(400, 'validation', 'previous must be a commit OID')
         if (!store.getNodeRewrite)
           return fail(501, 'unsupported-operation', 'rewrite index unsupported')
         return json(
           200,
-          nodeRewriteWireSchema.parse(await store.getNodeRewrite(slug, previous ?? undefined)),
+          nodeRewriteWireSchema.parse(
+            await store.getNodeRewrite(slug, previous ?? undefined, beforePrevious ?? undefined),
+          ),
         )
       }
       case 'GET artifact-meta': {

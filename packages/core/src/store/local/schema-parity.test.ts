@@ -345,6 +345,16 @@ describe('schema/DDL parity (real tree)', () => {
         .all('node', 'a'.repeat(40))
       expect(JSON.stringify(plan)).toContain('events_node_rewrite_previous')
       expect(JSON.stringify(plan)).not.toContain('SCAN events')
+      const cursorPlan = db
+        .query(`EXPLAIN QUERY PLAN SELECT payload FROM events
+        WHERE type = 'node.rewritten' AND build = ? AND seq < (
+          SELECT seq FROM events WHERE type = 'node.rewritten' AND build = ?
+          AND json_extract(payload, '$.previous') = ? ORDER BY seq DESC LIMIT 1
+        ) ORDER BY seq DESC LIMIT 1`)
+        .all('node', 'node', 'a'.repeat(40))
+      expect(JSON.stringify(cursorPlan)).toContain('events_node_rewrite_previous')
+      expect(JSON.stringify(cursorPlan)).toContain('events_type_build_seq')
+      expect(JSON.stringify(cursorPlan)).not.toContain('SCAN events')
     } finally {
       db.close()
     }

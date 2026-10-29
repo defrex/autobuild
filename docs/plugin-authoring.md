@@ -81,12 +81,16 @@ authentication, malformed responses or rate limits. Missing capability withholds
 new replay requiring proof. GitHub uses exact-SHA comparison; local-git requires
 an explicit served `repoRoot`. Unknown ancestry never authorizes replay.
 
-Stores may expose `getNodeRewrite(node, previousHead)` as a bounded point
+Stores may expose `getNodeRewrite(node, previousHead, beforePrevious)` as a bounded point
 lookup of a durable `node.rewritten` receipt. Built-in adapters index these
 validated publication facts atomically with append, including transactional
 deposits. The dispatcher uses at most 64 hops per baseline to prove kernel node
 restacks and records `target.moved.lineage` for scoped runners. There is no
 history-download fallback when the capability or a receipt is absent.
+With `beforePrevious`, return the publication immediately preceding the latest
+receipt keyed by that previous head, using indexed cursor and result lookups.
+This lets lineage proofs cross forward sibling landings between restacks; every
+intervening forward gap still requires immutable ancestry proof.
 
 
 ### Publication readback

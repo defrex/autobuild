@@ -706,20 +706,28 @@ export class SqliteBuildStore implements BuildStore {
     return rows.map((row) => this.toRecord(row))
   }
 
-  async getNodeRewrite(slug: string, previous?: string) {
+  async getNodeRewrite(slug: string, previous?: string, beforePrevious?: string) {
     this.requireBuild(slug)
     const row = (
-      previous === undefined
+      beforePrevious !== undefined
         ? this.sqlite
             .query(`SELECT payload FROM events
+          WHERE type = 'node.rewritten' AND build = ? AND seq < (
+            SELECT seq FROM events WHERE type = 'node.rewritten' AND build = ?
+              AND json_extract(payload, '$.previous') = ? ORDER BY seq DESC LIMIT 1
+          ) ORDER BY seq DESC LIMIT 1`)
+            .get(slug, slug, beforePrevious)
+        : previous === undefined
+          ? this.sqlite
+              .query(`SELECT payload FROM events
           WHERE type = 'node.rewritten' AND build = ? ORDER BY seq DESC LIMIT 1`)
-            .get(slug)
-        : this.sqlite
-            .query(`SELECT payload FROM events
+              .get(slug)
+          : this.sqlite
+              .query(`SELECT payload FROM events
           WHERE type = 'node.rewritten' AND build = ?
             AND json_extract(payload, '$.previous') = ?
           ORDER BY seq DESC LIMIT 1`)
-            .get(slug, previous)
+              .get(slug, previous)
     ) as { payload: string } | null
     return row ? eventPayloadSchemas['node.rewritten'].parse(JSON.parse(row.payload)) : null
   }

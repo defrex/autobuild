@@ -1323,6 +1323,14 @@ test('paused child crosses two durable kernel rewrites before its next demand', 
       await commitAll(h.origin, `root ${round}`)
       await requestNodeRestack({ store: h.store, repo: h.origin, slug: a.slug, user: 'operator' })
       await tick()
+      if (round === 1) {
+        const ws = join(h.tmp, 'sibling-landing')
+        await git(['worktree', 'add', ws, a.branch!], h.origin)
+        await Bun.write(join(ws, 'sibling-owned'), 'sibling-owned')
+        await commitAll(ws, 'sibling lands between parent restacks')
+        await git(['worktree', 'remove', ws], h.origin)
+        await tick()
+      }
     }
     const parentHead = await git(['rev-parse', a.branch!], h.origin)
     expect(ofType(await h.events(a.slug), 'node.rewritten')).toHaveLength(2)
@@ -1337,7 +1345,7 @@ test('paused child crosses two durable kernel rewrites before its next demand', 
       (e) => e.payload.sha === parentHead,
     )!
     expect(move.payload.lineage?.find((p) => p.from === baseline)?.receipts).toHaveLength(2)
-    for (const file of ['parent-owned', 'child-owned', 'root-1', 'root-2'])
+    for (const file of ['parent-owned', 'child-owned', 'sibling-owned', 'root-1', 'root-2'])
       expect(await git(['show', `${b.branch}:${file}`], h.origin)).toBe(
         file.startsWith('root-') ? file.replace('-', ' ') : file,
       )
@@ -1362,15 +1370,25 @@ test('leaf verify entry uses recorded kernel lineage after its parent restacks d
           ...cli,
           run: async (argv) => {
             if (argv[0] === 'done') {
-              await Bun.write(join(h.origin, 'new-root'), 'new root')
-              await commitAll(h.origin, 'advance root while leaf implements')
-              await requestNodeRestack({
-                store: h.store,
-                repo: h.origin,
-                slug: parentSlug,
-                user: 'operator',
-              })
-              for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+              for (const round of [1, 2]) {
+                await Bun.write(join(h.origin, 'new-root'), `new root ${round}`)
+                await commitAll(h.origin, `advance root ${round} while leaf implements`)
+                await requestNodeRestack({
+                  store: h.store,
+                  repo: h.origin,
+                  slug: parentSlug,
+                  user: 'operator',
+                })
+                for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+                if (round === 1) {
+                  const ws = join(h.tmp, 'sibling-landing')
+                  await git(['worktree', 'add', ws, parentBranch], h.origin)
+                  await Bun.write(join(ws, 'sibling-owned'), 'sibling')
+                  await commitAll(ws, 'sibling lands while leaf implements')
+                  await git(['worktree', 'remove', ws], h.origin)
+                  for (let i = 0; i < 4; i++) await h.dispatcher.tick()
+                }
+              }
             }
             return cli.run(argv)
           },
@@ -1405,7 +1423,8 @@ test('leaf verify entry uses recorded kernel lineage after its parent restacks d
     )
     const head = reduceBuild(events).pr!.headSha
     expect(await git(['show', `${head}:parent-owned`], h.origin)).toBe('owned')
-    expect(await git(['show', `${head}:new-root`], h.origin)).toBe('new root')
+    expect(await git(['show', `${head}:new-root`], h.origin)).toBe('new root 2')
+    expect(await git(['show', `${head}:sibling-owned`], h.origin)).toBe('sibling')
     expect(h.cliErrors).toEqual([])
   } finally {
     await h.cleanup()

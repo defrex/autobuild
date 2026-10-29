@@ -1518,6 +1518,8 @@ test('rewrite index validates OIDs and fails closed without a history fallback',
     expect(await remote.getNodeRewrite('rewrite-node', 'a'.repeat(40))).toBeNull()
     expect(await remote.getNodeRewrite('rewrite-node')).toBeNull()
     await expect(remote.getNodeRewrite('rewrite-node', 'invalid')).rejects.toThrow()
+    await expect(remote.getNodeRewrite('rewrite-node', undefined, 'invalid')).rejects.toThrow()
+    expect(await remote.getNodeRewrite('rewrite-node', undefined, 'b'.repeat(40))).toBeNull()
     Reflect.set(store, 'getNodeRewrite', undefined)
     await expect(remote.getNodeRewrite('rewrite-node', 'a'.repeat(40))).rejects.toThrow()
     expect(histories).toBe(0)
