@@ -738,6 +738,7 @@ if (testUrl)
     const source = new PostgresTicketSource(database.sql, context, lifecycle, new RecordingRetry())
     try {
       const target = await source.create({ title: 'node', body: 'x'.repeat(100000), kind: 'node' })
+      const secondTarget = await source.create({ title: 'second node', body: 'node', kind: 'node' })
       const unresolved = await source.create({ title: 'blocker', body: 'x'.repeat(100000) })
       const resolved = await source.create(
         { title: 'done blocker', body: 'x'.repeat(100000) },
@@ -747,14 +748,70 @@ if (testUrl)
         await source.create({
           title: String(i),
           body: 'page',
-          target: target.ref.id,
           labels: i % 2 ? ['page'] : ['page', 'second'],
           blockedBy: [unresolved.ref.id, resolved.ref.id],
         })
       await database
         .source({ ...context, repo: 'two' })
         .create({ title: 'foreign', body: 'foreign', labels: ['page'] })
+      const foreign = database.source({ ...context, repo: 'two' })
+      const foreignTarget = await foreign.create({
+        title: 'foreign node',
+        body: 'foreign',
+        kind: 'node',
+      })
+      await foreign.create({
+        title: 'foreign child',
+        body: 'foreign',
+        target: foreignTarget.ref.id,
+        labels: ['page'],
+      })
+      await source.transition(target.ref.id, 'Ready')
+      await source.transition(secondTarget.ref.id, 'Ready')
+      await source.comment(target.ref.id, 'private comment')
+      const measure = async () => {
+        const counts: number[] = []
+        for (const operation of [
+          () => source.listReady({}),
+          () => source.listReady({ state: 'inbox', labels: ['page', 'second'] }),
+          () => source.listAll(),
+        ]) {
+          observations.length = 0
+          const result = await operation()
+          counts.push(observations.length)
+          expect(
+            observations.some(
+              (o) => /SELECT \*,/.test(o.query) && !o.query.includes('AS blockers'),
+            ),
+          ).toBe(false)
+          for (const ticket of result.tickets) {
+            expect(ticket).not.toHaveProperty('comments')
+            expect(ticket.title).not.toContain('foreign')
+          }
+        }
+        return counts
+      }
+      const before = await measure()
+      const children = (await source.listReady({ labels: ['page'] })).tickets
+      for (const [i, child] of children.entries())
+        await source.update(child.ref.id, { target: i % 2 ? secondTarget.ref.id : target.ref.id })
+      expect(await measure()).toEqual(before)
+      const all = await source.listAll()
+      for (const [i, child] of children.entries())
+        expect(all.tickets.find((t) => t.ref.id === child.ref.id)?.target).toBe(
+          i % 2 ? secondTarget.ref.id : target.ref.id,
+        )
+      for (const ticket of all.tickets.filter((t) => !children.some((c) => c.ref.id === t.ref.id)))
+        expect(ticket).not.toHaveProperty('target')
+      expect((await source.listReady({ state: 'Done' })).tickets.map((t) => t.ref.id)).toEqual([
+        resolved.ref.id,
+      ])
       await database.sql`UPDATE ab_tickets SET created_at = '2026-01-01' WHERE repo = 'one'`
+      const ordered =
+        await database.sql`SELECT readable_id FROM ab_tickets WHERE repo = 'one' ORDER BY created_at, id`
+      expect((await source.listAll()).tickets.map((t) => t.ref.id)).toEqual(
+        ordered.map((r: { readable_id: string }) => String(r.readable_id)),
+      )
       for (const labels of [['page'], ['page', 'second']])
         for (const order of ['oldest', 'newest'] as const) {
           const full = await source.listReady({ state: 'inbox', labels })

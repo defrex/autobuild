@@ -446,3 +446,47 @@ export async function upgradeReadBudget(store: BuildStore): Promise<void> {
     expect(metrics.reducer).toBeGreaterThan(0)
   }
 }
+
+/** Measure real ticket-source operations through an injected statement boundary.
+ * Each fixture is fresh, so a source-local cache cannot conceal target reads. */
+export async function ticketListReadBudget(
+  fixture: (
+    size: number,
+    targets: 'none' | 'shared' | 'distinct',
+  ) => {
+    source: import('../ports/types').TicketSource
+    reset(): void
+    statements(): number
+  },
+): Promise<void> {
+  for (const size of [0, 1, 100]) {
+    for (const targets of ['none', 'shared', 'distinct'] as const) {
+      for (const state of [undefined, 'Ready']) {
+        const { source, reset, statements } = fixture(size, targets)
+        const criteria = state === undefined ? {} : { state }
+        const operations = [
+          { run: () => source.listReady(criteria), count: state ? 3 : 2 },
+          ...(state ? [] : [{ run: () => source.listAll!(), count: 2 }]),
+          ...(['oldest', 'newest'] as const).map((order) => ({
+            run: () => source.listPage!(criteria, { limit: 100, order }),
+            count: state ? 4 : 3,
+          })),
+          { run: () => source.listPage!(criteria, { limit: 0 }), count: state ? 3 : 2 },
+        ]
+        for (const [index, operation] of operations.entries()) {
+          reset()
+          const result = await operation.run()
+          expect(statements()).toBe(operation.count)
+          expect(result.tickets).toHaveLength(index === operations.length - 1 ? 0 : size)
+          for (const ticket of result.tickets) {
+            if (targets === 'none') expect(ticket).not.toHaveProperty('target')
+            else
+              expect(ticket.target).toBe(
+                targets === 'shared' ? 'AUT-1000' : `AUT-${1000 + Number(ticket.title)}`,
+              )
+          }
+        }
+      }
+    }
+  }
+}

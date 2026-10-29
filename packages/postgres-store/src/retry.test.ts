@@ -312,3 +312,62 @@ test('hosted retries reacquire generation per transaction attempt; reads never a
   })
   expect(boundaries).toBe(3)
 })
+
+test('ticket listings have a fixed statement budget regardless of target cardinality', async () => {
+  const { ticketListReadBudget } = await import('@defrex/autobuild/testing')
+  const { PostgresTicketSource } = await import('./tickets')
+  const { PlanRetryRunner } = await import('./retry')
+  const lifecycle = { triage: 'Inbox', ready: 'Ready', doing: 'Doing', done: 'Done' }
+  await ticketListReadBudget((size, targets) => {
+    let statements = 0
+    const execute = async (query: string): Promise<Record<string, unknown>[]> => {
+      statements++
+      if (query.includes('SELECT name FROM ab_ticket_states'))
+        return Object.values(lifecycle).map((name) => ({ name }))
+      if (query.includes('SELECT s.name'))
+        return Object.values(lifecycle).map((name) => ({ name, about: null, tickets: size }))
+      if (query.includes('count(*)::text AS total')) return [{ total: String(size) }]
+      if (query.includes('AS blockers') && query.includes('ORDER BY created_at')) {
+        return Array.from({ length: size }, (_, i) => ({
+          id: `storage-${i}`,
+          readable_id: `AUT-${i + 1}`,
+          revision: '1',
+          title: String(i),
+          body: 'Body',
+          state: 'Ready',
+          labels: [],
+          blockers: [],
+          target_id: targets === 'none' ? null : `target-${targets === 'shared' ? 0 : i}`,
+          ...(query.includes('AS target_readable_id')
+            ? {
+                target_readable_id:
+                  targets === 'none' ? null : `AUT-${1000 + (targets === 'shared' ? 0 : i)}`,
+              }
+            : {}),
+        }))
+      }
+      throw new Error(`Unexpected listing statement: ${query}`)
+    }
+    const q = Object.assign((parts: TemplateStringsArray) => execute(parts.join('?')), {
+      unsafe: (query: string) => execute(query),
+      array: (values: unknown[]) => values,
+    }) as unknown as import('./retry').Exec
+    class RecordingRunner extends PlanRetryRunner {
+      override tx<T>(_pool: SQL, body: (q: import('./retry').Exec) => Promise<T>): Promise<T> {
+        return body(q)
+      }
+    }
+    return {
+      source: new PostgresTicketSource(
+        {} as SQL,
+        { repo: 'budget', teamKey: 'AUT', lifecycle },
+        lifecycle,
+        new RecordingRunner(),
+      ),
+      reset: () => {
+        statements = 0
+      },
+      statements: () => statements,
+    }
+  })
+})
