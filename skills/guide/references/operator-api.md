@@ -242,18 +242,23 @@ Dispatcher liveness is also visible through `ab repository status --json`:
 of `latestRun`. Each run includes its recorded `runtime` (version, commit, and
 source kind/location), or null for unrecorded historical starts. Heartbeat age measures attributable renewals; tick age measures
 durable progress. Missing historical evidence is null. The liveness query uses
-bounded repository facts first, with a full-history fallback when a later
-invocation hides the holder start or the latest stop. Other state reads retain
-their bounded semantics.
+persisted repository and exact per-run reduced values, including when newer
+invocations hide an older holder or stop. Missing facts never trigger a full-log
+fallback.
 
 Repository-following `ab watch` additionally emits a read-only `dispatcher.lost`
 observation when an observed lease expires without a matching stop or validated
-successor takeover. A completed ownership transfer suppresses predecessor loss
+successor takeover. Any recorded stop, normal or abnormal, suppresses loss;
+abnormal stops retain their own default attention event. A completed ownership transfer suppresses predecessor loss
 even while its sessions drain; a handoff without takeover still reports loss on
 expiry. Successor loss and upgrade-failure/rollback attention remain independent. JSON carries
 `observation` instead of `event`, with run, observedAt, leaseExpiresAt and available
 identity, plus the usual repo/build/state/cursor fields. It invents no durable
 sequence or actor. Retain the cursor to avoid repeat reports across invocations.
+A watch retains sampled owners after authoritative lease release. Once-run teardown
+stops heartbeat and releases only its own lease; release is best effort because
+expiry fences ambiguous ownership. A retained sample or failed release cannot
+override a persisted stop.
 No lease alone is not evidence of death. SIGINT, SIGHUP and SIGTERM drain dispatch,
 record the first signal in the stop fact, and release its lease before exit.
 

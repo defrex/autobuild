@@ -637,3 +637,41 @@ test('operator status reports live registrations, ages and exactly one human lin
   await abRepositoryStatus(absent)
   expect(absent.output.filter((line) => line.startsWith('operator:'))).toEqual(['operator: absent'])
 })
+
+for (const outcome of ['normal', 'abnormal'] as const) {
+  test(`status correlates a hidden ${outcome} stopped holder before and after expiry`, async () => {
+    const { DISPATCHER } = await import('../events/envelope')
+    const { manualClock } = await import('../testing/fixed')
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    for (const run of ['holder', 'yielding']) {
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 42,
+          roleWarnings: [],
+          effectiveConfig: { kind: 'config', rev: 0 },
+        },
+      })
+      if (run === 'holder') await store.claimRepoLease(REPO, run, 1000)
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-stopped',
+        payload: { run, outcome },
+      })
+    }
+    for (const advance of [0, 2000]) {
+      clock.advance(advance)
+      const opts = options(store, { json: true, now: clock })
+      await abRepositoryStatus(opts)
+      expect(JSON.parse(opts.output.join('\n')).dispatcher).toMatchObject({
+        state: 'stopped',
+        expiredHolder: null,
+        holder: null,
+      })
+    }
+  })
+}
