@@ -159,20 +159,24 @@ test('high water before bounded seed handles concurrent appends and failed snaps
   expect(await feed.refresh()).toEqual([])
 })
 
-test('SQLite frontend read budget stays flat across thousands of journal events', async () => {
-  const { mkdtemp, rm } = await import('node:fs/promises')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const { openLocalStore } = await import('../store/local/store')
-  const { dispatchReadBudget } = await import('../testing/dispatch-read-budget')
-  const root = await mkdtemp(join(tmpdir(), 'ab-dashboard-feed-'))
-  try {
-    const store = openLocalStore(root)
-    await dispatchReadBudget(store, store)
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-}, 30_000)
+test.each([false, true])(
+  'frontend read budget stays flat across thousands of journal events (memory=%s)',
+  async (memory) => {
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { openLocalStore } = await import('../store/local/store')
+    const { dispatchReadBudget } = await import('../testing/dispatch-read-budget')
+    const root = await mkdtemp(join(tmpdir(), 'ab-dashboard-feed-'))
+    try {
+      const store = memory ? new MemoryBuildStore() : openLocalStore(root)
+      await dispatchReadBudget(store, store)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+  30_000,
+)
 
 test('scripted harvest, settings and live status retain full replay and rendered parity', async () => {
   const { randomHarvestJournal, randomSettingsJournal, randomStatusJournal } = await import(

@@ -162,4 +162,5 @@ test('cold presence reads consume canonical witnessed values with zero idle even
 test('expired prior watch owners have bounded exact-run reads at 100 and 100000 events', async () => {
   const { stoppedOwnerWatchReadBudget } = await import('../testing/reduced-read-budget')
   await stoppedOwnerWatchReadBudget()
+  // Seeding 100,000 validated events can exceed Bun's default timeout on shared runners.
 }, 30_000)

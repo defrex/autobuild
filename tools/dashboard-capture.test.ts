@@ -113,6 +113,18 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'account-credentials-recovered-narrow',
     'forge-readiness-wide',
     'forge-readiness-narrow',
+    'viewer-known-180',
+    'viewer-known-180-light',
+    'viewer-unknown-180',
+    'viewer-unknown-180-light',
+    'viewer-session-180',
+    'viewer-session-180-light',
+    'viewer-known-100',
+    'viewer-known-100-light',
+    'viewer-unknown-100',
+    'viewer-unknown-100-light',
+    'viewer-session-100',
+    'viewer-session-100-light',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
@@ -136,7 +148,12 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    if (frame.id.startsWith('rollback-')) {
+    if (frame.id.startsWith('viewer-')) {
+      expect(frame.text).toContain('viewer')
+      expect(frame.text).toContain('Ctrl-C close viewer')
+      if (frame.id.startsWith('viewer-session-'))
+        expect(frame.text).toContain('Session  complete-dashboard-evidence')
+    } else if (frame.id.startsWith('rollback-')) {
       expect(frame.text.replace(/\s+/g, ' ')).toContain(
         'rollback: failed 1.1.0 bbbbbbbbbbbb; restored 1.0.0 aaaaaaaaaaaa; held 1.1.0 bbbbbbbbbbbb; at 2026-07-15T12:10:00.000Z',
       )
@@ -259,7 +276,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       !frame.id.startsWith('handoff-') &&
       !frame.id.startsWith('rollback-') &&
       !frame.id.startsWith('session-') &&
-      !frame.id.startsWith('integration-detail-')
+      !frame.id.startsWith('integration-detail-') &&
+      !frame.id.startsWith('viewer-')
     ) {
       expect(frame.text).toContain('BLOCKED')
     }
