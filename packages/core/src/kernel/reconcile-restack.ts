@@ -246,7 +246,7 @@ export async function recoverLostCandidate(
       })
   if (available) {
     if (!current.value.workspace || !isRemoteWorkspace(current.value.workspace))
-      await requireRewrite(deps.forge).archive({
+      await (deps.forge.kernelRewrite ?? requireRewrite(deps.forge)).archive({
         workspacePath: deps.workspacePath,
         ref: `refs/autobuild/archive/${deps.slug}/${sha}`,
         sha,

@@ -99,8 +99,9 @@ export async function preserveWorkspaceBeforeRelease(deps: {
       candidates,
     })
   } else {
-    if (!deps.forge.rewrite) throw new Error('forge lacks immutable workspace commit archives')
-    const base = await deps.forge.rewrite.snapshot({
+    const rewrite = deps.forge.kernelRewrite ?? deps.forge.rewrite
+    if (!rewrite) throw new Error('forge lacks immutable workspace commit archives')
+    const base = await rewrite.snapshot({
       workspacePath: handle.path,
       branch: handle.branch,
       destinationRef: `refs/autobuild/reconcile/${deps.slug}/preservation`,
@@ -108,13 +109,13 @@ export async function preserveWorkspaceBeforeRelease(deps: {
     preserved = {
       outcome: 'preserved',
       heads: await preserveGitCommits({
-        exec: deps.exec,
+        exec: deps.forge.kernelExec ?? deps.exec,
         workspacePath: handle.path,
         branch: handle.branch,
         slug: deps.slug,
         base,
         candidates,
-        archive: deps.forge.rewrite.archive,
+        archive: rewrite.archive,
       }),
     }
   }

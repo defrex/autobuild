@@ -284,6 +284,8 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'landing.native-enable-started',
     'landing.native-applied',
     'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
     'workspace.released',
     'build.completed',
   ])
@@ -506,8 +508,10 @@ test('plugin-selected workspace drives runner, PR polling, and terminal release 
       branch: BRANCH,
     },
   ])
-  expect(typesOf(await h.events(SLUG)).slice(-3)).toEqual([
+  expect(typesOf(await h.events(SLUG)).slice(-5)).toEqual([
     'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
     'workspace.released',
     'build.completed',
   ])
@@ -881,7 +885,13 @@ test('gated CLEAN auto-merge requested before finalize remains GitHub-native', a
   h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
+  expect(typesOf(final).slice(-5)).toEqual([
+    'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
+    'workspace.released',
+    'build.completed',
+  ])
   expect(reduceBuild(final).outcome).toBe('merged')
 }, 30_000)
 
@@ -935,7 +945,13 @@ test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and comp
   // The next ordinary observation settles the existing lifecycle vocabulary.
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
+  expect(typesOf(final).slice(-5)).toEqual([
+    'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
+    'workspace.released',
+    'build.completed',
+  ])
   expect(reduceBuild(final).status).toBe('done')
   expect(reduceBuild(final).outcome).toBe('merged')
   expect(typesOf(final)).not.toContain('escalation.raised')
@@ -1018,7 +1034,13 @@ test('local-git defers for missing identity, then merges under repository identi
   // A later independent state read observes the pending landing and completes.
   expect(await h.dispatcher.tick()).toEqual({ ...noRequests, merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
+  expect(typesOf(final).slice(-5)).toEqual([
+    'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
+    'workspace.released',
+    'build.completed',
+  ])
   expect(ofType(final, 'pr.merged')[0]!.payload.sha).toBe(landed)
   expect(await git(['show', '-s', '--format=%P', landed], h.origin)).toBe(initialBase)
   expect(await git(['show', '-s', '--format=%an <%ae>%n%cn <%ce>', landed], h.origin)).toBe(
