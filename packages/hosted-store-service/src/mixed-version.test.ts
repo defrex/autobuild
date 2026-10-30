@@ -1,3 +1,5 @@
+import { RELEASED_CLIENTS } from '@defrex/autobuild/remote-store'
+import { RELEASED_REDUCER_VALUES, projectReducerValue } from '@defrex/autobuild/testing'
 import { expect, test } from 'bun:test'
 import {
   MemoryBuildStore,
@@ -85,7 +87,7 @@ test('released strict parsers accept three-field build/repository answers throug
   })
   const line = (version: string) => version.split('.').slice(0, 2).join('.')
   // Published releases still inside the installed service's supported client window.
-  const released = ['1.0.0-beta.0', '1.1.0', '1.2.0'].filter(
+  const released = RELEASED_CLIENTS.map((entry) => entry.version).filter(
     (version) => classifyClient(version, supportedClientRange()) === 'supported',
   )
   expect(released.length).toBeGreaterThan(0)
@@ -114,10 +116,13 @@ test('released strict parsers accept three-field build/repository answers throug
         const body = await response.json()
         expect(Object.keys(body).sort()).toEqual(['cursor', 'value', 'version'])
         releasedParser.parse(body)
+        const publication = RELEASED_CLIENTS.find((entry) => entry.version === client)!
+        const catalog = RELEASED_REDUCER_VALUES[publication.contract!]!
+        expect(projectReducerValue(reducer!, body.value, catalog)).toEqual({ value: body.value })
       }
 })
 
-test('released 1.2.0 clients read their frozen reducer versions; projecting clients read canonical ones', async () => {
+test('released 1.2.0 clients keep their frozen contract even when advertising projection', async () => {
   const store = await fixture()
   const server = createStoreServer({ store, secret })
   for (const [path, reducer, released] of [
@@ -140,13 +145,7 @@ test('released 1.2.0 clients read their frozen reducer versions; projecting clie
       expect(response.status).toBe(200)
       return (await response.json()) as { version: number; value: Record<string, unknown> }
     }
-    const canonical = await store.getReducerValue(
-      path.startsWith('/builds')
-        ? { kind: 'build', slug: 'mixed' }
-        : { kind: 'repo', repo: 'repo' },
-      { reducer },
-    )
-    expect((await read(true)).version).toBe(canonical.version)
+    expect((await read(true)).version).toBe(released)
     const frozen = await read(false)
     expect(frozen.version).toBe(released)
     if (reducer === 'repositoryReadFacts') expect(frozen.value).not.toHaveProperty('preparation')

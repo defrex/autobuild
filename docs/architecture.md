@@ -193,16 +193,23 @@ describes recovery and the supported-window boundary.
 All event-derived checkpoints include the combined read-catalog fingerprint in
 their keys, independently of numeric reducer versions. Snapshot envelopes validate
 that fingerprint; another catalog's rows remain untouched. Remote named values
-are canonical regardless of `x-autobuild-catalog-identity`, keeping their strict
-three-field JSON body unchanged. The client projects the value onto its own
-shape (`projectReducerValue` in `store/reducer-value-validation.ts`), dropping
-unknown properties, so reducer version skew alone is not an error. An invalid
-envelope or a value the client's shape cannot represent raises
-`ReducerValueIncompatibilityError` with client/server versions and validation
-detail. Exact-version 1.2.0 clients, which predate the
-`x-autobuild-reducer-value-projection` capability, receive answers projected onto
-the frozen catalog in `store/remote/released-reducer-values/` by
-`reducerValueForClient`. No remote named read replays events.
+keep their strict three-field JSON body `{version, cursor, value}`. Clients sending
+both `x-autobuild-reducer-value-projection: 1` and an unrecognized
+`x-autobuild-catalog-identity` receive the canonical answer, including source clients
+whose catalog identity differs from the service's. The client projects the value
+onto its own shape (`projectReducerValue` in `store/reducer-value-validation.ts`),
+dropping unknown properties, so reducer version skew alone is not an error.
+Published clients with a recorded published catalog identity, or without a catalog
+identity, receive answers projected onto their
+frozen released contracts in `store/remote/released-reducer-values/` and stamped
+with their released reducer versions, including projection-capable published clients.
+`reducerValueForClient` omits optional `lastEvent` fields with newer event variants,
+including nested build state, and filters `seenTypes` to known event types while
+preserving canonical cursor, progress, and compatibility facts. An invalid envelope
+or an unrepresentable required value raises `ReducerValueIncompatibilityError`
+with client/server versions and validation detail. See the
+[reduced-value protocol](remote-store-protocol.md) for the response
+contract. No remote named read replays events.
 Repository digest batches likewise return the server batch with one scoped
 request and no discovery or per-build fallback.
 
