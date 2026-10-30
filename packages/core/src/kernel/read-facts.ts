@@ -10,7 +10,7 @@ import {
 import { awaitsConsent } from './landing-readiness'
 import { leafRestackReducer, type LeafRestackState } from './leaf-restack-state'
 import { landingCandidateId } from './landing-policy'
-import { referencedGitTips } from './reconcile-head'
+import { referencesGitHistory, referencedGitTips } from './reconcile-head'
 import { encodeLog } from './log-index-value'
 import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
 import { infrastructureFailureResetReducer } from '../processes/infrastructure-failure-budget'
@@ -390,18 +390,21 @@ export const buildReadFactsReducer = defineReducer({
           }
         }
       }
-      for (const tip of referencedGitTips([event])) {
-        const ephemeral =
-          (event.type === 'reconcile.publish-intended' ||
-            event.type === 'restack.publish-intended') &&
-          event.payload.headSha === tip
-        const source = ephemeral ? `${event.type.split('.')[0]}:${event.payload.id}` : 'proven'
-        if (!acc.tipSources[tip]) {
-          acc.tipSources[tip] = []
-          acc.gitTips.push(tip)
+      // Most events carry no Git history. Skip the allocating history selector
+      // entirely on that hot path; retirement is handled independently above.
+      if (referencesGitHistory(event.type))
+        for (const tip of referencedGitTips([event])) {
+          const ephemeral =
+            (event.type === 'reconcile.publish-intended' ||
+              event.type === 'restack.publish-intended') &&
+            event.payload.headSha === tip
+          const source = ephemeral ? `${event.type.split('.')[0]}:${event.payload.id}` : 'proven'
+          if (!acc.tipSources[tip]) {
+            acc.tipSources[tip] = []
+            acc.gitTips.push(tip)
+          }
+          if (!acc.tipSources[tip]!.includes(source)) acc.tipSources[tip]!.push(source)
         }
-        if (!acc.tipSources[tip]!.includes(source)) acc.tipSources[tip]!.push(source)
-      }
 
       if (
         event.type === 'reconcile.started' ||

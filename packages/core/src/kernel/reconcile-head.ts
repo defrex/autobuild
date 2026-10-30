@@ -11,6 +11,14 @@ export function reconcileRewriteHead(payload: EventPayload<'reconcile.rewritten'
   return payload.observedHead ?? payload.headSha
 }
 
+const gitHistoryEvent =
+  /^(workspace\.provisioned|implement\.completed|code-review\.|restack\.|reconcile\.|finalize\.|pr\.)/
+
+/** Shared allocation-free gate for the history selector and its incremental fold. */
+export function referencesGitHistory(type: AbEvent['type']): boolean {
+  return gitHistoryEvent.test(type)
+}
+
 const oid = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 /** Only Git-related event fields are object tips. Content digests and attachment
  * hashes are not Git objects. Publication requests/losses describe attempts,
@@ -42,12 +50,7 @@ export function referencedGitTips(events: readonly AbEvent[]): string[] {
   for (const event of events) {
     if (event.type === 'publication.candidate-retired')
       sources.get(event.payload.sha)?.delete(`${event.payload.operation}:${event.payload.id}`)
-    if (
-      !/^(workspace\.provisioned|implement\.completed|code-review\.|restack\.|reconcile\.|finalize\.|pr\.)/.test(
-        event.type,
-      )
-    )
-      continue
+    if (!referencesGitHistory(event.type)) continue
     const tips = new Set<string>()
     visit(event.payload, tips)
     for (const tip of tips) {
