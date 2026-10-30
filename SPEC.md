@@ -3405,6 +3405,8 @@ no agent and do not fabricate `reconcile.completed`. A conflicted replay is adop
 by `reconcile.started {restackId}` without another collapse or target selection.
 Resolver completion links back to the automatic transaction. Retained commit bytes
 and replay object packs recover disposable-workspace objects before publication.
+Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.
+
 
 `reconcile.prepared` records transaction identity, attempt, branch, old head,
 effective old base, target base and temporary single-change SHA before checkout.
