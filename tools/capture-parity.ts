@@ -12,8 +12,7 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, readFile, rm, symlink } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { repoRoot } from './git-tracked'
 
@@ -66,10 +65,16 @@ export async function runCaptureCommand(cwd: string, command: readonly string[])
     stdout: 'pipe',
     stderr: 'pipe',
   })
-  const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
-  await new Response(child.stdout).text()
+  const [, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
   if (exitCode !== 0) {
-    throw new Error(`${command.join(' ')} failed in ${cwd} (exit ${exitCode}): ${stderr.trim()}`)
+    throw new Error(
+      `capture infrastructure failure: ${command.join(' ')} in ${cwd} ` +
+        `(exit ${exitCode}, signal ${child.signalCode ?? 'none'}, source unknown): ${stderr.trim()}`,
+    )
   }
 }
 
@@ -104,10 +109,10 @@ async function captureAll(root: string): Promise<Map<string, string>> {
 }
 
 export async function runCaptureParity(argv: readonly string[]): Promise<number> {
-  const baseFlag = argv.indexOf('--base')
-  const baseRef = baseFlag >= 0 ? (argv[baseFlag + 1] ?? 'main') : await defaultBase()
-  const baseSha = await git(repoRoot, ['merge-base', 'HEAD', baseRef])
-  const scratch = await mkdtemp(join(tmpdir(), 'capture-parity-'))
+  const { baseRef, baseSha } = await resolveBaseline(argv)
+  console.log(`capture parity baseline: requested ${baseRef}, resolved merge base ${baseSha}`)
+  await mkdir(join(repoRoot, '.ab'), { recursive: true })
+  const scratch = await mkdtemp(join(repoRoot, '.ab', 'capture-parity-'))
   const baseTree = join(scratch, 'base')
   try {
     await git(repoRoot, ['worktree', 'add', '--detach', baseTree, baseSha])
@@ -139,17 +144,32 @@ export async function runCaptureParity(argv: readonly string[]): Promise<number>
 }
 
 /** The remote default branch when there is one, else the local `main`. */
-async function defaultBase(): Promise<string> {
+async function defaultBase(cwd: string): Promise<string> {
   for (const ref of ['origin/main', 'main']) {
     if (
-      await git(repoRoot, ['rev-parse', '--verify', '--quiet', ref]).then(
+      await git(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).then(
         () => true,
         () => false,
       )
     )
       return ref
   }
-  return 'main'
+  throw new Error('No default baseline (origin/main or main); pass --base <recorded-start-commit>')
+}
+
+/** Resolve before starting captures or creating a worktree. Never substitute HEAD. */
+export async function resolveBaseline(
+  argv: readonly string[],
+  cwd: string = repoRoot,
+): Promise<{ baseRef: string; baseSha: string }> {
+  const baseFlag = argv.indexOf('--base')
+  const value = baseFlag >= 0 ? argv[baseFlag + 1] : undefined
+  if (baseFlag >= 0 && (!value || value.startsWith('-')))
+    throw new Error('Usage: bun tools/capture-parity.ts [--base <ref>]; --base requires a value')
+  const baseRef = value ?? (await defaultBase(cwd))
+  await git(cwd, ['rev-parse', '--verify', `${baseRef}^{commit}`])
+  const baseSha = await git(cwd, ['merge-base', 'HEAD', baseRef])
+  return { baseRef, baseSha }
 }
 
 async function packageModules(): Promise<string[]> {
