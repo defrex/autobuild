@@ -1,3 +1,5 @@
+import { WorkspaceCleanupRequired } from '../types'
+import { inspectGitCandidate, preserveGitCommits, restoreGitCommits } from './commit-preservation'
 import { accountPolicy, accountGuestEnvironment } from './account-policy'
 import { gitRewrite, parseRemoteHead } from '../forge/git-rewrite'
 import { delegateCredential } from '../../store/remote/credentials'
@@ -254,8 +256,10 @@ export interface VercelSnapshotPurge {
 
 export interface VercelSandboxFacade {
   get(name: string, signal?: AbortSignal): Promise<VercelSandboxHandle | null>
-  /** Durable build workspaces retain the named get-or-create lifecycle. */
+  /** Creation never deletes an existing named environment. */
   create(input: VercelSandboxCreateInput): Promise<VercelSandboxHandle>
+  /** Dispatcher-authorized destruction only, after fence and commit receipt. */
+  deleteByName?(name: string, signal?: AbortSignal): Promise<'confirmed' | 'absent'>
   /** Readiness always acquires a new unnamed disposable environment. */
   createFresh?(
     input: Omit<VercelSandboxCreateInput, 'name' | 'persistent'>,
@@ -327,43 +331,71 @@ function withSessionMetadata(sandbox: object): VercelSandboxHandle {
   return sandbox as VercelSandboxHandle
 }
 
+export function isUnavailableVercelSnapshot(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false
+  const candidate = error as {
+    response?: { status?: number }
+    json?: { error?: { code?: string } }
+  }
+  return candidate.response?.status === 410 && candidate.json?.error?.code === 'snapshot_not_found'
+}
+
+/** Confirmed filesystem absence; an expired snapshot may still reserve the name. */
 export function isMissingVercelSandbox(error: unknown): boolean {
   if (error === null || typeof error !== 'object') return false
   const candidate = error as {
     response?: { status?: number }
     json?: { error?: { code?: string } }
   }
-  return (
-    candidate.response?.status === 404 ||
-    (candidate.response?.status === 410 && candidate.json?.error?.code === 'snapshot_not_found')
-  )
+  return candidate.response?.status === 404 || isUnavailableVercelSnapshot(error)
 }
 
 export function createVercelSdkFacade(
   env: Record<string, string | undefined>,
+  fetch: typeof globalThis.fetch = globalThis.fetch,
 ): VercelSandboxFacade {
   const credentials = vercelSdkCredentials(env)
   return {
     async get(name, signal) {
       try {
-        return withSessionMetadata(await Sandbox.get({ name, signal, ...credentials }))
+        return withSessionMetadata(
+          await Sandbox.get({ name, signal, resume: false, fetch, ...credentials }),
+        )
       } catch (error) {
+        // Provision must retain the stale name so dispatcher cleanup can delete it.
+        if (isUnavailableVercelSnapshot(error)) throw error
         if (isMissingVercelSandbox(error)) return null
         throw error
       }
     },
     async create(input) {
-      // get() returning null includes stale snapshots. getOrCreate performs the
-      // SDK's required stale-name deletion before recreating and also closes a
-      // concurrent provision race safely.
       return withSessionMetadata(
-        await Sandbox.getOrCreate({
+        await Sandbox.create({
           ...input,
           region: input.region as SandboxRegion | undefined,
           failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
+          fetch,
           ...credentials,
         }),
       )
+    },
+    async deleteByName(name, signal) {
+      const { token, projectId, teamId } = credentials
+      if (!token || !projectId || !teamId)
+        throw new Error(
+          'sandbox deletion requires explicitly resolved credentials and project scope',
+        )
+      const url = new URL(`https://vercel.com/api/v2/sandboxes/${encodeURIComponent(name)}`)
+      url.searchParams.set('projectId', projectId)
+      url.searchParams.set('teamId', teamId)
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${token}` },
+        ...(signal === undefined ? {} : { signal }),
+      })
+      if (response.status === 404 || response.status === 410) return 'absent'
+      if (!response.ok) throw new Error(`sandbox deletion failed with HTTP ${response.status}`)
+      return 'confirmed'
     },
     async createFresh(input) {
       return withSessionMetadata(
@@ -371,6 +403,7 @@ export function createVercelSdkFacade(
           ...input,
           region: input.region as SandboxRegion | undefined,
           failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
+          fetch,
           ...credentials,
         }),
       )
@@ -380,6 +413,7 @@ export function createVercelSdkFacade(
       const page = await Snapshot.list({
         name,
         limit: 50,
+        fetch,
         ...(signal === undefined ? {} : { signal }),
         ...credentials,
       })
@@ -393,7 +427,7 @@ export function createVercelSdkFacade(
       }))
     },
     async deleteSnapshot(snapshotId, signal) {
-      const snapshot = await Snapshot.get({ snapshotId, ...credentials })
+      const snapshot = await Snapshot.get({ snapshotId, fetch, ...credentials })
       await snapshot.delete(signal === undefined ? {} : { signal })
     },
   }
@@ -1177,9 +1211,12 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   readonly buildExecution: BuildExecution
   readonly harvestExecution: HarvestExecution
   readonly orchestratorSandbox: OperatorSandboxExecution
-  readonly publication
+  readonly publication: WorkspacePublication &
+    Required<
+      Pick<WorkspacePublication, 'isPublished' | 'rewrite' | 'preserve' | 'recoverCandidate'>
+    >
   readonly sandboxPublication: WorkspacePublication
-  readonly recovery
+  readonly recovery: import('../types').WorkspaceRecovery
   private readonly facade: VercelSandboxFacade
   private readonly exec: Exec
   private readonly active = new Set<string>()
@@ -1258,16 +1295,91 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       release: (input) => this.sandboxRelease(input),
     }
     this.recovery = {
+      fence: async (handle) => {
+        if (handle.provider !== this.name) throw new Error('workspace fence provider mismatch')
+        try {
+          // Never trust the in-process handle after restart or another resume.
+          const sandbox = await this.facade.get(handle.ref, this.operationSignal())
+          if (sandbox === null) {
+            this.forget(handle.ref)
+            return { outcome: 'absent' }
+          }
+          await sandbox.stop({ signal: this.operationSignal() })
+          this.active.delete(handle.ref)
+          this.uncertain.delete(handle.ref)
+          this.sessions.set(handle.ref, sandbox)
+          return { outcome: 'confirmed' }
+        } catch (error) {
+          if (isMissingVercelSandbox(error)) {
+            this.forget(handle.ref)
+            return { outcome: 'absent' }
+          }
+          return {
+            outcome: 'unknown',
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+      },
       reap: (handle: WorkspaceHandle) => {
         if (handle.provider !== this.name) {
           throw new Error(
             `vercel-sandbox cannot reap a workspace owned by provider "${handle.provider}" (${handle.ref})`,
           )
         }
-        return this.reap(handle.ref)
+        return this.reap(handle.ref, true)
       },
     }
     this.publication = {
+      recoverCandidate: (input) =>
+        this.withPolicyLock(input.ref, async () => {
+          if (this.active.has(input.ref) || this.uncertain.has(input.ref))
+            throw new Error('candidate recovery requires confirmed teardown')
+          const sandbox = await this.facade.get(input.ref, this.operationSignal())
+          if (!sandbox) throw new Error('candidate recovery awaits replacement workspace')
+          return this.withTrustedGit(sandbox, input.ref, async (exec) => {
+            const archiveRef = `refs/autobuild/archive/${input.slug}/${input.sha}`
+            const available = await inspectGitCandidate({
+              ...input,
+              exec,
+              workspacePath: VERCEL_WORKSPACE_PATH,
+              archiveRef,
+            })
+            if (available)
+              await gitRewrite(exec, false).archive({
+                workspacePath: VERCEL_WORKSPACE_PATH,
+                ref: archiveRef,
+                sha: input.sha,
+              })
+            return available
+          })
+        }),
+      preserve: (input) =>
+        this.withPolicyLock(input.ref, async () => {
+          if (this.active.has(input.ref) || this.uncertain.has(input.ref))
+            throw new Error('preservation requires confirmed execution teardown')
+          const sandbox = await this.facade.get(input.ref, this.operationSignal())
+          if (sandbox === null) return { outcome: 'absent' }
+          const heads = await this.withTrustedGit(sandbox, input.ref, async (exec) => {
+            const capability = gitRewrite(exec, false)
+            const remote = await this.remoteBranchHead(input.branch, 'preservation branch')
+            const base =
+              remote === null
+                ? input.base
+                : await capability.snapshot({
+                    workspacePath: VERCEL_WORKSPACE_PATH,
+                    branch: input.branch,
+                    destinationRef: `refs/autobuild/reconcile/${input.slug}/preservation`,
+                  })
+            return preserveGitCommits({
+              ...input,
+              base,
+              exec,
+              workspacePath: VERCEL_WORKSPACE_PATH,
+              archive: capability.archive,
+            })
+          })
+          return { outcome: 'preserved', heads }
+        }),
       rewrite: (input: Parameters<NonNullable<WorkspacePublication['rewrite']>>[0]) =>
         this.withPolicyLock(input.ref, () => this.publish(input)),
       isPublished: (input: { sha: string; branch: string }) => this.isPublished(input),
@@ -1290,6 +1402,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     branch: string
     revision?: string
     generation?: number
+    restoration?: import('../types').WorkspacePreservationHead[]
   }): Promise<WorkspaceProvisionResult> {
     const scopedToken = await (this.options.delegateCredential ?? delegateCredential)(
       this.options.storeRef,
@@ -1303,7 +1416,6 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // current archive source would deliver, against which both a fresh
     // install's marker and a reused sandbox's marker are compared.
     const distributionIdentity = await this.identityStamp()
-    let sandbox = await this.facade.get(name, this.operationSignal())
     const existing = await this.remoteBranchHead(opts.branch, `remote branch ${opts.branch}`)
     const base =
       existing ??
@@ -1313,6 +1425,23 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       throw new Error(
         `remote branch ${existing === null ? opts.baseBranch : opts.branch} does not exist`,
       )
+
+    let sandbox: VercelSandboxHandle | null
+    try {
+      sandbox = await this.facade.get(name, this.operationSignal())
+    } catch (error) {
+      if (!isUnavailableVercelSnapshot(error)) throw error
+      throw new WorkspaceCleanupRequired(
+        {
+          provider: this.name,
+          ref: name,
+          path: VERCEL_WORKSPACE_PATH,
+          branch: opts.branch,
+          base: { source: 'existing', sha: base },
+        },
+        error,
+      )
+    }
 
     if (sandbox !== null) {
       const marker = await sandbox.runCommand({
@@ -1337,24 +1466,32 @@ export class VercelSandboxProvider implements WorkspaceProvider {
               this.operationSignal(),
             )
           } catch (error) {
-            try {
-              this.sessions.set(name, sandbox)
-              await this.reap(name)
-            } catch (deleteError) {
-              throw new AggregateError(
-                [error, deleteError],
-                `sandbox ${name} distribution refresh failed and its incomplete environment could not be confirmed deleted`,
-              )
-            }
-            throw error
+            throw new WorkspaceCleanupRequired(
+              {
+                provider: this.name,
+                ref: name,
+                path: VERCEL_WORKSPACE_PATH,
+                branch: opts.branch,
+                base: { source: 'existing', sha: base },
+              },
+              error,
+            )
           }
           await sandbox.stop({ signal: this.operationSignal() })
         }
       } else {
         // A named VM without the marker is a crashed/legacy provisioning
         // attempt. Never expose its potentially unscrubbed checkout to agents.
-        await sandbox.delete({ signal: this.operationSignal() })
-        sandbox = null
+        throw new WorkspaceCleanupRequired(
+          {
+            provider: this.name,
+            ref: name,
+            path: VERCEL_WORKSPACE_PATH,
+            branch: opts.branch,
+            base: { source: 'existing', sha: base },
+          },
+          new Error('incomplete provisioning marker'),
+        )
       }
     }
 
@@ -1447,17 +1584,34 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         })
         await sandbox.stop({ signal: this.operationSignal() })
       } catch (error) {
-        try {
-          this.sessions.set(name, sandbox)
-          await this.reap(name)
-        } catch (deleteError) {
-          throw new AggregateError(
-            [error, deleteError],
-            `sandbox ${name} setup failed and its incomplete environment could not be confirmed deleted`,
-          )
-        }
-        throw error
+        throw new WorkspaceCleanupRequired(
+          {
+            provider: this.name,
+            ref: name,
+            path: VERCEL_WORKSPACE_PATH,
+            branch: opts.branch,
+            base: { source: 'remote', sha: base },
+          },
+          error,
+        )
       }
+    }
+    let provisionHead = base
+    if (opts.restoration?.length) {
+      provisionHead = await this.withTrustedGit(sandbox, name, async (exec) => {
+        await restoreGitCommits({
+          exec,
+          workspacePath: VERCEL_WORKSPACE_PATH,
+          branch: opts.branch,
+          heads: opts.restoration!,
+        })
+        const result = await exec(
+          ['git', 'rev-parse', '--verify', `refs/heads/${opts.branch}^{commit}`],
+          { cwd: VERCEL_WORKSPACE_PATH },
+        )
+        if (result.exitCode !== 0) throw new Error('cannot confirm restored workspace branch')
+        return result.stdout.trim()
+      })
     }
     this.origins.set(name, origin)
     this.sessions.set(name, sandbox)
@@ -1466,7 +1620,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       ref: name,
       path: VERCEL_WORKSPACE_PATH,
       branch: opts.branch,
-      base: { source: existing === null ? 'remote' : 'existing', sha: base },
+      base: {
+        source: opts.restoration?.length || existing !== null ? 'existing' : 'remote',
+        sha: provisionHead,
+      },
     }
   }
 
@@ -1482,9 +1639,21 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   /** Stop/delete and then prove absence by exact deterministic name — for the
    * sandbox and, because deleting a sandbox never removes the automatic
    * snapshots its sessions created, for its snapshot storage too. */
-  private async reap(ref: string): Promise<WorkspaceReapOutcome> {
-    let sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
+  private async reap(ref: string, dispatcherAuthorized = false): Promise<WorkspaceReapOutcome> {
+    let sandbox: VercelSandboxHandle | null
+    try {
+      sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
+    } catch (error) {
+      if (!isMissingVercelSandbox(error)) throw error
+      sandbox = null
+    }
     if (sandbox === null) {
+      // A snapshot-unavailable lookup also leaves a stale name reservation.
+      if (dispatcherAuthorized) {
+        if (!this.facade.deleteByName)
+          throw new Error('sandbox facade lacks dispatcher-authorized deleteByName')
+        await this.facade.deleteByName(ref, this.operationSignal())
+      }
       // An environment can vanish without its snapshots; the purge still
       // applies and only a confirmed empty list may forget the reference.
       try {
@@ -1508,7 +1677,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       // name filter is unambiguous, and after the explicit stop no new
       // snapshot can be created.
       const purged = await this.purgeOrRetryable(ref)
-      await sandbox.delete({ signal: this.operationSignal() })
+      if (dispatcherAuthorized) {
+        if (!this.facade.deleteByName)
+          throw new Error('sandbox facade lacks dispatcher-authorized deleteByName')
+        await this.facade.deleteByName(ref, this.operationSignal())
+      } else await sandbox.delete({ signal: this.operationSignal() })
       sandbox = await this.facade.get(ref, this.operationSignal())
       if (sandbox !== null)
         throw new Error(`sandbox ${ref} still exists after delete acknowledgement`)
@@ -1621,8 +1794,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // reuse paths do: a guest installed by an older dispatcher — including one
     // stranded by a protocol-only bump or a missing/unreadable marker — is
     // refreshed before the runner starts, or the hosted store would 409 its
-    // heartbeat and the build would strand. Refresh failure deletes the
-    // sandbox so the next pass rematerializes it cleanly.
+    // heartbeat and the build would strand. Refresh failure retains the
+    // sandbox for dispatcher-owned preservation and cleanup.
     const distributionIdentity = await this.identityStamp()
     const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
     if (installed !== distributionIdentity) {
@@ -1630,16 +1803,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         const archive = await this.archiveBytes()
         await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
       } catch (error) {
-        try {
-          this.sessions.set(ref, sandbox)
-          await this.reap(ref)
-        } catch (deleteError) {
-          throw new AggregateError(
-            [error, deleteError],
-            `sandbox ${ref} distribution refresh failed and its incomplete environment could not be confirmed deleted`,
-          )
-        }
-        throw error
+        throw new WorkspaceCleanupRequired(
+          { provider: this.name, ref, path: VERCEL_WORKSPACE_PATH, branch: `ab/${input.slug}` },
+          error,
+        )
       }
     }
     await preflightBun(sandbox, this.options.config.image)
@@ -2641,6 +2808,72 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // its cache refresh before teardown; recovery needs only forge readback.
     const head = await this.remoteBranchHead(input.branch, `published branch ${input.branch}`)
     return head === input.sha
+  }
+
+  private async withTrustedGit<T>(
+    sandbox: VercelSandboxHandle,
+    ref: string,
+    effect: (exec: Exec) => Promise<T>,
+  ): Promise<T> {
+    const { origin } = await this.normalNetworkPolicy(ref)
+    const token = this.options.env.GITHUB_TOKEN || this.options.env.GH_TOKEN
+    if (!token) throw new Error('workspace preservation requires GITHUB_TOKEN or GH_TOKEN')
+    const authorization = `Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`
+    const policy: NetworkPolicy = {
+      allow: {
+        [origin.host]: [
+          {
+            match: {
+              method: ['GET'],
+              path: { exact: `${origin.path}/info/refs` },
+              queryString: [
+                { key: { exact: 'service' }, value: { regex: '^git-(receive|upload)-pack$' } },
+              ],
+            },
+            transform: [{ headers: { authorization } }],
+          },
+          {
+            match: {
+              method: ['POST'],
+              path: {
+                regex: `^${origin.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/git-(receive|upload)-pack$`,
+              },
+            },
+            transform: [{ headers: { authorization } }],
+          },
+        ],
+      },
+    }
+    try {
+      await sandbox.update(
+        { networkPolicy: this.billingPolicy(policy, ref) },
+        { signal: this.operationSignal() },
+      )
+      return await effect(async (cmd) => {
+        const result = await sandbox.runCommand({
+          cmd: cmd[0]!,
+          args: cmd.slice(1),
+          cwd: VERCEL_WORKSPACE_PATH,
+          signal: this.operationSignal(),
+        })
+        if (!('stdout' in result) || !('stderr' in result) || result.exitCode === null)
+          throw new Error('trusted preservation requires captured command output')
+        return {
+          exitCode: result.exitCode,
+          stdout: await result.stdout!(),
+          stderr: await result.stderr!(),
+        }
+      })
+    } finally {
+      try {
+        await sandbox.update(
+          { networkPolicy: (await this.normalNetworkPolicy(ref)).policy },
+          { signal: this.operationSignal() },
+        )
+      } finally {
+        await sandbox.stop({ signal: this.operationSignal() })
+      }
+    }
   }
 
   private async publish(
