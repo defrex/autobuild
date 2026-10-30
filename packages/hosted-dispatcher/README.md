@@ -49,6 +49,8 @@ Dispatcher variables (server-only, like every secret; none reach the browser):
   Each invocation synchronizes durable placement for included and excluded
   registered projects before dispatch; a failed synchronization prevents that
   project's dispatch. Project reads publish the same selection before first cron.
+  Unset or blank `CRON_SECRET` disables hosted responsibility; reads publish
+  `hosted: false` without requiring an origin.
 - `AB_DISPATCHER_BUDGET_SECONDS`: per-invocation work budget (default 240,
   clamped 10–780); pair it with the route's `maxDuration` as described in the
   operator procedure.

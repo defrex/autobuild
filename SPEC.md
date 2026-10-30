@@ -1082,6 +1082,12 @@ includes its public `AB_DISPATCHER_ORIGIN`, never credentials. It is configured
 responsibility, not liveness. Unrecorded placement is unknown. Bounded repository
 journal reads retain only the latest placement publication across run anchors.
 
+Hosted responsibility requires the cron endpoint to be enabled: unset or blank
+`CRON_SECRET` publishes `{ hosted: false }` for every admitted project, without
+requiring `AB_DISPATCHER_ORIGIN`. Cron authorization and read-time publication
+share this enablement check. When enabled, selection and origin configuration
+are validated before publication.
+
 Cron and read-time publication share the `AB_DISPATCHER_REPOSITORIES` parser:
 unset selects every registered project, and an explicit normalized, deduplicated
 CSV selects only registered members. No web-selection fallback applies. Cron

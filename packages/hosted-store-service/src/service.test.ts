@@ -892,7 +892,7 @@ test('first placement read publishes configuration without cron or account secre
   const publications: unknown[] = []
   let enumerations = 0
   const service = createHostedStoreService({
-    env: { ...env, AB_DISPATCHER_ORIGIN: 'https://service.test' },
+    env: { ...env, CRON_SECRET: 'cron-secret', AB_DISPATCHER_ORIGIN: 'https://service.test' },
     clock,
     openStore: async () => backing,
     openProjectRegistry: async () => ({
@@ -930,6 +930,7 @@ test('excluded placement and invalid configuration do not require dispatcher cre
         ...env,
         AB_DISPATCHER_ORIGIN: 'https://service.test',
         AB_DISPATCHER_REPOSITORIES: selection,
+        CRON_SECRET: 'cron-secret',
       },
       clock,
       openStore: async () => new MemoryBuildStore(),
@@ -955,6 +956,36 @@ test('excluded placement and invalid configuration do not require dispatcher cre
       await expect(client.getDispatchPlacement(project)).rejects.toThrow()
       expect(publications).toEqual([])
       expect(await client.listBuilds()).toEqual([])
+    }
+  }
+})
+
+test('disabled dispatcher publishes false with or without an origin and never enumerates', async () => {
+  for (const cronSecret of [undefined, '', '   ']) {
+    for (const origin of [undefined, 'https://service.test']) {
+      const publications: unknown[] = []
+      const service = createHostedStoreService({
+        env: { ...env, CRON_SECRET: cronSecret, AB_DISPATCHER_ORIGIN: origin },
+        clock,
+        openStore: async () => new MemoryBuildStore(),
+        openProjectRegistry: async () => ({
+          has: async () => true,
+          list: async () => {
+            throw new Error('placement must not enumerate')
+          },
+        }),
+        syncPlacement: async (_repo, desired) => {
+          publications.push(desired)
+          return { status: 'known', placement: desired }
+        },
+      })
+      expect(
+        await clientFor(service).getDispatchPlacement('https://github.com/acme/project'),
+      ).toEqual({
+        status: 'known',
+        placement: { hosted: false },
+      })
+      expect(publications).toEqual([{ hosted: false }])
     }
   }
 })

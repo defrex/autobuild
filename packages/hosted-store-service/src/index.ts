@@ -25,5 +25,6 @@ export { HumanAccess, humanAccess, organizationStore, validSession } from './web
 export {
   parseDispatcherRepositories,
   dispatcherSelection,
+  dispatcherEnabled,
   dispatcherOrigin,
 } from './dispatcher-selection'

@@ -1,5 +1,10 @@
 import { normalizeProjectRepository } from '@defrex/autobuild-postgres-store/projects'
 
+/** Shared with the cron endpoint: no authorization secret means no hosted work. */
+export function dispatcherEnabled(env: Record<string, string | undefined>): boolean {
+  return Boolean(env.CRON_SECRET?.trim())
+}
+
 /** The cron and read-time publication share exactly one selection rule. */
 export function parseDispatcherRepositories(raw: string | undefined): string[] | undefined {
   if (raw === undefined) return undefined

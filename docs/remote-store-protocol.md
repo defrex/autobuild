@@ -52,6 +52,12 @@ Origins are absolute HTTP(S) origins without credentials, paths, queries or
 fragments (`AB_DISPATCHER_ORIGIN`, HTTPS in production). The fact records configured
 responsibility, not dispatcher liveness or successful execution.
 
+Hosted responsibility requires the cron endpoint to be enabled: unset or blank
+`CRON_SECRET` publishes `{ hosted: false }` for every admitted project, without
+requiring `AB_DISPATCHER_ORIGIN`. Cron authorization and read-time publication
+share this enablement check. When enabled, selection and origin configuration
+are validated before publication.
+
 The service publishes the advisory repository fact `dispatcher.placement-set`
 and serves its dedicated `dispatchPlacement` canonical reduction. Bounded journal
 reads retain only the latest placement publication across run anchors. Before answering

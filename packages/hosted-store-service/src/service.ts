@@ -1,6 +1,7 @@
 import { DISPATCH_PLACEMENT_CAPABILITY } from '@defrex/autobuild/remote-store'
 import {
   dispatcherSelection,
+  dispatcherEnabled,
   parseDispatcherRepositories,
   dispatcherOrigin,
 } from './dispatcher-selection'
@@ -711,18 +712,22 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
             : undefined)
         let placementConfiguration:
           | { selection: ReturnType<typeof dispatcherSelection>; origin: string }
+          | false
           | undefined
         const storeServer = createStoreServer({
           store,
           ...(publication
             ? {
                 placement: (repo: string) => {
-                  placementConfiguration ??= {
-                    selection: dispatcherSelection(
-                      parseDispatcherRepositories(env.AB_DISPATCHER_REPOSITORIES),
-                    ),
-                    origin: dispatcherOrigin(env),
-                  }
+                  placementConfiguration ??= dispatcherEnabled(env)
+                    ? {
+                        selection: dispatcherSelection(
+                          parseDispatcherRepositories(env.AB_DISPATCHER_REPOSITORIES),
+                        ),
+                        origin: dispatcherOrigin(env),
+                      }
+                    : false
+                  if (placementConfiguration === false) return publication(repo, { hosted: false })
                   const { selection, origin } = placementConfiguration
                   return publication(
                     repo,

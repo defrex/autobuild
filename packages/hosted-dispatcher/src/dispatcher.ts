@@ -49,6 +49,7 @@ import {
   parseHostedStoreEnv,
   parseDispatcherRepositories,
   dispatcherSelection,
+  dispatcherEnabled,
   dispatcherOrigin,
   type HostedStoreEnv,
 } from '@defrex/autobuild-hosted-store-service'
@@ -583,7 +584,7 @@ export function createDispatcherEndpoint(options: HostedDispatcherOptions = {}):
       }
       // Endpoint disabled: never run work without authorization configured.
       const cronSecret = env.CRON_SECRET?.trim()
-      if (cronSecret === undefined || cronSecret === '') {
+      if (!dispatcherEnabled(env)) {
         return reject(
           403,
           'disabled',
