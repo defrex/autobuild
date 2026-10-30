@@ -33,7 +33,7 @@ Range endpoints remain stable versions. The range is inclusive at the minimum
 and exclusive at the maximum; a 1.3.x
 service publishes `>=1.2.0 <1.4.0` until later publication facts permit retirement.
 The service reads the clock for each decision, so retirement needs no redeploy. Health needs no credentials, version
-headers, or available backend.
+headers, or available backend. On the service’s own line, both its runtime protocol and its published ledger protocol are admitted. Health advertises a fully validated same-line request’s admitted protocol. Otherwise it advertises the service line’s published protocol, or its runtime protocol when that line is unpublished. Thus default 1.3 health advertises 6 anonymously and to published clients, and 7 to admitted source clients; explicit 1.4/7 services default to 7. The package version and support range remain truthful. Health performs no store reads.
 
 ## 1. Transport and conventions
 
@@ -507,7 +507,7 @@ freezes the head for absence checks. The remote array method `getEvents`
 requests one page and returns its array only when `hasMore` is false. Otherwise
 it throws `IncompleteEventReadError` with requested cursor, continuation cursor
 and page limit. It never silently returns a prefix or concatenates history.
-Legacy build-event clients must upgrade to protocol 7; the service refuses their build-event route instead of returning a different successful envelope.
+Protocol 7 is prepared for the next minor line, 1.4; package versions remain unchanged. Supported published 1.2 and 1.3 clients retain protocol 6. Their build-event reads return plain arrays when the complete suffix fits in 256 events; larger suffixes receive HTTP 409 `{kind:"conflict",error:"…"}` with an upgrade diagnostic, never a truncated successful array. Expired repository cursors also use the legacy `conflict` shape, naming requested, head and oldest cursor and instructing fresh attachment and status reconciliation. Bounds apply before response projection for every protocol.
 
 Repository event reads retain their array response but enforce a **1,000**
 sequence-position tail window. A cursor is eligible exactly when

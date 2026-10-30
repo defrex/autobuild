@@ -5,6 +5,7 @@ import {
   classifyClient,
   supportedClientRange,
   clientIdentityError,
+  healthIdentity,
   releaseVersion,
   reducerValueForClient,
 } from './compatibility'
@@ -47,7 +48,7 @@ test('bounded event protocol rejects peers without the new required operations',
   expect(REMOTE_STORE_PROTOCOL_VERSION).toBe('7')
   expect(clientIdentityError(AUTOBUILD_VERSION, '4')).toContain('unsupported protocol identity')
   expect(clientIdentityError(AUTOBUILD_VERSION, '5')).toContain('unsupported protocol identity')
-  expect(clientIdentityError(AUTOBUILD_VERSION, '6')).toContain('unsupported protocol identity')
+  expect(clientIdentityError(AUTOBUILD_VERSION, '6')).toBeUndefined()
   expect(clientIdentityError(AUTOBUILD_VERSION, '7')).toBeUndefined()
 })
 
@@ -355,3 +356,27 @@ for (const release of matrixReleases)
       ),
     ).toBe(broken)
   })
+
+test('default and next-minor services admit only recorded historical protocols', () => {
+  for (const service of ['1.3.0', '1.4.0']) {
+    for (const client of ['1.2.0', '1.2.999', '1.3.0', '1.3.999'])
+      expect(clientIdentityError(client, '6', service, '7')).toBeUndefined()
+    expect(clientIdentityError('1.2.0', '7', service, '7')).toContain('unsupported protocol')
+    expect(clientIdentityError(service, '7', service, '7')).toBeUndefined()
+  }
+})
+
+test('health echoes only admitted same-line protocols with a published public default', () => {
+  for (const [client, protocol, expected] of [
+    [null, null, '6'],
+    ['1.3.0', '6', '6'],
+    ['1.3.0', '7', '7'],
+    ['1.3.999', '7', '7'],
+    ['1.2.0', '6', '6'],
+    ['invalid', '7', '6'],
+    ['1.3.0', 'invented', '6'],
+    ['1.4.0', '7', '6'],
+  ])
+    expect(healthIdentity(client!, protocol!, '1.3.0', '7').protocolVersion).toBe(expected!)
+  expect(healthIdentity(null, null, '1.4.0', '7').protocolVersion).toBe('7')
+})

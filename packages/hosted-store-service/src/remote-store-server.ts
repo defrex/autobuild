@@ -106,7 +106,7 @@ import {
 import {
   AUTOBUILD_VERSION,
   clientIdentityError,
-  supportedClientRange,
+  healthIdentity,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
@@ -1205,28 +1205,29 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return json(event === null ? 200 : 201, event)
       }
       case 'GET events': {
-        if (req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER) !== REMOTE_STORE_PROTOCOL_VERSION)
-          throw new RequestError(
-            409,
-            'unsupported-operation',
-            'build event pages require protocol 7; upgrade the client',
-          )
         if (!store.getBuildEventPage)
           throw new RequestError(501, 'unsupported-operation', 'bounded build reads unavailable')
         const since = cursorParam(url, 'since')
         const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
-        return json(
-          200,
-          await withDisconnect(
-            req,
-            store.getBuildEventPage!(slug, since, {
-              ...(url.searchParams.has('through') ? { through: cursorParam(url, 'through') } : {}),
-              ...(wait !== undefined ? { waitSeconds: wait } : {}),
-              signal: req.signal,
-            }),
-            () => ({ events: [], cursor: since, hasMore: false }),
-          ),
+        const page = await withDisconnect(
+          req,
+          store.getBuildEventPage!(slug, since, {
+            ...(url.searchParams.has('through') ? { through: cursorParam(url, 'through') } : {}),
+            ...(wait !== undefined ? { waitSeconds: wait } : {}),
+            signal: req.signal,
+          }),
+          () => ({ events: [], cursor: since, hasMore: false }),
         )
+        if (req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER) === '6') {
+          if (page.hasMore)
+            return fail(
+              409,
+              'conflict',
+              'build event suffix exceeds the 256-event page bound; upgrade the client to page history',
+            )
+          return json(200, page.events)
+        }
+        return json(200, page)
       }
       case 'POST deposits':
       case 'POST deposits/conditional': {
@@ -1451,9 +1452,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments.length === 1 && segments[0] === 'health' && req.method === 'GET') {
       return json(200, {
         ok: true,
-        autobuildVersion: identity.autobuildVersion,
-        protocolVersion: identity.protocolVersion,
-        supportedClientRange: supportedClientRange(identity.autobuildVersion),
+        ...healthIdentity(
+          req.headers.get(AUTOBUILD_VERSION_HEADER),
+          req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER),
+          identity.autobuildVersion,
+          identity.protocolVersion,
+        ),
       })
     }
     if (['credentials', 'repos', 'builds', 'streams', 'sessions'].includes(segments[0] ?? '')) {
@@ -1621,7 +1625,16 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     })
   }
 
-  function errorResponse(error: unknown): Response {
+  function errorResponse(error: unknown, req: Request): Response {
+    if (
+      error instanceof CursorTooOldError &&
+      req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER) === '6'
+    )
+      return fail(
+        409,
+        'conflict',
+        `requested cursor ${error.requestedCursor}, head ${error.head}, oldest cursor ${error.oldestCursor}; ${error.message}`,
+      )
     if (error instanceof CursorTooOldError)
       return json(409, {
         kind: 'cursor-too-old',
@@ -1675,7 +1688,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           try {
             return await route(req)
           } catch (error) {
-            const response = errorResponse(error)
+            const response = errorResponse(error, req)
             if (response.status >= 500 && opts.onInternalError !== undefined) {
               try {
                 await opts.onInternalError(error, req)
