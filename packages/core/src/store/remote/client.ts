@@ -1,3 +1,4 @@
+import { StoreWriteTooLargeError } from './errors'
 import { scanCadenceSchema, type ScanCadence } from '../scan-cadence'
 import { nodeRewriteWireSchema } from './protocol'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
@@ -286,19 +287,29 @@ export class RemoteBuildStore implements BuildStore {
     }
     if (this.token !== undefined) headers.authorization = `Bearer ${this.token}`
     if (body !== undefined) headers['content-type'] = 'application/json'
-    return this.fetchFn(`${this.base}${path}`, {
+    const serialized =
+      body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
+    const response = await this.fetchFn(`${this.base}${path}`, {
       method,
       headers,
       // A string body is already serialized JSON (the ticket-asset put sizes
       // its exact bytes before sending).
-      ...(body !== undefined
-        ? { body: typeof body === 'string' ? body : JSON.stringify(body) }
-        : {}),
+      ...(serialized !== undefined ? { body: serialized } : {}),
       ...(signal !== undefined ? { signal } : {}),
     })
+    if (method !== 'GET' && response.status === 413)
+      throw await this.toError(response, {
+        method,
+        route: path,
+        requestBytes: Buffer.byteLength(serialized ?? '', 'utf8'),
+      })
+    return response
   }
 
-  private async toError(response: Response): Promise<Error> {
+  private async toError(
+    response: Response,
+    request?: { method: string; route: string; requestBytes: number },
+  ): Promise<Error> {
     let body: { error: string; kind: string } | undefined
     try {
       body = errorBodySchema.parse(await response.json())
@@ -325,6 +336,13 @@ export class RemoteBuildStore implements BuildStore {
     if (response.status === 413 && message.startsWith('stream batch of ')) {
       return new StreamBatchTooLargeError(undefined, undefined, message)
     }
+    if (response.status === 413 && request !== undefined)
+      return new StoreWriteTooLargeError(
+        request.method,
+        request.route,
+        request.requestBytes,
+        body?.error,
+      )
     if (response.status === 409 && /^stream ".+" is closed$/.test(message)) {
       return new StreamClosedError(message)
     }

@@ -1,3 +1,4 @@
+import { StoreWriteTooLargeError } from '../store/remote/errors'
 import { observeTarget } from '../kernel/target-observation'
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import {
@@ -1616,6 +1617,14 @@ export class BuildRunner {
    * again, preserving the execution-boundary freshness guarantee.
    */
   private async checkReconcileProgress(decision: CheckReconcileProgressDecision): Promise<void> {
+    await this.withKernelPhaseFailure('reconcile', decision.nextAttempt, () =>
+      this.checkReconcileProgressOperation(decision),
+    )
+  }
+
+  private async checkReconcileProgressOperation(
+    decision: CheckReconcileProgressDecision,
+  ): Promise<void> {
     const { nextAttempt } = decision
     const failures = await readPhaseFailures(
       this.deps.store,
@@ -1641,6 +1650,7 @@ export class BuildRunner {
         nextAttempt,
         failures.count,
         `failed to check reconcile progress: ${errorMessage(error)}`,
+        !(error instanceof StoreWriteTooLargeError),
       )
       return
     }
@@ -1658,6 +1668,12 @@ export class BuildRunner {
 
   /** A core-phase run: retry guard (D5), started event (§15.3), session. */
   private async runPhase(decision: RunPhaseDecision): Promise<void> {
+    await this.withKernelPhaseFailure(decision.phase, decision.round, () =>
+      this.runPhaseOperation(decision),
+    )
+  }
+
+  private async runPhaseOperation(decision: RunPhaseDecision): Promise<void> {
     const { store, slug } = this.deps
     const { phase, round } = decision
 
@@ -1699,6 +1715,7 @@ export class BuildRunner {
           round,
           failures.count,
           `failed to refresh reconcile base: ${errorMessage(error)}`,
+          !(error instanceof StoreWriteTooLargeError),
         )
         return
       }
@@ -1760,6 +1777,7 @@ export class BuildRunner {
           round,
           failures.count,
           `failed to prepare reconcile replay: ${errorMessage(error)}`,
+          !(error instanceof StoreWriteTooLargeError),
         )
         return
       }
@@ -1794,6 +1812,15 @@ export class BuildRunner {
     const active = node.active!
     const conflict = node.conflict!
     const change = active.changes[conflict.index]!
+    const failures = await readPhaseFailures(store, slug, 'reconcile', round)
+    if (failures.count >= this.maxPhaseAttempts) {
+      await this.raisePolicyExhausted('reconcile', round, failures)
+      return
+    }
+    if (failures.lastWillRetry === false) {
+      await this.raisePolicyNonRetryable('reconcile', round, failures)
+      return
+    }
     if (!this.recovery) {
       try {
         for (const sha of [active.expected, active.parent]) {
@@ -1849,6 +1876,7 @@ export class BuildRunner {
         if (result.kind !== 'conflict')
           throw new Error('reserved conflict no longer reproduces from frozen inputs')
       } catch (error) {
+        if (error instanceof StoreWriteTooLargeError) throw error
         await store.append(slug, {
           actor: KERNEL,
           type: 'escalation.raised',
@@ -1866,11 +1894,6 @@ export class BuildRunner {
         type: 'reconcile.started',
         payload: { attempt: round, baseSha: conflict.base },
       })
-    }
-    const failures = await readPhaseFailures(store, slug, 'reconcile', round)
-    if (failures.count >= this.maxPhaseAttempts) {
-      await this.raisePolicyExhausted('reconcile', round, failures)
-      return
     }
     await this.executeSession({
       phase: 'reconcile',
@@ -2002,6 +2025,10 @@ export class BuildRunner {
     const failures = await readPhaseFailures(store, slug, 'reconcile', round)
     if (failures.count >= this.maxPhaseAttempts) {
       await this.raisePolicyExhausted('reconcile', round, failures)
+      return
+    }
+    if (failures.lastWillRetry === false) {
+      await this.raisePolicyNonRetryable('reconcile', round, failures)
       return
     }
     try {
@@ -2159,6 +2186,7 @@ export class BuildRunner {
         round,
         failures.count,
         `automatic restack failed: ${errorMessage(error)}`,
+        !(error instanceof StoreWriteTooLargeError),
       )
     }
   }
@@ -2520,12 +2548,27 @@ export class BuildRunner {
   /** Deterministic check (§8.2): NO session, NO CLI — the kernel runs the
    * command directly; a failure deposits the output tail as the report. */
   private async runCheck(decision: RunCheckDecision): Promise<void> {
+    await this.withKernelPhaseFailure(verifyPhase(decision.step), decision.attempt, () =>
+      this.runCheckOperation(decision),
+    )
+  }
+
+  private async runCheckOperation(decision: RunCheckDecision): Promise<void> {
     const { store, slug, exec, workspacePath } = this.deps
     const { step, command, attempt } = decision
     const current = (await readBuildFacts(store, slug)).value.state
     const memberKey = verifyMemberKey(step, attempt)
     if (current.verifyStage.outcomes[memberKey] || current.verifyStage.cancellations[memberKey])
       return
+    const failures = await readPhaseFailures(store, slug, verifyPhase(step), attempt)
+    if (failures.count >= this.maxPhaseAttempts) {
+      await this.raisePolicyExhausted(verifyPhase(step), attempt, failures)
+      return
+    }
+    if (failures.lastWillRetry === false) {
+      await this.raisePolicyNonRetryable(verifyPhase(step), attempt, failures)
+      return
+    }
     const evidence = await this.verifyEvidence()
     if (!this.recovery)
       await store.append(slug, {
@@ -2586,6 +2629,12 @@ export class BuildRunner {
 
   /** Agent-verify step (§5): a session with a pass/fail/skip verdict. */
   private async runAgentVerify(decision: RunAgentVerifyDecision): Promise<void> {
+    await this.withKernelPhaseFailure(verifyPhase(decision.step), decision.attempt, () =>
+      this.runAgentVerifyOperation(decision),
+    )
+  }
+
+  private async runAgentVerifyOperation(decision: RunAgentVerifyDecision): Promise<void> {
     const { store, slug } = this.deps
     const { step, skill, attempt, feedback } = decision
     const evidence = await this.verifyEvidence()
@@ -3666,53 +3715,58 @@ export class BuildRunner {
       }
 
       if (terminal && handle !== undefined && result !== undefined) {
-        if (spec.producerPhase !== undefined && index === 0) {
-          this.producerSessions.set(spec.producerPhase, {
-            handle,
-            runner: owner,
-            route: primaryRoute,
-          })
-          const content = JSON.stringify(
-            {
-              session,
-              phase: spec.phase,
-              round: spec.round,
-              note: 'producer session kept live for §10 continuation; per-round turn transcript',
-              turn: {
-                text: result.text,
-                usage: result.usage,
-                prompt: this.interruptionPrompts.get(session),
+        try {
+          if (spec.producerPhase !== undefined && index === 0) {
+            this.producerSessions.set(spec.producerPhase, {
+              handle,
+              runner: owner,
+              route: primaryRoute,
+            })
+            const content = JSON.stringify(
+              {
+                session,
+                phase: spec.phase,
+                round: spec.round,
+                note: 'producer session kept live for §10 continuation; per-round turn transcript',
+                turn: {
+                  text: result.text,
+                  usage: result.usage,
+                  prompt: this.interruptionPrompts.get(session),
+                },
               },
-            },
-            null,
-            2,
-          )
-          await this.depositTranscriptAndEnd(
-            session,
-            bracket,
-            content,
-            result.usage,
-            target.model,
-            streamBracket !== undefined
-              ? { stream: streamBracket, outcome: 'completed' }
-              : undefined,
-          )
-        } else {
-          // An alternate producer must not become sticky across the review
-          // boundary. End it like any fresh session; the next round begins on
-          // the primary and rehydrates context from durable artifacts.
-          const transcript = await owner.end(handle)
-          await this.depositTranscriptAndEnd(
-            session,
-            bracket,
-            transcript.content,
-            transcript.metadata.usage,
-            transcript.metadata.model ?? target.model,
-            streamBracket !== undefined
-              ? { stream: streamBracket, outcome: 'completed' }
-              : undefined,
-          )
-          if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+              null,
+              2,
+            )
+            await this.depositTranscriptAndEnd(
+              session,
+              bracket,
+              content,
+              result.usage,
+              target.model,
+              streamBracket !== undefined
+                ? { stream: streamBracket, outcome: 'completed' }
+                : undefined,
+            )
+          } else {
+            // An alternate producer must not become sticky across the review
+            // boundary. End it like any fresh session; the next round begins on
+            // the primary and rehydrates context from durable artifacts.
+            const transcript = await owner.end(handle)
+            await this.depositTranscriptAndEnd(
+              session,
+              bracket,
+              transcript.content,
+              transcript.metadata.usage,
+              transcript.metadata.model ?? target.model,
+              streamBracket !== undefined
+                ? { stream: streamBracket, outcome: 'completed' }
+                : undefined,
+            )
+            if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+          }
+        } catch (error) {
+          if (!(error instanceof StoreWriteTooLargeError)) throw error
+          // The durable terminal remains authoritative over optional cleanup.
         }
         return
       }
@@ -3769,12 +3823,15 @@ export class BuildRunner {
             transcript.metadata.model ?? target.model,
             streamBracket !== undefined ? { stream: streamBracket, outcome: 'aborted' } : undefined,
           )
-        } catch {
+        } catch (error) {
+          if (error instanceof StoreWriteTooLargeError) turnError = error
           // A dead provider may leave no recoverable transcript.
         }
       }
       this.closeBracketStream(streamBracket, 'aborted')
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
+
+      if (turnError instanceof StoreWriteTooLargeError) throw turnError
 
       const failure: AgentTurnFailure =
         turnError !== undefined
@@ -3983,49 +4040,59 @@ export class BuildRunner {
     }
 
     if (terminal && handle !== undefined && result !== undefined) {
-      if (spec.producerPhase !== undefined) {
-        // §10 memory: keep the handle live for the next round; the bracket
-        // closes with THIS turn's transcript (see module doc — ending the
-        // runner session would destroy the continuation every adapter needs).
-        this.producerSessions.set(spec.producerPhase, {
-          handle,
-          runner: live?.runner ?? runner,
-          route,
-        })
-        const content = JSON.stringify(
-          {
-            session,
-            phase: spec.phase,
-            round: spec.round,
-            note: 'producer session kept live for §10 continuation; ' + 'per-round turn transcript',
-            turn: {
-              text: result.text,
-              usage: result.usage,
-              prompt: this.interruptionPrompts.get(session),
+      try {
+        if (spec.producerPhase !== undefined) {
+          // §10 memory: keep the handle live for the next round; the bracket
+          // closes with THIS turn's transcript (see module doc — ending the
+          // runner session would destroy the continuation every adapter needs).
+          this.producerSessions.set(spec.producerPhase, {
+            handle,
+            runner: live?.runner ?? runner,
+            route,
+          })
+          const content = JSON.stringify(
+            {
+              session,
+              phase: spec.phase,
+              round: spec.round,
+              note:
+                'producer session kept live for §10 continuation; ' + 'per-round turn transcript',
+              turn: {
+                text: result.text,
+                usage: result.usage,
+                prompt: this.interruptionPrompts.get(session),
+              },
             },
-          },
-          null,
-          2,
-        )
-        await this.depositTranscriptAndEnd(
-          session,
-          bracket,
-          content,
-          result.usage,
-          model,
-          streamBracket !== undefined ? { stream: streamBracket, outcome: 'completed' } : undefined,
-        )
-      } else {
-        // Reviewer / agent-verify: single-run session, real transcript.
-        const transcript = await runner.end(handle)
-        await this.depositTranscriptAndEnd(
-          session,
-          bracket,
-          transcript.content,
-          transcript.metadata.usage,
-          transcript.metadata.model ?? model,
-          streamBracket !== undefined ? { stream: streamBracket, outcome: 'completed' } : undefined,
-        )
+            null,
+            2,
+          )
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            content,
+            result.usage,
+            model,
+            streamBracket !== undefined
+              ? { stream: streamBracket, outcome: 'completed' }
+              : undefined,
+          )
+        } else {
+          // Reviewer / agent-verify: single-run session, real transcript.
+          const transcript = await runner.end(handle)
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            transcript.content,
+            transcript.metadata.usage,
+            transcript.metadata.model ?? model,
+            streamBracket !== undefined
+              ? { stream: streamBracket, outcome: 'completed' }
+              : undefined,
+          )
+        }
+      } catch (error) {
+        if (!(error instanceof StoreWriteTooLargeError)) throw error
+        // The durable terminal remains authoritative over optional cleanup.
       }
       return
     }
@@ -4090,7 +4157,8 @@ export class BuildRunner {
           transcript.metadata.model ?? model,
           streamBracket !== undefined ? { stream: streamBracket, outcome: 'aborted' } : undefined,
         )
-      } catch {
+      } catch (error) {
+        if (error instanceof StoreWriteTooLargeError) turnError = error
         // Transcript deposition can still fail. A later recovering runner
         // explicitly reclaims this open session before announcing attachment.
       }
@@ -4099,6 +4167,7 @@ export class BuildRunner {
     if (spec.producerPhase !== undefined) {
       this.producerSessions.delete(spec.producerPhase)
     }
+    if (turnError instanceof StoreWriteTooLargeError) throw turnError
     const failure =
       turnError !== undefined
         ? { message: errorMessage(turnError), mayRetry: true }
@@ -4360,7 +4429,34 @@ export class BuildRunner {
     })
   }
 
-  private async failPhase(
+  /** Only typed kernel write failures change disposition; persistence errors escape. */
+  private async withKernelPhaseFailure(
+    phase: Phase,
+    round: number,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await operation()
+    } catch (error) {
+      if (!(error instanceof StoreWriteTooLargeError) || this.failurePersistenceErrors.has(error))
+        throw error
+      const failures = await readPhaseFailures(this.deps.store, this.deps.slug, phase, round)
+      await this.failPhase(phase, round, failures.count, error.message, false)
+    }
+  }
+
+  private readonly failurePersistenceErrors = new WeakSet<Error>()
+
+  private async failPhase(...args: Parameters<BuildRunner['persistPhaseFailure']>): Promise<void> {
+    try {
+      await this.persistPhaseFailure(...args)
+    } catch (error) {
+      if (error instanceof Error) this.failurePersistenceErrors.add(error)
+      throw error
+    }
+  }
+
+  private async persistPhaseFailure(
     phase: Phase,
     round: number,
     priorFailures: number,
@@ -4410,7 +4506,7 @@ export class BuildRunner {
     }
   }
 
-  /** A provider/runner-declared permanent failure parks immediately. The fact
+  /** A permanent failure parks immediately. The fact
    * comes from the latest durable `phase.failed {willRetry:false}`, so a crash
    * between that write and this escalation resumes safely without attempt 2. */
   private async raisePolicyNonRetryable(
@@ -4433,7 +4529,7 @@ export class BuildRunner {
         policyCause: 'non-retryable-phase-failure',
         question:
           `${phase} round ${round} stopped after a non-retryable ` +
-          `provider/runner failure on attempt ${failures.count}; last error: ` +
+          `failure on attempt ${failures.count}; last error: ` +
           `${failures.lastError ?? 'unknown'}` +
           providerAttemptSummary(failures.lastProviderAttempts),
       },
