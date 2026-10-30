@@ -1158,3 +1158,70 @@ if (testUrl)
       await database.cleanup()
     }
   })
+
+if (testUrl)
+  test('placement publication serializes independent connections, persists canonical values and fences old generations', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const { MemoryBlobStore } = await import('@defrex/autobuild/plugin-sdk')
+    const { PostgresProjectRegistry } = await import('./projects')
+    const { withHostedProjectContext, rememberProjectGeneration } = await import(
+      './request-context'
+    )
+    const first = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+    const second = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+    try {
+      const projects = new PostgresProjectRegistry(sql)
+      const repo = 'https://github.com/acme/placement'
+      await projects.add(repo, 'test')
+      const hosted = { hosted: true, origin: 'https://store.test' } as const
+      const known = { status: 'known', placement: hosted } as const
+      expect(
+        await Promise.all([
+          first.syncDispatchPlacement(repo, hosted),
+          second.syncDispatchPlacement(repo, hosted),
+        ]),
+      ).toEqual([known, known])
+      expect(await first.getRepoHighWater(repo)).toBe(1)
+      for (let i = 0; i < 3; i++) {
+        await Promise.all([
+          first.syncDispatchPlacement(repo, { hosted: false }),
+          second.syncDispatchPlacement(repo, hosted),
+        ])
+        const log = await first.getRepoEvents(repo)
+        expect(
+          (await second.getRepoStateEvents(repo)).filter(
+            (event) => event.type === 'dispatcher.placement-set',
+          ),
+        ).toEqual(log.filter((event) => event.type === 'dispatcher.placement-set').slice(-1))
+        expect(
+          (await second.getReducerValue({ kind: 'repo', repo }, { reducer: 'dispatchPlacement' }))
+            .value,
+        ).toEqual({ status: 'known', placement: log.at(-1)!.payload })
+        for (let j = 1; j < log.length; j++)
+          expect(log[j]!.payload).not.toEqual(log[j - 1]!.payload)
+      }
+      const before = await first.getRepoHighWater(repo)
+      const final = (await first.getRepoEvents(repo)).at(-1)!.payload as typeof hosted
+      await Promise.all([
+        first.syncDispatchPlacement(repo, final),
+        second.syncDispatchPlacement(repo, final),
+      ])
+      expect(await first.getRepoHighWater(repo)).toBe(before)
+      const [generation] = await sql`SELECT generation FROM project_generations WHERE repo=${repo}`
+      await withHostedProjectContext(async () => {
+        rememberProjectGeneration(repo, String(generation.generation))
+        await projects.remove(repo, 'test')
+        await projects.add(repo, 'test')
+        await expect(first.syncDispatchPlacement(repo, { hosted: false })).rejects.toThrow(
+          'project not registered',
+        )
+      })
+      expect(await first.getRepoHighWater(repo)).toBe(before)
+    } finally {
+      await first.close()
+      await second.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  })

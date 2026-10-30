@@ -29,6 +29,7 @@ live(
       const dispatched: string[] = [],
         logs: string[] = []
       const dispatcher = createHostedDispatcher({
+        syncPlacement: async () => {},
         env: {
           AB_STORE_SECRET: 'signing',
           AB_POSTGRES_URL: url.href,
@@ -126,6 +127,7 @@ live(
       )
       const ticks: Record<string, string | undefined>[] = []
       const dispatcher = createHostedDispatcher({
+        syncPlacement: async () => {},
         env: {
           AB_STORE_SECRET: 'signing',
           AB_POSTGRES_URL: url.href,

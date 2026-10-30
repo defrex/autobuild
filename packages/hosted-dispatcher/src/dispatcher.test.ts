@@ -44,9 +44,19 @@ async function issueDispatcherCredentialAdapter(
   }
 }
 const createHostedDispatcher = (options: HostedDispatcherOptions) =>
-  realCreateHostedDispatcher({ openDispatcherCredentials, openSecrets: emptySecrets, ...options })
+  realCreateHostedDispatcher({
+    syncPlacement: async () => {},
+    openDispatcherCredentials,
+    openSecrets: emptySecrets,
+    ...options,
+  })
 const createDispatcherEndpoint = (options: HostedDispatcherOptions) =>
-  realCreateDispatcherEndpoint({ openDispatcherCredentials, openSecrets: emptySecrets, ...options })
+  realCreateDispatcherEndpoint({
+    syncPlacement: async () => {},
+    openDispatcherCredentials,
+    openSecrets: emptySecrets,
+    ...options,
+  })
 
 const storeEnv = {
   AB_STORE_SECRET: 'test-signing-secret',
@@ -220,6 +230,7 @@ describe('createHostedDispatcher', () => {
     return {
       calls,
       ...createHostedDispatcher({
+        syncPlacement: async () => {},
         openProjectRegistry: async () =>
           testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
         ...options,
@@ -278,6 +289,7 @@ describe('createHostedDispatcher', () => {
     }
     const { calls: dispatchCalls, dispatch } = recordingDispatch(['ok'])
     const summary = await createHostedDispatcher({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
@@ -354,6 +366,7 @@ describe('createHostedDispatcher', () => {
 describe('createDispatcherEndpoint', () => {
   function endpoint(options: HostedDispatcherOptions = {}) {
     return createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       clock,
@@ -464,6 +477,7 @@ describe('hosted dispatcher runtime logging', () => {
   test('an authorized invocation logs the request, every repository outcome, and completion', async () => {
     const { lines, errors, log, logError } = sinks()
     const response = await createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
@@ -515,6 +529,7 @@ describe('hosted dispatcher runtime logging', () => {
     const { lines, log, logError } = sinks()
     const out: string[] = []
     await createHostedDispatcher({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
@@ -533,6 +548,7 @@ describe('hosted dispatcher runtime logging', () => {
   test('a failed repository tick logs the kernel error with its stack at error level', async () => {
     const { lines, errors, log, logError } = sinks()
     await createHostedDispatcher({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
@@ -566,6 +582,7 @@ describe('hosted dispatcher runtime logging', () => {
     const { errors, log, logError } = sinks()
     const endpoint = (env: Record<string, string | undefined>) =>
       createDispatcherEndpoint({
+        syncPlacement: async () => {},
         openProjectRegistry: async () =>
           testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
         env,
@@ -604,6 +621,7 @@ describe('hosted dispatcher runtime logging', () => {
     const override = 'override-forge-token'
     const minted: string[] = []
     await createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: {
@@ -622,6 +640,7 @@ describe('hosted dispatcher runtime logging', () => {
     }).fetch(new Request(url, { headers: authorized }))
     // Also the wrong-bearer path: the presented header value is never echoed.
     await createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
@@ -668,6 +687,7 @@ describe('hosted dispatcher sandbox credentials', () => {
   test('the x-vercel-oidc-token request header becomes the kernel VERCEL_OIDC_TOKEN', async () => {
     const { envs, lines, errors, options } = capture()
     const response = await createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       ...options,
@@ -687,6 +707,7 @@ describe('hosted dispatcher sandbox credentials', () => {
   test('an environment VERCEL_OIDC_TOKEN keeps precedence over the header', async () => {
     const { envs, lines, options } = capture()
     await createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       ...options,
@@ -699,6 +720,7 @@ describe('hosted dispatcher sandbox credentials', () => {
   test('without a header or environment token the kernel env carries none and the log says so', async () => {
     const { envs, lines, options } = capture()
     await createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       ...options,
@@ -708,6 +730,7 @@ describe('hosted dispatcher sandbox credentials', () => {
     expect(lines).toContainEqual(expect.stringContaining('sandboxAuth=none'))
     const { lines: durable, options: durableOptions } = capture()
     await createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       ...durableOptions,
@@ -753,6 +776,7 @@ test('warm ticks discover current registration, explicit selection intersects in
   await projects.add(one, 'Ada')
   calls.length = 0
   const explicit = createHostedDispatcher({
+    syncPlacement: async () => {},
     ...options,
     env: { ...baseEnv, AB_DISPATCHER_REPOSITORIES: `${two},${one}` },
   })
@@ -767,6 +791,7 @@ test('warm ticks discover current registration, explicit selection intersects in
 test('unauthorized requests never open registry; failed initialization is retryable', async () => {
   let opens = 0
   const endpoint = createDispatcherEndpoint({
+    syncPlacement: async () => {},
     env: baseEnv,
     log: () => {},
     logError: () => {},
@@ -798,6 +823,7 @@ describe('cron credential lifecycle', () => {
     let maximum = 0
     for (let i = 0; i < 100; i++) {
       const dispatcher = realCreateHostedDispatcher({
+        syncPlacement: async () => {},
         env,
         clock,
         openSecrets: emptySecrets,
@@ -824,6 +850,7 @@ describe('cron credential lifecycle', () => {
       const calls: string[] = []
       const logs: string[] = []
       const dispatcher = realCreateHostedDispatcher({
+        syncPlacement: async () => {},
         env,
         clock,
         openProjectRegistry: async () => registry(),
@@ -891,6 +918,7 @@ describe('cron credential lifecycle', () => {
     })
     const make = (dispatch: NonNullable<HostedDispatcherOptions['dispatch']>) =>
       realCreateHostedDispatcher({
+        syncPlacement: async () => {},
         env,
         clock,
         openSecrets: emptySecrets,
@@ -922,4 +950,38 @@ describe('cron credential lifecycle', () => {
     expect(await store.pruneDispatcherCredentials(repo, new Date(at.getTime() + 2))).toBe(1)
     expect(await store.authenticate(abandoned.token, at)).toBeNull()
   })
+})
+
+test('cron publishes excluded projects and stops only projects whose placement sync fails', async () => {
+  const one = 'https://github.com/acme/one',
+    two = 'https://github.com/acme/two'
+  const synced: [string, unknown][] = [],
+    dispatched: string[] = []
+  let fail = false
+  const dispatcher = createHostedDispatcher({
+    env: { ...baseEnv, AB_DISPATCHER_REPOSITORIES: one },
+    clock,
+    openProjectRegistry: async () => testProjects([one, two]),
+    syncPlacement: async (repo, desired) => {
+      synced.push([repo, desired])
+      if (fail && repo === one) throw new Error('unavailable')
+    },
+    dispatch: async (opts) => {
+      dispatched.push(opts.repository!)
+    },
+    log: () => {},
+    logError: () => {},
+  })
+  await dispatcher.tick()
+  expect(synced).toEqual([
+    [one, { hosted: true, origin: baseEnv.AB_DISPATCHER_ORIGIN }],
+    [two, { hosted: false }],
+  ])
+  expect(dispatched).toEqual([one])
+  fail = true
+  const summary = await dispatcher.tick()
+  expect(summary.repositories).toEqual([
+    { repository: one, outcome: 'failed', error: 'placement synchronization failed' },
+  ])
+  expect(dispatched).toEqual([one])
 })

@@ -22,6 +22,7 @@ test('fresh project environment, next tick mutations, key exclusion and redactio
     seen: Record<string, string | undefined>[] = [],
     supplied: string[] = []
   const dispatcher = createHostedDispatcher({
+    syncPlacement: async () => {},
     env,
     openProjectRegistry: async () => testProjects([one, two]),
     openDispatcherCredentials: async () => ({

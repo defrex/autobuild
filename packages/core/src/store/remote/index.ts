@@ -66,3 +66,9 @@ export {
 export * from './released-clients'
 
 export { StoreWriteTooLargeError } from './errors'
+export { dispatchPlacementSchema, dispatchPlacementReducer } from '../../kernel/dispatch-placement'
+export type { DispatchPlacement } from '../../kernel/dispatch-placement'
+export { dispatchPlacementFactSchema } from '../../events/repository'
+export type { DispatchPlacementFact } from '../../events/repository'
+
+export { readDispatchPlacement } from '../reduced-reads'

@@ -371,3 +371,54 @@ test('ticket listings have a fixed statement budget regardless of target cardina
     }
   })
 })
+
+test('placement synchronization has a fixed idle query budget across fresh adapters and long journals', async () => {
+  const { PlanRetryRunner } = await import('./retry')
+  const { PostgresBuildStore } = await import('./store')
+  const { MemoryBlobStore } = await import('@defrex/autobuild/plugin-sdk')
+  const { resolveReducerValue } = await import('@defrex/autobuild/store-adapter')
+  const repo = 'https://github.com/acme/placement-budget'
+  const { identity, reducer } = resolveReducerValue(
+    { kind: 'repo', repo },
+    { reducer: 'dispatchPlacement' },
+  )
+  const totals: number[] = []
+  for (const length of [100, 100_000]) {
+    let statements = 0
+    const q = (async (parts: TemplateStringsArray) => {
+      statements++
+      const query = parts.join('?')
+      if (query.includes('FROM project_generations'))
+        return [{ generation: 'g', registration: '1' }]
+      if (query.includes('INSERT INTO repo_streams')) return []
+      if (query.includes('FROM repo_streams')) return [{}]
+      if (query.includes('COALESCE(MAX(seq),0)')) return [{ seq: length }]
+      if (query.includes('FROM reducer_snapshots'))
+        return [
+          {
+            version: reducer.version,
+            cursor: length,
+            state: { identity, acc: { placement: { hosted: false } } },
+          },
+        ]
+      // Any event-row read, project enumeration, or idle publication is a failure.
+      throw new Error(`Unexpected placement query: ${query}`)
+    }) as unknown as import('./retry').Exec
+    class RecordingRunner extends PlanRetryRunner {
+      override tx<T>(_pool: SQL, body: (q: import('./retry').Exec) => Promise<T>): Promise<T> {
+        return body(q)
+      }
+    }
+    for (let i = 0; i < 5; i++) {
+      const fresh = new PostgresBuildStore(q as unknown as SQL, { blobs: new MemoryBlobStore() })
+      Reflect.set(fresh, 'retry', new RecordingRunner())
+      expect(await fresh.syncDispatchPlacement(repo, { hosted: false })).toEqual({
+        status: 'known',
+        placement: { hosted: false },
+      })
+    }
+    expect(statements).toBeLessThanOrEqual(40)
+    totals.push(statements)
+  }
+  expect(totals[0]).toBe(totals[1])
+})
