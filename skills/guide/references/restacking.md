@@ -144,6 +144,8 @@ against the current destination. Remote guests park for trusted
 publication after teardown. Historical merge reconciliations keep their original
 interpretation and supply a promoted contribution base for later replay.
 
+Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.
+
 ## Node contributions and recovery
 
 Node replay enumerates oldest-first first-parent contributions above the last
