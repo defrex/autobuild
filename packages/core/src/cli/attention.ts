@@ -41,6 +41,7 @@ export function mergeDecisionFromFacts(
 export function buildNeedsAttention(events: AbEvent[], state: BuildState): boolean {
   return (
     state.janitor?.attention === true ||
+    !!state.targetRewrite ||
     (state.compatibility?.decisiveFacts ?? 0) > 0 ||
     (state.openEscalations?.length ?? 0) > 0 ||
     mergeDecision(events, new Date(0), state) !== null

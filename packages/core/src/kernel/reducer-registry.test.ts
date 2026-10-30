@@ -301,7 +301,32 @@ function corpora(): unknown[][] {
     actor: { kind: 'dispatcher' },
     ...event,
   }))
+  const rewrite = {
+    type: 'target.rewritten',
+    build: 'node',
+    seq: 3,
+    ts: '2026-10-24T00:00:00.000Z',
+    actor: { kind: 'dispatcher' },
+    payload: { branch: 'main', previousSha: 'a'.repeat(40), sha: 'b'.repeat(40) },
+  }
   return [
+    [...leafRestackLog(), rewrite],
+    [...nodeRestackLog(), rewrite],
+    [rewrite],
+    [
+      {
+        type: 'build.created',
+        seq: 1,
+        payload: {
+          ticket: { source: 'fake', id: 'N' },
+          repo: 'repo',
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      },
+      { type: 'node.opened', seq: 2, payload: { sha: 'a'.repeat(40) } },
+      rewrite,
+    ],
     preparationCorpus,
     verifyStageCorpus,
     rollbackCorpus.slice(0, 1),
@@ -446,6 +471,16 @@ function corpora(): unknown[][] {
       },
       { type: 'node.opened', payload: { sha: 'opening' } },
       {
+        type: 'target.rewritten',
+        build: 'node',
+        seq: 3,
+        ts: '2026-10-24T00:00:00.000Z',
+        actor: { kind: 'dispatcher' },
+        payload: { branch: 'main', previousSha: 'a'.repeat(40), sha: 'b'.repeat(40) },
+      },
+      { type: 'target.rewrite-cleared', payload: { branch: 'main', sha: 'a'.repeat(40) } },
+
+      {
         type: 'node.restack-requested',
         payload: {
           id: 'request',
@@ -552,11 +587,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 26,
+        "build": 27,
         "buildDelegation": 1,
         "buildDigest": 10,
-        "buildReadFacts": 70,
-        "buildStreamSeed": 37,
+        "buildReadFacts": 73,
+        "buildStreamSeed": 40,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 3,
@@ -576,9 +611,9 @@ describe('reducer registry', () => {
         "infrastructureFailureReset": 1,
         "journalView": 8,
         "lastExecutionOutcome": 2,
-        "leafRestack": 5,
-        "logIndex": 6,
-        "nodeRestack": 8,
+        "leafRestack": 7,
+        "logIndex": 8,
+        "nodeRestack": 9,
         "openBuildWorkspace": 1,
         "openExecution": 1,
         "openHarvestExecutions": 1,

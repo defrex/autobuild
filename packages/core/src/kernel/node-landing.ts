@@ -1,3 +1,4 @@
+import { observeTarget } from './target-observation'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { inspectIntegrationStack } from './integration-stack'
 import { integrationFailed } from './integration-state'
@@ -128,6 +129,18 @@ export async function landIntoNode(
         branch: deps.destination,
         destinationRef: `refs/autobuild/reconcile/${deps.slug}/landing-destination`,
       })
+      if (
+        (await observeTarget({
+          store,
+          forge,
+          slug: deps.slug,
+          branch: deps.destination,
+          sha: expected,
+          enforceUsedBaseline: true,
+          actor: KERNEL,
+        })) === 'rejected'
+      )
+        return defer('Upstream destination rewrite requires operator attention.')
       const candidate = await forge.rewrite.snapshot({
         workspacePath,
         branch: deps.branch,
@@ -147,13 +160,14 @@ export async function landIntoNode(
           ? expected !== deps.stack.parent || candidate !== deps.stack.head
           : parents.stdout.trim() !== expected
       ) {
-        const source = (await readBuildFacts(store, deps.slug)).value
-        if (source.log.restack.target?.sha !== expected)
-          await store.append(deps.slug, {
-            actor: KERNEL,
-            type: 'target.moved',
-            payload: { branch: deps.destination, sha: expected },
-          })
+        await observeTarget({
+          store,
+          forge,
+          slug: deps.slug,
+          branch: deps.destination,
+          sha: expected,
+          actor: KERNEL,
+        })
         return defer(
           'Leaf head is not one canonical change on the current node head; awaiting restack or human provenance review.',
         )
@@ -304,10 +318,13 @@ export async function landIntoNode(
             })
         }
         if (result.actual)
-          await store.append(deps.slug, {
+          await observeTarget({
+            store,
+            forge,
+            slug: deps.slug,
+            branch: deps.destination,
+            sha: result.actual,
             actor: KERNEL,
-            type: 'target.moved',
-            payload: { branch: deps.destination, sha: result.actual },
           })
         return undefined
       }
