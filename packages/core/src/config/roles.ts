@@ -1,3 +1,4 @@
+import type { Accounts } from './accounts'
 import { selectAccount, type SelectedAccount } from './accounts'
 /**
  * Role-key consumability diagnostics (SPEC §9).
@@ -100,6 +101,7 @@ export interface RuntimeReferenceGroup {
  */
 export function effectiveRuntimeReferences(
   config: Pick<Config, 'roles' | 'verify' | 'finalize'> & Partial<Pick<Config, 'accounts'>>,
+  options: { includeUnusedAccounts?: boolean } = {},
 ): RuntimeReferenceGroup[] {
   const defaultSpec = config.roles.default ?? {}
   const routes: Array<{ role: string; aliases?: string[]; label: string }> = [
@@ -185,7 +187,9 @@ export function effectiveRuntimeReferences(
   }
 
   // Unused accounts still require their actual runtime for readiness.
-  for (const [name, descriptor] of Object.entries(config.accounts ?? {}))
+  for (const [name, descriptor] of Object.entries(
+    options.includeUnusedAccounts === false ? {} : (config.accounts ?? {}),
+  ))
     add(
       descriptor.kind === 'chatgpt-subscription' ? 'codex' : 'claude',
       descriptor.kind === 'kimi-code' ? 'kimi-for-coding' : undefined,
@@ -486,4 +490,15 @@ export function roleKeyWarnings(config: Config): string[] {
     )
   }
   return lines
+}
+
+/** Accounts reachable through execution routes; readiness separately includes unused descriptors. */
+export function selectedExecutionAccounts(
+  config: Parameters<typeof effectiveRuntimeReferences>[0],
+): Accounts {
+  return Object.fromEntries(
+    effectiveRuntimeReferences(config, { includeUnusedAccounts: false }).flatMap((group) =>
+      (group.accountTargets ?? []).map(({ account }) => [account.name, account.descriptor]),
+    ),
+  )
 }

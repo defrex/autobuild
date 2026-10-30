@@ -85,6 +85,8 @@ function payloadShape(type: RepositoryEventType): Record<string, unknown> {
       return { run: '', step: 'scan' }
     case 'harvest.proposal.id-reserved':
       return { run: '', proposalKey: 'k', id: '00000000-0000-4000-8000-000000000000' }
+    case 'orchestrator.sandbox.activity':
+      return { operator: 'op', environmentId: 'env' }
     case 'orchestrator.sandbox.provisioned':
       return { operator: 'op', environmentId: 'env', provider: 'p', workspacePath: '/w' }
     case 'dispatcher.run-started':

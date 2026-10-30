@@ -7,6 +7,7 @@ import { parseConfig } from './load'
 import { isSafeStepName } from '../context-directory'
 import {
   effectiveRuntimeReferences,
+  selectedExecutionAccounts,
   INTERNAL_ROLES,
   roleKeyDiagnostics,
   roleKeyWarnings,
@@ -770,5 +771,52 @@ describe('roleKeyWarnings — the one message set', () => {
       for (const step of entry.activeAlias) expect(head).toContain(`[roles.${step}]`)
       for (const step of entry.supersededAlias) expect(head).toContain(`"${step}"`)
     }
+  })
+})
+
+describe('execution account admission', () => {
+  test('deduplicates inherited primary and alternate routes and excludes unused readiness descriptors', () => {
+    const parsed = config(`
+[accounts.primary]
+kind = "chatgpt-subscription"
+credentialEnv = "PRIMARY"
+[accounts.backup]
+kind = "chatgpt-subscription"
+credentialEnv = "BACKUP"
+[accounts.unused]
+kind = "chatgpt-subscription"
+credentialEnv = "UNUSED"
+[roles.default]
+runtime = "codex"
+account = "primary"
+alternates = [{ account = "backup" }]
+`)
+    expect(Object.keys(selectedExecutionAccounts(parsed)).sort()).toEqual(['backup', 'primary'])
+    expect(
+      effectiveRuntimeReferences(parsed)
+        .flatMap((g) => g.accountTargets ?? [])
+        .some((t) => t.account.name === 'unused'),
+    ).toBe(true)
+  })
+  test('implicit sole Claude account and verify skill aliases select execution accounts', () => {
+    const parsed = config(`
+[accounts.claude]
+kind = "claude-subscription"
+credentialEnv = "CLAUDE_TOKEN"
+[accounts.codex]
+kind = "chatgpt-subscription"
+credentialEnv = "CODEX_TOKEN"
+[roles.default]
+runtime = "claude"
+[verify]
+steps = ["visual"]
+[verify.visual]
+kind = "agent"
+skill = "check-pixels"
+[roles.check-pixels]
+runtime = "codex"
+account = "codex"
+`)
+    expect(Object.keys(selectedExecutionAccounts(parsed)).sort()).toEqual(['claude', 'codex'])
   })
 })

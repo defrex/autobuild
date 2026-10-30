@@ -491,6 +491,11 @@ export const dispatcherStatusEventPayloadSchemas = {
     outcome: z.enum(['drained', 'suspended', 'unknown']),
   }),
   'dispatcher.drain-deadline': handoffSchema.extend({ deadline: z.iso.datetime() }),
+  'account.credentials-unavailable': selectedAccountSchema.extend({
+    source: z.enum(['environment', 'project-secrets']),
+    remedy: z.string().min(1).max(4096),
+  }),
+  'account.credentials-recovered': z.strictObject({ name: z.string().min(1) }),
   'dispatcher.upgrade-detected': upgradeIdentitySchema,
   'dispatcher.upgrade-failed': upgradeIdentitySchema.extend({ reason: z.string().min(1) }),
   'dispatcher.runtime-rolled-back': z.strictObject({
@@ -808,6 +813,8 @@ export const REPOSITORY_EVENT_TYPES = Object.keys(
 /** Repository attention followed by `ab watch` with no slugs or explicit
  * `--repository`. Historical session wakes also used this catalog. */
 export const REPOSITORY_ATTENTION_EVENTS = [
+  'account.credentials-unavailable',
+  'account.credentials-recovered',
   'harvest.escalated',
   'harvest.failed',
   'dispatcher.forge-degraded',
@@ -913,6 +920,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.takeover': ['dispatcher'],
   'dispatcher.drain-settled': ['dispatcher'],
   'dispatcher.drain-deadline': ['dispatcher'],
+  'account.credentials-unavailable': ['dispatcher'],
+  'account.credentials-recovered': ['dispatcher'],
   'dispatcher.upgrade-detected': ['dispatcher'],
   'dispatcher.upgrade-failed': ['dispatcher'],
   'dispatcher.runtime-rolled-back': ['dispatcher'],
