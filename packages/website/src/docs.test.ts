@@ -113,15 +113,24 @@ test('docs renderer escapes page metadata', () => {
 
 test('published pages keep navigation on-site and link only declared repository references', () => {
   const references = new Map([
-    ['docs/cli.md', ['docs/operator-api.md#permanent-project-deletion']],
+    [
+      'docs/cli.md',
+      ['docs/accounts.md#dispatcher-admission', 'docs/operator-api.md#permanent-project-deletion'],
+    ],
     [
       'docs/dispatcher-hosting.md',
-      ['docs/setup.md#running-the-dispatcher-without-a-checkout-origin-mode'],
+      [
+        'docs/accounts.md#dispatcher-admission',
+        'docs/setup.md#running-the-dispatcher-without-a-checkout-origin-mode',
+      ],
     ],
     ['docs/operating.md', ['docs/operator-api.md']],
     [
       'docs/troubleshooting.md',
-      ['docs/remote-store-protocol.md#7-authentication-and-project-authority'],
+      [
+        'docs/accounts.md#dispatcher-admission',
+        'docs/remote-store-protocol.md#7-authentication-and-project-authority',
+      ],
     ],
   ])
   for (const page of DOCS_PAGES) {
