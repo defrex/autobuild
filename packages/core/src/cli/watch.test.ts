@@ -990,6 +990,7 @@ describe('watch discovery bounds terminal-build reads with the AUT-487 digest (A
     let digests = 0
     const fake: BuildStore = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getReducerValue') {
           return async (...args: Parameters<BuildStore['getReducerValue']>) => {
             if (args[0].kind === 'build' && args[1].reducer === 'buildStreamSeed') {
@@ -1162,6 +1163,7 @@ describe('watch read-failure resilience', () => {
     let listCalls = 0
     const flaky: BuildStore = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'listBuilds') {
           return async () => {
             listCalls += 1
@@ -1200,6 +1202,7 @@ describe('watch read-failure resilience', () => {
     let failNext = true
     const flaky: BuildStore = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getEvents') {
           return async (slug: string, sinceSeq?: number) => {
             if (failNext && (sinceSeq ?? 0) > 0) {
@@ -1304,6 +1307,7 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     let total = 0
     const fake: BuildStore = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getEvents') {
           return async (
             slug: string,
@@ -1637,6 +1641,7 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     // reaches it, the step throws — after b2 was registered in the same pass.
     const breaking = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getEvents') {
           return async (
             slug: string,
@@ -3223,15 +3228,15 @@ test('operator heartbeat runs while remote event reads are held with a large int
   const readStarted = new Promise<void>((resolve) => {
     heldRead = resolve
   })
-  const getEvents = store.getEvents.bind(store)
-  store.getEvents = async (slug, since, opts) => {
+  const getEvents = store.getBuildEventPage.bind(store)
+  store.getBuildEventPage = async (slug, since, opts) => {
     if (!opts?.waitSeconds) return getEvents(slug, since, opts)
     heldRead()
     await new Promise<void>((resolve) => {
       if (opts.signal?.aborted) resolve()
       else opts.signal?.addEventListener('abort', () => resolve(), { once: true })
     })
-    return []
+    return { events: [], cursor: since ?? 0, hasMore: false }
   }
   let tick!: () => void
   let ready!: () => void
@@ -3616,3 +3621,17 @@ for (const outcome of ['normal', 'abnormal'] as const) {
     )
   })
 }
+
+test('expired hosted watch resume is terminal and never replays the prefix', async () => {
+  const store = new MemoryBuildStore()
+  await seedRunningBuild(store, 'expired')
+  for (let i = 0; i < 1001; i++)
+    await store.append('expired', { actor: KERNEL, type: 'build.paused', payload: {} })
+  const h = harness(store, {
+    slugs: ['expired'],
+    since: encodeCursor({ v: 1, repo: REPO, store: `${REPO}/.autobuild`, streams: { expired: 0 } }),
+  })
+  await expect(abWatch(h.base)).rejects.toThrow('Re-arm without --since')
+  expect(h.out).toEqual([])
+  expect((Reflect.get(store, 'snapshots') as Map<string, unknown>).size).toBe(0)
+})

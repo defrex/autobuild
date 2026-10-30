@@ -158,3 +158,8 @@ test('expired prior watch owners have bounded exact-run reads at 100 and 100000 
   const { stoppedOwnerWatchReadBudget } = await import('../testing/reduced-read-budget')
   await stoppedOwnerWatchReadBudget()
 })
+
+test('hosted exact seeds have one canonical rebuild and gap-proportional warm reads', async () => {
+  const { hostedSeedReadBudget } = await import('../testing/reduced-read-budget')
+  await hostedSeedReadBudget()
+}, 30_000)

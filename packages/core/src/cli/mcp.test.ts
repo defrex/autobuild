@@ -392,8 +392,12 @@ test('MCP builds.events forwards failed-node attention intact and respects its c
       expect(result.isError).toBeUndefined()
       return JSON.parse((result.content as { text: string }[])[0]!.text)
     }
-    expect(await call(event.seq - 1)).toEqual({ events: [event], cursor: event.seq })
-    expect(await call(event.seq)).toEqual({ events: [], cursor: event.seq })
+    expect(await call(event.seq - 1)).toEqual({
+      events: [event],
+      cursor: event.seq,
+      hasMore: false,
+    })
+    expect(await call(event.seq)).toEqual({ events: [], cursor: event.seq, hasMore: false })
   } finally {
     await client.close()
   }

@@ -242,7 +242,7 @@ test('scripted harvest, settings and live status retain full replay and rendered
   }
 })
 
-test('a failed prelaunch boundary preserves exceptional full-read recovery', async () => {
+test('a failed prelaunch boundary refreshes bounded state without replay', async () => {
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
   await setting(store)
@@ -255,7 +255,7 @@ test('a failed prelaunch boundary preserves exceptional full-read recovery', asy
   await start(store, 'own')
   await start(store, 'competitor')
   store.getRepoHighWater = high
-  expect((await feed.refresh()).map((e) => e.seq)).toEqual([1, 2, 3])
+  expect(await feed.refresh()).toEqual([])
 })
 
 test('foreign repository cache facts are rejected and missing repositories are not materialized', async () => {
