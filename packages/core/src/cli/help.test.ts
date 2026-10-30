@@ -180,6 +180,10 @@ describe('layered CLI help catalog', () => {
         'outside sessions',
       ],
       dispatch: [
+        '--viewer',
+        '--dispatched-by <label>',
+        'Every viewer frame says viewer',
+        'close only the viewer',
         '--intake | --no-intake',
         'omission',
         '--no-intake',
