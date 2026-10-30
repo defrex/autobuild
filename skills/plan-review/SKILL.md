@@ -34,6 +34,12 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
    - **Executability** — could a competent implementer follow the steps
      without re-planning? Are the steps ordered so the build is never broken
      mid-sequence?
+   - **Implement-session fit** — apply [Fit one implement session](../ab-guide/references/spec-standard.md#fit-one-implement-session)
+     to the whole required plan, grounded in real code and its reading,
+     edit-site, and iteration burden, with debugging headroom. Most plans need
+     no estimate. The ceiling is a limit, not a target; ordinary large plans
+     and plans near but comfortably under it proceed. When fulfilling the
+     spec clearly will not fit, escalate with a proposed split as below.
    - **Testing** — does the testing section cover the seams the change
      touches?
    - **Verification selection** — if the plan has opening `verifySteps` TOML
@@ -50,6 +56,19 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
    ab verdict revise --findings "$AB_CONTEXT_DIR/findings.json" --notes "$AB_CONTEXT_DIR/plan-review.md"
    ab verdict escalate --reason "…" --notes "$AB_CONTEXT_DIR/plan-review.md"
    ```
+
+## Escalating an oversized plan
+
+When fulfilling the spec clearly exceeds one implement session, write review
+notes and use `ab verdict escalate --reason "…" --notes "$AB_CONTEXT_DIR/plan-review.md"`.
+The reason must explain the concrete evidence and propose seams, what each
+resulting ticket owns, and the blocker graph. Follow [Cut along seams](../ab-guide/references/spec-standard.md#cut-along-seams)
+and [Keep the blocker graph wide](../ab-guide/references/spec-standard.md#keep-the-blocker-graph-wide):
+favor independent work, blockers only for prerequisites, and a minimal
+contract-establishing prerequisite where needed. The operator decides and
+files the split. Do not issue a revise finding asking the planner to omit
+scope the spec requires. Unnecessary scope expansion and ordinary plan defects
+still belong in findings.
 
 ## Writing findings
 
@@ -121,8 +140,9 @@ invariant makes it material.
 Approve when the plan would satisfy the spec — not when it matches how you
 would have written it. Known immaterial defects are not a reason to withhold
 approval — record them with `ab observe` and approve. Escalate when the
-*spec* is the problem (contradictory or unbuildable); revise when the plan
-is.
+*spec* is the problem (contradictory or unbuildable), or when its required
+plan clearly exceeds one implement session, carrying the proposed split above.
+Revise when the plan has an ordinary defect it can fix within the spec.
 
 Read the manifest path printed by `ab context`. Its `materialized` keys are
 relative to `contextDir`: join them to locate collision-adjusted inputs.
