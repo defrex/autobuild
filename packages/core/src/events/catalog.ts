@@ -104,6 +104,10 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'runner.setup-failed': ['kernel'],
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.provision-started': ['dispatcher'],
+  'workspace.cleanup-required': ['dispatcher'],
+  'workspace.fenced': ['dispatcher'],
+  'workspace.commits-preserved': ['dispatcher'],
+  'workspace.commits-lost': ['dispatcher'],
   'workspace.released': ['dispatcher', 'kernel'],
   'execution.relaunch-requested': ['kernel'],
   'execution.drain-authorized': ['dispatcher'],
@@ -120,6 +124,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'publication.requested': ['agent', 'kernel'],
   // Only the dispatcher releases workspaces and settles publications (§15.7);
   // the kernel never destroys one, so it never records a loss.
+  'publication.candidate-retired': ['dispatcher', 'kernel'],
   'publication.lost': ['dispatcher'],
   'publication.retry-scheduled': ['kernel', 'dispatcher'],
   'publication.retry-exhausted': ['kernel', 'dispatcher'],
