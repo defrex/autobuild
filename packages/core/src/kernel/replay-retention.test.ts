@@ -179,6 +179,17 @@ for (const large of [false, true])
     expect(await git(['rev-parse', `${head}^{tree}`], fresh)).toBe(
       await git(['rev-parse', `${head}^{tree}`]),
     )
+    if (!large) {
+      // A retained node prefix can itself be the thin base of the next item.
+      data.write('second small edit', 1000)
+      await writeFile(join(cwd, 'data'), data)
+      await git(['add', '.'])
+      await git(['commit', '-qm', 'second item'])
+      const next = await git(['rev-parse', 'HEAD'])
+      await retainReplay(deps, next, head)
+      expect(await restoreReplay({ ...deps, workspacePath: fresh }, next)).toBe(true)
+      expect(await git(['show', '-s', '--format=%P', next], fresh)).toBe(head)
+    }
     store.getArtifact = async () => {
       throw new Error('unexpected store read')
     }
