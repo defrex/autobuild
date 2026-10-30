@@ -604,6 +604,33 @@ counts actual schedules, not suppressed polls. Open session history is never a
 lock: a legacy dead session may remain open, while an actual takeover closes it
 explicitly.
 
+`processes/workspace-preservation.ts` owns the non-destructive fence, immutable
+checkpoint and durable receipt ordering shared by both release paths in the
+dispatcher. `ports/workspace/commit-preservation.ts` inventories the unpublished
+change and restores exact refs, keeping detached producer objects separate from
+the named branch. Provider provisioning and start failures signal
+`WorkspaceCleanupRequired`; they cannot delete an existing build checkout.
+
+Before releasing or replacing a build workspace, the dispatcher confirms a
+non-destructive execution fence for the exact workspace and execution generation.
+It preserves unpublished branch commits and distinct detached producer candidates
+under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
+readback, and records `workspace.commits-preserved` before cleanup. Replacement
+provisioning restores those exact refs before starting an agent. Preservation
+never advances the public build branch. A confirmed absent environment records
+`workspace.commits-lost`, naming known candidates and explicitly noting that any
+additional unpublished SHAs could not be inspected. Unknown fencing, inspection,
+transport, or receipt-write outcomes leave the workspace and snapshots intact.
+Fencing is revalidated after restart; a saved receipt alone never authorizes
+cleanup of a newer execution. Current recovery notes are linked by the session
+manifest's `workspaceRecovery` field. Recovery notes apply to the next session
+and repeat hydration within it; empty checkpoints produce no note. Checkpoints survive
+repeated replacement until a published reconcile or restack rewrite retires them,
+so an old preserved branch cannot overwrite that rewrite. Before the first
+branch publication, preservation compares against the recorded workspace base.
+A confirmed `snapshot_not_found` response means the sandbox filesystem is gone;
+cleanup records loss and deletes its stale name before replacement.
+
 **Store authority.** `packages/core/src/store/build-scope.ts` wraps every adapter with one
 build's authority. Own-build record/event/artifact/lease/subscription calls
 delegate; foreign-build, collection/admin, close, and repository-journal calls
@@ -1720,6 +1747,19 @@ the same 64-read cap, including unsuccessful lookups. Unchanged accepted
 polls read no receipts or event rows.
 
 
+A historical `publication.lost` does not prove that every copy of its candidate
+is gone. Recovery checks the exact branch and private archive refs and retained
+replay objects first. An available candidate continues guarded publication.
+A genuinely missing reconcile or automatic restack candidate records
+`publication.candidate-retired`, abandons its obsolete request, and replays the
+producing operation with a fresh transaction identity. Its frozen target,
+reconcile occurrence or automatic trigger, cycle, and message survive. The
+retired candidate is excluded from archive requirements unless independently
+required by proven history. This reconstruction consumes no infrastructure
+attempt and no additional conflict occurrence; it needs no operator guidance.
+A bare retry also clears an existing infrastructure-limit escalation through
+ordinary retry semantics. Unavailable inspection defers rather than proving loss.
+
 `kernel/publication-retry.ts` selects eligibility from the publication ledger
 and shares the policy between `processes/build-runner.ts` and trusted
 `cli/publication-settlement.ts`. The lease sweep skips ineligible retained intents;
@@ -1729,7 +1769,7 @@ Leaf restack and reconcile publication retry classified transient forge or trans
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and
 300 seconds. `publication.retry-scheduled` records the operation, frozen rewrite
 identity, episode anchor, failure ordinal, last error and absolute retry time;
-restart resumes that schedule without rerunning the resolver. These retries do
+restart resumes that schedule without rerunning a resolver whose candidate remains available. These retries do
 not consume `maxPhaseAttempts`. A seventh transient failure records
 `publication.retry-exhausted` and raises `publication-retry-limit`, naming the last
 error and six retries. Answering that escalation opens a fresh publication episode

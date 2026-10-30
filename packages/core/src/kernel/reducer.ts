@@ -712,6 +712,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         pinnedAssets = event.payload.assets ?? []
         break
       case 'workspace.provisioned':
+      case 'workspace.cleanup-required':
+      case 'workspace.fenced':
+      case 'workspace.commits-preserved':
+      case 'workspace.commits-lost':
       case 'workspace.released':
       case 'pr-summary.requested':
       case 'pr-summary.attempted':
@@ -725,6 +729,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       // the phase — the reducer needs no state from it.
       case 'publication.retry-scheduled':
       case 'publication.retry-exhausted':
+      case 'publication.candidate-retired':
       case 'publication.lost':
       case 'dispatch.comment-posted':
       case 'pr-attachment.designated':
