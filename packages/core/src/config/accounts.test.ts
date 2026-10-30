@@ -161,3 +161,16 @@ test('ChatGPT configuration requires Codex and a unique host-resolved credential
     ),
   ).toThrow('distinct')
 })
+
+test('project account slots are exclusively resolved from the snapshot, including empty sets', async () => {
+  const { applyProjectAccountSnapshot } = await import('../accounts/availability')
+  const accounts = { billing: { kind: 'claude-subscription', credentialEnv: 'BILLING' } } as const
+  const env: Record<string, string | undefined> = { BILLING: 'service-value', OTHER: 'unchanged' }
+  applyProjectAccountSnapshot(accounts, env, {})
+  expect(env.BILLING).toBeUndefined()
+  expect(Boolean(env.OTHER)).toBe(true)
+  applyProjectAccountSnapshot(accounts, env, { BILLING: 'project-value' })
+  expect(Boolean(env.BILLING)).toBe(true)
+  applyProjectAccountSnapshot(accounts, env, {})
+  expect(env.BILLING).toBeUndefined()
+})

@@ -9,6 +9,15 @@ build or phase. Work directly in the repository and involve the maintainer in
 choices that cannot be derived from source. Secrets belong in the environment
 or an ignored `.env`, never in `autobuild.toml`, commits, or validation reports.
 
+Local dispatch checks selected primary and alternate account credentials before
+taking the repository lease. Supply the configured environment slot or a local
+ChatGPT login (`bun ab accounts login NAME --local`). Hosted account absence
+appears once in repository attention: set `bun ab secrets set VARIABLE`, or
+renew with `bun ab accounts login NAME --project`. The next tick resumes without
+per-build retries or infrastructure-attempt consumption. Unused accounts do not
+block startup; present rejected credentials keep their rejection attention.
+See [account admission and remedies](accounts.md#dispatcher-admission).
+
 ## Choose the execution environment
 
 Keep the default `git-worktree` provider unless the maintainer explicitly opts
