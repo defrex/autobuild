@@ -1,4 +1,14 @@
 import { scanCadenceSchema, type ScanCadence } from '@defrex/autobuild/store-adapter'
+import { lockSeed, admitSeed, seedValueStorage, loadSeed } from './stream-seeds'
+import {
+  BUILD_EVENT_PAGE_SIZE,
+  IncompleteEventReadError,
+  assertResumeWindow,
+  validateEventCursor,
+  CheckpointIntegrityError,
+  type EventPage,
+  type EventReadOptions,
+} from '@defrex/autobuild/store-adapter'
 import { PROJECT_BLOB_LOCK, reserveProjectBlobs } from './project-lifecycle'
 import { hostedProjectContext } from './request-context'
 import {
@@ -622,32 +632,9 @@ export class PostgresBuildStore implements BuildStore {
     sinceSeq = 0,
     opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<AbEvent[]> {
-    const read = async (): Promise<AbEvent[]> => {
-      if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
-      const rows: Row[] = await this.run(
-        (q) =>
-          q`SELECT * FROM events WHERE build = ${slug}
-        AND seq > ${sinceSeq} ORDER BY seq`,
-      )
-      return rows.map((row) => ({
-        build: String(row.build),
-        seq: num(row.seq),
-        ts: iso(row.ts),
-        actor: json(row.actor),
-        type: String(row.type),
-        payload: json(row.payload),
-        ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
-      })) as AbEvent[]
-    }
-    return readEventsWithWait({
-      read,
-      waitSeconds: opts?.waitSeconds,
-      signal: opts?.signal,
-      // Hosted budget: no held event request polls the database faster than
-      // once per second (AUT-334), so append-to-wake is typically under one
-      // second — worst case one poll interval plus the query round-trip.
-      pollMs: EVENT_WAIT_POLL_MS,
-    })
+    const page = await this.getBuildEventPage(slug, sinceSeq, opts)
+    if (page.hasMore) throw new IncompleteEventReadError(sinceSeq, page.cursor)
+    return page.events
   }
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
@@ -1315,27 +1302,7 @@ export class PostgresBuildStore implements BuildStore {
     sinceSeq = 0,
     opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]> {
-    if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
-    const read = async (): Promise<RepositoryEvent[]> => {
-      const rows: Row[] = await this.run(
-        (q) => q`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${sinceSeq} ORDER BY seq`,
-      )
-      return rows.map((row) => ({
-        repo: String(row.repo),
-        seq: num(row.seq),
-        ts: iso(row.ts),
-        actor: json(row.actor),
-        type: String(row.type),
-        payload: json(row.payload),
-        ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
-      })) as RepositoryEvent[]
-    }
-    return readEventsWithWait({
-      read,
-      waitSeconds: opts?.waitSeconds,
-      signal: opts?.signal,
-      pollMs: EVENT_WAIT_POLL_MS,
-    })
+    return this.getRepositoryTail(repo, sinceSeq, opts)
   }
 
   async getRepoHighWater(repo: string): Promise<number> {
@@ -1358,6 +1325,11 @@ export class PostgresBuildStore implements BuildStore {
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
     // Reject invalid requests before touching storage.
     resolveReducerValue(scope, request)
+    if (request.reducer === 'buildStreamSeed' || request.reducer === 'repositoryAttention')
+      return this.tx(async (q) => {
+        await lockSeed(q, scope)
+        return this.readSeedValue(q, scope, request)
+      })
     return readReducerValue(scope, request, {
       highWater: async () => {
         const tail = await this.valueTail(scope)
@@ -1417,6 +1389,144 @@ export class PostgresBuildStore implements BuildStore {
         return rows.length > 0
       },
     })
+  }
+
+  private async seedHead(q: Exec, scope: SnapshotScope): Promise<number> {
+    const key = scope.kind === 'build' ? scope.slug : scope.repo
+    const rows: Row[] =
+      scope.kind === 'build'
+        ? await q`SELECT (SELECT COALESCE(MAX(seq),0) FROM events WHERE build=${key}) AS tail FROM builds WHERE slug=${key}`
+        : await q`SELECT (SELECT COALESCE(MAX(seq),0) FROM repo_events WHERE repo=${key}) AS tail FROM repo_streams WHERE repo=${key}`
+    if (!rows[0]) throw new Error('unknown reducer scope')
+    return num(rows[0].tail)
+  }
+
+  private async readSeedValue(
+    q: Exec,
+    scope: SnapshotScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
+    const { key } = resolveReducerValue(scope, request)
+    const fresh = await admitSeed(q, scope, key)
+    const storage = seedValueStorage(q, scope)
+    try {
+      if (!fresh && !(await storage.read(key)))
+        throw new CheckpointIntegrityError('missing canonical stream seed')
+      return await readReducerValue(scope, request, storage)
+    } catch (error) {
+      if (error instanceof CheckpointIntegrityError) throw error
+      throw new CheckpointIntegrityError(
+        `stream-seed storage/reduction failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
+  private eventRow(row: Row, scope: SnapshotScope): AbEvent | RepositoryEvent {
+    return {
+      ...(scope.kind === 'build' ? { build: scope.slug } : { repo: scope.repo }),
+      seq: num(row.seq),
+      ts: iso(row.ts),
+      actor: json(row.actor),
+      type: String(row.type),
+      payload: json(row.payload),
+      ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
+    } as AbEvent | RepositoryEvent
+  }
+
+  async getStreamSeed(scope: SnapshotScope, cursor: number): Promise<ReducerValue> {
+    validateEventCursor(cursor)
+    return this.tx(async (q) => {
+      assertResumeWindow(scope, cursor, await this.seedHead(q, scope))
+      await lockSeed(q, scope)
+      const request = {
+        reducer: scope.kind === 'build' ? 'buildStreamSeed' : 'repositoryAttention',
+      }
+      const current = await this.readSeedValue(q, scope, request)
+      assertResumeWindow(scope, cursor, current.cursor)
+      const { key, identity, reducer, entry } = resolveReducerValue(scope, request)
+      const snapshot = await loadSeed(q, scope, key, cursor)
+      const state = snapshot.state as { identity?: unknown; acc?: unknown } | null
+      if (
+        snapshot.cursor !== cursor ||
+        snapshot.version !== reducer.version ||
+        state?.identity !== identity ||
+        !entry.validate(state.acc)
+      )
+        throw new CheckpointIntegrityError('corrupt stream-seed checkpoint')
+      return { ...current, cursor, value: entry.value(reducer.finish(state.acc)) }
+    })
+  }
+
+  async getBuildEventPage(
+    slug: string,
+    since = 0,
+    opts?: EventReadOptions,
+  ): Promise<EventPage<AbEvent>> {
+    validateEventCursor(since)
+    if (opts?.through !== undefined) validateEventCursor(opts.through)
+    let hasMore = false
+    const events = await readEventsWithWait({
+      read: async () => {
+        if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
+        const rows: Row[] = await this.run(
+          (q) =>
+            q`SELECT * FROM events WHERE build=${slug} AND seq>${since} AND seq<=${opts?.through ?? Number.MAX_SAFE_INTEGER} ORDER BY seq LIMIT ${BUILD_EVENT_PAGE_SIZE + 1}`,
+        )
+        hasMore = rows.length > BUILD_EVENT_PAGE_SIZE
+        return rows
+          .slice(0, BUILD_EVENT_PAGE_SIZE)
+          .map((row) => this.eventRow(row, { kind: 'build', slug }) as AbEvent)
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
+    return { events, cursor: events.at(-1)?.seq ?? since, hasMore }
+  }
+
+  async getRepositoryTail(
+    repo: string,
+    since = 0,
+    opts?: EventReadOptions,
+  ): Promise<RepositoryEvent[]> {
+    if (opts?.through !== undefined) validateEventCursor(opts.through)
+    validateEventCursor(since)
+    return readEventsWithWait({
+      read: async () => {
+        const head = await this.getRepoHighWater(repo)
+        assertResumeWindow({ kind: 'repo', repo }, since, head)
+        const through = Math.min(head, opts?.through ?? head)
+        const rows: Row[] = await this.run(
+          (q) =>
+            q`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${since} AND seq<=${through} ORDER BY seq`,
+        )
+        return rows.map((row) => this.eventRow(row, { kind: 'repo', repo }) as RepositoryEvent)
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
+  }
+
+  async getHarvestHistoryPage(
+    repo: string,
+    before = Number.MAX_SAFE_INTEGER,
+  ): Promise<EventPage<RepositoryEvent>> {
+    validateEventCursor(before)
+    if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
+    const rows: Row[] = await this.run(
+      (q) =>
+        q`SELECT * FROM repo_events WHERE repo=${repo} AND seq<${before} AND type LIKE 'harvest.%' ORDER BY seq DESC LIMIT ${BUILD_EVENT_PAGE_SIZE + 1}`,
+    )
+    const events = rows
+      .slice(0, BUILD_EVENT_PAGE_SIZE)
+      .map((row) => this.eventRow(row, { kind: 'repo', repo }) as RepositoryEvent)
+    return {
+      events,
+      cursor: events.at(-1)?.seq ?? before,
+      hasMore: rows.length > BUILD_EVENT_PAGE_SIZE,
+    }
   }
 
   private async valueTail(scope: SnapshotScope): Promise<number | undefined> {
@@ -1831,7 +1941,11 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
-    return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
+    return pollingSubscribe(
+      async (since) => (await this.getBuildEventPage(slug, since)).events,
+      opts,
+      onEvent,
+    )
   }
 
   // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────

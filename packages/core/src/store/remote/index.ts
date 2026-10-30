@@ -64,3 +64,4 @@ export {
 } from '../../events/forge-degradation-policy'
 
 export * from './released-clients'
+export * from '../event-reads'

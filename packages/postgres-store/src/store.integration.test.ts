@@ -1158,3 +1158,140 @@ if (testUrl)
       await database.cleanup()
     }
   })
+
+test.skipIf(!testUrl)(
+  'hosted pages, exact seeds, durable restart and checkpoint failures',
+  async () => {
+    const { CursorTooOldError, IncompleteEventReadError, CheckpointIntegrityError } = await import(
+      '@defrex/autobuild/store-adapter'
+    )
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url, { max: 2 })
+    const store = new PostgresBuildStore(new SQL(database.url, { max: 4 }), {
+      blobs: new MemoryBlobStore(),
+    })
+    try {
+      await store.ensureRepo('bounded')
+      await store.createBuild(sampleBuildInput('bounded', { repo: 'bounded' }))
+      await sql`INSERT INTO events(build,seq,ts,actor,type,payload) SELECT 'bounded',n,now(),' {"kind":"kernel"}'::jsonb,'build.paused','{}'::jsonb FROM generate_series(1,1100) n`
+      await sql`INSERT INTO repo_events(repo,seq,ts,actor,type,payload) SELECT 'bounded',n,now(),'{"kind":"human","user":"budget"}'::jsonb,'dispatcher.intake-set','{"enabled":true}'::jsonb FROM generate_series(1,1100) n`
+      const page = await store.getBuildEventPage('bounded')
+      expect(page.events).toHaveLength(256)
+      expect(page.cursor).toBe(256)
+      expect(page.hasMore).toBe(true)
+      await expect(store.getEvents('bounded')).rejects.toBeInstanceOf(IncompleteEventReadError)
+      await expect(store.getRepoEvents('bounded', 99)).rejects.toBeInstanceOf(CursorTooOldError)
+      expect(await store.getRepoEvents('bounded', 100)).toHaveLength(1000)
+      const scopes = [
+        { kind: 'build', slug: 'bounded' },
+        { kind: 'repo', repo: 'bounded' },
+      ] as const
+      const seeds = await Promise.all(
+        scopes.flatMap((scope) =>
+          Array.from({ length: 4 }, () => store.getStreamSeed(scope, 1093)),
+        ),
+      )
+      expect(seeds.every((seed) => seed.cursor === 1093)).toBe(true)
+      expect((await sql`SELECT count(*) AS count FROM stream_seed_checkpoints`)[0]!.count).toBe(
+        '2002',
+      )
+      const restarted = new PostgresBuildStore(new SQL(database.url, { max: 1 }), {
+        blobs: new MemoryBlobStore(),
+      })
+      try {
+        expect(await restarted.getStreamSeed(scopes[0], 1093)).toEqual(seeds[0]!)
+      } finally {
+        await restarted.close()
+      }
+      await sql`DELETE FROM stream_seed_checkpoints WHERE scope_kind='build' AND scope_key='bounded' AND cursor=1093`
+      await expect(store.getStreamSeed(scopes[0], 1093)).rejects.toBeInstanceOf(
+        CheckpointIntegrityError,
+      )
+      // Missing derived history never blocks an authoritative append.
+      expect((await store.append('bounded', sampleEventWrite('still-writable'))).seq).toBe(1101)
+      await sql.unsafe(
+        `CREATE FUNCTION fail_seed_publish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'seed publication unavailable'; END $$; CREATE TRIGGER fail_seed_publish BEFORE INSERT ON stream_seed_checkpoints FOR EACH ROW EXECUTE FUNCTION fail_seed_publish()`,
+      )
+      await expect(store.getStreamSeed(scopes[0], 1101)).rejects.toThrow(
+        'seed publication unavailable',
+      )
+      expect(
+        (
+          await sql`SELECT cursor FROM reducer_snapshots WHERE scope_kind='build' AND scope_key='bounded'`
+        )[0]!.cursor,
+      ).toBe('1100')
+      expect((await store.append('bounded', sampleEventWrite('still-writable-again'))).seq).toBe(
+        1102,
+      )
+    } finally {
+      await store.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  },
+)
+
+test.skipIf(!testUrl)(
+  'seed generations support old/new/old readers and permanent indexed retirement',
+  async () => {
+    const { RetiredSeedGenerationError, resolveReducerValue } = await import(
+      '@defrex/autobuild/store-adapter'
+    )
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const store = new PostgresBuildStore(new SQL(database.url, { max: 4 }), {
+      blobs: new MemoryBlobStore(),
+    })
+    const { entry } = resolveReducerValue(
+      { kind: 'repo', repo: 'generations' },
+      { reducer: 'repositoryAttention' },
+    )
+    const create = entry.create
+    try {
+      await store.ensureRepo('generations')
+      const scope = { kind: 'repo', repo: 'generations' } as const
+      const old = await store.getStreamSeed(scope, 0)
+      const oldReducer = create({})
+      entry.create = () => ({ ...oldReducer, version: oldReducer.version + 1 })
+      await store.getStreamSeed(scope, 0)
+      await store.appendRepo('generations', {
+        actor: { kind: 'human', user: 'new' },
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+      await store.getStreamSeed(scope, 1)
+      entry.create = create
+      expect(await store.getStreamSeed(scope, 0)).toEqual(old)
+      await store.appendRepo('generations', {
+        actor: { kind: 'human', user: 'old' },
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+      expect((await store.getStreamSeed(scope, 2)).cursor).toBe(2)
+      entry.create = () => ({ ...oldReducer, version: oldReducer.version + 2 })
+      await store.getStreamSeed(scope, 2)
+      entry.create = create
+      await expect(store.getStreamSeed(scope, 2)).rejects.toBeInstanceOf(RetiredSeedGenerationError)
+      // Retired processes can still append, but never re-admit their seed identity.
+      await store.appendRepo('generations', {
+        actor: { kind: 'human', user: 'old' },
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+      await expect(store.getStreamSeed(scope, 3)).rejects.toBeInstanceOf(RetiredSeedGenerationError)
+      entry.create = () => ({ ...oldReducer, version: oldReducer.version + 1 })
+      expect((await store.getStreamSeed(scope, 3)).cursor).toBe(3)
+      expect(
+        (await sql`SELECT count(*) AS n FROM stream_seed_generations WHERE retired`)[0]!.n,
+      ).toBe('1')
+      expect(
+        (await sql`SELECT count(*) AS n FROM stream_seed_generations WHERE NOT retired`)[0]!.n,
+      ).toBe('2')
+    } finally {
+      entry.create = create
+      await store.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  },
+)
