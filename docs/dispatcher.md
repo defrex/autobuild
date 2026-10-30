@@ -17,6 +17,29 @@ bun ab dispatch
 It watches your ticket source, claims eligible tickets, pins their specs, and starts isolated build-runners up to capacity.
 
 
+## Watch a dispatcher running elsewhere
+
+A human can open the terminal dashboard from a local checkout without dispatching:
+
+```sh
+bun ab dispatch --viewer --dispatched-by app.autobuild.run
+```
+
+The optional label is descriptive input. Every frame says `viewer · dispatched by
+<label>`, or simply `viewer` when omitted. Plain/non-TTY output states the mode
+at startup and prints state changes. `--once` reads one snapshot; `--interval <s>`
+sets the polling cadence. Without a recorded configuration it waits for the dispatcher.
+
+The viewer takes no repository lease and starts no build, harvest, scan, janitor,
+or dispatcher process. Ctrl-C closes only the viewer. Shared-store controls
+remain available: merge consent, hold, pause/resume, blocked feedback/retry,
+intake and harvest gates, harvest resume/acknowledgement, queued discard and
+confirmed abort. Navigation and session inspection work as usual. These record
+operator intent for the dispatcher to execute. No current control needs a local
+dispatcher. Startup intake flags and `--repository` are rejected; use a local
+checkout with its configured Store or `--store`. Operator agents still must not
+run `ab dispatch`, including `--viewer`.
+
 ## Ready work becomes a build
 
 A ticket is claimed when it passes every gate:

@@ -12,6 +12,19 @@ order: 11
 
 The dispatcher claims eligible tickets, starts and observes build runners, settles publication and merge, and recovers durable work. Local and origin-mode arrangements run the same kernel. Your operator agent acts through the CLI or MCP; Autobuild never starts it.
 
+## Viewing from a local checkout
+
+Humans can watch any arrangement through `bun ab dispatch --viewer`, optionally
+adding `--dispatched-by <label>` to name where dispatching runs. The label is
+input, not an inferred placement fact. Each frame keeps `viewer` visible; plain
+output states it at startup. This mode only reads shared state until an operator
+uses a shared-store control. It takes no lease and performs no dispatch work.
+Ctrl-C closes the viewer without stopping the dispatcher. `--once` reads one
+snapshot, `--plain` selects line output, and `--interval <s>` sets polling cadence.
+It requires a checkout and rejects `--repository` and startup intake flags.
+See [viewer controls](dispatcher.md#watch-a-dispatcher-running-elsewhere).
+Operator agents must not launch it.
+
 ## Shipped arrangements
 
 ### Local process

@@ -37,6 +37,7 @@ const tickCounters = {
 /** Run the actual frontend lifecycle with a deterministic child and manual
  * refreshes. Instrument the backing boundary, including HTTP server reads. */
 export async function dispatchReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
+  await viewerReadBudget(store, backing)
   const repo = '/dashboard-read-budget'
   await backing.ensureRepo(repo)
   const metrics = {
@@ -347,6 +348,159 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
     }
     expect(metrics.rows).toBe(before.rows)
     expect(await store.getRepoHighWater(retentionRepo)).toBe(position)
+  }
+}
+
+/** Viewer cold/idle reads must reuse canonical values even without a frontend checkpoint. */
+async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
+  // Instrument the existing in-memory backing boundary, also when reached through HTTP.
+  const memory = backing as unknown as { repoState(repo: string): { events: RepositoryEvent[] } }
+  const originalState = memory.repoState
+  if (originalState === undefined) return
+  const originalEvents = backing.getRepoEvents.bind(backing)
+  const originalSeed = backing.getRepoStateEvents.bind(backing)
+  let rows = 0
+  let rawCalls = 0
+  memory.repoState = function (repo) {
+    const state = originalState.call(this, repo)
+    return new Proxy(state, {
+      get(target, key) {
+        if (key !== 'events') return Reflect.get(target, key)
+        return new Proxy(target.events, {
+          get(events, method) {
+            if (method === 'slice')
+              return (since: number, through: number) => {
+                const result = events.slice(since, through)
+                rows += result.length
+                return result
+              }
+            return Reflect.get(events, method)
+          },
+        })
+      },
+    })
+  }
+  backing.getRepoEvents = async (...args) => {
+    rawCalls++
+    return originalEvents(...args)
+  }
+  backing.getRepoStateEvents = async (...args) => {
+    rawCalls++
+    return originalSeed(...args)
+  }
+  try {
+    for (const length of [100, 100_000]) {
+      const repo = `/viewer-budget-${length}`
+      await backing.ensureRepo(repo)
+      for (let i = 0; i < length; i++)
+        await backing.appendRepo(repo, {
+          actor: humanActor('budget'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: false },
+        })
+      // The one canonical materialization is allowed once, never once per viewer.
+      await readRepositoryFacts(store, repo)
+      const snapshot = await backing.putRepoArtifact(repo, {
+        kind: 'config',
+        content: JSON.stringify({
+          capacity: 4,
+          roles: { default: { runtime: 'claude' } },
+          tickets: { source: 'file', readyState: 'ready' },
+        }),
+      })
+      for (const configured of [false, true]) {
+        if (configured)
+          await backing.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run: 'elsewhere',
+              pid: 1,
+              roleWarnings: [],
+              effectiveConfig: { kind: snapshot.kind, rev: snapshot.revision },
+            },
+          })
+        await readRepositoryFacts(store, repo)
+        rows = 0
+        rawCalls = 0
+        for (let fresh = 0; fresh < 3; fresh++) {
+          let now = 0
+          const controller = new AbortController()
+          let painted!: () => void
+          let outputs = 0
+          const firstFrame = new Promise<void>((resolve) => {
+            painted = resolve
+          })
+          const frontend = new DispatchFrontend({
+            viewer: {},
+            repo,
+            store,
+            storeRef: 'memory',
+            env: {},
+            once: false,
+            signal: controller.signal,
+            refreshScheduler: { now: () => now, set: () => undefined, clear: () => {} },
+            clock: () => new Date(now),
+            plainOutput: () => {
+              if (++outputs >= 2) painted()
+            },
+            terminal: {
+              columns: 100,
+              rows: 24,
+              interactive: false,
+              write: () => {},
+              modes: createTerminalModeController(
+                () => {},
+                () => {},
+              ),
+            },
+            input: {
+              start: () => {
+                throw new Error('viewer input')
+              },
+            },
+            launchChild: () => {
+              throw new Error('viewer child')
+            },
+          })
+          const running = frontend.run()
+          await firstFrame
+          const refresh = () => (frontend as unknown as { readFrame(): Promise<void> }).readFrame()
+          for (let poll = 0; poll < 4; poll++) {
+            now += 15_000
+            await refresh()
+          }
+          expect(rows).toBe(0)
+          expect(rawCalls).toBe(0)
+          await backing.appendRepo(repo, {
+            actor: humanActor('budget'),
+            type: 'dispatcher.pause-set',
+            payload: { enabled: true },
+          })
+          await refresh()
+          expect(rows).toBe(1)
+          expect(rawCalls).toBe(0)
+          rows = 0
+          now += 15_000
+          await refresh()
+          expect(rows).toBe(0)
+          controller.abort()
+          await running
+        }
+        await backing.appendRepo(repo, {
+          actor: humanActor('budget'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        })
+        await readRepositoryFacts(store, repo)
+        expect(rows).toBe(1)
+        expect(rawCalls).toBe(0)
+      }
+    }
+  } finally {
+    memory.repoState = originalState
+    backing.getRepoEvents = originalEvents
+    backing.getRepoStateEvents = originalSeed
   }
 }
 

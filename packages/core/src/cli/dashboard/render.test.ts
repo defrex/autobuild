@@ -3238,3 +3238,61 @@ test('destination survives a long Unicode slug before yielding to the right clus
     expect(lines.every((line) => cellWidth(stripAnsi(line)) <= width)).toBe(true)
   }
 })
+
+test('viewer row persists through every view, composer and confirmation within the frame budget', () => {
+  const b = build()
+  const transcript = {
+    kind: 'raw' as const,
+    text: Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n'),
+  }
+  const session = {
+    kind: 'session' as const,
+    slug: b.slug,
+    sessionId: 's1',
+    stream: 'stdout',
+    status: 'closed' as const,
+    source: { kind: 'parts' as const, parts: [], lastSeq: 0 },
+    follow: true,
+    scroll: 0,
+  }
+  for (const width of [8, 20, 100, 180])
+    for (const height of [0, 1, 2, 5, 15, 40]) {
+      for (const viewer of [
+        {},
+        { dispatchedBy: 'app.autobuild.run' },
+        { dispatchedBy: `\x1b[2J\n${'界'.repeat(100)}` },
+      ]) {
+        for (const view of [
+          undefined,
+          { kind: 'detail' as const, slug: b.slug, scroll: 0 },
+          {
+            kind: 'transcript' as const,
+            slug: b.slug,
+            sessionId: 's1',
+            transcript,
+            scroll: transcriptScrollLimit(transcript, width, Math.max(0, height - 1)),
+          },
+          session,
+        ]) {
+          for (const overlay of [
+            {},
+            { resumeInput: { slug: b.slug, value: 'retry', cursor: 5 } },
+            { abortConfirmation: { slug: b.slug } },
+          ]) {
+            const lines = rd(
+              { ...model([b]), viewer, view, ...overlay },
+              { color: false, width, height },
+            )
+            expect(lines.length).toBeLessThanOrEqual(height)
+            for (const line of lines) {
+              expect(cellWidth(line)).toBeLessThanOrEqual(width)
+              expect(line).not.toContain('\x1b')
+            }
+            if (height > 0) expect(lines[0]).toContain('viewer')
+            if (view?.kind === 'transcript' && height >= 15 && width >= 20)
+              expect(lines.join('\n')).toContain('line 29')
+          }
+        }
+      }
+    }
+})

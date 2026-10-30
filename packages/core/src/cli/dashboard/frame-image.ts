@@ -41,6 +41,8 @@ const PALETTE: Record<Foreground | 'background', string> = {
 }
 
 export interface FrameImageOptions {
+  /** Optional terminal palette for evidence on another ground. */
+  palette?: Record<Foreground | 'background', string>
   /** Declared terminal width. Every parsed line must fit this grid. */
   columns: number
 }
@@ -68,6 +70,7 @@ function xml(value: string): string {
 function svgFor(
   parsed: ParsedFrameLine[],
   columns: number,
+  palette: typeof PALETTE,
 ): {
   svg: string
   width: number
@@ -95,7 +98,7 @@ function svgFor(
           : ''
       const size = emoji ? ' font-size="18"' : ''
       const node =
-        `<text x="${x}" y="${y}" fill="${PALETTE[run.style.foreground]}"` +
+        `<text x="${x}" y="${y}" fill="${palette[run.style.foreground]}"` +
         `${weight}${opacity}${geometry}${size}>${xml(run.text)}</text>`
       content.push(
         run.style.href === undefined ? node : `<a href="${xml(run.style.href)}">${node}</a>`,
@@ -108,7 +111,7 @@ function svgFor(
     height,
     svg: [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-      `<rect width="${width}" height="${height}" fill="${PALETTE.background}"/>`,
+      `<rect width="${width}" height="${height}" fill="${palette.background}"/>`,
       `<g font-family="${FONT_FAMILIES}" font-size="${FONT_SIZE}" xml:space="preserve" text-rendering="geometricPrecision">`,
       ...content,
       '</g>',
@@ -138,10 +141,11 @@ export function renderDashboardFrameImage(
 ): RenderedFrameImage {
   const parsed = parseFrame(lines, options.columns)
 
-  const { svg, width, height } = svgFor(parsed, options.columns)
+  const palette = options.palette ?? PALETTE
+  const { svg, width, height } = svgFor(parsed, options.columns, palette)
   const rendered = new Resvg(svg, {
     fitTo: { mode: 'original' },
-    background: PALETTE.background,
+    background: palette.background,
     font: {
       fontFiles: fontFiles(),
       loadSystemFonts: false,

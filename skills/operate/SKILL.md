@@ -450,7 +450,7 @@ for the exceptions above.
   logical credentials, or records a reasoned `harvest.session.resume-fallback`
   and starts fresh. Orderly suspension spends no recovery attempt; real
   crashes retain recovery accounting.
-- Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode,
+- Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode (including `--viewer`),
   and no dispatcher process-management commands. This applies when the
   dispatcher is lost, stopped, absent, or failing repeatedly. Its lease,
   process, and configuration management belong to the maintainer. Diagnose
