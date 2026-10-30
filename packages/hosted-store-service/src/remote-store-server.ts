@@ -1,4 +1,9 @@
 import { scanCadenceWriteSchema } from '@defrex/autobuild/remote-store'
+import {
+  CursorTooOldError,
+  CheckpointIntegrityError,
+  RetiredSeedGenerationError,
+} from '@defrex/autobuild/remote-store'
 import { validateForgeDegradation } from '@defrex/autobuild/remote-store'
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
@@ -46,7 +51,7 @@ import {
  * re-implemented here.
  */
 import { z, type ZodType } from 'zod'
-import type { AbEvent, EventWrite } from '@defrex/autobuild/plugin-sdk'
+import type { EventWrite } from '@defrex/autobuild/plugin-sdk'
 import {
   EventValidationError,
   type RepositoryEvent,
@@ -173,6 +178,18 @@ async function readBody<T>(req: Request, schema: ZodType<T>): Promise<T> {
     throw new RequestError(400, 'validation', `invalid request body: ${parsed.error.message}`)
   }
   return parsed.data
+}
+
+function cursorParam(url: URL, name: string): number {
+  const raw = url.searchParams.get(name)
+  if (raw === null) return 0
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)))
+    throw new RequestError(
+      400,
+      'validation',
+      `query parameter "${name}" must be a safe nonnegative integer`,
+    )
+  return Number(raw)
 }
 
 function intParam(url: URL, name: string): number | undefined {
@@ -736,6 +753,26 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return snapshotRoute(req, url, { kind: 'repo', repo }, segments[1]!)
     }
     if (rest === 'reducer-values') return valueRoute(req, { kind: 'repo', repo })
+    if (req.method === 'GET' && rest === 'stream-seed') {
+      if (!store.getStreamSeed)
+        throw new RequestError(501, 'unsupported-operation', 'historical stream seeds unavailable')
+      const { catalogIdentity: _catalog, ...seed } = await store.getStreamSeed(
+        { kind: 'repo', repo },
+        cursorParam(url, 'cursor'),
+      )
+      return json(200, seed)
+    }
+    if (req.method === 'GET' && rest === 'harvest-history') {
+      if (!store.getHarvestHistoryPage)
+        throw new RequestError(501, 'unsupported-operation', 'harvest history unavailable')
+      return json(
+        200,
+        await store.getHarvestHistoryPage(
+          repo,
+          url.searchParams.has('before') ? cursorParam(url, 'before') : undefined,
+        ),
+      )
+    }
     switch (`${req.method} ${rest}`) {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
@@ -745,13 +782,19 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return json(201, await store.appendRepo(repo, { ...body, actor } as RepositoryEventWrite))
       }
       case 'GET events': {
-        const since = intParam(url, 'since') ?? 0
+        if (!store.getRepositoryTail)
+          throw new RequestError(
+            501,
+            'unsupported-operation',
+            'bounded repository reads unavailable',
+          )
+        const since = cursorParam(url, 'since')
         const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
         return json(
           200,
           await withDisconnect(
             req,
-            store.getRepoEvents(repo, since, {
+            store.getRepositoryTail(repo, since, {
               ...(wait !== undefined ? { waitSeconds: wait } : {}),
               signal: req.signal,
             }),
@@ -929,7 +972,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return json(event === null ? 200 : 201, event)
       }
       case 'GET events': {
-        const since = intParam(url, 'since') ?? 0
+        const since = cursorParam(url, 'since')
         const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
         return json(
           200,
@@ -1104,6 +1147,15 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return snapshotRoute(req, url, { kind: 'build', slug }, segments[1]!)
     }
     if (rest === 'reducer-values') return valueRoute(req, { kind: 'build', slug })
+    if (req.method === 'GET' && rest === 'stream-seed') {
+      if (!store.getStreamSeed)
+        throw new RequestError(501, 'unsupported-operation', 'historical stream seeds unavailable')
+      const { catalogIdentity: _catalog, ...seed } = await store.getStreamSeed(
+        { kind: 'build', slug },
+        cursorParam(url, 'cursor'),
+      )
+      return json(200, seed)
+    }
     switch (`${req.method} ${rest}`) {
       // The build's frozen ticket assets (SPEC §6.3): read through the build's
       // own events, so a build-scoped token needs no ticket-asset authority.
@@ -1153,17 +1205,26 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return json(event === null ? 200 : 201, event)
       }
       case 'GET events': {
-        const since = intParam(url, 'since') ?? 0
+        if (req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER) !== REMOTE_STORE_PROTOCOL_VERSION)
+          throw new RequestError(
+            409,
+            'unsupported-operation',
+            'build event pages require protocol 7; upgrade the client',
+          )
+        if (!store.getBuildEventPage)
+          throw new RequestError(501, 'unsupported-operation', 'bounded build reads unavailable')
+        const since = cursorParam(url, 'since')
         const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
         return json(
           200,
           await withDisconnect(
             req,
-            store.getEvents(slug, since, {
+            store.getBuildEventPage!(slug, since, {
+              ...(url.searchParams.has('through') ? { through: cursorParam(url, 'through') } : {}),
               ...(wait !== undefined ? { waitSeconds: wait } : {}),
               signal: req.signal,
             }),
-            (): AbEvent[] => [],
+            () => ({ events: [], cursor: since, hasMore: false }),
           ),
         )
       }
@@ -1306,7 +1367,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return json(201, await store.appendStreamParts(streamId, body.parts as StreamPart[]))
       }
       if (req.method === 'GET') {
-        const since = intParam(url, 'since') ?? 0
+        const since = cursorParam(url, 'since')
         // §9 grammar: `wait` is digits-only server-wide, clamped to the
         // 30-second stream ceiling (MAX_STREAM_WAIT_SECONDS, not the hosted
         // event ceiling of §6's hosted exception).
@@ -1486,6 +1547,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         'GET events',
         'POST events',
         'GET high-water',
+        'GET stream-seed',
+        'GET harvest-history',
         'GET state-events',
         'POST deposits',
         'POST artifacts',
@@ -1559,6 +1622,19 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   }
 
   function errorResponse(error: unknown): Response {
+    if (error instanceof CursorTooOldError)
+      return json(409, {
+        kind: 'cursor-too-old',
+        error: error.message,
+        scope: error.scope,
+        requestedCursor: error.requestedCursor,
+        head: error.head,
+        oldestCursor: error.oldestCursor,
+      })
+    if (error instanceof CheckpointIntegrityError)
+      return fail(500, 'checkpoint-integrity', error.message)
+    if (error instanceof RetiredSeedGenerationError)
+      return fail(409, 'retired-seed-generation', error.message)
     if (error instanceof MachineAuthError || error instanceof AccessError)
       return fail(error.status, 'auth', error.message)
     if (error instanceof RequestError) {

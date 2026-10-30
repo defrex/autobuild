@@ -2,9 +2,9 @@
 
 A conforming hosted instance implements this normative polling-oriented operator
 contract at
-`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **6**.
+`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **7**.
 Every request must send `X-Autobuild-Version`,
-`X-Autobuild-Protocol-Version: 6`, and `Authorization: Bearer …`. Identity is
+`X-Autobuild-Protocol-Version: 7`, and `Authorization: Bearer …`. Identity is
 checked before authentication or resource lookup.
 
 Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one
@@ -311,7 +311,7 @@ have `repo` and null build/state. Source observations also report
 
 Every record carries a cursor, including timer-only records. Resuming suppresses
 delivered merge decisions and persistence episodes even when stream positions
-did not advance. Old v1 cursors remain valid: historical eligible merge
+did not advance. Old v1 cursors remain valid inside the hosted 1,000-position resume window: historical eligible merge
 decisions are treated as consumed; active overdue repository episodes may
 report because old watches had no persistence notification. Fresh attachment
 silently baselines historical direct events and merge decisions, but retains
@@ -327,6 +327,21 @@ even with `--since`; live and backlog matches ignore routine outcomes and
 self-healing failures. A merge match uses the watch observation with
 `condition: "attention"`. Explicit `--event` globs remain event-only.
 Watch and wait preserve each other's cursor notification metadata.
+
+Normal re-arms retain `--since`. Hosted watch/wait resume is gap-proportional
+inside a 1,000-sequence-position window, inclusive at `head - 1000`. Expired
+cursors fail with typed `cursor-too-old` and the oldest servable cursor; re-arm
+without `--since` and reconcile repository/build status, acknowledging the lost
+historical gap. An ordinary reducer upgrade preserves valid cursors. A retired
+seed generation instead requires an upgrade/restart before fresh attachment;
+checkpoint integrity errors are terminal and never trigger replay from zero.
+
+The MCP `builds.events` tool returns `{events, cursor, hasMore}`, at most 256
+events per call. Follow `cursor` while `hasMore` is true to traverse a build's
+complete history without omission. Waiting remains bounded and applies only
+when no events are available. Repository event reads have a 1,000-position
+window; build history itself remains available through explicit pages.
+
 
 Hosted ticket tools resolve independent project ticket policy before legacy uploaded
 configuration. Queue, detail, state discovery and mutations work before any build

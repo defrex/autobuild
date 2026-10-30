@@ -1,3 +1,4 @@
+import { readBuildRange, isTerminalEventReadError } from '../store/event-reads'
 import { ReducerValueIncompatibilityError } from '../store/remote/compatibility'
 import { WatchLifetime } from './watch-lifetime'
 import { hostname } from 'node:os'
@@ -703,6 +704,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         try {
           await lifetime.register(store, repo, operator)
         } catch (error) {
+          if (isTerminalEventReadError(error)) throw error
           if (!lifetime.terminated) throw error
         }
         heartbeatTask = (async () => {
@@ -719,6 +721,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               await lifetime.renew()
               reported = false
             } catch (error) {
+              if (isTerminalEventReadError(error)) throw error
               if (!reported && !lifetime.terminated)
                 opts.stderr(
                   `ab watch: operator heartbeat failed (${String(error)}); retrying at next heartbeat`,
@@ -938,6 +941,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           if (streams.has(slug)) return true
           const record = await store.getBuild(slug)
           if (record === null) return false
+          if (resumeSeq !== undefined && store.getStreamSeed)
+            await store.getStreamSeed({ kind: 'build', slug }, resumeSeq)
           const current = await readBuildStreamSeed(store, slug)
           const seed =
             resumeSeq === undefined
@@ -956,7 +961,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           if (resumeSeq === undefined || resumedCursor?.deliveredAttention === undefined)
             baselineMerge(slug, seed)
           if (resumeSeq !== undefined) {
-            for (const event of await store.getEvents(slug, resumeSeq)) {
+            for (const event of await readBuildRange(store, slug, resumeSeq)) {
               processBuildEvent(stream, event)
               if (stop) break
             }
@@ -1016,6 +1021,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           positions[REPO_STREAM_KEY] = stream.lastSeq
           try {
             if ((await store.getRepo(repo)) !== null) {
+              if (resumeSeq !== undefined && store.getStreamSeed)
+                await store.getStreamSeed({ kind: 'repo', repo }, resumeSeq)
               const current = await readRepositoryAttention(store, repo)
               const baseline = resumeSeq ?? current.cursor
               const seed =
@@ -1036,6 +1043,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             } else attentionInitialized = true
             return true
           } catch (error) {
+            if (isTerminalEventReadError(error)) throw error
             if (error instanceof ReducerValueIncompatibilityError) throw error
             return false
           }
@@ -1045,7 +1053,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           stream: BuildStream,
           readOpts?: RemotePollReadOpts,
         ): Promise<boolean> => {
-          const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
+          const fresh = await readBuildRange(store, stream.slug, stream.lastSeq, readOpts)
           for (const event of fresh) {
             if (stop) break
             processBuildEvent(stream, event)
@@ -1067,8 +1075,10 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           if ((await store.getRepo(repo)) === null) return true
           if (!attentionInitialized) {
             repositoryInitialization ??= (async () => {
-              const current = await readRepositoryAttention(store, repo)
               const resumeSeq = sinceStreams[REPO_STREAM_KEY]
+              if (resumeSeq !== undefined && store.getStreamSeed)
+                await store.getStreamSeed({ kind: 'repo', repo }, resumeSeq)
+              const current = await readRepositoryAttention(store, repo)
               const baseline = resumeSeq ?? current.cursor
               const seed =
                 resumeSeq === undefined
@@ -1082,6 +1092,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             try {
               await repositoryInitialization
             } catch (error) {
+              if (isTerminalEventReadError(error)) throw error
               repositoryInitialization = undefined
               throw error
             }
@@ -1121,6 +1132,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             try {
               await discoverBuilds()
             } catch (error) {
+              if (isTerminalEventReadError(error)) throw error
               allReadsOk = false
               tickStreak.onFailure(error)
             }
@@ -1131,6 +1143,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               if (stream.kind === 'build') await pollBuild(stream)
               else await pollRepository(stream)
             } catch (error) {
+              if (isTerminalEventReadError(error)) throw error
               allReadsOk = false
               tickStreak.onFailure(error)
             }
@@ -1140,6 +1153,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               await checkLiveness()
               tickStreak.onSuccess()
             } catch (error) {
+              if (isTerminalEventReadError(error)) throw error
               tickStreak.onFailure(error)
             }
           }
@@ -1181,6 +1195,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           try {
             await discoverBuilds()
           } catch (error) {
+            if (isTerminalEventReadError(error)) throw error
             const message = error instanceof Error ? error.message : String(error)
             throw new Error(`could not list builds in this store (${message})`)
           }
@@ -1190,6 +1205,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           try {
             await checkLiveness()
           } catch (error) {
+            if (isTerminalEventReadError(error)) throw error
             tickStreak.onFailure(error)
           }
         }

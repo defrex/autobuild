@@ -43,11 +43,12 @@ test('audit capability follows its introduction line independently of admission'
   expect(clientSupportsIntegrationAuditPending('0.13.0')).toBe(false)
 })
 
-test('operator presence protocol rejects peers without the new required operations', () => {
-  expect(REMOTE_STORE_PROTOCOL_VERSION).toBe('6')
+test('bounded event protocol rejects peers without the new required operations', () => {
+  expect(REMOTE_STORE_PROTOCOL_VERSION).toBe('7')
   expect(clientIdentityError(AUTOBUILD_VERSION, '4')).toContain('unsupported protocol identity')
   expect(clientIdentityError(AUTOBUILD_VERSION, '5')).toContain('unsupported protocol identity')
-  expect(clientIdentityError(AUTOBUILD_VERSION, '6')).toBeUndefined()
+  expect(clientIdentityError(AUTOBUILD_VERSION, '6')).toContain('unsupported protocol identity')
+  expect(clientIdentityError(AUTOBUILD_VERSION, '7')).toBeUndefined()
 })
 
 test('supported peer admission does not make advisory polling facts decisive', async () => {
