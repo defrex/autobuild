@@ -752,8 +752,17 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // a build, so it routes before any store/env requirement and does its own
     // heavy wiring (like ticket create). One dispatcher per repo (§12).
     case 'dispatch': {
-      const { once, plain, intake, defaultAutoMerge, intervalMs, storeRef, repository } =
-        parseDispatchArgs(rest, deps.processEnv ?? {})
+      const {
+        viewer,
+        dispatchedBy,
+        once,
+        plain,
+        intake,
+        defaultAutoMerge,
+        intervalMs,
+        storeRef,
+        repository,
+      } = parseDispatchArgs(rest, deps.processEnv ?? {})
       if (deps.exec === undefined) {
         throw new Error("'ab dispatch' needs an exec seam — this is a wiring bug in the ab binary")
       }
@@ -763,6 +772,8 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         exec: deps.exec,
         stdout,
         stderr,
+        viewer,
+        ...(dispatchedBy !== undefined ? { dispatchedBy } : {}),
         once,
         plain,
         ...(intake !== undefined ? { intake } : {}),

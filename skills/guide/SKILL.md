@@ -1779,6 +1779,25 @@ in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
+Humans may run `ab dispatch --viewer` from a local checkout to watch dispatch
+elsewhere without taking a lease or starting any dispatch work. The optional
+`--dispatched-by <label>` is descriptive input: every frame shows `viewer` or
+`viewer · dispatched by <label>`. Plain/non-TTY output prints the same at startup
+and emits state changes. `--once` reads one snapshot; `--interval <s>` sets the
+viewer polling cadence. Startup intake flags and explicit `--repository` are
+rejected. Without a durable effective configuration the viewer waits.
+
+Viewer uses the Store-only frontend with canonical repository facts for status,
+settings, harvest and migrations, bypassing the dispatch presentation event feed
+and its checkpoints. Fresh viewers reuse server reductions; idle refreshes read
+zero event rows. It has no child, lease, execution wiring or upgrade-release timer.
+All existing shared-store controls remain: merge/hold, build/global pause/resume,
+blocked feedback/retry, intake/harvest gates, harvest resume/acknowledgement,
+queued discard and confirmed abort. Navigation/session inspection also remain.
+No current key requires a local dispatcher. Ctrl-C closes only the viewer.
+The operator-agent no-dispatch boundary includes `--viewer`.
+
+
 Both dashboards also show the current authoritative dispatcher's unresolved
 rollback: failed and restored runtime (version and commit), held failed runtime,
 and rollback event timestamp. A matching durable different-target hold clearance
@@ -1814,7 +1833,7 @@ steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
 
 
-On a TTY, `ab dispatch` renders one fixed interactive frame anchored at the
+On a TTY, execution-mode `ab dispatch` renders one fixed interactive frame anchored at the
 terminal's first row. Its header remains on that top row as frame height changes
 and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
@@ -1827,14 +1846,14 @@ of recorded observation occurrences not yet claimed by a Harvest snapshot
 against `policy.harvestThreshold`. The Store-only interactive frontend refreshes
 that display value directly from the BuildStore; a failed refresh retains the
 last successful count, shows a diagnostic, and appends no transport event.
-The frontend checkpoints dashboard facts, the latest run start and the sampled
+The execution-mode frontend checkpoints dashboard facts, the latest run start and the sampled
 lease holder's start; identity history stays partial and missing holders use a
 bounded per-run lookup. Unchanged written/refused checkpoints are not uploaded
 again. Dirty saves run at most once per 30 seconds; transient failures retry
 without new events after 30, 60, 120, 240, then 300 seconds (capped). Teardown
 forces only dirty state. An equal-cursor refusal leaves correlation recoverable
 by bounded lookup on restart; a later advancing checkpoint persists it.
-Non-interactive dispatch performs no frontend-only sampling, and the separate
+Non-interactive execution-mode dispatch performs no frontend-only sampling, and the separate
 drift trigger is not displayed. An indented controls line follows for
 `intake ON`/`intake OFF` and `harvest ON`/`harvest OFF`, plus a conditional yellow `repository PAUSED` segment while
 the durable repository-wide hold is set. The controls start in the title

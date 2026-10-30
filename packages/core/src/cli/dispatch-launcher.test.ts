@@ -363,3 +363,51 @@ test('reader errors stay visible while predecessor conditional state remains sco
     return { version: 1, handoff: null, takeover: false }
   })
 })
+
+test('public viewer bypasses the immutable launcher and execution config in non-TTY mode', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'ab-viewer-routing-'))
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      distributionPath('bin/ab.ts'),
+      'dispatch',
+      '--viewer',
+      '--dispatched-by',
+      'app.autobuild.run',
+    ],
+    {
+      cwd,
+      env: { PATH: process.env.PATH },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  const stdoutDone = (async () => {
+    const reader = child.stdout.getReader()
+    const decoder = new TextDecoder()
+    let output = ''
+    let stopped = false
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      output += decoder.decode(chunk.value, { stream: true })
+      if (!stopped && output.includes('Waiting for dispatcher configuration')) {
+        stopped = true
+        await Bun.sleep(30)
+        expect(child.exitCode).toBeNull()
+        child.kill('SIGINT')
+      }
+    }
+    return output
+  })()
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    stdoutDone,
+    new Response(child.stderr).text(),
+  ])
+  expect(code).toBe(0)
+  expect(stderr).toBe('')
+  expect(stdout).toContain('viewer · dispatched by app.autobuild.run')
+  expect(stdout).toContain('Waiting for dispatcher configuration')
+  await expect(access(join(cwd, '.autobuild/runtime'))).rejects.toThrow()
+})

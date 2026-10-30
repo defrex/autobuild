@@ -219,6 +219,27 @@ surface remains the remote HTTP protocol rather than in-process registration.
 
 Small, independently runnable, crash-safe:
 
+Explicit human `ab dispatch --viewer` is a Store-only dashboard lifecycle,
+available from a local checkout in TTY and plain/non-TTY modes. It bypasses the
+resident launcher, execution configuration/plugins, account admission and kernel
+wiring. It never takes or renews a repository lease, starts a child, writes
+dispatch lifecycle facts, or runs intake scans, janitor, sweep, harvest or builds.
+Canonical repository facts supply the observed dispatcher's status and effective
+configuration, independent of the viewer's operator correlation identity. With no
+configuration the display waits, polling bounded canonical state. Fresh viewers
+reuse saved server reductions; missing presentation caches never trigger event
+history reconstruction. Idle polls read zero event rows.
+
+Every frame reserves a row for `viewer`, optionally `viewer · dispatched by
+<label>` from explicit `--dispatched-by` input. Plain output states the mode at
+startup. `--once` reads one snapshot, `--interval` sets polling cadence, and Ctrl-C
+closes only presentation. All existing Store-level controls remain available:
+merge/hold, build and global pause/resume, blocked feedback/retry, intake/harvest
+gates, harvest resume/acknowledgement, discard and confirmed abort, plus navigation
+and session inspection. No current control requires a local dispatcher. Viewer
+rejects startup intake flags and explicit `--repository`; it does not infer mode
+or placement. Operator agents' prohibition on running dispatch includes viewer.
+
 Resident checkout-backed `ab dispatch` starts a launcher and one dispatcher
 **generation**. The launcher eagerly loads its own filesystem/process code,
 opens no Store, holds no repository/execution lease and makes no kernel
