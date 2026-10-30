@@ -8,6 +8,7 @@ import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DashboardBuildPollCache } from '../cli/dashboard/poll'
 import { abDispatch } from '../cli/dispatch'
 import { createTerminalModeController } from '../cli/terminal-restore'
 import { randomUuids } from '../ids'
@@ -296,6 +297,17 @@ export async function reducedReadBudget(opts: {
       expect(costs.events).toBe(0)
       expect(costs.metadata).toBeLessThan(operations * 20)
     }
+    // A new dashboard on every invocation must use canonical persisted facts,
+    // even after the build exceeds the hosted page cap. Warm and cold polls
+    // select zero event rows at either history length.
+    reset()
+    for (let invocation = 0; invocation < 3; invocation++) {
+      const dashboard = new DashboardBuildPollCache(cold, repo, config)
+      expect((await dashboard.refresh()).states.get(slug)?.status).toBe('running')
+      await dashboard.refresh()
+    }
+    expect(costs.events).toBe(0)
+    expect(costs.metadata).toBeLessThan(100)
     await coldDispatchOnceBudget(store, cold, length, costs)
     await coldDispatchOnceBudget(store, cold, length, costs, true)
     await coldDispatchOnceBudget(store, cold, length, costs, true, true)

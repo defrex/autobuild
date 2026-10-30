@@ -10,6 +10,7 @@ import { steppingClock } from '../../testing/fixed'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
 import { DashboardBuildPollCache, type DashboardBuildReader } from './poll'
+import { projectBuild } from './model'
 
 const REPO = '/repos/dashboard-cache'
 const CONFIG = parseConfig(`
@@ -633,4 +634,47 @@ test('completed contribution metadata refreshes without rereading terminal histo
   expect(child(refreshed)).toMatchObject({ id: 'LANDED', title: 'Current title', state: 'merged' })
   expect(child(initial).title).toBe('Original title')
   expect(reader.eventCalls.some((call) => call.slug === 'landed')).toBe(false)
+})
+
+test('persisted dashboard facts render large builds without raw history on cold or later polls', async () => {
+  const store = new MemoryBuildStore({ clock: steppingClock() })
+  await addRunning(store, 'large')
+  for (let i = 0; i < 300; i++) {
+    await store.append('large', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: `runner-${i}`, host: 'test' },
+    })
+  }
+  let reads = 0
+  const reader: DashboardBuildReader = {
+    listBuildsForRepo: store.listBuildsForRepo.bind(store),
+    getReducerValue: (...args) => {
+      reads++
+      return store.getReducerValue(...args)
+    },
+    getEvents: async () => {
+      throw new Error('dashboard must not request raw history')
+    },
+  }
+  const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
+  const first = await cache.refresh()
+  expect(first.states.get('large')).toEqual(reduceBuild(await store.getEvents('large')))
+  expect(row(first, 'large')).toEqual(
+    projectBuild(
+      (await store.listBuildsForRepo(REPO))[0]!,
+      reduceBuild(await store.getEvents('large')),
+      CONFIG,
+      await store.getEvents('large'),
+    ) ?? undefined,
+  )
+  expect((await cache.refresh()).builds).toEqual(first.builds)
+  await store.append('large', {
+    actor: { kind: 'dispatcher' },
+    type: 'build.completed',
+    payload: { outcome: 'merged' },
+  })
+  expect((await cache.refresh()).builds).toEqual([])
+  await cache.refresh()
+  expect(reads).toBe(3)
 })
