@@ -1,5 +1,6 @@
 import { reducerValueForClient } from '../store/remote/compatibility'
 import { RELEASED_CLIENTS } from '../store/remote/released-clients'
+import { missingAccountCredentials, reconcileMissingAccounts } from '../accounts/availability'
 import { decideNextFromFacts } from '../kernel/engine'
 import { proveTargetLineage } from '../kernel/target-lineage'
 import { nodeRestackLog } from '../kernel/generators/node-restack-log'
@@ -296,6 +297,41 @@ export async function reducedReadBudget(opts: {
       expect(costs.events).toBe(0)
       expect(costs.metadata).toBeLessThan(operations * 20)
     }
+    // Account holds survive fresh consumers and reconcile without idle journal reads or writes.
+    const missing = missingAccountCredentials(
+      { billing: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' } },
+      {},
+      'project-secrets',
+    )
+    await reconcileMissingAccounts(
+      missing,
+      (await readRepositoryFacts(store, repo)).value.missingAccounts,
+      (event) => store.appendRepo(repo, event),
+    )
+    await readRepositoryFacts(store, repo) // durable reducer advances exactly once
+    const heldPosition = await store.getRepoHighWater(repo)
+    reset()
+    for (let tick = 0; tick < 8; tick++) {
+      const fresh = await opts.fresh()
+      // The harness owns the shared connection; these are fresh adapter facades.
+      const facts = (await readRepositoryFacts(fresh, repo)).value
+      expect(Object.keys(facts.missingAccounts)).toEqual(['billing'])
+      await reconcileMissingAccounts(missing, facts.missingAccounts, (event) =>
+        fresh.appendRepo(repo, event),
+      )
+    }
+    expect(costs.events).toBe(0)
+    expect(await store.getRepoHighWater(repo)).toBe(heldPosition)
+    await reconcileMissingAccounts(
+      [],
+      (await readRepositoryFacts(store, repo)).value.missingAccounts,
+      (event) => store.appendRepo(repo, event),
+    )
+    await readRepositoryFacts(store, repo)
+    await readRepositoryAttention(store, repo)
+    reset()
+    expect((await readRepositoryFacts(cold, repo)).value.missingAccounts).toEqual({})
+    expect(costs.events).toBe(0)
     await coldDispatchOnceBudget(store, cold, length, costs)
     await coldDispatchOnceBudget(store, cold, length, costs, true)
     await coldDispatchOnceBudget(store, cold, length, costs, true, true)

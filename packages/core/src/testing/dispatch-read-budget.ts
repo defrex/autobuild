@@ -1,3 +1,5 @@
+import { missingAccountCredentials, reconcileMissingAccounts } from '../accounts/availability'
+import { readRepositoryFacts } from '../store/reduced-reads'
 import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
 import { loadReducerSnapshot, persistReducerSnapshot } from '../store/snapshots'
 import { expect } from 'bun:test'
@@ -322,6 +324,29 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
     expect(sizes[0]).toBe(sizes[1])
   } finally {
     backing.getReducerSnapshot = checkpoint
+  }
+  // A long journal's account hold is served from the durable reduced value.
+  const missing = missingAccountCredentials(
+    { billing: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' } },
+    {},
+    'project-secrets',
+  )
+  for (const next of [missing, []]) {
+    const facts = (await readRepositoryFacts(store, retentionRepo)).value
+    await reconcileMissingAccounts(next, facts.missingAccounts, (event) =>
+      store.appendRepo(retentionRepo, event),
+    )
+    await readRepositoryFacts(store, retentionRepo)
+    const before = { ...metrics }
+    const position = await store.getRepoHighWater(retentionRepo)
+    for (let tick = 0; tick < 8; tick++) {
+      const facts = (await readRepositoryFacts(store, retentionRepo)).value
+      await reconcileMissingAccounts(next, facts.missingAccounts, (event) =>
+        store.appendRepo(retentionRepo, event),
+      )
+    }
+    expect(metrics.rows).toBe(before.rows)
+    expect(await store.getRepoHighWater(retentionRepo)).toBe(position)
   }
 }
 

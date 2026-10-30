@@ -450,6 +450,10 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `Janitor failing: ${singleLine(event.payload.message)}`
     case 'dispatcher.forge-degraded':
       return `Forge degraded: ${singleLine(event.payload.message)}; reset ${event.payload.resetAt}`
+    case 'account.credentials-unavailable':
+      return `Missing credentials: ${singleLine(event.payload.remedy)} [${event.payload.source}]`
+    case 'account.credentials-recovered':
+      return `Account credentials recovered: ${JSON.stringify(event.payload.name)}`
     case 'dispatcher.forge-recovered':
       return `Forge recovered: ${event.payload.forge}`
     case 'phase.deferral-escalated':

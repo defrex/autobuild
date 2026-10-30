@@ -13,7 +13,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 
 - `accounts` — Authorize a ChatGPT subscription for a local dispatcher or connected project.
 
-- `dispatch` — Run the dispatcher and dashboard.
+- `dispatch` — Run the dispatcher and dashboard; missing selected account credentials refuse local startup before the lease. See [account admission](accounts.md#dispatcher-admission).
 - `init` — Install skills and hand setup to a coding agent.
 - `upgrade` — Update Autobuild and merge default skills.
 - `connect` — Connect to a hosted service with browser approval.

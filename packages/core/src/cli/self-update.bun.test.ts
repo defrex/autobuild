@@ -152,6 +152,9 @@ describe('real Bun self-update of a registry install', () => {
       const result = await selfUpdate({
         targetRepo: owner,
         distRoot: dist,
+        // This fixture models a local install, independent of a build runner's
+        // hosted store connection. Compatibility warnings have separate coverage.
+        env: { ...env(), AB_STORE: undefined },
         registry: async () => ({ status: 200, body: '{"version":"1.1.0"}' }),
         command,
         env: env(),
