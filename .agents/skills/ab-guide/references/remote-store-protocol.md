@@ -477,8 +477,15 @@ finished JSON answer is returned, with no accumulator or raw-log bundle. `cursor
 is the authoritative prefix included in the answer, not a guarantee to include
 appends concurrent with the request. Every call checks durable progress and
 persisted state; parallel instances may safely advance the same checkpoint.
-Server-owned snapshots are disposable caches: deletion, corruption, wrong versions
-and unreadable cache storage cause server-side replay. Log read failures remain errors.
+Ordinary reducer snapshots are disposable caches: deletion, corruption, wrong
+versions and unreadable cache storage cause server-side replay. The checkpoint-backed
+`buildStreamSeed` and `repositoryAttention` generations instead fail with typed
+`checkpoint-integrity` (HTTP 500) for missing admitted canonical state, corrupt
+existing state or unreadable checkpoint-backed storage; these failures never trigger
+recovery replay. A new identity may rebuild once per scope/identity, and valid
+legacy checkpoint-coverage gaps may be repaired as described in
+[Hosted event bounds and exact resume](#hosted-event-bounds-and-exact-resume).
+Log read failures remain errors.
 The server answer is canonical for remote clients, regardless of missing, malformed
 or different `x-autobuild-catalog-identity` headers. The strict body stays exactly
 `{version, cursor, value}`. The reducer `version` is the server's cache identity, not

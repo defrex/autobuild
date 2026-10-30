@@ -288,7 +288,12 @@ Operator passes are single-flight per repository, with requests arriving during 
 pass queued for one trailing pass. Fresh readers use persisted cache rows too;
 steady-state event-row cost depends on newly appended events at fixed build/run
 cardinality, not on log length. Reduced collections may legitimately grow in JSON
-size. Cache loss or corruption can replay history once to recover the same answer.
+size. Ordinary reducer cache loss or corruption can replay history once to recover
+the same answer. Checkpoint-backed `buildStreamSeed` and `repositoryAttention`
+generations instead fail with typed `checkpoint-integrity` for missing admitted
+canonical state, corrupt existing state or unreadable storage. New-identity rebuilds
+and valid legacy-coverage repair remain separate cases; see the
+[checkpoint rules](remote-store-protocol.md#hosted-event-bounds-and-exact-resume).
 
 Watch and wait register from a compound persisted `buildStreamSeed` at cursor C.
 Its build accumulator, deferral ledger and insertion-ordered historical PR
