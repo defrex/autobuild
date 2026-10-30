@@ -877,6 +877,26 @@ a new classified failure parks again. There are zero automatic paid retries
 after this deferral. If evidence cannot be written, ordinary recovery applies;
 agent output and `no-terminal` alone never classify a read failure.
 
+Before releasing or replacing a build workspace, the dispatcher confirms a
+non-destructive execution fence for the exact workspace and execution generation.
+It preserves unpublished branch commits and distinct detached producer candidates
+under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
+readback, and records `workspace.commits-preserved` before cleanup. Replacement
+provisioning restores those exact refs before starting an agent. Preservation
+never advances the public build branch. A confirmed absent environment records
+`workspace.commits-lost`, naming known candidates and explicitly noting that any
+additional unpublished SHAs could not be inspected. Unknown fencing, inspection,
+transport, or receipt-write outcomes leave the workspace and snapshots intact.
+Fencing is revalidated after restart; a saved receipt alone never authorizes
+cleanup of a newer execution. Current recovery notes are linked by the session
+manifest's `workspaceRecovery` field. Recovery notes apply to the next session
+and repeat hydration within it; empty checkpoints produce no note. Checkpoints survive
+repeated replacement until a published reconcile or restack rewrite retires them,
+so an old preserved branch cannot overwrite that rewrite. Before the first
+branch publication, preservation compares against the recorded workspace base.
+A confirmed `snapshot_not_found` response means the sandbox filesystem is gone;
+cleanup records loss and deletes its stale name before replacement.
+
 Ordinary silence, provider failures and session timeouts retain the runner's
 phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is
 an internal runner option, not an accepted `[policy]` TOML key. Reconcile
@@ -2687,11 +2707,24 @@ proof or a longer gap still raises attention. See
 [destination observation and replay](references/restacking.md) for admission,
 recovery and read-cost bounds.
 
+A historical `publication.lost` does not prove that every copy of its candidate
+is gone. Recovery checks the exact branch and private archive refs and retained
+replay objects first. An available candidate continues guarded publication.
+A genuinely missing reconcile or automatic restack candidate records
+`publication.candidate-retired`, abandons its obsolete request, and replays the
+producing operation with a fresh transaction identity. Its frozen target,
+reconcile occurrence or automatic trigger, cycle, and message survive. The
+retired candidate is excluded from archive requirements unless independently
+required by proven history. This reconstruction consumes no infrastructure
+attempt and no additional conflict occurrence; it needs no operator guidance.
+A bare retry also clears an existing infrastructure-limit escalation through
+ordinary retry semantics. Unavailable inspection defers rather than proving loss.
+
 Leaf restack and reconcile publication retry classified transient forge or transport
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and
 300 seconds. `publication.retry-scheduled` records the operation, frozen rewrite
 identity, episode anchor, failure ordinal, last error and absolute retry time;
-restart resumes that schedule without rerunning the resolver. These retries do
+restart resumes that schedule without rerunning a resolver whose candidate remains available. These retries do
 not consume `maxPhaseAttempts`. A seventh transient failure records
 `publication.retry-exhausted` and raises `publication-retry-limit`, naming the last
 error and six retries. Answering that escalation opens a fresh publication episode
