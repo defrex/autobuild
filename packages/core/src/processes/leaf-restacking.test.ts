@@ -1,3 +1,4 @@
+import { StoreWriteTooLargeError } from '../store/remote/errors'
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
 import { readVerifyPipeline } from '../config/pipeline-source'
 import { ForgeFailure } from '../ports/forge-failure'
@@ -49,6 +50,7 @@ for (const conflict of [false, true])
   for (const { remote, recovery } of [false, true].flatMap((remote) =>
     [
       ...(!remote && conflict ? ['none', 'contention', 'pause'] : ['none']),
+      ...(!remote && !conflict ? ['oversized'] : []),
       'transient',
       'persistent',
       'acknowledgement',
@@ -233,6 +235,62 @@ for (const conflict of [false, true])
         await store.claimLease(BUILD, 'test', 3_600_000)
         const retryClock = manualClock()
         deps.clock = retryClock
+        if (recovery === 'oversized') {
+          const put = deps.store.putArtifact.bind(deps.store)
+          let writes = 0
+          let reject = true
+          deps.store.putArtifact = async (...args) => {
+            if (reject) {
+              writes += 1
+              throw new StoreWriteTooLargeError(
+                'POST',
+                '/builds/test/artifacts',
+                123,
+                'ceiling 100 bytes',
+              )
+            }
+            return put(...args)
+          }
+          expect(await new BuildRunner(deps).step()).toMatchObject({ kind: 'restack' })
+          let events = await store.getEvents(BUILD)
+          expect(events.filter((e) => e.type === 'phase.failed').map((e) => e.payload)).toEqual([
+            {
+              phase: 'reconcile',
+              round: 1,
+              attempt: 1,
+              willRetry: false,
+              error:
+                'automatic restack failed: oversized store write: POST /builds/test/artifacts (123 request bytes): ceiling 100 bytes',
+            },
+          ])
+          const restarted = new BuildRunner(deps)
+          await restarted.step()
+          events = await store.getEvents(BUILD)
+          const escalation = events.findLast((e) => e.type === 'escalation.raised')!
+          expect(escalation.payload.policyCause).toBe('non-retryable-phase-failure')
+          expect(escalation.payload.question).toContain('oversized store write')
+          await restarted.step()
+          expect(writes).toBe(1)
+          await store.append(BUILD, {
+            actor: humanActor('operator'),
+            type: 'escalation.answered',
+            payload: { id: escalation.payload.id, answer: 'retry', resolution: 'retry' },
+          })
+          await restarted.step()
+          expect(writes).toBe(2)
+          await restarted.step()
+          events = await store.getEvents(BUILD)
+          const next = events.findLast((e) => e.type === 'escalation.raised')!
+          reject = false
+          await store.append(BUILD, {
+            actor: humanActor('operator'),
+            type: 'escalation.answered',
+            payload: { id: next.payload.id, answer: 'retry', resolution: 'retry' },
+          })
+          await restarted.step()
+          expect((await readBuildFacts(store, BUILD)).value.log.restack.completed).toBeDefined()
+          return
+        }
         const runner = new BuildRunner(deps)
         const settle = async () =>
           settlePendingPublication(

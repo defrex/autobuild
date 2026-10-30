@@ -64,3 +64,5 @@ export {
 } from '../../events/forge-degradation-policy'
 
 export * from './released-clients'
+
+export { StoreWriteTooLargeError } from './errors'
