@@ -1073,6 +1073,39 @@ processes. Absence does not consume the marker. Restarts or later variable
 edits cannot resurrect removals. Deployments migrate the pinned schema before
 starting services; runtime initialization never runs DDL.
 
+### Hosted dispatch placement
+
+The hosted service publishes a durable advisory repository fact,
+`dispatcher.placement-set`, and serves its canonical `dispatchPlacement` reduction.
+The fact says whether this service dispatches a registered project; a hosted value
+includes its public `AB_DISPATCHER_ORIGIN`, never credentials. It is configured
+responsibility, not liveness. Unrecorded placement is unknown.
+
+Cron and read-time publication share the `AB_DISPATCHER_REPOSITORIES` parser:
+unset selects every registered project, and an explicit normalized, deduplicated
+CSV selects only registered members. No web-selection fallback applies. Cron
+synchronizes included and excluded projects using its existing registry listing;
+a project read synchronizes only that admitted key, including before first cron.
+Configuration changes are published on next synchronization. Invalid configuration
+fails without overwriting placement. Account secrets are unnecessary for publication.
+
+Compare, append-if-changed and canonical reduction persistence are one transaction
+under a per-project serialization lock, with registration-generation admission.
+Initialization may reduce that scope/identity once and saves it durably; idle reads
+fetch zero event rows and a constant number of keyed records, independent of log
+length and project count. Changed reads consume only the incremental tail.
+
+Authorized project members and dispatcher credentials read
+`GET /repos/{encodedRepo}/placement`; delegated build/harvest grants are refused.
+The optional health capability `dispatch-placement-v1` is advertised only with a
+provider. The core client negotiates once per instance and returns typed unknown
+(`unsupported-capability`) for older services, without probing the route or
+reconstructing state from events. Other failures remain failures. External event
+publication cannot forge service placement. Existing protocol identity and
+supported released reducer shapes remain unchanged. This fact changes no CLI
+dispatch decisions. See [the remote protocol](docs/remote-store-protocol.md#hosted-dispatch-placement)
+for response shapes and authority semantics.
+
 ### 7.3 Persistence granularity
 
 Required phase outputs persist at **phase/round boundaries**; a killed phase

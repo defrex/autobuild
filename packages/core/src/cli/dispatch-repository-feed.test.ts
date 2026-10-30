@@ -723,3 +723,16 @@ test('recovery facts below a restored cursor still dirty the restored projection
   await feed.save(true)
   expect(attempts).toBe(1)
 })
+
+test('placement read budget is bounded across fresh readers', async () => {
+  const { placementReadBudget } = await import('../testing/reduced-read-budget')
+  const { readDispatchPlacement } = await import('../store/reduced-reads')
+  const { MemoryBuildStore } = await import('../store/memory')
+  const store = new MemoryBuildStore()
+  await placementReadBudget({
+    store,
+    fresh: async () => ({
+      getDispatchPlacement: async (repo) => (await readDispatchPlacement(store, repo)).value,
+    }),
+  })
+})

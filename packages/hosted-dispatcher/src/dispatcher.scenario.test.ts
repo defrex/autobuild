@@ -541,6 +541,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   }
 
   const endpoint = createDispatcherEndpoint({
+    syncPlacement: async () => {},
     openSecrets: emptySecrets,
     openDispatcherCredentials,
     openProjectRegistry: async () => credentialRegistry,
@@ -813,6 +814,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       return new Date(clockBase + (boundedCalls > 3 ? 30_000 : 0))
     }) as Clock
     const boundedEndpoint = createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openSecrets: emptySecrets,
       openDispatcherCredentials,
       openProjectRegistry: async () =>
@@ -855,6 +857,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       { state: 'Ready' },
     )
     const secondEndpoint = createDispatcherEndpoint({
+      syncPlacement: async () => {},
       openSecrets: emptySecrets,
       openDispatcherCredentials,
       openProjectRegistry: async () => credentialRegistry,
@@ -894,6 +897,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       const idleRepo = 'https://github.com/acme/one'
       for (let tick = 0; tick < 100; tick++) {
         const idle = createDispatcherEndpoint({
+          syncPlacement: async () => {},
           openSecrets: emptySecrets,
           openDispatcherCredentials,
           openProjectRegistry: async () => credentialRegistry,

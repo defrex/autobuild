@@ -1442,3 +1442,57 @@ export async function operatorTicketAssociationBudget() {
     }
   }
 }
+
+/** Canonical placement stays warm across fresh consumers and long journals. */
+export async function placementReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  fresh: () => Promise<{
+    getDispatchPlacement(
+      repo: string,
+    ): Promise<import('../kernel/dispatch-placement').DispatchPlacement>
+  }>
+}) {
+  const { readDispatchPlacement } = await import('../store/reduced-reads')
+  const repo = 'https://github.com/acme/placement-budget'
+  await opts.store.ensureRepo(repo)
+  let seeded = 0
+  for (const length of [100, 100_000]) {
+    for (; seeded < length; seeded++)
+      await opts.store.appendRepo(repo, {
+        actor: humanActor('test'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    await opts.store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'dispatcher.placement-set',
+      payload: { hosted: false },
+    })
+    await readDispatchPlacement(opts.store, repo)
+    const counter = memoryRepositoryReadCounter(opts.store, repo)
+    counter.reset()
+    for (let i = 0; i < 5; i++) {
+      const fresh = await opts.fresh()
+      expect(await fresh.getDispatchPlacement(repo)).toEqual({
+        status: 'known',
+        placement: { hosted: false },
+      })
+    }
+    expect(counter.rows).toBe(0)
+    expect(counter.reducedCalls).toBe(5)
+    await opts.store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'dispatcher.placement-set',
+      payload: { hosted: true, origin: 'https://store.test' },
+    })
+    counter.reset()
+    expect(await (await opts.fresh()).getDispatchPlacement(repo)).toEqual({
+      status: 'known',
+      placement: { hosted: true, origin: 'https://store.test' },
+    })
+    expect(counter.rows).toBe(1)
+    counter.reset()
+    await (await opts.fresh()).getDispatchPlacement(repo)
+    expect(counter.rows).toBe(0)
+  }
+}

@@ -46,6 +46,9 @@ Dispatcher variables (server-only, like every secret; none reach the browser):
   a project stops subsequent ticks, without cancelling already-started work.
   Registry failures fail closed. Configure `AB_POSTGRES_URL` or `DATABASE_URL`;
   the registry pool is reused while membership is queried each invocation.
+  Each invocation synchronizes durable placement for included and excluded
+  registered projects before dispatch; a failed synchronization prevents that
+  project's dispatch. Project reads publish the same selection before first cron.
 - `AB_DISPATCHER_BUDGET_SECONDS`: per-invocation work budget (default 240,
   clamped 10–780); pair it with the route's `maxDuration` as described in the
   operator procedure.

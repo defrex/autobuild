@@ -310,6 +310,16 @@ function corpora(): unknown[][] {
     payload: { branch: 'main', previousSha: 'a'.repeat(40), sha: 'b'.repeat(40) },
   }
   return [
+    ...[{ hosted: true, origin: 'https://store.test' }, { hosted: false }].map((payload) => [
+      {
+        repo: 'repo',
+        type: 'dispatcher.placement-set',
+        payload,
+        actor: { kind: 'kernel' },
+        seq: 1,
+        ts: '2026-10-30T00:00:00Z',
+      },
+    ]),
     [...leafRestackLog(), rewrite],
     [...nodeRestackLog(), rewrite],
     [rewrite],
@@ -608,6 +618,7 @@ describe('reducer registry', () => {
         "dashboardFacts": 3,
         "dispatchFailureBudget": 1,
         "dispatchFrontend": 4,
+        "dispatchPlacement": 1,
         "dispatchSettings": 1,
         "dispatchStatus": 4,
         "dispatchUpgrade": 6,

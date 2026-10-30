@@ -1,3 +1,8 @@
+import {
+  DISPATCH_PLACEMENT_CAPABILITY,
+  dispatchPlacementSchema,
+  type DispatchPlacement,
+} from '@defrex/autobuild/remote-store'
 import { scanCadenceWriteSchema } from '@defrex/autobuild/remote-store'
 import { validateForgeDegradation } from '@defrex/autobuild/remote-store'
 import { nodeRewriteWireSchema } from '@defrex/autobuild/remote-store'
@@ -109,6 +114,7 @@ import {
 } from '@defrex/autobuild/remote-store'
 
 export interface StoreServerOptions {
+  placement?: (repo: string) => Promise<DispatchPlacement>
   requireRegistered?: (repo: string) => Promise<void>
   store: BuildStore
   /** Test seam for release-line compatibility before the release-owned version bump. */
@@ -714,6 +720,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   }
 
   function validateRepoAdmission(event: { type: string; payload: unknown }): void {
+    if (event.type === 'dispatcher.placement-set')
+      throw new RequestError(403, 'auth', 'placement is published only by the service')
     if (event.type !== 'dispatcher.forge-degraded') return
     try {
       validateForgeDegradation(event.payload, clock())
@@ -1010,6 +1018,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     } catch (error) {
       throw new RequestError(400, 'validation', String(error))
     }
+    if (body.reducer === 'dispatchPlacement' && (await principal(req))?.kind === 'delegated')
+      throw new MachineAuthError(403, 'placement requires project authority')
     try {
       const result = reducerValueForClient(
         {
@@ -1409,6 +1419,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments.length === 1 && segments[0] === 'health' && req.method === 'GET') {
       return json(200, {
         ok: true,
+        ...(opts.placement ? { capabilities: [DISPATCH_PLACEMENT_CAPABILITY] } : {}),
         autobuildVersion: identity.autobuildVersion,
         protocolVersion: identity.protocolVersion,
         supportedClientRange: supportedClientRange(identity.autobuildVersion),
@@ -1464,6 +1475,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return fail(404, 'not-found', 'unknown operator presence route')
       }
       const scope = await authorize(req, 'repo', repo)
+      if (segments.length === 3 && segments[2] === 'placement' && req.method === 'GET') {
+        if (scope?.kind === 'delegated')
+          throw new MachineAuthError(403, 'placement requires project authority')
+        await opts.requireRegistered?.(repo)
+        if (!opts.placement) return fail(404, 'not-found', 'placement unavailable')
+        return json(200, dispatchPlacementSchema.parse(await opts.placement(repo)))
+      }
       if (segments.length === 3 && segments[2] === 'scan-cadence') {
         if (req.method === 'GET') return json(200, await store.getScanCadence(repo))
         if (req.method === 'POST') {

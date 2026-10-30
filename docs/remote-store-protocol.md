@@ -35,6 +35,55 @@ service publishes `>=1.2.0 <1.4.0` until later publication facts permit retireme
 The service reads the clock for each decision, so retirement needs no redeploy. Health needs no credentials, version
 headers, or available backend.
 
+
+## Hosted dispatch placement
+
+A service with a placement provider advertises `capabilities: ["dispatch-placement-v1"]`
+on `GET /health`. An authorized project member or dispatcher credential reads
+`GET /repos/{encodedRepo}/placement` using the usual identity headers. Registration
+and exact project scope are required; delegated build/harvest credentials cannot
+read placement. Member reads do not require a project mutation role. Unknown or
+deleted projects fail the registration gate. There is no client publication API.
+
+The response is `{ "status": "known", "placement": { "hosted": true, "origin":
+"https://service.example" } }` when this service dispatches the project, or
+`{ "status": "known", "placement": { "hosted": false } }` when it excludes it.
+Origins are absolute HTTP(S) origins without credentials, paths, queries or
+fragments (`AB_DISPATCHER_ORIGIN`, HTTPS in production). The fact records configured
+responsibility, not dispatcher liveness or successful execution.
+
+The service publishes the advisory repository fact `dispatcher.placement-set`
+and serves its dedicated `dispatchPlacement` canonical reduction. Before answering
+the read, it synchronizes the requested admitted project against the same shared
+`AB_DISPATCHER_REPOSITORIES` parser the cron uses. Unset selects every registered
+project; an explicit normalized, deduplicated CSV selects its intersection with
+registration. Empty or unsafe entries are configuration errors. There is no
+`AB_WEB_REPOSITORIES` selection fallback. The cron synchronizes every already
+listed registered project, including excluded projects, before dispatching selected
+ones; a publication failure prevents that project's dispatch. Reads work before
+the first cron invocation and publish changes on the next synchronization.
+
+Comparison, append-if-changed and saved-reduction advancement share one transaction
+and per-project lock, fenced by captured registration generation. Concurrent
+identical syncs append one fact. Initialization reduces the scope/reducer identity
+once and saves it durably; subsequent reads use keyed metadata and the incremental
+tail, with zero event rows while unchanged. A placement request never enumerates
+projects or builds. Cron adds one keyed synchronization per project in its existing
+registration enumeration. No account secret is required to decide placement.
+External event append, deposit and tick publication endpoints reject this fact,
+even when the caller supplies a kernel actor.
+
+`RemoteBuildStore.getDispatchPlacement(repo)` negotiates health once per client
+instance. Capability absence returns `{ "status": "unknown", "reason":
+"unsupported-capability" }` without calling the route. An unrecorded reduction is
+`{ "status": "unknown", "reason": "unrecorded" }`; unknown never implies local
+dispatch is safe. Authentication, transport, configuration and malformed-response
+failures remain failures; a capable service's 404/500 is not unsupported.
+The operation never downloads the journal as a fallback. This additive capability
+does not change protocol identity or existing released reducer contracts; clients
+from supported lines (1.2 and later) continue using their existing operations.
+Placement is informational and does not change `ab dispatch` behavior.
+
 ## 1. Transport and conventions
 
 - The transport is JSON over HTTP or HTTPS. There is no API version prefix.
@@ -463,7 +512,7 @@ client version window are unchanged.
 | Scope | Reducers with no arguments |
 | --- | --- |
 | Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `pinnedAssets`, `buildDelegation` |
-| Repository | `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
+| Repository | `dispatchPlacement`, `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
 
 | Reducer | Scope | Required arguments |
 | --- | --- | --- |

@@ -69,6 +69,11 @@ async function fixture() {
 
 test('released strict parsers accept three-field build/repository answers through direct and composed services', async () => {
   const store = await fixture()
+  await store.appendRepo('repo', {
+    actor: { kind: 'kernel' },
+    type: 'dispatcher.placement-set',
+    payload: { hosted: true, origin: 'https://store.test' },
+  })
   const direct = createStoreServer({ store, secret })
   const composed = createHostedStoreService({
     openTicketPolicy: async () => new MemoryTicketPolicyStore(),

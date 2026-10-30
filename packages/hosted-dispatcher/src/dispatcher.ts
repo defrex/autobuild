@@ -1,3 +1,5 @@
+import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
+import type { DispatchPlacementFact } from '@defrex/autobuild/remote-store'
 import { ProjectSecretError } from '@defrex/autobuild/project-secrets'
 import {
   openPostgresProjectSecretsFromEnv,
@@ -43,7 +45,13 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Clock } from '@defrex/autobuild/plugin-sdk'
 import { spawnExec } from '@defrex/autobuild/git-worktree'
 import { abDispatch, type DispatchOpts } from '@defrex/autobuild/cli'
-import { parseHostedStoreEnv, type HostedStoreEnv } from '@defrex/autobuild-hosted-store-service'
+import {
+  parseHostedStoreEnv,
+  parseDispatcherRepositories,
+  dispatcherSelection,
+  dispatcherOrigin,
+  type HostedStoreEnv,
+} from '@defrex/autobuild-hosted-store-service'
 
 /** The service environment the dispatcher reads. Secrets are only ever taken
  * through `parseHostedStoreEnv`'s already-validated fields. */
@@ -81,38 +89,12 @@ const MAX_BUDGET_SECONDS = 780
 const DEFAULT_TOKEN_TTL_SECONDS = 604800
 const MIN_TOKEN_TTL_SECONDS = 3600
 
-function required(env: HostedDispatcherEnv, name: string): string {
-  const value = env[name]?.trim()
-  if (!value) throw new Error(`${name} is required and must be nonblank`)
-  return value
-}
-
 function integerSetting(env: HostedDispatcherEnv, name: string, fallback: number): number {
   const raw = env[name]?.trim()
   if (raw === undefined || raw === '') return fallback
   const value = Number(raw)
   if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`)
   return value
-}
-
-/** Parse one repository-CSV variable into normalized https identities. */
-function repositoryList(raw: string, name: string): string[] {
-  const values = raw.split(',').map((value) => value.trim())
-
-  const repositories: string[] = []
-  for (const value of values) {
-    // Entries are repository identities — normalized https origins — so an
-    // operator-spelled `git@github.com:acme/app.git` still matches the Store's
-    // identity for this repository (same rule as AB_WEB_REPOSITORIES).
-    let normalized: string
-    try {
-      normalized = normalizeProjectRepository(value)
-    } catch {
-      throw new Error(`${name} contains an unsafe repository name`)
-    }
-    if (!repositories.includes(normalized)) repositories.push(normalized)
-  }
-  return repositories
 }
 
 /** Parse the optional per-repository forge-credential override map
@@ -185,33 +167,10 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
   // AB_STORE_SECRET, validated once here together with the rest of the store
   // configuration.
   const secret = parseHostedStoreEnv(env).secret
-  const rawOrigin = required(env, 'AB_DISPATCHER_ORIGIN')
-  let origin: URL
-  try {
-    origin = new URL(rawOrigin)
-  } catch {
-    throw new Error('AB_DISPATCHER_ORIGIN must be an absolute http(s) origin')
-  }
-  if (
-    !['http:', 'https:'].includes(origin.protocol) ||
-    origin.username ||
-    origin.password ||
-    origin.pathname !== '/' ||
-    origin.search ||
-    origin.hash
-  ) {
-    throw new Error(
-      'AB_DISPATCHER_ORIGIN must be an absolute http(s) origin without credentials or a path',
-    )
-  }
-  if (env.NODE_ENV === 'production' && origin.protocol !== 'https:') {
-    throw new Error('AB_DISPATCHER_ORIGIN must use https in production')
-  }
+  const origin = dispatcherOrigin(env)
   const rawRepositories = env.AB_DISPATCHER_REPOSITORIES
   const repositories =
-    rawRepositories === undefined
-      ? undefined
-      : repositoryList(rawRepositories, 'AB_DISPATCHER_REPOSITORIES')
+    rawRepositories === undefined ? undefined : parseDispatcherRepositories(rawRepositories)
   const rawBudget = integerSetting(env, 'AB_DISPATCHER_BUDGET_SECONDS', DEFAULT_BUDGET_SECONDS)
   const budgetSeconds = Math.min(MAX_BUDGET_SECONDS, Math.max(MIN_BUDGET_SECONDS, rawBudget))
   const tokenTtlSeconds = integerSetting(
@@ -229,7 +188,7 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
   const cronSecret = env.CRON_SECRET?.trim()
   return {
     secret,
-    origin: origin.origin,
+    origin,
     ...(repositories !== undefined ? { repositories } : {}),
     githubTokenOverrides: githubTokenOverridesMap,
     budgetSeconds,
@@ -258,6 +217,7 @@ export interface HostedDispatcherTickSummary {
 }
 
 export interface HostedDispatcherOptions {
+  syncPlacement?: (repo: string, desired: DispatchPlacementFact) => Promise<unknown>
   openSecrets?: (env: HostedDispatcherEnv) => Promise<ProjectSecretsResolver>
   /** Per-repository credential lifecycle; child grants are independent of these rows. */
   openDispatcherCredentials?: (
@@ -359,6 +319,16 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
     return projectPromise
   }
 
+  let placementStore: ReturnType<typeof openPostgresBuildStoreFromEnv> | undefined
+  const syncPlacement =
+    options.syncPlacement ??
+    (async (repo: string, desired: DispatchPlacementFact) => {
+      placementStore ??= openPostgresBuildStoreFromEnv(env).catch((error) => {
+        placementStore = undefined
+        throw error
+      })
+      return (await placementStore).syncDispatchPlacement(repo, desired)
+    })
   let secrets: Promise<ProjectSecretsResolver> | undefined
   const openSecrets = () =>
     (secrets ??= (options.openSecrets ?? openPostgresProjectSecretsFromEnv)(env).catch((error) => {
@@ -376,8 +346,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
     ): Promise<HostedDispatcherTickSummary> {
       const config = parseHostedDispatcherEnv(env)
       const registered = (await (await openProjects()).list()).map((entry) => entry.repo)
-      const selected =
-        config.repositories?.filter((repo) => registered.includes(repo)) ?? registered
+      const selected = dispatcherSelection(config.repositories).filter(registered)
       const now = clock().getTime()
       const deadlineAt = now + config.budgetSeconds * 1000
       const sandboxAuth = sandboxAuthSource(env, credentials)
@@ -385,7 +354,30 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
         `${LOG_PREFIX} ${invocation}: tick start repositories=${selected.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin} sandboxAuth=${sandboxAuth}`,
       )
       const repositories: HostedDispatcherRepositoryOutcome[] = []
+      const placementFailures = new Set<string>()
+      const selection = dispatcherSelection(config.repositories)
+      for (const repository of registered) {
+        try {
+          await syncPlacement(
+            repository,
+            selection.includes(repository)
+              ? { hosted: true, origin: config.origin }
+              : { hosted: false },
+          )
+        } catch (error) {
+          placementFailures.add(repository)
+          repositories.push({
+            repository,
+            outcome: 'failed',
+            error: 'placement synchronization failed',
+          })
+          logError(
+            `${LOG_PREFIX} ${invocation}: ${repository} placement synchronization failed: ${errorDetail(error)}`,
+          )
+        }
+      }
       for (const repository of selected) {
+        if (placementFailures.has(repository)) continue
         if (clock().getTime() + MIN_REMAINING_MS > deadlineAt) {
           repositories.push({ repository, outcome: 'skipped' })
           log(`${LOG_PREFIX} ${invocation}: ${repository} skipped (invocation budget exhausted)`)
