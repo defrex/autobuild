@@ -107,6 +107,10 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'resume-prompt',
     'standby-list',
     'standby-detail',
+    'account-credentials-missing-wide',
+    'account-credentials-missing-narrow',
+    'account-credentials-recovered-wide',
+    'account-credentials-recovered-narrow',
     'forge-readiness-wide',
     'forge-readiness-narrow',
   ])
@@ -188,6 +192,16 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('merge (waiting, 7m45s)')
       expect(frame.text).toContain('skipped by post-reconcile policy')
       expect(frame.text).toContain('verify.afterReconcile = false')
+    } else if (frame.id.startsWith('account-credentials-')) {
+      const text = frame.text.replace(/\s+/g, ' ')
+      if (frame.id.startsWith('account-credentials-missing-')) {
+        expect(text).toContain('Missing credentials:')
+        expect(text).toContain('BILLING_TOKEN')
+        expect(text).toContain('ab secrets set BILLING_TOKEN')
+        expect(text).toContain('[project-secrets]')
+      } else {
+        expect(text).not.toContain('Missing credentials:')
+      }
     } else if (frame.id.startsWith('mixed-')) {
       expect(frame.text).toContain('CAP-PLAN')
       expect(frame.text).toContain('CAP-IMPLEMENT')

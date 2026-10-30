@@ -2,7 +2,11 @@ import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { migrationIdentity, ticketMigrationsReducer } from '../kernel/ticket-migrations'
 import type { DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
-import { readDispatchUpgrade } from '../store/reduced-reads'
+import {
+  readDispatchUpgrade,
+  readRepositoryFacts,
+  type RepositoryReadFacts,
+} from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
 import { launchContext } from './dispatch-launch-contract'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
@@ -316,6 +320,7 @@ export class DispatchFrontend {
   private readonly repositoryPoll = new RepositoryPollCache<{
     repositoryEvents: RepositoryEvent[]
     upgrades: DispatchUpgradeState
+    repositoryFacts: RepositoryReadFacts
     status: DispatchStatus
     config: Config
     observationCount: number
@@ -336,7 +341,14 @@ export class DispatchFrontend {
         const repositoryEvents = await this.events()
         // Authority and rollback holds need the full durable reduction, not the
         // low-volume replay feed (which deliberately discards per-tick facts).
-        const upgrades = (await readDispatchUpgrade(this.reader, this.opts.repo)).value
+        const repositoryFacts = (
+          await readRepositoryFacts(
+            this.reader,
+            this.opts.repo,
+            repositoryEvents.length || this.repositoryFeed.identities.length ? true : undefined,
+          )
+        ).value
+        const upgrades = repositoryFacts.upgrades
         const status = this.dispatchStatus
         const ref = status.effectiveConfig
         if (ref === undefined) {
@@ -364,11 +376,19 @@ export class DispatchFrontend {
           await this.standbyResolver.refresh(this.runId, status.yieldedHolder, this.clock())
         await this.repositoryFeed.save()
         if (!this.cache.isCurrent(snapshot)) return undefined
-        return { repositoryEvents, upgrades, status, config, observationCount, snapshot }
+        return {
+          repositoryEvents,
+          repositoryFacts,
+          upgrades,
+          status,
+          config,
+          observationCount,
+          snapshot,
+        }
       },
     })
     if (frame === undefined) return
-    let { repositoryEvents, upgrades, status } = frame
+    let { repositoryEvents, repositoryFacts, upgrades, status } = frame
     const { config, snapshot } = frame
     const standby = this.opts.once
       ? undefined
@@ -388,7 +408,14 @@ export class DispatchFrontend {
       if (!validAbortConfirmation(snapshot.states.get(slug))) {
         await this.dismissStaleAbortConfirmation(slug)
         repositoryEvents = await this.events()
-        upgrades = (await readDispatchUpgrade(this.reader, this.opts.repo)).value
+        repositoryFacts = (
+          await readRepositoryFacts(
+            this.reader,
+            this.opts.repo,
+            repositoryEvents.length || this.repositoryFeed.identities.length ? true : undefined,
+          )
+        ).value
+        upgrades = repositoryFacts.upgrades
         status = this.dispatchStatus
       }
     }
@@ -425,7 +452,7 @@ export class DispatchFrontend {
           : {}),
         ...(warningLines.length > 0 ? { warningLines } : {}),
       },
-      repositoryEvents,
+      repositoryFacts,
       upgrades,
     )
     this.selection = reconcileSelection(previous, dashboardSelections(projected), this.selection)

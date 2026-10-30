@@ -156,6 +156,8 @@ export const buildEventPolicy = {
   'phase.deferral-escalated': 'decisive',
 } satisfies Record<EventType, FactClassification>
 export const repositoryEventPolicy = {
+  'account.credentials-unavailable': 'decisive',
+  'account.credentials-recovered': 'decisive',
   'ticket-preparation.intended': 'decisive',
   'ticket-preparation.claimed': 'decisive',
   'ticket-preparation.creation-selected': 'decisive',

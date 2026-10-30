@@ -1,5 +1,11 @@
 import { proveTargetLineage } from '../kernel/target-lineage'
 import { assertTargetOid, observeTarget } from '../kernel/target-observation'
+import {
+  MissingAccountCredentialsError,
+  missingAccountCredentials,
+  reconcileMissingAccounts,
+  type MissingAccountCredential,
+} from '../accounts/availability'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import type { TicketPreparation } from '../kernel/ticket-preparation'
 import { sampleTargetDistance } from '../kernel/target-distance'
@@ -157,6 +163,7 @@ import type {
   Ticket,
   TicketSource,
   WorkspaceProvider,
+  WorkspaceProvisionResult,
 } from '../ports/types'
 import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -597,6 +604,9 @@ export interface TickOpts {
 export type LaunchRunnerResult = 'scheduled' | 'already-active'
 
 export interface DispatcherDeps {
+  /** Current selected-account presence; no store reads. */
+  missingAccounts?: () => MissingAccountCredential[]
+  accountCredentialSource?: MissingAccountCredential['source']
   store: BuildStore
   tickets: TicketSource
   workspaces: WorkspaceProvider
@@ -1039,6 +1049,7 @@ export class Dispatcher {
     // the durable driver of this tick's fan-out below. Neither control
     // pretends to a serialization the store does not offer.
     const repoFacts = this.store.repositoryFacts()
+    if (this.deps.missingAccounts) await this.reconcileAccountPresence(this.deps.missingAccounts())
     const paused = repoFacts.settings.paused
     const autoMergeSeedFact = undefined
     // Stage 0 — SETTLEMENT: observe foreign executions from durable facts plus
@@ -1427,7 +1438,47 @@ export class Dispatcher {
     )
   }
 
+  private accountsAvailable(): boolean {
+    return !this.deps.missingAccounts?.().length
+  }
+
+  private accountReconciliation: Promise<unknown> = Promise.resolve()
+
+  private reconcileAccountPresence(
+    missing: readonly MissingAccountCredential[],
+    merge = false,
+  ): Promise<void> {
+    const operation = this.accountReconciliation.then(async () => {
+      if (missing.length && !this.store.journalRecorded())
+        await this.store.ensureRepo(this.deps.repo)
+      const current = this.store.repositoryFacts().missingAccounts
+      const next = merge
+        ? Object.values({
+            ...current,
+            ...Object.fromEntries(missing.map((account) => [account.name, account])),
+          })
+        : missing
+      await reconcileMissingAccounts(next, current, (event) =>
+        this.store.appendRepo(this.deps.repo, event),
+      )
+    })
+    this.accountReconciliation = operation.catch(() => {})
+    return operation
+  }
+
+  async holdForMissingAccounts(error: unknown): Promise<boolean> {
+    if (!(error instanceof MissingAccountCredentialsError)) return false
+    const absent = missingAccountCredentials(
+      Object.fromEntries(error.missing.map((account) => [account.name, account.descriptor])),
+      {},
+      this.deps.accountCredentialSource,
+    )
+    await this.reconcileAccountPresence(absent, true)
+    return true
+  }
+
   private async triggerHarvest(): Promise<void> {
+    if (!this.accountsAvailable()) return
     const start = this.deps.startHarvest
     if (start === undefined) return
     // Use the tick sample, advanced by any local repository append.
@@ -1452,6 +1503,7 @@ export class Dispatcher {
     launched: Set<string>,
     report: TickReport = emptyTickReport(),
   ): Promise<LaunchRunnerResult> {
+    if (!this.accountsAvailable()) return 'already-active'
     if (await this.forgeCoolingDown()) return 'already-active'
     if (await deferMixedVersion(this.store, slug)) return 'already-active'
     const launchState = (await this.store.buildFacts(slug)).state
@@ -1788,6 +1840,7 @@ export class Dispatcher {
     },
   ): Promise<'kicked' | 'in-flight' | 'foreign-live'> {
     const slug = record.slug
+    if (!this.accountsAvailable()) return 'in-flight'
     if (this.continuations.has(slug)) return 'in-flight'
     const marker = this.openProvisionMarker(events)
     if (marker !== undefined) {
@@ -1943,12 +1996,13 @@ export class Dispatcher {
       const queued = (await readBuildFacts(store, slug)).value.state.status === 'queued'
       boundary = input.tail === 'dispatch' || queued ? 'dispatch' : 'launch'
       if (boundary === 'dispatch') await this.completeDispatchBoundaries(record, input.seed)
-      else await this.deps.launchRunner(slug)
+      else if (this.accountsAvailable()) await this.deps.launchRunner(slug)
     } catch (error) {
       // Dispatch boundaries own their failure facts and exhaustion repair.
       // A failed tail read/write leaves durable unfinished work for the next
       // tick; it is not another provider workspace failure. Replacement
       // runner launch errors retain the existing infrastructure-budget path.
+      if (await this.holdForMissingAccounts(error)) return
       if (boundary === 'read' || boundary === 'dispatch') return
       const events = (await readBuildFacts(store, slug)).value
       if (workspaces.recovery !== undefined) {
@@ -3916,6 +3970,7 @@ export class Dispatcher {
       cleanupPending: boolean
     },
   ): Promise<void> {
+    if (await this.holdForMissingAccounts(input.error)) return
     const execution = events.state.executions.at(-1)
     const _appended = await appendInfrastructureFailure(
       { store: this.store, ids: this.deps.ids },
@@ -4195,6 +4250,7 @@ export class Dispatcher {
       assets?: PinnedAsset[]
     },
   ): Promise<DispatchOutcome> {
+    if (!this.accountsAvailable()) return 'parked'
     const store = this.store
     const { config } = this.deps
     if (await deferMixedVersion(this.store, record.slug)) return 'parked'
@@ -4282,6 +4338,7 @@ export class Dispatcher {
         events = (await readBuildFacts(store, record.slug)).value
       }
     } catch (error) {
+      if (await this.holdForMissingAccounts(error)) return 'parked'
       if (error instanceof MixedVersionDeferral) return 'parked'
       const events = (await readBuildFacts(store, record.slug)).value
       if (stage === 'workspace' && this.deps.workspaces.recovery !== undefined) {
@@ -4428,11 +4485,13 @@ export class Dispatcher {
       if (launchState.status !== 'queued' || launchState.discardRequest !== undefined) {
         return 'parked'
       }
+      if (!this.accountsAvailable()) return 'parked'
       if (launched === undefined) await this.deps.launchRunner(record.slug)
       else await this.launch(record.slug, launched, report)
       if (authored && report !== undefined) report.authored += 1
       return 'completed'
     } catch (error) {
+      if (await this.holdForMissingAccounts(error)) return 'parked'
       const events = (await readBuildFacts(store, record.slug)).value
       const attempt = events.dispatchFailureCount + 1
       const message = (
@@ -4910,6 +4969,7 @@ export class Dispatcher {
     opts: TickOpts = {},
     autoMergeSeedFact: AutoMergeDefaultFact | undefined = undefined,
   ): Promise<void> {
+    if (!this.accountsAvailable()) return
     const health = this.store.repositoryFacts().forgeHealth
     if (health && Date.parse(health.resetAt) > this.deps.clock().getTime()) return
     const store = this.store
@@ -5742,6 +5802,7 @@ export class Dispatcher {
           }
         }
 
+        if (!this.accountsAvailable()) return
         if (!(await this.nodeHasCapacity(record.slug))) return
         if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
           const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
@@ -5771,6 +5832,7 @@ export class Dispatcher {
         }
       }
     } catch (error) {
+      if (await this.holdForMissingAccounts(error)) return
       const message =
         error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       // Safety refusals require human judgment. Infrastructure failures remain
@@ -5978,6 +6040,7 @@ export class Dispatcher {
     await this.observeIntegration(record.slug)
     state = (await this.store.buildFacts(record.slug)).state
     if (!integrationCurrent(state)) return
+    if (!this.accountsAvailable()) return
     const facts = (await readBuildFacts(this.store, record.slug)).value
     if (openWorkspace(facts) === null && this.deps.workspaces.recovery) {
       const kicked = await this.ensureProvisionContinuation(record, facts, 'launch')
@@ -5985,12 +6048,18 @@ export class Dispatcher {
       return
     }
     if (openWorkspace(facts) === null) {
-      const handle = await this.deps.workspaces.provision({
-        repo: this.deps.checkout ?? this.deps.repo,
-        baseBranch: record.branch,
-        branch: record.branch,
-        revision: state.integration!.cycle!.head,
-      })
+      let handle: WorkspaceProvisionResult
+      try {
+        handle = await this.deps.workspaces.provision({
+          repo: this.deps.checkout ?? this.deps.repo,
+          baseBranch: record.branch,
+          branch: record.branch,
+          revision: state.integration!.cycle!.head,
+        })
+      } catch (error) {
+        if (await this.holdForMissingAccounts(error)) return
+        throw error
+      }
       await this.store.append(record.slug, {
         actor: DISPATCHER,
         type: 'workspace.provisioned',
