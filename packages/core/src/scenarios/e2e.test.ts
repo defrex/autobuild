@@ -233,6 +233,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'pr-description@0',
     expect.stringMatching(/^reconcile-change-[a-f0-9]{40}@0$/),
     expect.stringMatching(/^replay-objects-[a-f0-9]{40}@0$/),
+    expect.stringMatching(/^replay-v1-[a-f0-9]{64}-0@0$/),
     'spec@0',
     'transcript@0',
     'transcript@1',
