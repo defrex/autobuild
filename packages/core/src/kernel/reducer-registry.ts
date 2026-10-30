@@ -22,6 +22,7 @@ import {
 } from './service-facts'
 import { phaseSchema } from '../ontology'
 import { z } from 'zod'
+import { dispatchPlacementReducer } from './dispatch-placement'
 import type { ValueCatalogEntry } from '../store/reducer-values'
 import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
 import { executionNoProgressReducer } from '../processes/execution-no-progress'
@@ -191,6 +192,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
   autoMergeDefault: { reducer: autoMergeDefaultReducer, covers: ['latestAutoMergeDefault'] },
   pinnedAssets: { reducer: pinnedAssetsReducer, covers: ['findPinnedRevision'] },
   forgeHealthValue: { reducer: optionalValue(forgeHealthReducer), covers: [] },
+  dispatchPlacement: { reducer: dispatchPlacementReducer, covers: [] },
 }
 
 /** Qualification concerns the existing finished contract, including absence. */
@@ -217,6 +219,7 @@ const valueExclusions: Record<string, string> = {
   ),
 }
 const repositoryValues = new Set([
+  'dispatchPlacement',
   'ticketPreparation',
   'ticketMigrations',
   'forgeHealthValue',

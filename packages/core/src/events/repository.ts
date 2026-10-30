@@ -793,7 +793,32 @@ export const ticketPreparationEventPayloadSchemas = {
   }),
 }
 
+export const dispatchPlacementFactSchema = z.discriminatedUnion('hosted', [
+  z.strictObject({
+    hosted: z.literal(true),
+    origin: z
+      .string()
+      .url()
+      .refine((value) => {
+        try {
+          const url = new URL(value)
+          return (
+            ['http:', 'https:'].includes(url.protocol) &&
+            url.origin === value &&
+            !url.username &&
+            !url.password
+          )
+        } catch {
+          return false
+        }
+      }, 'expected a public http(s) origin'),
+  }),
+  z.strictObject({ hosted: z.literal(false) }),
+])
+export type DispatchPlacementFact = z.infer<typeof dispatchPlacementFactSchema>
+
 export const repositoryEventPayloadSchemas = {
+  'dispatcher.placement-set': dispatchPlacementFactSchema,
   ...ticketPreparationEventPayloadSchemas,
   ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
@@ -864,6 +889,7 @@ export type HarvestEventWrite<T extends HarvestEventType = HarvestEventType> =
 export const HARVEST_EVENT_TYPES = Object.keys(harvestEventPayloadSchemas) as HarvestEventType[]
 
 const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
+  'dispatcher.placement-set': ['kernel'],
   'ticket-preparation.intended': ['dispatcher'],
   'ticket-preparation.claimed': ['dispatcher'],
   'ticket-preparation.creation-selected': ['dispatcher'],

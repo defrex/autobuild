@@ -21,3 +21,10 @@ export { hostedService, webGateway } from './web/runtime'
 
 export { createOrganizationHandler } from './web/organizations'
 export { HumanAccess, humanAccess, organizationStore, validSession } from './web/access'
+
+export {
+  parseDispatcherRepositories,
+  dispatcherSelection,
+  dispatcherEnabled,
+  dispatcherOrigin,
+} from './dispatcher-selection'
