@@ -102,19 +102,24 @@ export async function preserveWorkspaceBeforeRelease(deps: {
   } else {
     const rewrite = deps.forge.kernelRewrite ?? deps.forge.rewrite
     if (!rewrite) throw new Error('forge lacks immutable workspace commit archives')
-    const remote = await remoteBranchHead(
-      deps.forge.kernelExec ?? deps.exec,
-      handle.path,
-      handle.branch,
-    )
-    const base =
-      remote === null
-        ? source.payload.base.sha
-        : await rewrite.snapshot({
-            workspacePath: handle.path,
-            branch: handle.branch,
-            destinationRef: `refs/autobuild/reconcile/${deps.slug}/preservation`,
-          })
+    let base: string
+    try {
+      base = await rewrite.snapshot({
+        workspacePath: handle.path,
+        branch: handle.branch,
+        destinationRef: `refs/autobuild/reconcile/${deps.slug}/preservation`,
+      })
+    } catch (error) {
+      // A never-published branch compares against its recorded base; any other
+      // snapshot failure, or an unreadable remote, keeps the workspace intact.
+      const remote = await remoteBranchHead(
+        deps.forge.kernelExec ?? deps.exec,
+        handle.path,
+        handle.branch,
+      ).catch(() => undefined)
+      if (remote !== null) throw error
+      base = source.payload.base.sha
+    }
     preserved = {
       outcome: 'preserved',
       heads: await preserveGitCommits({
