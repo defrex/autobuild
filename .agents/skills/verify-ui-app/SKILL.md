@@ -36,20 +36,47 @@ again or edit product code. Parity means shared vocabulary and facts, not pixels
    Title First, Sign-off, Glyph, Square Rules, and Flowing Document rules apply.
    Both grounds use the exact packaged Atkinson Hyperlegible Next and
    JetBrains Mono fonts; host font substitution is not acceptable.
-3. Run `bun run capture:web-dashboard`. It renders offline production views
-   over deterministic dispatch models, writes `frames.json`, PNGs, HTML and
-   `verify-report.md` under `.ab/web-dashboard-frames/`. It needs local Chromium
-   (`CHROMIUM_BIN` may select it). A capture crash, omitted required fact,
-   missing browser or unreadable PNG is a failure, never a skip.
-4. Run `bun tools/capture-parity.ts`; when the manifest supplies
-   `commitRange.base`, also run with `--base <commitRange.base>`. Record both
-   baselines. The default merge base may predate inherited changes. Frames
-   identical to the recorded starting revision are inherited evidence; every
-   difference against that revision must be authorized by the spec. A failed
-   capture or unexplained difference fails, and this comparison never relaxes
-   visual criteria. Terminal frame differences, like web differences, must each
-   be authorized by the spec against this build's recorded starting revision.
-   Never loosen comparison.
+3. Run `bun run capture:web-dashboard` **alone, in the foreground**, and await
+   its completion before starting parity. Allow at least **1,800 seconds per
+   capture/parity command**. A tool yield is progress, not completion: wait on
+   that same process until it exits. Never use background jobs, parallel tool
+   calls, overlapping retries, or run capture and parity concurrently. Parity
+   deletes and replaces the capture directories, including active browser profiles.
+   It renders offline production views over deterministic dispatch models, writes
+   `frames.json`, PNGs, HTML and `verify-report.md` under `.ab/web-dashboard-frames/`.
+   It needs local Chromium (`CHROMIUM_BIN` may select it). A capture crash, omitted
+   required fact, missing browser or unreadable PNG is a failure, never a skip.
+   Keep command logs and elapsed-time/exit evidence under the context directory,
+   outside both `.ab/web-dashboard-frames/` and `.ab/dashboard-frames/`, which
+   parity replaces. Where available, run each command under
+   `strace -f -e trace=none -e signal=SIGTERM,SIGINT,SIGHUP -o <context-log>`
+   to retain signal metadata (including `si_pid` when provided). Record the
+   sender's command line from `/proc/<sender-pid>/cmdline` if still available;
+   preserve evidence rather than inferring a sender from exit 143. If tracing
+   is unavailable, record that limitation and the raw tool completion evidence.
+   Record start/end times, command, exit status, and complete manifest variants
+   for the initial capture before continuing; do not accept a stale manifest.
+4. Read `commitRange.base` from the materialized manifest, validate it with
+   `git rev-parse --verify '<base>^{commit}'`, and record the full SHA. Missing
+   or unresolvable recorded start is an infrastructure failure. Then, sequentially:
+   - Run `bun tools/capture-parity.ts` if `origin/main` or `main` resolves to a
+     commit. If neither resolves, run `bun tools/capture-parity.ts --base <base>`
+     explicitly and label this the **recorded-start fallback**.
+   - After that command exits, run `bun tools/capture-parity.ts --base <base>`
+     for the recorded-start comparison, even when the fallback used the same SHA.
+   Record requested baselines, resolved merge-base SHAs, exit status and successful
+   completion for both comparisons separately. Never silently compare HEAD to
+   itself, invent a branch, fetch a moving baseline, or omit either comparison.
+   The default merge base may predate inherited changes. Frames identical to the
+   recorded starting revision are inherited evidence; every difference against
+   that revision must be authorized by the spec. A failed capture or unexplained
+   difference fails, and this comparison never relaxes visual criteria. Terminal
+   frame differences, like web differences, must each be authorized by the spec
+   against this build's recorded starting revision. Never loosen comparison.
+   Finish both recaptures before opening the final working-tree manifest/PNGs
+   or editing the final report: parity replaces `verify-report.md` too. Carry
+   initial capture and both comparison logs into that final report and confirm
+   every required manifest variant remains present.
 5. Open **every PNG listed in frames.json**, including both grounds and both
    widths, with the image tool. Compare applicable reference views at 1440px
    and 390px. Check all generated checklist criteria: title and slug, current
@@ -90,7 +117,14 @@ again or edit product code. Parity means shared vocabulary and facts, not pixels
    ab verdict fail --report .ab/web-dashboard-frames/verify-report.md
    ```
 
-If capture fails before a report exists, create that report under the same
-scratch directory with the command, error and missing evidence. Never designate
+If a capture is killed or otherwise cannot complete, create or replace the report
+under the same scratch directory with an explicit **Infrastructure failure**
+section, distinct from visual or parity differences. Name the stage, command,
+requested/resolved baseline, elapsed time, raw exit status, decoded signal,
+proven signal source or timeout owner and supporting log paths, and missing
+manifest/variants. If source evidence is unavailable, say **source unknown** and
+name the missing evidence (for example, no retained signal sender metadata or
+sender process already exited). A signal number alone never proves the sender.
+Use the existing fail verdict above; attach no partial frames. Never designate
 frames from a failed run. A prior build's visual differences are not themselves
 failures; the spec and recorded ANSI rules define the verdict.

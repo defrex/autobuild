@@ -2,7 +2,12 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import { captureEnvironment, compareFrameSets, runCaptureCommand } from './capture-parity'
+import {
+  captureEnvironment,
+  compareFrameSets,
+  resolveBaseline,
+  runCaptureCommand,
+} from './capture-parity'
 
 describe('compareFrameSets', () => {
   const base = new Map([
@@ -132,5 +137,71 @@ test('capture commands create reproducible real Git provenance for independent t
     expect(commits[0]).toBe(commits[1])
   } finally {
     await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('capture drains stdout and stderr while waiting for completion', async () => {
+  await runCaptureCommand(tmpdir(), [
+    'bun',
+    '-e',
+    "process.stdout.write('x'.repeat(4 * 1024 * 1024)); process.stderr.write('y'.repeat(4 * 1024 * 1024))",
+  ])
+}, 10_000)
+
+test('capture infrastructure diagnostics distinguish signals and ordinary exits', async () => {
+  const signalCommand = ['bun', '-e', "process.kill(process.pid, 'SIGTERM')"]
+  await expect(runCaptureCommand(tmpdir(), signalCommand)).rejects.toThrow('signal SIGTERM')
+  try {
+    await runCaptureCommand(tmpdir(), ['bun', '-e', 'process.exit(7)'])
+    throw new Error('expected capture failure')
+  } catch (error) {
+    expect(String(error)).toContain('capture infrastructure failure')
+    expect(String(error)).toContain('bun -e process.exit(7)')
+    expect(String(error)).toContain(tmpdir())
+    expect(String(error)).toContain('exit 7, signal none, source unknown')
+    expect(String(error)).not.toContain('capture parity FAILED')
+  }
+})
+
+test('recorded baseline resolves without default branch refs and invalid inputs fail before capture', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'capture-baseline-'))
+  async function git(args: string[]) {
+    const child = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' })
+    const [code, out, err] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    if (code !== 0) throw new Error(err)
+    return out.trim()
+  }
+  async function commit(message: string) {
+    await git([
+      '-c',
+      'user.name=capture',
+      '-c',
+      'user.email=capture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      message,
+    ])
+  }
+  try {
+    await git(['init', '-q', '-b', 'build'])
+    await commit('base')
+    const base = await git(['rev-parse', 'HEAD'])
+    await commit('head')
+    expect(await resolveBaseline(['--base', base], cwd)).toEqual({ baseRef: base, baseSha: base })
+    await expect(resolveBaseline([], cwd)).rejects.toThrow('No default baseline')
+    await expect(resolveBaseline(['--base'], cwd)).rejects.toThrow('--base requires a value')
+    await expect(resolveBaseline(['--base', '--other'], cwd)).rejects.toThrow(
+      '--base requires a value',
+    )
+    await expect(resolveBaseline(['--base', 'not-a-commit'], cwd)).rejects.toThrow('rev-parse')
+  } finally {
+    await rm(cwd, { recursive: true, force: true })
   }
 })
