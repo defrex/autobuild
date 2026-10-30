@@ -10,6 +10,7 @@ import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DashboardBuildPollCache } from '../cli/dashboard/poll'
 import { abDispatch } from '../cli/dispatch'
 import { createTerminalModeController } from '../cli/terminal-restore'
 import { randomUuids } from '../ids'
@@ -366,6 +367,17 @@ export async function reducedReadBudget(opts: {
     reset()
     expect((await readRepositoryFacts(cold, repo)).value.missingAccounts).toEqual({})
     expect(costs.events).toBe(0)
+    // A new dashboard on every invocation must use canonical persisted facts,
+    // even after the build exceeds the hosted page cap. Warm and cold polls
+    // select zero event rows at either history length.
+    reset()
+    for (let invocation = 0; invocation < 3; invocation++) {
+      const dashboard = new DashboardBuildPollCache(cold, repo, config)
+      expect((await dashboard.refresh()).states.get(slug)?.status).toBe('running')
+      await dashboard.refresh()
+    }
+    expect(costs.events).toBe(0)
+    expect(costs.metadata).toBeLessThan(100)
     await coldDispatchOnceBudget(store, cold, length, costs)
     await coldDispatchOnceBudget(store, cold, length, costs, true)
     await coldDispatchOnceBudget(store, cold, length, costs, true, true)
@@ -1499,4 +1511,167 @@ export async function placementReadBudget(opts: {
     await (await opts.fresh()).getDispatchPlacement(repo)
     expect(counter.rows).toBe(0)
   }
+}
+
+/** Hosted historical seeds: count underlying selections, including the private
+ * canonical fold, rather than response lengths. Run at both exact history sizes. */
+export async function hostedSeedReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { CursorTooOldError, RetiredSeedGenerationError, REPOSITORY_TAIL_WINDOW } = await import(
+    '../store/event-reads'
+  )
+  const { REDUCERS } = await import('../kernel/reducer-registry')
+  const { repositoryAttentionReducer } = await import('../kernel/repository-attention')
+  const { buildStreamSeedReducer } = await import('../kernel/read-facts')
+  const gapCosts: number[] = []
+  for (const length of [100, 10_000]) {
+    const store = new MemoryBuildStore()
+    const repo = 'seed-budget',
+      slug = 'seed-budget'
+    await store.ensureRepo(repo)
+    await store.createBuild({ slug, repo })
+    for (let i = 0; i < length; i++) {
+      await store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    }
+    const counter = memoryRepositoryReadCounter(store, repo)
+    const scopes = [
+      { kind: 'build', slug },
+      { kind: 'repo', repo },
+    ] as const
+    const requested = length - 7
+    const { readReducerValue } = await import('../store/reducer-values')
+    const canonicalControl = async (scope: (typeof scopes)[number], name: string) => {
+      const events =
+        scope.kind === 'build' ? await store.getEvents(slug) : await store.getRepoEvents(repo)
+      let rows = 0
+      const answer = await readReducerValue(
+        scope,
+        { reducer: name },
+        {
+          highWater: async () => length,
+          read: async () => null,
+          events: async (since, through) => {
+            const selected = events.slice(since, through)
+            rows += selected.length
+            return selected
+          },
+          put: async () => true,
+          repair: async () => true,
+        },
+      )
+      expect(rows).toBe(length)
+      return answer
+    }
+    for (const scope of scopes)
+      await canonicalControl(
+        scope,
+        scope.kind === 'build' ? 'buildStreamSeed' : 'repositoryAttention',
+      )
+    await Promise.all(
+      Array.from({ length: 8 }, () =>
+        Promise.all(scopes.map((scope) => store.getStreamSeed(scope, requested))),
+      ),
+    )
+    // One serialized durable canonical rebuild per scope, even with cold races.
+    expect(counter.rows).toBe(length)
+    expect(counter.buildRows).toBe(length)
+    counter.reset()
+    for (const scope of scopes) await store.getStreamSeed(scope, requested)
+    const fresh = new RepoViewStore(store, { repo })
+    for (const scope of scopes) await fresh.getStreamSeed!(scope, requested)
+    expect(counter.rows + counter.buildRows).toBe(0)
+    const build = await store.getBuildEventPage(slug, requested)
+    const repository = await store.getRepositoryTail(repo, requested)
+    expect(build.events).toHaveLength(7)
+    expect(repository).toHaveLength(7)
+    gapCosts.push(counter.rows + counter.buildRows)
+    expect(gapCosts.at(-1)).toBe(14)
+    counter.reset()
+    await store.getRepositoryTail(repo, length)
+    await store.getBuildEventPage(slug, length)
+    expect(counter.rows + counter.buildRows).toBe(0)
+    if (length > REPOSITORY_TAIL_WINDOW) {
+      for (const scope of scopes)
+        await expect(
+          store.getStreamSeed(scope, length - REPOSITORY_TAIL_WINDOW - 1),
+        ).rejects.toBeInstanceOf(CursorTooOldError)
+      await expect(store.getRepositoryTail(repo, 0)).rejects.toBeInstanceOf(CursorTooOldError)
+      expect(counter.rows + counter.buildRows).toBe(0)
+      for (const scope of scopes)
+        expect((await store.getStreamSeed(scope, length - REPOSITORY_TAIL_WINDOW)).cursor).toBe(
+          length - REPOSITORY_TAIL_WINDOW,
+        )
+    }
+    for (const [name, scope, control] of [
+      ['buildStreamSeed', scopes[0], buildStreamSeedReducer],
+      ['repositoryAttention', scopes[1], repositoryAttentionReducer],
+    ] as const) {
+      const entry = REDUCERS[name]!.valueRead
+      if ('excluded' in entry) throw new Error('missing seed entry')
+      const create = entry.create
+      const validate = entry.validate
+      entry.validate = (state) => {
+        if (!state || typeof state !== 'object') return false
+        const { addedByNewVersion, ...prior } = state as Record<string, unknown>
+        return typeof addedByNewVersion === 'number' && validate(prior)
+      }
+      try {
+        // A new reducer requires a field absent from the old accumulator. No
+        // upgrader or old implementation is supplied to historical lookup.
+        for (let generation = 1; generation <= 2; generation++) {
+          const reducer = create({})
+          entry.create = () => ({
+            ...reducer,
+            version: reducer.version + generation,
+            initial: () => ({ ...reducer.initial(), addedByNewVersion: 0 }),
+            finish: (acc) => ({ ...reducer.finish(acc), addedByNewVersion: acc.addedByNewVersion }),
+            advance: (acc, events) => ({
+              ...reducer.advance(acc, events),
+              addedByNewVersion: (acc.addedByNewVersion ?? 0) + events.length,
+            }),
+          })
+          const baseline = await canonicalControl(scope, name)
+          counter.reset()
+          const seed = await store.getStreamSeed(scope, requested)
+          expect(counter.rows + counter.buildRows).toBe(length)
+          const events =
+            scope.kind === 'build' ? await store.getEvents(slug) : await store.getRepoEvents(repo)
+          expect(seed.value).toMatchObject(
+            JSON.parse(JSON.stringify(control.reduce(events.slice(0, requested) as never))),
+          )
+          expect(seed.value).toMatchObject({ addedByNewVersion: requested })
+          expect((await store.getStreamSeed(scope, length)).value).toEqual(baseline.value)
+          counter.reset()
+          await store.getStreamSeed(scope, requested)
+          expect(counter.rows + counter.buildRows).toBe(0)
+        }
+        entry.create = create
+        counter.reset()
+        await expect(store.getStreamSeed(scope, requested)).rejects.toBeInstanceOf(
+          RetiredSeedGenerationError,
+        )
+        expect(counter.rows + counter.buildRows).toBe(0)
+        const checkpoints = Reflect.get(store, 'seedCheckpoints') as Map<
+          string,
+          Map<number, unknown>
+        >
+        for (const values of checkpoints.values()) {
+          expect(values.size).toBeLessThanOrEqual(REPOSITORY_TAIL_WINDOW + 1)
+          // Representative fixture checkpoints contain state, never an event prefix.
+          expect(Buffer.byteLength(JSON.stringify(values.values().next().value))).toBeLessThan(
+            64_000,
+          )
+        }
+      } finally {
+        entry.create = create
+        entry.validate = validate
+      }
+    }
+  }
+  expect(gapCosts).toEqual([14, 14])
 }
