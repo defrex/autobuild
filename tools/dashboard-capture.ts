@@ -1,3 +1,4 @@
+import { accountCredentialsCapture } from './account-credentials-capture'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   parseBuildConfigMetadata,
@@ -59,6 +60,7 @@ export interface FrameSpec {
   handoff?: boolean
   nativeSessions?: boolean
   verifyStages?: boolean
+  accountCredentials?: 'missing' | 'recovered'
   forgeReadiness?: boolean
   id: string
   scenario: CaptureScenario
@@ -464,6 +466,25 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'Build  plan-blocked-dashboard',
     ],
   },
+  ...(['missing', 'recovered'] as const).flatMap((state) =>
+    [140, 80].map((columns) => ({
+      id: `account-credentials-${state}-${columns === 140 ? 'wide' : 'narrow'}`,
+      scenario: 'mixed' as const,
+      columns,
+      rows: 70,
+      accountCredentials: state,
+      ...(state === 'missing'
+        ? {
+            requires: [
+              'Missing credentials:',
+              'BILLING_TOKEN',
+              'ab secrets set',
+              'project-secrets',
+            ],
+          }
+        : { forbids: ['Missing credentials:'] }),
+    })),
+  ),
   {
     id: 'forge-readiness-wide',
     scenario: 'mixed',
@@ -1801,13 +1822,15 @@ async function capturePaint(
         spec.scenario === 'happy'
           ? (model.warningLines ?? []).filter((line) => !sentinelLeaseNotices.has(line))
           : []
-      const sourceModel = spec.verifyStages
-        ? verifyStagesCapture(model)
-        : spec.rollback
-          ? rollbackCapture(model)
-          : spec.handoff
-            ? handoffCapture(model)
-            : model
+      const sourceModel = spec.accountCredentials
+        ? accountCredentialsCapture(model, spec.accountCredentials === 'recovered')
+        : spec.verifyStages
+          ? verifyStagesCapture(model)
+          : spec.rollback
+            ? rollbackCapture(model)
+            : spec.handoff
+              ? handoffCapture(model)
+              : model
       const presented = {
         ...sourceModel,
         ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),
@@ -1830,7 +1853,7 @@ async function capturePaint(
         }),
         ...(spec.standby !== undefined ? { standby: spec.standby } : {}),
         ...(spec.availableUpgrade !== undefined ? { availableUpgrade: spec.availableUpgrade } : {}),
-        ...(spec.forgeReadiness
+        ...(spec.accountCredentials || spec.forgeReadiness
           ? {}
           : spec.scenario === 'happy'
             ? warningLines.length > 0

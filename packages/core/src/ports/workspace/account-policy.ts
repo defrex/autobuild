@@ -12,6 +12,7 @@ export function accountPolicy(
   base: NetworkPolicy,
   accounts: Accounts,
   env: Readonly<Record<string, string | undefined>>,
+  requiredAccounts: Accounts = accounts,
 ): { policy: NetworkPolicy; missing: string[] } {
   if (Object.keys(accounts).length === 0) return { policy: base, missing: [] }
   if (base === 'deny-all' || (typeof base === 'object' && Array.isArray(base.allow)))
@@ -24,7 +25,7 @@ export function accountPolicy(
   for (const [name, descriptor] of Object.entries(accounts)) {
     const credential = env[descriptor.credentialEnv]
     if (!credential) {
-      missing.push(accountRemedy({ name, descriptor }))
+      if (Object.hasOwn(requiredAccounts, name)) missing.push(accountRemedy({ name, descriptor }))
       continue
     }
     const claude = descriptor.kind !== 'kimi-code'

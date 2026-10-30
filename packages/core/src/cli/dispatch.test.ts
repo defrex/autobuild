@@ -12498,3 +12498,144 @@ for (const peer of [false, true]) {
     }
   })
 }
+
+describe('account credentials precede local repository authority', () => {
+  for (const once of [true, false]) {
+    test(`missing selected accounts refuse ${once ? 'once' : 'watch'} before any lease or launch`, async () => {
+      const toml =
+        DISPATCH_CONFIG_TOML.replace(
+          '[roles.default]',
+          '[roles.default]\naccount = "primary"\nalternates = [{ account = "backup" }]',
+        ) +
+        `
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 2700
+[workspace.config.runtimeProvisioning.claude]
+install = "true"
+preflight = "true"
+[workspace.config.runtimeProvisioning.codex]
+install = "true"
+preflight = "true"
+[accounts.primary]
+kind = "claude-subscription"
+credentialEnv = "PRIMARY_TOKEN"
+[accounts.backup]
+kind = "claude-subscription"
+credentialEnv = "BACKUP_TOKEN"
+[accounts.unused]
+kind = "chatgpt-subscription"
+credentialEnv = "UNUSED_TOKEN"
+`
+      const f = await makeFixture([], happyHandlers(), toml)
+      try {
+        let claims = 0
+        f.store.claimRepoLease = async () => {
+          claims++
+          return true
+        }
+        let launches = 0
+        const wiring = f.wire()
+        wiring.buildExecution.start = async () => {
+          launches++
+          throw new Error('unexpected launch')
+        }
+        const failure = await abDispatch({
+          targetRepo: f.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once,
+          wire: () => wiring,
+        }).catch((error) => error)
+        expect(failure).toBeInstanceOf(Error)
+        expect(failure.message).toContain('PRIMARY_TOKEN')
+        expect(failure.message).toContain('BACKUP_TOKEN')
+        expect(failure.message).toContain('claude setup-token')
+        expect(failure.message).not.toContain('UNUSED_TOKEN')
+        expect(claims).toBe(0)
+        expect(launches).toBe(0)
+        expect(await f.store.listBuilds()).toEqual([])
+      } finally {
+        await f.cleanup()
+      }
+    })
+  }
+})
+
+test('startup inspects peer-owned credentials and yields without renewal or claim', async () => {
+  const f = await makeFixture(
+    [],
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML.replace('runtime = "claude"', 'runtime = "codex"\naccount = "personal"') +
+      `
+[accounts.personal]
+kind = "chatgpt-subscription"
+credentialEnv = "CHATGPT"
+`,
+  )
+  try {
+    const wiring = f.wire()
+    wiring.runtimes.codex = {
+      ...wiring.runtimes.claude!,
+      servesModels: ['gpt-'],
+      defaultModel: 'gpt-5',
+    }
+    let inspected = false
+    wiring.inspectAccounts = () => {
+      inspected = true
+      return { CHATGPT: 'local-refreshing-source' }
+    }
+    wiring.renewAccounts = async () => {
+      throw new Error('must not claim before lease')
+    }
+    wiring.store.claimRepoLease = async () => false
+    await abDispatch({
+      targetRepo: f.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      wire: () => wiring,
+    })
+    expect(inspected).toBe(true)
+  } finally {
+    await f.cleanup()
+  }
+})
+
+test('worktree Claude host login reaches the lease without a named token', async () => {
+  const f = await makeFixture(
+    [],
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML +
+      `
+[accounts.personal]
+kind = "claude-subscription"
+credentialEnv = "CLAUDE_TOKEN"
+`,
+  )
+  try {
+    const wiring = f.wire()
+    let claims = 0
+    wiring.store.claimRepoLease = async () => {
+      claims++
+      return false
+    }
+    await abDispatch({
+      targetRepo: f.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      wire: () => wiring,
+    })
+    expect(claims).toBe(1)
+  } finally {
+    await f.cleanup()
+  }
+})
