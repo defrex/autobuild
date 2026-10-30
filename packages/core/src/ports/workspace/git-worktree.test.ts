@@ -1645,3 +1645,64 @@ describe('GitWorktreeProvider operator sandbox', () => {
     await expect(publication.isPublished!({ sha, branch: 'ab/orch-ops-x' })).rejects.toThrow() // no ref and no recorded workspace → probe cannot run
   })
 })
+
+test('private checkpoint retains two unpublished branch commits and detached work across replacement', async () => {
+  const { preserveGitCommits, restoreGitCommits } = await import('./commit-preservation')
+  const { gitRewrite } = await import('../forge/git-rewrite')
+  const root = await mkdtemp(join(tmpdir(), 'ab-commit-checkpoint-'))
+  const origin = join(root, 'origin.git')
+  const source = join(root, 'source')
+  await initRepo(source)
+  await run(['git', 'init', '--bare', origin], root)
+  await run(['git', 'remote', 'add', 'origin', origin], source)
+  await run(['git', 'push', 'origin', 'main'], source)
+  const base = await run(['git', 'rev-parse', 'HEAD'], source)
+  await run(['git', 'checkout', '-b', 'ab/checkpoint'], source)
+  await run(['git', 'push', 'origin', 'ab/checkpoint'], source)
+  const first = await commitFile(source, 'one', 'one', 'first unpublished')
+  const second = await commitFile(source, 'two', 'two', 'second unpublished')
+  await run(['git', 'checkout', '--detach'], source)
+  const detached = await commitFile(source, 'three', 'three', 'detached producer')
+  const heads = await preserveGitCommits({
+    exec: spawnExec,
+    workspacePath: source,
+    slug: 'checkpoint',
+    branch: 'ab/checkpoint',
+    base,
+    candidates: [detached],
+    archive: gitRewrite(spawnExec, false).archive,
+  })
+  expect(heads.find((head) => head.role === 'branch')?.commits).toEqual([second, first])
+  expect(heads.find((head) => head.role === 'producer')?.sha).toBe(detached)
+  const replacement = join(root, 'replacement')
+  await run(['git', 'clone', '--branch', 'ab/checkpoint', origin, replacement], root)
+  await restoreGitCommits({
+    exec: spawnExec,
+    workspacePath: replacement,
+    branch: 'ab/checkpoint',
+    heads,
+  })
+  expect(await run(['git', 'rev-parse', 'HEAD'], replacement)).toBe(second)
+  for (const sha of [first, second, detached])
+    await run(['git', 'cat-file', '-e', `${sha}^{commit}`], replacement)
+  // Repeated restoration cannot move the branch or lose the detached object.
+  await restoreGitCommits({
+    exec: spawnExec,
+    workspacePath: replacement,
+    branch: 'ab/checkpoint',
+    heads,
+  })
+  expect(await run(['git', 'rev-parse', 'HEAD'], replacement)).toBe(second)
+  await run(['git', 'update-ref', heads[0]!.remoteRef, base], origin)
+  await expect(
+    preserveGitCommits({
+      exec: spawnExec,
+      workspacePath: source,
+      slug: 'checkpoint',
+      branch: 'ab/checkpoint',
+      base,
+      candidates: [],
+      archive: gitRewrite(spawnExec, false).archive,
+    }),
+  ).rejects.toThrow('immutable archive')
+})

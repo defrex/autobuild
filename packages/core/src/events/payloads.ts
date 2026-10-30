@@ -571,6 +571,55 @@ export const eventPayloadSchemas = {
     branch: z.string().min(1),
     base: workspaceBaseSchema,
   }),
+  'workspace.cleanup-required': z.strictObject({
+    provider: z.string().min(1),
+    ref: z.string().min(1),
+    /** Working-copy path in the provider execution environment. Optional only
+     * for historical event replay. */
+    path: z.string().min(1).optional(),
+    /** Dispatcher-reachable path. Remote providers intentionally omit it. */
+    localPath: z.string().min(1).optional(),
+    /** True when the provider reported a remote publication capability at
+     * provision time. Absent ⇒ local (historical journals). AUT-505 removes
+     * the legacy fallback that reads absent as the provider name. */
+    remote: z.boolean().optional(),
+    branch: z.string().min(1),
+    base: workspaceBaseSchema,
+  }),
+  /** A non-destructive execution fence, scoped to the exact provision and execution. */
+  'workspace.fenced': z.strictObject({
+    workspace: z.number().int().positive(),
+    execution: z.number().int().nonnegative(),
+    ref: z.string().min(1),
+    outcome: z.enum(['confirmed', 'absent']),
+  }),
+  'workspace.commits-preserved': z.strictObject({
+    workspace: z.number().int().positive(),
+    execution: z.number().int().nonnegative(),
+    ref: z.string().min(1),
+    branch: z.string().min(1),
+    phase: z.string().min(1),
+    round: z.number().int().nonnegative(),
+    heads: z.array(
+      z.strictObject({
+        sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+        remoteRef: z.string().regex(/^refs\/autobuild\/archive\//),
+        role: z.enum(['branch', 'producer']),
+        commits: z.array(z.string().regex(/^[0-9a-f]{40,64}$/i)),
+      }),
+    ),
+  }),
+  'workspace.commits-lost': z.strictObject({
+    workspace: z.number().int().positive(),
+    execution: z.number().int().nonnegative(),
+    ref: z.string().min(1),
+    branch: z.string().min(1),
+    phase: z.string().min(1),
+    round: z.number().int().nonnegative(),
+    shas: z.array(z.string().regex(/^[0-9a-f]{40,64}$/i)),
+    inventory: z.literal('additional-shas-unavailable'),
+    reason: z.string().min(1),
+  }),
   'workspace.released': z.union([
     empty,
     z.strictObject({
@@ -739,6 +788,13 @@ export const eventPayloadSchemas = {
    * (this event). Deliberately no competing status field — this fact plus the
    * request's seq is the whole surface. Recovery continues through the
    * existing abandoned-publication flow, which re-runs the phase. */
+  'publication.candidate-retired': z.strictObject({
+    request: z.number().int().positive(),
+    operation: z.enum(['reconcile', 'restack']),
+    id: z.string().min(1),
+    sha: gitOid,
+    replacementId: z.string().min(1),
+  }),
   'publication.lost': z.strictObject({
     /** seq of the lost `publication.requested` event. */
     request: z.number().int().positive(),

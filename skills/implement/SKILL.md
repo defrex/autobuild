@@ -43,6 +43,12 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    When the manifest lists `assets`, they are the build's pinned ticket assets
    under `$AB_CONTEXT_DIR/assets/<kind>/<name>/`; read them with the spec. A `design` asset
    is a contract on observable visual and reference outcomes, not on implementation — what you build must satisfy it, while how stays yours.
+   If the manifest includes `workspaceRecovery`, read that materialized note.
+   It distinguishes exact preserved commits restored before the session from
+   known lost candidates and unobservable additional work. A retired reconcile
+   result is reconstructed on the prepared replay under its retained frozen
+   target; do not search for the known nonexistent candidate. Preserved work
+   remains the starting point for continuation.
 2. Execute the plan. Commit in coherent increments with real messages —
    the commit history is part of the paper trail.
 3. Run the repo's checks yourself before finishing (the config's typecheck /

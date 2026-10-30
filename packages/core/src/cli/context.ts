@@ -71,6 +71,7 @@ export type MaterializedEntry = ArtifactRef | 'derived'
  * commands validate with, so skills are self-checking.
  */
 export interface ContextManifest {
+  workspaceRecovery?: string
   compatibility?: import('../events/compatibility').CompatibilityState
   compatibilityDiagnostic?: string
   build: string
@@ -293,6 +294,51 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     manifestPath: `${contextDir}/${manifestRelPath}`,
     ...(notesRelPath !== undefined ? { notesPath: `${contextDir}/${notesRelPath}` } : {}),
     materialized,
+  }
+
+  if (
+    events.workspaceLoss ||
+    events.workspacePreservation ||
+    Object.keys(events.candidateRecoveries).length ||
+    (events.publication.latestUncompletedRequest() &&
+      events.publication.lostRecorded(events.publication.latestUncompletedRequest()!))
+  ) {
+    const loss = events.workspaceLoss?.payload
+    const preserved = events.workspacePreservation?.payload
+    const lines = ['# Workspace commit recovery', '']
+    if (preserved) {
+      lines.push(`Preserved from ${preserved.ref}, ${preserved.phase}@${preserved.round}:`)
+      for (const head of preserved.heads)
+        lines.push(
+          `- ${head.role}: ${head.sha} (${head.remoteRef}); commits: ${head.commits.join(', ')}`,
+        )
+      lines.push(
+        'Replacement provisioning restores these exact refs before starting a session.',
+        '',
+      )
+    }
+    if (loss)
+      lines.push(
+        `Source workspace ${loss.ref}, ${loss.phase}@${loss.round}: ${loss.reason}`,
+        `Known lost candidates: ${loss.shas.join(', ') || '(no SHA inventory was observable)'}. Additional unpublished SHAs are unavailable.`,
+        '',
+      )
+    for (const recovery of Object.values(events.candidateRecoveries)) {
+      if (!recovery) continue
+      lines.push(
+        `${recovery.operation} candidate ${recovery.sha} was confirmed unavailable. Reconstruct its producer result under retained intent ${recovery.replacementId}; do not search for the retired candidate.`,
+        '',
+      )
+    }
+    const legacy = events.publication.latestUncompletedRequest()
+    if (!loss && legacy && events.publication.lostRecorded(legacy))
+      lines.push(
+        `Historical publication loss names ${legacy.payload.sha} (${legacy.payload.operation}). Availability must be checked before treating it as irrecoverable.`,
+      )
+    manifest.workspaceRecovery = await writeDerived(
+      'workspace-recovery.md',
+      `${lines.join('\n')}\n`,
+    )
   }
 
   if (inputs.ticket === true) {

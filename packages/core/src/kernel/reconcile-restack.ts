@@ -1,3 +1,4 @@
+import { inspectGitCandidate } from '../ports/workspace/commit-preservation'
 import { createHash } from 'node:crypto'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { suspendNativeLanding } from './landing-publication'
@@ -19,7 +20,16 @@ export interface RestackDeps {
   workspacePath: string
   forge: Forge
   exec: Exec
+  instance?: string
+  clock?: import('../store/types').Clock
   beforeRewrite?: () => Promise<void>
+  probeCandidate?: (input: {
+    ref: string
+    slug: string
+    branch: string
+    sha: string
+    replayPack?: string
+  }) => Promise<boolean>
   automatic?: Pick<
     EventPayload<'restack.prepared'>,
     'trigger' | 'cycle' | 'observation' | 'message'
@@ -29,11 +39,16 @@ export interface RestackDeps {
  * transactions have their own durable vocabulary and never fabricate a phase. */
 async function replayHistory(deps: RestackDeps): Promise<readonly AbEvent[]> {
   const facts = (await readBuildFacts(deps.store, deps.slug)).value
-  if (deps.automatic === undefined) return facts.reconcileHistory
+  const recovery = facts.candidateRecoveries[deps.automatic ? 'restack' : 'reconcile']
+  if (deps.automatic === undefined)
+    return facts.reconcileHistory.filter(
+      (event) => !('id' in event.payload && event.payload.id === recovery?.id),
+    )
   const mapped: AbEvent[] = [
     ...facts.reconcileHistory.filter((e) => e.type === 'workspace.provisioned'),
   ]
   for (const event of facts.restackHistory) {
+    if ('id' in event.payload && event.payload.id === recovery?.id) continue
     const type = event.type.replace('restack.', 'reconcile.')
     const payload = { ...event.payload, attempt: 1 }
     // Only replay mechanics consume these records; external writes below are
@@ -181,6 +196,81 @@ async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
   return true
 }
 
+/** Exact availability probes only. Transport/auth errors defer recovery;
+ * successful empty ref reads plus absent replay bytes prove candidate loss. */
+export async function recoverLostCandidate(
+  deps: RestackDeps,
+): Promise<'none' | 'available' | 'retired'> {
+  const current = await readBuildFacts(deps.store, deps.slug)
+  const request = current.value.publication.latestUncompletedRequest()
+  if (!request || !current.value.publication.lostRecorded(request)) return 'none'
+  const payload = request.payload
+  if ((payload.operation !== 'reconcile' && payload.operation !== 'restack') || !payload.rewrite)
+    return 'none'
+  if (
+    current.value.state.sessions.open.length ||
+    current.value.state.status === 'paused' ||
+    current.value.state.status === 'blocked' ||
+    current.value.state.pendingCommands.length
+  )
+    return 'none'
+  const record = await deps.store.getBuild(deps.slug)
+  if (
+    current.value.open &&
+    record?.lease &&
+    new Date(record.lease.expiresAt).getTime() > (deps.clock?.() ?? new Date()).getTime() &&
+    (deps.instance === undefined ||
+      current.value.open.instance !== deps.instance ||
+      record.lease.holder !== deps.instance)
+  )
+    return 'none'
+  const sha = payload.sha
+  const artifact = await deps.store.getArtifact(deps.slug, `replay-objects-${sha}`)
+  const replayPack = artifact ? new TextDecoder().decode(artifact.content) : undefined
+  const available = deps.probeCandidate
+    ? await deps.probeCandidate({
+        ref: current.value.workspace?.ref ?? '',
+        slug: deps.slug,
+        branch: payload.branch,
+        sha,
+        replayPack,
+      })
+    : await inspectGitCandidate({
+        exec: deps.forge.kernelExec ?? deps.exec,
+        workspacePath: deps.workspacePath,
+        branch: payload.branch,
+        sha,
+        archiveRef: `refs/autobuild/archive/${deps.slug}/${sha}`,
+        local: deps.forge.name === 'local-git',
+        replayPack,
+      })
+  if (available) {
+    if (!current.value.workspace || !isRemoteWorkspace(current.value.workspace))
+      await requireRewrite(deps.forge).archive({
+        workspacePath: deps.workspacePath,
+        ref: `refs/autobuild/archive/${deps.slug}/${sha}`,
+        sha,
+      })
+    return 'available'
+  }
+  if (await deferMixedVersion(deps.store, deps.slug, KERNEL)) throw new MixedVersionDeferral()
+  if (
+    !(await deps.store.appendIfCurrent(deps.slug, current.cursor, {
+      actor: KERNEL,
+      type: 'publication.candidate-retired',
+      payload: {
+        request: request.seq,
+        operation: payload.operation,
+        id: payload.rewrite.id,
+        sha,
+        replacementId: `${payload.rewrite.id}-recovery-${request.seq}`,
+      },
+    }))
+  )
+    throw new Error('publication changed during candidate recovery; retry')
+  return 'retired'
+}
+
 export async function archiveTips(deps: RestackDeps, extra: string[] = []) {
   const capability = requireRewrite(deps.forge)
   const facts = (await readBuildFacts(deps.store, deps.slug)).value
@@ -218,6 +308,18 @@ export async function prepareRestack(
 ): Promise<ReconcileTransaction> {
   if (await deferMixedVersion(deps.store, deps.slug, KERNEL)) throw new MixedVersionDeferral()
   const capability = requireRewrite(deps.forge)
+  await recoverLostCandidate(deps)
+  const recovery = (await readBuildFacts(deps.store, deps.slug)).value.candidateRecoveries[
+    deps.automatic ? 'restack' : 'reconcile'
+  ]
+  if (
+    recovery &&
+    (input.id === recovery.id ||
+      (deps.automatic === undefined &&
+        (await readBuildFacts(deps.store, deps.slug)).value.reconcileTransaction?.id ===
+          recovery.id))
+  )
+    input = { ...input, id: recovery.replacementId }
   const events = await replayHistory(deps)
   const prior = events.findLast(
     (e) =>

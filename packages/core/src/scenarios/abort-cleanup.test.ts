@@ -8,6 +8,7 @@ import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { reduceBuild } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
+import { gitRewrite } from '../ports/forge/git-rewrite'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { Dispatcher } from '../processes/dispatcher'
@@ -72,6 +73,7 @@ test('abort cleanup removes a real worktree and exact local/remote refs while pr
     }
     const tickets = new FakeTicketSource([ticket])
     const forge = new FakeForge()
+    forge.rewrite = gitRewrite(spawnExec, false)
     forge.deleteBranch = async (workspacePath, exactBranch) => {
       await git(workspacePath, 'check-ref-format', `refs/heads/${exactBranch}`)
       const probe = await spawnExec(

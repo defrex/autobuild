@@ -3101,7 +3101,9 @@ describe('abDispatch watch build-runner coordination', () => {
     let generation = 0
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -3166,7 +3168,9 @@ describe('abDispatch watch build-runner coordination', () => {
     let provisions = 0
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -3242,7 +3246,9 @@ describe('abDispatch watch build-runner coordination', () => {
     const baseWire = fx.wire()
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -3328,7 +3334,9 @@ describe('abDispatch watch build-runner coordination', () => {
     const starts: string[] = []
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         async reap(handle) {
           starts.push(`reap:${handle.provider}:${handle.ref}`)
           return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 0 } }
@@ -3439,7 +3447,9 @@ describe('abDispatch watch build-runner coordination', () => {
     let generation = 0
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -3627,6 +3637,7 @@ describe('abDispatch watch build-runner coordination', () => {
     let startSawCompletion = false
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       publication: {
         isPublished: async (input) => input.sha === head && input.branch === branch,
         publish: async () => {
@@ -3634,6 +3645,7 @@ describe('abDispatch watch build-runner coordination', () => {
         },
       },
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },

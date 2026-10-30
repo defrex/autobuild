@@ -38,6 +38,7 @@ import { isRemoteWorkspace } from '../events/workspace-remote'
 import { withBuildTrailer } from '../kernel/build-identity'
 import {
   prepareRestack,
+  recoverLostCandidate,
   publishRestack,
   retainReplay,
   requireRewrite,
@@ -1220,6 +1221,7 @@ export class BuildRunner {
       return { kind: 'wait', reason: 'mixed-version' }
     const { store, slug } = this.deps
     try {
+      await recoverLostCandidate(this.deps)
       await this.settleLocalReconcile()
     } catch (error) {
       if (error instanceof ForgeRequestDeferred)
