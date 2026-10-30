@@ -1545,6 +1545,7 @@ interface SessionViewHarness {
 
 async function seedSessionViewHarness(
   overrides: {
+    viewer?: boolean
     clock?: () => Date
     ticketSource?: () => Promise<import('../ports/types').TicketSource>
     /** Wrap the store (for a slow or pruned readStream). */
@@ -1608,7 +1609,9 @@ async function seedSessionViewHarness(
   let focus: ((focused: boolean) => void) | undefined
   let paintCount = 0
   const childDone = deferred<DispatchChildResult>()
+  if (overrides.viewer) await seedRun('remote-dispatcher')
   const frontend = new DispatchFrontend({
+    ...(overrides.viewer ? { viewer: {} } : {}),
     repo,
     storeRef: 'memory',
     store: overrides.wrapStore ? overrides.wrapStore(store) : store,
@@ -1666,81 +1669,86 @@ async function seedSessionViewHarness(
   }
 }
 
-test('merge key records consent for a ready node using a fresh ticket-source read', async () => {
-  let reads = 0
-  const tickets = new FakeTicketSource()
-  const h = await seedSessionViewHarness({
-    ticketSource: async () => {
-      reads++
-      return tickets
-    },
-  })
-  try {
-    await waitFor(() => h.output().includes('watched'), 'initial frame')
-    await h.store.append(h.slug, {
-      actor: KERNEL,
-      type: 'session.ended',
-      payload: {
-        session: 's_watch',
-        outcome: 'reclaimed',
-        reclaimedBy: { instance: 'test', resumedFromSeq: 0 },
+test.each([false, true])(
+  'merge key records consent for a ready node using a fresh ticket-source read (viewer=%s)',
+  async (viewer) => {
+    let reads = 0
+    const tickets = new FakeTicketSource()
+    const h = await seedSessionViewHarness({
+      viewer,
+      ticketSource: async () => {
+        reads++
+        return tickets
       },
     })
-    await h.store.append(h.slug, {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        repo: '/session-view-repo',
-        ticket: { source: 'fake', id: 'AUT-WATCH' },
-        baseBranch: 'main',
-        kind: 'node',
-      },
-    })
-    await h.store.append(h.slug, {
-      actor: DISPATCHER,
-      type: 'node.opened',
-      payload: { sha: 'parent' },
-    })
-    await h.store.append(h.slug, {
-      actor: DISPATCHER,
-      type: 'integration.observed',
-      payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
-    })
-    await h.store.append(h.slug, {
-      actor: KERNEL,
-      type: 'integration.prepared',
-      payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
-    })
-    await h.store.append(h.slug, {
-      actor: DISPATCHER,
-      type: 'pr.opened',
-      payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
-    })
-    await h.store.append(h.slug, {
-      actor: DISPATCHER,
-      type: 'landing.decided',
-      payload: {
-        candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
-        from: 'node',
-        into: { kind: 'root' },
-        labels: [],
-        mode: 'consent',
-        rule: { default: true },
-      },
-    })
-    const controller = h.frontend as unknown as { renderOnce(): Promise<void> }
-    await controller.renderOnce()
-    h.press({ type: 'down' })
-    h.press({ type: 'text', text: 'l' })
-    await waitFor(
-      async () => (await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested'),
-      'node merge request',
-    )
-    expect(reads).toBeGreaterThan(0)
-  } finally {
-    await h.finish()
-  }
-})
+    try {
+      await waitFor(() => h.output().includes('watched'), 'initial frame')
+      await h.store.append(h.slug, {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session: 's_watch',
+          outcome: 'reclaimed',
+          reclaimedBy: { instance: 'test', resumedFromSeq: 0 },
+        },
+      })
+      await h.store.append(h.slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: '/session-view-repo',
+          ticket: { source: 'fake', id: 'AUT-WATCH' },
+          baseBranch: 'main',
+          kind: 'node',
+        },
+      })
+      await h.store.append(h.slug, {
+        actor: DISPATCHER,
+        type: 'node.opened',
+        payload: { sha: 'parent' },
+      })
+      await h.store.append(h.slug, {
+        actor: DISPATCHER,
+        type: 'integration.observed',
+        payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+      })
+      await h.store.append(h.slug, {
+        actor: KERNEL,
+        type: 'integration.prepared',
+        payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
+      })
+      await h.store.append(h.slug, {
+        actor: DISPATCHER,
+        type: 'pr.opened',
+        payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+      })
+      await h.store.append(h.slug, {
+        actor: DISPATCHER,
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+          from: 'node',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'consent',
+          rule: { default: true },
+        },
+      })
+      const controller = h.frontend as unknown as { renderOnce(): Promise<void> }
+      await controller.renderOnce()
+      h.press({ type: 'down' })
+      h.press({ type: 'text', text: 'l' })
+      await waitFor(
+        async () =>
+          (await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested'),
+        'node merge request',
+      )
+      expect(reads).toBeGreaterThan(0)
+    } finally {
+      await h.finish()
+    }
+  },
+)
 
 test('Enter on a session with a stream opens the read-only session view; every control key is inert', async () => {
   const h = await seedSessionViewHarness({ rows: 24 })
@@ -3740,4 +3748,344 @@ test('interactive frontend reads rollback authority beyond its bounded repositor
     child.resolve({ outcome: 'normal', exitCode: 0 })
     await running
   }
+})
+
+test('viewer once follows canonical run/config changes without child, raw history, or lease access', async () => {
+  const store = new MemoryBuildStore()
+  const repo = '/viewer-repo'
+  await store.ensureRepo(repo)
+  const seed = async (run: string, capacity: number, queued: number) => {
+    await store.appendRepoWithArtifacts(
+      repo,
+      [
+        {
+          kind: 'config',
+          content: JSON.stringify({
+            capacity,
+            roles: { default: { runtime: 'claude' } },
+            tickets: { source: 'file', readyState: 'ready' },
+          }),
+        },
+      ],
+      (artifacts) => ({
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 42,
+          roleWarnings: [],
+          effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+        },
+      }),
+    )
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-completed',
+      payload: {
+        run,
+        queued,
+        counters: tickCounters,
+        janitorDiagnostics: [],
+        ticketDiagnostics: [],
+        creationDiagnostics: [],
+        dependencyDiagnostics: [],
+      },
+    })
+  }
+  await seed('hosted-one', 2, 3)
+  await store.claimRepoLease(repo, 'hosted-one', 60_000)
+  const before = await store.getRepoEvents(repo)
+  const leaseBefore = await store.getRepo(repo)
+  const watched = new Proxy(store, {
+    get(target, key) {
+      if (
+        [
+          'getRepoEvents',
+          'getRepoStateEvents',
+          'ensureRepo',
+          'acquireRepoLease',
+          'renewRepoLease',
+          'claimRepoLease',
+          'heartbeatRepo',
+          'releaseRepoLease',
+          'appendRepo',
+        ].includes(String(key))
+      )
+        return () => {
+          throw new Error(`viewer called ${String(key)}`)
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const models: DashboardModel[] = []
+  const lines: string[] = []
+  const frontend = new DispatchFrontend({
+    viewer: { dispatchedBy: 'app.autobuild.run' },
+    repo,
+    store: watched,
+    storeRef: 'memory',
+    env: {},
+    once: true,
+    plainOutput: (line) => lines.push(line),
+    terminal: {
+      write: () => {
+        throw new Error('plain terminal write')
+      },
+      columns: 100,
+      rows: 24,
+      interactive: false,
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    input: {
+      start: () => {
+        throw new Error('viewer once opened input')
+      },
+    },
+    launchChild: () => {
+      throw new Error('viewer launched child')
+    },
+    resolveDashboardRenderer: () => (model, opts) => {
+      models.push(model)
+      return renderDashboard(model, opts)
+    },
+  })
+  await frontend.run()
+  expect(models.at(-1)?.queued).toBe(3)
+  expect(models.at(-1)?.active.limit).toBe(2)
+  expect(lines.join('\n')).toContain('viewer · dispatched by app.autobuild.run')
+  expect(await store.getRepoEvents(repo)).toEqual(before)
+  expect(await store.getRepo(repo)).toEqual(leaseBefore)
+  await seed('hosted-two', 5, 7)
+  // A fresh viewer must observe the next dispatcher's identity/config too.
+  const next = new DispatchFrontend({
+    viewer: {},
+    repo,
+    store: watched,
+    storeRef: 'memory',
+    env: {},
+    once: true,
+    plainOutput: () => {},
+    terminal: {
+      write: () => {},
+      columns: 100,
+      rows: 24,
+      interactive: false,
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    input: { start: () => () => {} },
+    resolveDashboardRenderer: () => (model) => {
+      models.push(model)
+      return []
+    },
+    launchChild: () => {
+      throw new Error('viewer launched child')
+    },
+  })
+  await next.run()
+  expect(models.at(-1)?.queued).toBe(7)
+  expect(models.at(-1)?.active.limit).toBe(5)
+})
+
+test.each([false, true])(
+  'viewer without dispatcher exits cleanly (already aborted=%s)',
+  async (aborted) => {
+    const store = new MemoryBuildStore()
+    const signal = new AbortController()
+    if (aborted) signal.abort()
+    const output: string[] = []
+    await new DispatchFrontend({
+      viewer: {},
+      repo: '/absent-viewer',
+      store,
+      storeRef: 'memory',
+      env: {},
+      once: true,
+      signal: signal.signal,
+      plainOutput: (line) => output.push(line),
+      terminal: {
+        write: () => {},
+        columns: 100,
+        rows: 24,
+        interactive: false,
+        modes: createTerminalModeController(
+          () => {},
+          () => {},
+        ),
+      },
+      input: {
+        start: () => {
+          throw new Error('input')
+        },
+      },
+      launchChild: () => {
+        throw new Error('child')
+      },
+    }).run()
+    expect(output[0]).toBe('viewer')
+    if (!aborted) expect(output.join('\n')).toContain('Waiting for dispatcher configuration')
+    expect(await store.getRepo('/absent-viewer')).toBeNull()
+  },
+)
+
+test('viewer keeps shared intake, harvest, global pause/resume controls and Ctrl-C closes only presentation', async () => {
+  const h = await seedSessionViewHarness({ viewer: true })
+  try {
+    await waitFor(() => h.output().includes('viewer'), 'viewer startup')
+    await waitFor(() => h.output().includes('watched'), 'viewer builds')
+    const command = async (key: string, type: string) => {
+      const before = (await h.store.getRepoEvents('/session-view-repo')).filter(
+        (e) => e.type === type,
+      ).length
+      h.press({ type: 'text', text: key })
+      await waitFor(
+        async () =>
+          (await h.store.getRepoEvents('/session-view-repo')).filter((e) => e.type === type)
+            .length > before,
+        key,
+      )
+    }
+    await command('i', 'dispatcher.intake-set')
+    await command('h', 'harvest.pause-requested')
+    await command('p', 'dispatcher.pause-set')
+    await command('r', 'dispatcher.pause-set')
+  } finally {
+    await h.finish()
+  }
+  const events = await h.store.getRepoEvents('/session-view-repo')
+  expect(events.filter((e) => e.type === 'dispatcher.run-started')).toHaveLength(1)
+  expect(
+    events.some((e) =>
+      [
+        'dispatcher.run-stopped',
+        'dispatcher.tick-started',
+        'dispatcher.terminal-released',
+      ].includes(e.type),
+    ),
+  ).toBe(false)
+  expect(
+    events
+      .filter((e) => e.type === 'dispatcher.operator-reported')
+      .every((e) => e.actor.kind === 'human'),
+  ).toBe(true)
+})
+
+test('live viewer follows a new dispatcher run and changed config on the same controller', async () => {
+  const h = await seedSessionViewHarness({ viewer: true })
+  try {
+    await waitFor(() => h.output().includes('watched'), 'initial viewer frame')
+    await h.store.appendRepoWithArtifacts(
+      '/session-view-repo',
+      [
+        {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            capacity: 6,
+            roles: { default: { runtime: 'claude' } },
+            tickets: { source: 'file', readyState: 'ready' },
+          }),
+        },
+      ],
+      (artifacts) => ({
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'successor',
+          pid: 99,
+          roleWarnings: ['new dispatcher warning'],
+          effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+        },
+      }),
+    )
+    await h.store.appendRepo('/session-view-repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-completed',
+      payload: {
+        run: 'successor',
+        queued: 9,
+        counters: tickCounters,
+        janitorDiagnostics: [],
+        ticketDiagnostics: [],
+        creationDiagnostics: [],
+        dependencyDiagnostics: [],
+      },
+    })
+    await (h.frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+    expect(h.frame()).toContain('queue 9')
+    expect(h.frame()).toContain('active 1/6')
+    expect(h.frame()).toContain('new dispatcher warning')
+    expect(h.frame()).toContain('viewer')
+  } finally {
+    await h.finish()
+  }
+})
+
+test('viewer startup fails closed on an incompatible canonical value and restores presentation', async () => {
+  const { ReducerValueValidationError } = await import('../store/reduced-reads')
+  const store = new MemoryBuildStore()
+  const repo = '/viewer-incompatible'
+  await store.ensureRepo(repo)
+  const failure = new ReducerValueValidationError(
+    'repositoryReadFacts',
+    { kind: 'repo', repo },
+    0,
+    { path: 'status', expected: 'compatible status' },
+  )
+  let historyCalls = 0
+  const reader = new Proxy(store, {
+    get(target, key) {
+      if (key === 'getReducerValue')
+        return async () => {
+          throw failure
+        }
+      if (key === 'getRepoEvents' || key === 'getRepoStateEvents')
+        return async () => {
+          historyCalls++
+          throw new Error('history fallback')
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const output: string[] = []
+  await expect(
+    new DispatchFrontend({
+      viewer: {},
+      repo,
+      store: reader,
+      storeRef: 'memory',
+      env: {},
+      once: false,
+      plainOutput: (line) => output.push(line),
+      terminal: {
+        write: () => {
+          throw new Error('plain terminal traffic')
+        },
+        columns: 100,
+        rows: 24,
+        interactive: false,
+        modes: createTerminalModeController(
+          () => {},
+          () => {},
+        ),
+      },
+      input: {
+        start: () => {
+          throw new Error('startup input')
+        },
+      },
+      launchChild: () => {
+        throw new Error('startup child')
+      },
+    }).run(),
+  ).rejects.toBe(failure)
+  expect(output.join('\n')).toContain('viewer')
+  expect(output.join('\n')).toContain('Viewer unavailable')
+  expect(historyCalls).toBe(0)
 })

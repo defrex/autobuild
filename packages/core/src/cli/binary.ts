@@ -27,7 +27,7 @@ export async function runBinary(
   ) {
     try {
       const args = parseDispatchArgs(argv.slice(1), process.env)
-      if (!args.once && !args.repository) return await launchDispatcher(argv)
+      if (!args.viewer && !args.once && !args.repository) return await launchDispatcher(argv)
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error))
       return 1
