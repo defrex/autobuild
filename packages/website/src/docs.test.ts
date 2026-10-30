@@ -114,6 +114,7 @@ test('docs renderer escapes page metadata', () => {
 test('published pages keep navigation on-site and link only declared repository references', () => {
   const references = new Map([
     ['docs/builds.md', ['docs/spec-standard.md#fit-one-implement-session']],
+    ['docs/configuration.md', ['docs/architecture.md#key-boundaries']],
     [
       'docs/cli.md',
       ['docs/accounts.md#dispatcher-admission', 'docs/operator-api.md#permanent-project-deletion'],
@@ -126,6 +127,7 @@ test('published pages keep navigation on-site and link only declared repository 
       ],
     ],
     ['docs/operating.md', ['docs/operator-api.md']],
+    ['docs/workspaces.md', ['docs/architecture.md#key-boundaries']],
     [
       'docs/troubleshooting.md',
       [

@@ -55,6 +55,10 @@ async function pathExists(path: string): Promise<boolean> {
 
 export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly name = 'fake'
+  readonly preservation: NonNullable<WorkspacePublication['preserve']> = async () => ({
+    outcome: 'preserved',
+    heads: [],
+  })
   readonly orchestratorSandbox: OperatorSandboxExecution
   readonly sandboxPublication: WorkspacePublication
 

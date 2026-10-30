@@ -723,6 +723,9 @@ for (const checkout of ['scratch', 'absent'] as const) {
       const scratch = join(h.tmp, 'dispatch-scratch')
       await mkdir(scratch)
       const origin = 'https://github.com/acme/private-repo'
+      // The HTTPS transport shim maps this served repository to a local remote.
+      // Build worktrees must retain its named origin for preservation snapshots.
+      await git(['remote', 'add', 'origin', h.origin], h.origin)
       const token = 'fixture-private-token'
       const activity: string[] = []
       const claimWriter = h.store.claimNodeWriter.bind(h.store)
@@ -1223,6 +1226,7 @@ for (const mode of ['success', 'bare', 'cas', 'lease', 'missing', 'check-only'] 
       }
       let preparation = h.dispatcher
       if (mode === 'bare') {
+        await Bun.$`git -C ${h.origin} remote add origin ${h.origin}`.quiet()
         const { Dispatcher } = await import('../processes/dispatcher')
         const { gitRewrite } = await import('../ports/forge/git-rewrite')
         const { spawnExec } = await import('../ports/workspace/git-worktree')
