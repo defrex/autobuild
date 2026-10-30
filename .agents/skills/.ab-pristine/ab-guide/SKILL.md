@@ -234,7 +234,7 @@ The distinctions that change an administrator's answer:
   graceful until an open claim tick reaches a recoverable boundary; non-SIGINT
   termination is replayed only after that drain. Durable normal/forced/abnormal
   evidence retains available process detail, and parent-death detection prevents
-  a detached kernel. Resident checkout dispatch first runs a filesystem-only
+  a detached kernel. Resident checkout dispatch selects viewer or local execution before running a filesystem-only
   launcher that snapshots the invoking installation and its installed production
   dependencies offline into `.autobuild/runtime/`. The generation's frontend,
   kernel, later local runners and agent PATH CLI execute from that immutable
@@ -1792,6 +1792,22 @@ in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
+A plain `ab dispatch` reads dispatch placement once before starting local execution.
+For a hosted project it opens the Store-only viewer automatically, displaying
+`viewer · dispatched by <host>` from the placement origin (including a nondefault
+port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+`--takeover` explicitly dispatches locally, with a warning that it can displace
+the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
+flags require `--takeover` when placement selects viewer.
+
+An unreadable placement fails closed with a typed error naming the cause:
+use `--viewer` to watch or `--takeover` to dispatch locally. Both explicit modes
+skip placement discovery. Older services without the capability and projects
+with unknown or nonhosted placement retain local dispatch behavior. Local stores
+need no placement request. Origin mode (`--repository` or `AB_REPOSITORY`) and
+hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
+liveness probe or a polling input.
+
 Humans may run `ab dispatch --viewer` from a local checkout to watch dispatch
 elsewhere without taking a lease or starting any dispatch work. The optional
 `--dispatched-by <label>` is descriptive input: every frame shows `viewer` or
@@ -1808,7 +1824,7 @@ All existing shared-store controls remain: merge/hold, build/global pause/resume
 blocked feedback/retry, intake/harvest gates, harvest resume/acknowledgement,
 queued discard and confirmed abort. Navigation/session inspection also remain.
 No current key requires a local dispatcher. Ctrl-C closes only the viewer.
-The operator-agent no-dispatch boundary includes `--viewer`.
+The operator-agent no-dispatch boundary includes `--viewer` and `--takeover`.
 
 
 Both dashboards also show the current authoritative dispatcher's unresolved

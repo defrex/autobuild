@@ -1,3 +1,4 @@
+import { selectDispatchMode } from './dispatch-mode'
 import { createTerminalModeController } from './terminal-restore'
 import { inspectLocalAccountEnvironment } from '../accounts/local-owner'
 import {
@@ -373,6 +374,7 @@ const DEFAULT_TIMERS: TimerScheduler = {
 }
 
 export interface DispatchOpts {
+  takeover?: boolean
   viewer?: boolean
   dispatchedBy?: string
   /** Repo the dispatcher serves (§12: one dispatcher per repo) — the cwd, or
@@ -4956,6 +4958,9 @@ async function resolveOriginModeState(
  * path — is the served repository.
  */
 export async function abDispatch(opts: DispatchOpts): Promise<void> {
+  if (opts.kernelRunId === undefined && !launchContext(opts.env)) {
+    opts = { ...opts, ...(await selectDispatchMode(opts)) }
+  }
   if (opts.viewer) {
     if (opts.repository !== undefined)
       throw new Error('--viewer requires a local checkout; omit --repository')
