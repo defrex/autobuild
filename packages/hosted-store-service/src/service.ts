@@ -1,3 +1,11 @@
+import { DISPATCH_PLACEMENT_CAPABILITY } from '@defrex/autobuild/remote-store'
+import {
+  dispatcherSelection,
+  dispatcherEnabled,
+  parseDispatcherRepositories,
+  dispatcherOrigin,
+} from './dispatcher-selection'
+import type { DispatchPlacement, DispatchPlacementFact } from '@defrex/autobuild/remote-store'
 import { projectSecretsHandler } from './project-secrets'
 import {
   openPostgresProjectSecretsFromEnv,
@@ -79,6 +87,7 @@ export interface HostedStoreErrorContext {
 }
 
 export interface HostedStoreServiceOptions {
+  syncPlacement?: (repo: string, desired: DispatchPlacementFact) => Promise<DispatchPlacement>
   openSecrets?: (env: HostedStoreEnv) => Promise<ProjectSecretsManagement>
   secretMembership?: (user: string, repo: string) => Promise<boolean>
   diagnostic?: (message: string) => void
@@ -218,6 +227,7 @@ const storeResourceRoutes = new Set([
   // classified here and answers 200 from build records.
   'GET build-digests',
   'GET change-position',
+  'GET placement',
   'GET builds',
   // The bounded repository-journal read (AUT-489); unlike build-digests this
   // route is served inside the repo-existence gate, exactly like `GET
@@ -687,8 +697,45 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                 report: (error) =>
                   report(error, new Request('ab://operator-sandbox-composition'), 'operator'),
               }
+        const publication =
+          options.syncPlacement ??
+          ('syncDispatchPlacement' in store
+            ? (repo: string, desired: DispatchPlacementFact) =>
+                (
+                  store as BuildStore & {
+                    syncDispatchPlacement(
+                      repo: string,
+                      desired: DispatchPlacementFact,
+                    ): Promise<DispatchPlacement>
+                  }
+                ).syncDispatchPlacement(repo, desired)
+            : undefined)
+        let placementConfiguration:
+          | { selection: ReturnType<typeof dispatcherSelection>; origin: string }
+          | false
+          | undefined
         const storeServer = createStoreServer({
           store,
+          ...(publication
+            ? {
+                placement: (repo: string) => {
+                  placementConfiguration ??= dispatcherEnabled(env)
+                    ? {
+                        selection: dispatcherSelection(
+                          parseDispatcherRepositories(env.AB_DISPATCHER_REPOSITORIES),
+                        ),
+                        origin: dispatcherOrigin(env),
+                      }
+                    : false
+                  if (placementConfiguration === false) return publication(repo, { hosted: false })
+                  const { selection, origin } = placementConfiguration
+                  return publication(
+                    repo,
+                    selection.includes(repo) ? { hosted: true, origin } : { hosted: false },
+                  )
+                },
+              }
+            : {}),
           requireRegistered: async (repo) => {
             if (!(await projects.has(repo)))
               throw new MachineAuthError(403, 'project not registered')
@@ -868,6 +915,9 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           if (req.method === 'GET' && url.pathname === '/health') {
             return Response.json({
               ok: true,
+              ...(options.syncPlacement || !options.openStore
+                ? { capabilities: [DISPATCH_PLACEMENT_CAPABILITY] }
+                : {}),
               autobuildVersion: AUTOBUILD_VERSION,
               protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
               supportedClientRange: supportedClientRange(),

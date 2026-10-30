@@ -1,3 +1,9 @@
+import {
+  dispatchPlacementFactSchema,
+  type DispatchPlacementFact,
+  type DispatchPlacement,
+} from '@defrex/autobuild/store-adapter'
+import { captureProject, admitProject } from './project-lifecycle'
 import { scanCadenceSchema, type ScanCadence } from '@defrex/autobuild/store-adapter'
 import { PROJECT_BLOB_LOCK, reserveProjectBlobs } from './project-lifecycle'
 import { hostedProjectContext } from './request-context'
@@ -1355,7 +1361,98 @@ export class PostgresBuildStore implements BuildStore {
     return code === '42P01'
   }
 
+  /** Service-owned publication; no public client write endpoint. */
+  async syncDispatchPlacement(
+    repo: string,
+    input: DispatchPlacementFact,
+  ): Promise<DispatchPlacement> {
+    const desired = dispatchPlacementFactSchema.parse(input)
+    const admission = await captureProject(this.sql, repo)
+    return this.tx(async (q) => {
+      await admitProject(q, admission)
+      const ts = this.now()
+      await q`INSERT INTO repo_streams (repo, created_at, updated_at) VALUES (${repo}, ${ts}, ${ts}) ON CONFLICT (repo) DO NOTHING`
+      await this.lockRepo(q, repo)
+      const current = await this.placementValue(q, repo)
+      const value = current.value as DispatchPlacement
+      if (value.status === 'known' && JSON.stringify(value.placement) === JSON.stringify(desired))
+        return value
+      await this.appendRepoLocked(
+        q,
+        repo,
+        validateRepositoryEventWrite({
+          type: 'dispatcher.placement-set',
+          actor: { kind: 'kernel' },
+          payload: desired,
+        }),
+        true,
+      )
+      return (await this.placementValue(q, repo)).value as DispatchPlacement
+    })
+  }
+
+  /** Call only under the repository row lock. Initialization and publication
+   * use the same canonical reducer key and executor, with mandatory persistence. */
+  private async placementValue(q: Exec, repo: string): Promise<ReducerValue> {
+    const scope = { kind: 'repo', repo } as const
+    const { key, identity, reducer, entry } = resolveReducerValue(scope, {
+      reducer: 'dispatchPlacement',
+    })
+    const [tail] = await q`SELECT COALESCE(MAX(seq),0) AS seq FROM repo_events WHERE repo=${repo}`
+    const boundary = num(tail?.seq ?? 0)
+    const [saved] =
+      await q`SELECT version, cursor, state FROM reducer_snapshots WHERE scope_kind='repo' AND scope_key=${repo} AND reducer=${key}`
+    const state = saved ? (json(saved.state) as { identity?: string; acc?: unknown }) : undefined
+    if (
+      saved &&
+      (num(saved.version) !== reducer.version ||
+        state?.identity !== identity ||
+        !entry.validate(state.acc) ||
+        num(saved.cursor) > boundary)
+    )
+      throw new Error('invalid canonical dispatch placement reduction')
+    let acc = saved ? state!.acc : reducer.initial()
+    let cursor = saved ? num(saved.cursor) : 0
+    if (cursor < boundary) {
+      const rows: Row[] =
+        await q`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${cursor} AND seq<=${boundary} ORDER BY seq`
+      const events = rows.map((row) => ({
+        repo,
+        seq: num(row.seq),
+        ts: iso(row.ts),
+        actor: json(row.actor),
+        type: String(row.type),
+        payload: json(row.payload),
+        ...(row.compatibility ? { compatibility: json(row.compatibility) } : {}),
+      })) as RepositoryEvent[]
+      for (const event of events) {
+        if (event.seq !== ++cursor) throw new Error('noncontiguous reducer log')
+      }
+      if (cursor !== boundary) throw new Error('incomplete reducer log')
+      acc = reducer.advance(acc, entry.adapt(events))
+    }
+    if (!saved || num(saved.cursor) !== cursor) {
+      const encoded = JSON.stringify({ identity, acc })
+      await q`INSERT INTO reducer_snapshots (scope_kind,scope_key,reducer,version,cursor,state,updated_at)
+        VALUES ('repo',${repo},${key},${reducer.version},${cursor},${encoded}::jsonb,${this.now()})
+        ON CONFLICT(scope_kind,scope_key,reducer) DO UPDATE SET version=EXCLUDED.version,cursor=EXCLUDED.cursor,state=EXCLUDED.state,updated_at=EXCLUDED.updated_at`
+    }
+    return {
+      version: reducer.version,
+      cursor,
+      value: entry.value(reducer.finish(acc)),
+      catalogIdentity: READ_CATALOG_IDENTITY,
+    }
+  }
+
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
+    if (scope.kind === 'repo' && request.reducer === 'dispatchPlacement') {
+      resolveReducerValue(scope, request)
+      return this.tx(async (q) => {
+        await this.lockRepo(q, scope.repo)
+        return this.placementValue(q, scope.repo)
+      })
+    }
     // Reject invalid requests before touching storage.
     resolveReducerValue(scope, request)
     return readReducerValue(scope, request, {

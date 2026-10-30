@@ -382,3 +382,28 @@ describe('projectRepositoryStateEvents', () => {
     }
   })
 })
+
+test('placement is latest-only before any run anchor in bounded journal reads', async () => {
+  const { repositoryStateEventsReducer, journalViewReducer } = await import('./repo-state-events')
+  const placement = (
+    seq: number,
+    payload: import('../events/repository').DispatchPlacementFact,
+  ): RepositoryEvent => ({
+    repo: 'repo',
+    seq,
+    ts: '2026-10-30T00:00:00Z',
+    actor: KERNEL,
+    type: 'dispatcher.placement-set',
+    payload,
+  })
+  const first = placement(1, { hosted: true, origin: 'https://store.test' })
+  const second = placement(2, { hosted: false })
+  for (const project of [
+    projectRepositoryStateEvents,
+    repositoryStateEventsReducer.reduce,
+    journalViewReducer.reduce,
+  ])
+    expect(project([first, second])).toEqual([second])
+  const { isDashboardRepositoryEvent } = await import('../cli/dispatch-repository-feed')
+  expect(isDashboardRepositoryEvent(second)).toBe(false)
+})

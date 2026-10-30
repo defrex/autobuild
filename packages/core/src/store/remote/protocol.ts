@@ -535,3 +535,10 @@ export const finishRepoTickResponseSchema = z
   .nullable()
 
 export const nodeRewriteWireSchema = eventPayloadSchemas['node.rewritten'].nullable()
+
+/** Optional and independently negotiated; no change to released value contracts. */
+export const DISPATCH_PLACEMENT_CAPABILITY = 'dispatch-placement-v1'
+export const placementCapabilitiesSchema = z.object({
+  capabilities: z.array(z.string()).optional(),
+})
+export { dispatchPlacementSchema } from '../../kernel/dispatch-placement'
