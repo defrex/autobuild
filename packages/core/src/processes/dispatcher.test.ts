@@ -2816,7 +2816,9 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     const provider: WorkspaceProvider = {
       name: local.name,
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({ outcome: 'absent', snapshots: { outcome: 'confirmed', deleted: 0 } }),
       },
       provision: (input) => local.provision(input),
@@ -2867,7 +2869,9 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     const provider: WorkspaceProvider = {
       name: local.name,
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -2993,7 +2997,9 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     let provisions = 0
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({ outcome: 'absent', snapshots: { outcome: 'confirmed', deleted: 0 } }),
       },
       provision: async () => {
@@ -3273,8 +3279,10 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), merged: 1 })
 
     const events = await h.store.getEvents(slug)
-    expect(events.map((e) => e.type).slice(-3)).toEqual([
+    expect(events.map((e) => e.type).slice(-5)).toEqual([
       'pr.merged',
+      'workspace.fenced',
+      'workspace.commits-preserved',
       'workspace.released',
       'build.completed',
     ])
@@ -3478,8 +3486,10 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), closed: 1 })
 
     const events = await h.store.getEvents(slug)
-    expect(events.map((e) => e.type).slice(-3)).toEqual([
+    expect(events.map((e) => e.type).slice(-5)).toEqual([
       'pr.closed',
+      'workspace.fenced',
+      'workspace.commits-preserved',
       'workspace.released',
       'build.completed',
     ])
@@ -3675,8 +3685,10 @@ describe('Dispatcher janitor', () => {
     expect(h.workspaces.releases).toEqual([])
     await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-    expect((await h.store.getEvents(slug)).map((e) => e.type).slice(-3)).toEqual([
+    expect((await h.store.getEvents(slug)).map((e) => e.type).slice(-5)).toEqual([
       'pr.merged',
+      'workspace.fenced',
+      'workspace.commits-preserved',
       'workspace.released',
       'build.completed',
     ])
@@ -3791,8 +3803,10 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
-    expect((await h.store.getEvents(slug)).map((event) => event.type).slice(-3)).toEqual([
+    expect((await h.store.getEvents(slug)).map((event) => event.type).slice(-5)).toEqual([
       'pr.merged',
+      'workspace.fenced',
+      'workspace.commits-preserved',
       'workspace.released',
       'build.completed',
     ])
@@ -3835,8 +3849,10 @@ describe('Dispatcher janitor', () => {
     await h.store.releaseLease(slug, 'runner-live')
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
     const final = await h.store.getEvents(slug)
-    expect(final.map((e) => e.type).slice(-3)).toEqual([
+    expect(final.map((e) => e.type).slice(-5)).toEqual([
       'pr.merged',
+      'workspace.fenced',
+      'workspace.commits-preserved',
       'workspace.released',
       'build.completed',
     ])
@@ -4293,7 +4309,9 @@ describe('Dispatcher janitor', () => {
   test('conflicted re-entry records replacement provisioning failures durably', async () => {
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'absent',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -4439,7 +4457,9 @@ describe('Dispatcher janitor', () => {
     let fail = true
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         async reap() {
           if (fail) throw new Error('delete acknowledgement timed out')
           return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 2 } }
@@ -4483,7 +4503,9 @@ describe('Dispatcher janitor', () => {
   test('remote release records snapshot purge evidence before the durable release fact', async () => {
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         async reap() {
           return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 3 } }
         },
@@ -5567,7 +5589,9 @@ describe('Dispatcher lease sweep', () => {
     const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
     const provider: WorkspaceProvider = {
       name: local.name,
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -5618,7 +5642,9 @@ describe('Dispatcher lease sweep', () => {
     const operations: string[] = []
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         async reap(handle) {
           operations.push(`reap:${handle.provider}:${handle.ref}`)
           return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 1 } }
@@ -5640,6 +5666,7 @@ describe('Dispatcher lease sweep', () => {
     }
     const retired: WorkspaceProvider = {
       name: 'git-worktree',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       async provision() {
         throw new Error('retired providers never provision')
       },
@@ -5683,8 +5710,21 @@ describe('Dispatcher lease sweep', () => {
     let recoveredGeneration: number | undefined
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => {
+        operations.push('preserve')
+        const events = await h.store.getEvents(slug)
+        expect(events.length).toBeGreaterThan(0)
+        return { outcome: 'preserved', heads: [] }
+      },
       recovery: {
+        fence: async () => {
+          operations.push('fence')
+          return { outcome: 'confirmed' }
+        },
         async reap(handle) {
+          const receipts = await h.store.getEvents(slug)
+          expect(receipts.some((event) => event.type === 'workspace.fenced')).toBe(true)
+          expect(receipts.some((event) => event.type === 'workspace.commits-preserved')).toBe(true)
           operations.push(`reap:${handle.ref}`)
           return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 1 } }
         },
@@ -5738,7 +5778,7 @@ describe('Dispatcher lease sweep', () => {
     // The replacement provision runs inside the kicked background continuation,
     // whose tail re-attaches the runner once the workspace exists.
     await h.dispatcher.drainProvisioning()
-    expect(operations).toEqual(['reap:sandbox-g0', 'provision'])
+    expect(operations).toEqual(['fence', 'preserve', 'reap:sandbox-g0', 'provision'])
     expect(recoveredRevision).toBe(BASE_SHA)
     expect(recoveredGeneration).toBe(1)
     expect(h.launches).toEqual([slug])
@@ -5755,7 +5795,9 @@ describe('Dispatcher lease sweep', () => {
       const sha = 'f'.repeat(40)
       const workspaceProvider: WorkspaceProvider = {
         name: 'remote-test',
+        preservation: async () => ({ outcome: 'preserved', heads: [] }),
         recovery: {
+          fence: async () => ({ outcome: 'confirmed' }),
           async reap() {
             operations.push('reap')
             throw new Error('a completed execution must recover publication in place')
@@ -5839,7 +5881,9 @@ describe('Dispatcher lease sweep', () => {
     const operations: string[] = []
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         async reap(handle) {
           operations.push(`reap:${handle.ref}`)
           return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 1 } }
@@ -6263,7 +6307,9 @@ describe('Dispatcher durable supervision', () => {
     }
     const provider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -6288,7 +6334,9 @@ describe('Dispatcher durable supervision', () => {
   function remoteWorkspaceProvider(operations: string[]): WorkspaceProvider {
     return {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -6547,7 +6595,9 @@ describe('Dispatcher durable supervision', () => {
     const operations: string[] = []
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -6634,7 +6684,9 @@ describe('Dispatcher durable supervision', () => {
     })
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -6700,7 +6752,9 @@ describe('Dispatcher harvest execution settlement', () => {
         throw new Error('not used in settlement tests')
       },
       release: async () => {},
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async (handle: { provider: string; ref: string }) => {
           reapCalls.push({ provider: handle.provider, ref: handle.ref })
           return {
@@ -6868,7 +6922,9 @@ describe('publication loss before workspace release', () => {
     const settleCalls: string[] = []
     const remote: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         async reap(handle) {
           reapCalls.push(handle.ref)
           return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 0 } }
@@ -7969,7 +8025,9 @@ describe('Dispatcher tick event reads', () => {
     }
     const provider: WorkspaceProvider = {
       name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
       recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
         reap: async () => ({
           outcome: 'confirmed',
           snapshots: { outcome: 'confirmed', deleted: 0 },
@@ -10415,7 +10473,9 @@ for (const asynchronous of [false, true]) {
       name: local.name,
       ...(asynchronous
         ? {
+            preservation: async () => ({ outcome: 'preserved', heads: [] }),
             recovery: {
+              fence: async () => ({ outcome: 'confirmed' }),
               reap: async () => ({
                 outcome: 'absent' as const,
                 snapshots: { outcome: 'confirmed' as const, deleted: 0 },
@@ -12282,5 +12342,176 @@ test('incomplete node observation cannot advance an idle deadline', async () => 
   await h.dispatcher.tick({ acceptNewWork: false })
   expect(reduceBuild(await h.store.getEvents(node.slug)).nodePolling?.checkedAt).toBe(
     h.clock().toISOString(),
+  )
+})
+
+test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
+  'workspace replacement retries safely after %s failure',
+  async (failure) => {
+    let failing = true
+    let reaped = 0
+    let fences = 0
+    let restored: import('../ports/types').WorkspacePreservationHead[] | undefined
+    const sha = 'f'.repeat(40)
+    const heads = [
+      {
+        sha,
+        remoteRef: `refs/autobuild/archive/test-build/${sha}`,
+        role: 'branch' as const,
+        commits: [sha, 'e'.repeat(40)],
+      },
+    ]
+    const provider: WorkspaceProvider = {
+      name: 'checkpoint-fixture',
+      preservation: async () => {
+        if (failing && failure === 'preservation') throw new Error('archive readback unavailable')
+        return { outcome: 'preserved', heads }
+      },
+      recovery: {
+        fence: async () => {
+          fences++
+          return failing && failure === 'unknown-fence'
+            ? { outcome: 'unknown', error: 'stop unconfirmed' }
+            : { outcome: 'confirmed' }
+        },
+        reap: async () => {
+          const events = await h.store.getEvents(slug)
+          expect(events.some((event) => event.type === 'workspace.fenced')).toBe(true)
+          expect(events.some((event) => event.type === 'workspace.commits-preserved')).toBe(true)
+          if (failing && failure === 'reap') throw new Error('delete unavailable')
+          reaped++
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 0 } }
+        },
+      },
+      provision: async (input) => {
+        restored = input.restoration
+        return {
+          provider: 'checkpoint-fixture',
+          ref: 'replacement',
+          path: '/replacement',
+          branch: input.branch,
+          base: { source: 'existing', sha },
+        }
+      },
+      release: async () => {},
+    }
+    const h = harness({ workspaceProvider: provider })
+    const slug = await seedBuild(h, { workspaceProvider: provider.name, workspaceRef: 'source' })
+    const append = h.store.appendIfCurrent.bind(h.store)
+    h.store.appendIfCurrent = async (...args) => {
+      if (failing && failure === 'receipt' && args[2].type === 'workspace.commits-preserved')
+        throw new Error('receipt store unavailable')
+      return append(...args)
+    }
+    if (failure === 'preservation' || failure === 'receipt')
+      await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('unavailable')
+    else await h.dispatcher.tick({ acceptNewWork: false })
+    expect(reaped).toBe(0)
+    expect(
+      (await h.store.getEvents(slug)).some((event) => event.type === 'workspace.released'),
+    ).toBe(false)
+    failing = false
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.drainProvisioning()
+    expect(reaped).toBe(1)
+    expect(fences).toBe(2)
+    expect(restored).toEqual(heads)
+    expect(
+      (await h.store.getEvents(slug)).filter(
+        (event) => event.type === 'workspace.commits-preserved',
+      ),
+    ).toHaveLength(1)
+  },
+)
+
+test('confirmed absent replacement records unknown additional inventory before cleanup', async () => {
+  let reaped = false
+  const provider: WorkspaceProvider = {
+    name: 'absent-checkpoint-fixture',
+    preservation: async () => {
+      throw new Error('absent source must never be inspected')
+    },
+    recovery: {
+      fence: async () => ({ outcome: 'absent' }),
+      reap: async () => {
+        const events = await h.store.getEvents(slug)
+        const loss = events.find((event) => event.type === 'workspace.commits-lost')!
+        expect(loss.payload).toMatchObject({
+          inventory: 'additional-shas-unavailable',
+          ref: 'source',
+          phase: 'implement',
+        })
+        reaped = true
+        return { outcome: 'absent', snapshots: { outcome: 'confirmed', deleted: 0 } }
+      },
+    },
+    provision: async (input) => ({
+      provider: 'absent-checkpoint-fixture',
+      ref: 'replacement',
+      path: '/replacement',
+      branch: input.branch,
+      base: { source: 'existing', sha: BASE_SHA },
+    }),
+    release: async () => {},
+  }
+  const h = harness({ workspaceProvider: provider })
+  const slug = await seedBuild(h, { workspaceProvider: provider.name, workspaceRef: 'source' })
+  await h.dispatcher.tick({ acceptNewWork: false })
+  await h.dispatcher.drainProvisioning()
+  expect(reaped).toBe(true)
+  const types = (await h.store.getEvents(slug)).map((event) => event.type)
+  expect(types.indexOf('workspace.fenced')).toBeLessThan(types.indexOf('workspace.commits-lost'))
+  expect(types.indexOf('workspace.commits-lost')).toBeLessThan(types.indexOf('workspace.released'))
+})
+
+test('workspace preservation refuses a live execution lease before any provider operation', async () => {
+  const { preserveWorkspaceBeforeRelease } = await import('./workspace-preservation')
+  let calls = 0
+  const provider: WorkspaceProvider = {
+    name: 'live-checkpoint-fixture',
+    preservation: async () => {
+      calls++
+      return { outcome: 'preserved', heads: [] }
+    },
+    recovery: {
+      fence: async () => {
+        calls++
+        return { outcome: 'confirmed' }
+      },
+      reap: async () => {
+        throw new Error('unexpected reap')
+      },
+    },
+    provision: async () => {
+      throw new Error('unexpected provision')
+    },
+    release: async () => {
+      throw new Error('unexpected release')
+    },
+  }
+  const h = harness({ workspaceProvider: provider })
+  const slug = await seedBuild(h, { workspaceProvider: provider.name, workspaceRef: 'source' })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: provider.name, workspaceRef: 'source', instance: 'live' },
+  })
+  await h.store.claimLease(slug, 'live', 60_000)
+  await expect(
+    preserveWorkspaceBeforeRelease({
+      store: h.store,
+      slug,
+      owner: provider,
+      forge: h.forge,
+      exec: async () => {
+        throw new Error('unexpected Git')
+      },
+      reason: 'replacement',
+      now: h.clock(),
+    }),
+  ).rejects.toThrow('lease is live')
+  expect(calls).toBe(0)
+  expect((await h.store.getEvents(slug)).some((event) => event.type === 'workspace.fenced')).toBe(
+    false,
   )
 })

@@ -76,6 +76,23 @@ Reconcile requires the optional grouped `Forge.rewrite` capability:
 - Older forge plugins still load; reconcile refuses them actionably.
 - Remote workspace providers also need trusted `WorkspacePublication.rewrite` after guest teardown; ordinary `publish` can't publish a restack.
 
+### Workspace preservation
+
+Remote providers expose trusted `WorkspacePublication.preserve` and
+`recoverCandidate`; local providers may supply `WorkspaceProvider.preservation`
+without changing the remote-publication discriminator. Missing capabilities fail
+safely at destructive boundaries. `WorkspaceRecovery.fence(handle)` reports
+confirmed, absent, or unknown without deleting an environment or its snapshots.
+Only dispatcher-authorized reap follows the durable fence and preservation/loss
+receipt. `provision` accepts exact `restoration` heads; branch ancestry must be
+verified, and detached producer objects must never overwrite the named branch.
+Provision/start failures signal `WorkspaceCleanupRequired` rather than deleting
+or implicitly recreating an existing checkout. A confirmed `snapshot_not_found`
+lookup establishes filesystem absence, while retaining the stale name for
+dispatcher-authorized deletion. Other provider failures remain unknown and must
+never be converted into loss evidence. Credentials stay in trusted transport policy,
+never guest environment or agent commands.
+
 ### Publication readback
 
 Publication succeeds only when an authoritative branch-head readback equals the frozen intended SHA, including recovery after a failed push. Unconfirmed candidate ancestry never proves publication.

@@ -159,11 +159,24 @@ retry eligibility and recheck authorization after repository forge cooldown.
 
 ## Leaf publication retry recovery
 
+A historical `publication.lost` does not prove that every copy of its candidate
+is gone. Recovery checks the exact branch and private archive refs and retained
+replay objects first. An available candidate continues guarded publication.
+A genuinely missing reconcile or automatic restack candidate records
+`publication.candidate-retired`, abandons its obsolete request, and replays the
+producing operation with a fresh transaction identity. Its frozen target,
+reconcile occurrence or automatic trigger, cycle, and message survive. The
+retired candidate is excluded from archive requirements unless independently
+required by proven history. This reconstruction consumes no infrastructure
+attempt and no additional conflict occurrence; it needs no operator guidance.
+A bare retry also clears an existing infrastructure-limit escalation through
+ordinary retry semantics. Unavailable inspection defers rather than proving loss.
+
 Leaf restack and reconcile publication retry classified transient forge or transport
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and
 300 seconds. `publication.retry-scheduled` records the operation, frozen rewrite
 identity, episode anchor, failure ordinal, last error and absolute retry time;
-restart resumes that schedule without rerunning the resolver. These retries do
+restart resumes that schedule without rerunning a resolver whose candidate remains available. These retries do
 not consume `maxPhaseAttempts`. A seventh transient failure records
 `publication.retry-exhausted` and raises `publication-retry-limit`, naming the last
 error and six retries. Answering that escalation opens a fresh publication episode
@@ -172,6 +185,11 @@ publication keeps its workspace through backoff and unresolved exhaustion.
 Classified rate limits retain repository cooldown and consume no publication
 retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
+
+Preserved restoration checkpoints survive repeated replacement; a published
+reconcile or restack rewrite retires the old checkpoint.
+Recovery context applies to the following session and its repeated hydration; later
+sessions do not inherit obsolete reconstruction instructions.
 
 ## Ticket preparation before build creation
 

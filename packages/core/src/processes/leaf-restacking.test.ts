@@ -49,6 +49,7 @@ for (const conflict of [false, true])
   for (const { remote, recovery } of [false, true].flatMap((remote) =>
     [
       ...(!remote && conflict ? ['none', 'contention', 'pause'] : ['none']),
+      ...(!remote && !conflict ? ['lost-candidate'] : []),
       'transient',
       'persistent',
       'acknowledgement',
@@ -331,6 +332,90 @@ for (const conflict of [false, true])
           expect(
             events.some((e) => e.type === (conflict ? 'reconcile.completed' : 'restack.completed')),
           ).toBe(true)
+          expect(await git(['show', '-s', '--format=%P', BRANCH])).toBe(target)
+          return
+        }
+        if (recovery === 'lost-candidate') {
+          const original = leafRestackLog().find((event) => event.type === 'restack.prepared')!
+          if (original.type !== 'restack.prepared') throw new Error('missing transaction')
+          const transaction = {
+            ...original.payload,
+            branch: BRANCH,
+            oldHead,
+            oldBase: base,
+            targetBase: target,
+            changeSha: oldHead,
+            workspaceHead: oldHead,
+            localBranchHead: oldHead,
+            message: `Leaf change\n\nAutobuild-Build: ${BUILD}\n`,
+          }
+          const missing = '9'.repeat(40)
+          const intent = { ...transaction, headSha: missing }
+          await store.append(BUILD, {
+            actor: KERNEL,
+            type: 'restack.prepared',
+            payload: transaction,
+          })
+          await store.append(BUILD, {
+            actor: KERNEL,
+            type: 'restack.replayed',
+            payload: { id: transaction.id, conflicted: false },
+          })
+          await store.append(BUILD, {
+            actor: KERNEL,
+            type: 'restack.publish-intended',
+            payload: intent,
+          })
+          await store.append(BUILD, {
+            actor: KERNEL,
+            type: 'publication.requested',
+            payload: { operation: 'restack', branch: BRANCH, sha: missing, rewrite: intent },
+          })
+          await store.append(BUILD, {
+            actor: { kind: 'dispatcher' },
+            type: 'publication.lost',
+            payload: {
+              request: (await store.getEvents(BUILD)).at(-1)!.seq,
+              operation: 'restack',
+              branch: BRANCH,
+              sha: missing,
+              reason: 'replacement',
+            },
+          })
+          const capability = forge.rewrite!
+          Object.defineProperty(forge, 'rewrite', {
+            value: {
+              ...capability,
+              archive: async (input: Parameters<typeof capability.archive>[0]) => {
+                expect(input.sha).not.toBe(missing)
+                return capability.archive(input)
+              },
+              replace: async (input: Parameters<typeof capability.replace>[0]) => {
+                expect(input.sha).not.toBe(missing)
+                return capability.replace(input)
+              },
+            },
+          })
+          await runner.step()
+          const fresh = new BuildRunner(deps)
+          if (!(await readBuildFacts(store, BUILD)).value.log.restack.completed) await fresh.step()
+          const facts = (await readBuildFacts(store, BUILD)).value
+          const completed = facts.log.restack.completed!
+          expect(completed).toBeDefined()
+          expect(completed.id).not.toBe(transaction.id)
+          expect(completed.targetBase).toBe(target)
+          expect(completed.trigger).toBe(transaction.trigger)
+          expect(completed.cycle).toBe(transaction.cycle)
+          expect(completed.message).toBe(transaction.message)
+          const events = await store.getEvents(BUILD)
+          expect(
+            events.filter((event) => event.type === 'publication.candidate-retired'),
+          ).toHaveLength(1)
+          expect(
+            events.filter(
+              (event) => event.type === 'infrastructure.failed' || event.type === 'phase.failed',
+            ),
+          ).toHaveLength(0)
           expect(await git(['show', '-s', '--format=%P', BRANCH])).toBe(target)
           return
         }

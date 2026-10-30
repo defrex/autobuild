@@ -304,7 +304,50 @@ export interface WorkspaceProvisionResult extends WorkspaceHandle {
   base: WorkspaceBase
 }
 
+/** A provider refused to destroy a checkout during provision/start. The
+ * dispatcher must record its identity before fencing and preservation. */
+export class WorkspaceCleanupRequired extends Error {
+  constructor(
+    readonly workspace: WorkspaceHandle & { base?: WorkspaceBase },
+    cause: unknown,
+  ) {
+    super(
+      `workspace ${workspace.ref} requires dispatcher-authorized cleanup: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    )
+    this.name = 'WorkspaceCleanupRequired'
+  }
+}
+
+export interface WorkspacePreservationHead {
+  sha: string
+  remoteRef: string
+  role: 'branch' | 'producer'
+  commits: string[]
+}
+export type WorkspaceFenceOutcome =
+  | { outcome: 'confirmed' | 'absent' }
+  | { outcome: 'unknown'; error: string }
+
 export interface WorkspacePublication {
+  recoverCandidate?(input: {
+    ref: string
+    slug: string
+    branch: string
+    sha: string
+    replayPack?: string
+  }): Promise<boolean>
+
+  /** Dispatcher-only, after a durable non-destructive fence. Errors never
+   * constitute proof that an environment or its unpublished work is absent. */
+  preserve?(input: {
+    ref: string
+    slug: string
+    branch: string
+    base: string
+    candidates: string[]
+  }): Promise<{ outcome: 'preserved'; heads: WorkspacePreservationHead[] } | { outcome: 'absent' }>
+
   /** Trusted after-teardown path; never route a restack through plain publish. */
   rewrite?(input: {
     ref: string
@@ -342,12 +385,19 @@ export interface WorkspaceReapOutcome {
 }
 
 export interface WorkspaceRecovery {
+  /** Stops execution without deleting the workspace or its snapshots. */
+  fence?(handle: WorkspaceHandle): Promise<WorkspaceFenceOutcome>
+
   /** Fence an unavailable environment. Unknown outcomes must reject so the
    * dispatcher retains the lease/workspace fact and retries after its fence. */
   reap(handle: WorkspaceHandle): Promise<WorkspaceReapOutcome>
 }
 
 export interface WorkspaceProvider {
+  /** Local adapters may provide the same boundary capability without becoming
+   * a remote-publication provider. */
+  readonly preservation?: NonNullable<WorkspacePublication['preserve']>
+
   readonly name: string
   /** Optional workspace-adjacent executor. Remote providers substitute here;
    * locally reachable providers use the shipped subprocess capability. */
@@ -381,6 +431,7 @@ export interface WorkspaceProvider {
     /** Confirmed publication and known stale cache tips, from durable facts.
      * Providers must preserve unknown unpublished work during ordinary resume. */
     publication?: { sha: string; cacheHeads: string[] }
+    restoration?: WorkspacePreservationHead[]
     /** Immutable recovery checkpoint, never a moved base branch. */
     revision?: string
     /** Monotonic environment generation used in provider idempotency keys. */

@@ -2883,7 +2883,7 @@ with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
+| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
 | Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
@@ -3229,12 +3229,33 @@ The setup target belongs only to escalation metadata and is not a pipeline `Phas
 native continuation described in §9. The following remote-sandbox recovery
 retains its fresh-session fallback.
 
+Before releasing or replacing a build workspace, the dispatcher confirms a
+non-destructive execution fence for the exact workspace and execution generation.
+It preserves unpublished branch commits and distinct detached producer candidates
+under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
+readback, and records `workspace.commits-preserved` before cleanup. Replacement
+provisioning restores those exact refs before starting an agent. Preservation
+never advances the public build branch. A confirmed absent environment records
+`workspace.commits-lost`, naming known candidates and explicitly noting that any
+additional unpublished SHAs could not be inspected. Unknown fencing, inspection,
+transport, or receipt-write outcomes leave the workspace and snapshots intact.
+Fencing is revalidated after restart; a saved receipt alone never authorizes
+cleanup of a newer execution. Current recovery notes are linked by the session
+manifest's `workspaceRecovery` field. Recovery notes apply to the next session
+and repeat hydration within it; empty checkpoints produce no note. Checkpoints survive
+repeated replacement until a published reconcile or restack rewrite retires them,
+so an old preserved branch cannot overwrite that rewrite. Before the first
+branch publication, preservation compares against the recorded workspace base.
+A confirmed `snapshot_not_found` response means the sandbox filesystem is gone;
+cleanup records loss and deletes its stale name before replacement.
+
 **Remote sandbox death:** log ends at `session.started {session: old}` after
 `implement.started {round: 2}`; heartbeat goes stale → dispatcher expires the
-lease, records the old execution identity, stops/deletes its exact deterministic
-sandbox name, and confirms absence before recording `workspace.released` → it
+lease, records the old execution identity, fences and preserves its committed
+work before deleting the exact deterministic sandbox name, and confirms absence
+before recording `workspace.released` → it
 provisions the next generation from the published build head (or the original
-recorded branch-cut SHA when no checkpoint exists) → `workspace.provisioned
+recorded branch-cut SHA), then restores preserved branch and producer refs → `workspace.provisioned
 {base: {source: existing, sha}}` → the workspace execution capability starts a
 fresh process and records the replacement sandbox/session identity. The
 supervising kernel first claims the lease for that execution
@@ -3247,9 +3268,10 @@ started-not-completed, so the process re-runs the phase from its start and opens
 one fresh session. For a `publication.requested` fact issued before the old
 `workspace.released`, the supervisor first compares its exact SHA with the
 durable remote branch: a match repairs the missing completion fact before the
-replacement starts, covering a lost post-push acknowledgement; otherwise the
-commit existed only in the deleted sandbox, the request is abandoned, and the
-phase rerun must issue a new request. A crash while closing several sessions
+replacement starts, covering a lost post-push acknowledgement. Otherwise exact
+private refs and replay objects distinguish preserved continuation from genuine
+loss. Missing rewrite candidates restart their producing replay under retained
+intent; an implementation rerun issues a new publication request. A crash while closing several sessions
 merges no attachment;
 the next recovery closes only those still open, so repeated takeover converges.
 Historical orphan-only logs remain valid and require no repair.
@@ -4215,11 +4237,24 @@ by the shared projection vocabulary and reused by terminal and CLI text.
 
 ## Forge failure recovery
 
+A historical `publication.lost` does not prove that every copy of its candidate
+is gone. Recovery checks the exact branch and private archive refs and retained
+replay objects first. An available candidate continues guarded publication.
+A genuinely missing reconcile or automatic restack candidate records
+`publication.candidate-retired`, abandons its obsolete request, and replays the
+producing operation with a fresh transaction identity. Its frozen target,
+reconcile occurrence or automatic trigger, cycle, and message survive. The
+retired candidate is excluded from archive requirements unless independently
+required by proven history. This reconstruction consumes no infrastructure
+attempt and no additional conflict occurrence; it needs no operator guidance.
+A bare retry also clears an existing infrastructure-limit escalation through
+ordinary retry semantics. Unavailable inspection defers rather than proving loss.
+
 Leaf restack and reconcile publication retry classified transient forge or transport
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and
 300 seconds. `publication.retry-scheduled` records the operation, frozen rewrite
 identity, episode anchor, failure ordinal, last error and absolute retry time;
-restart resumes that schedule without rerunning the resolver. These retries do
+restart resumes that schedule without rerunning a resolver whose candidate remains available. These retries do
 not consume `maxPhaseAttempts`. A seventh transient failure records
 `publication.retry-exhausted` and raises `publication-retry-limit`, naming the last
 error and six retries. Answering that escalation opens a fresh publication episode
