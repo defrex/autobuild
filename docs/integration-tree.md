@@ -297,3 +297,11 @@ A concurrent state change refuses publication with a retry explanation;
 uncited artifacts are inert. Leaves still require an open escalation and
 restart from `plan` after any unfinished reconcile resumes under the revised
 spec and its publication is confirmed.
+
+
+
+Parent node restacks are kernel rewrites. Child admission uses the dispatcher's
+bounded indexed publication-receipt proof, retained in `target.moved.lineage`,
+including after a child was paused across multiple restacks. External rewrites
+without proof raise attention; node ownership alone never authorizes replay.
+See [restacking](restacking.md).

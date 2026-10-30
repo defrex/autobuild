@@ -769,6 +769,9 @@ test('unavailable nested presence waits durably, survives re-parenting, and prog
   await store.claimNodeWriter('waiting', 'holder', 60_000)
   const forge = new FakeForge()
   forge.rewrite = gitRewrite(deps.exec, true)
+  const { LocalGitForge } = await import('../ports/forge/local-git')
+  const ancestry = new LocalGitForge({ exec: deps.exec, repoRoot: deps.workspacePath })
+  forge.isCommitAncestor = ancestry.isCommitAncestor.bind(ancestry)
   forge.setPrState(77, { state: 'open', mergeable: true })
   forge.setAutoMergeState(77, true)
   const { suspendNativeLanding } = await import('./landing-publication')
@@ -820,8 +823,8 @@ test('unavailable nested presence waits durably, survives re-parenting, and prog
       (e) => e.type === 'node.restack-availability-observed',
     ),
   ).toHaveLength(1)
-  // Same branch now points to a different ancestry without the required identity.
-  await git('checkout', '--detach', base)
+  // A forward parent move still lacks the required identity and invalidates the assessment.
+  await git('checkout', '--detach', parent)
   parent = await commit('replacement-parent')
   expect(await run()).toBe('idle')
   expect(

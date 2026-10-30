@@ -7,6 +7,8 @@ import { reduceBuild } from '../kernel/reducer'
 import { emptyTickReport } from '../processes/dispatcher'
 import {
   CONFIG_TOML,
+  GIT_ID,
+  git,
   happyHandlers,
   makeHarness,
   ofType,
@@ -89,6 +91,16 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
     }
     const baseSha = context.conflict?.baseSha
     if (baseSha === undefined) throw new Error('reconcile context omitted baseSha')
+    // The forge conflict must also exist in Git: a clean replay never needs
+    // the reconcile agent, regardless of the scripted PR mergeability flag.
+    expect(await git(['ls-files', '-u'], cli.ws)).not.toBe('')
+    await writeFileIn(
+      cli.ws,
+      'rate-limit.txt',
+      'upstream audit preserved\nfeature throttle after 5 preserved\n',
+    )
+    await git(['add', 'rate-limit.txt'], cli.ws)
+    await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
     const notes = await writeFileIn(
       cli.ws,
       '.ab/reconcile-notes.md',
@@ -99,7 +111,7 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
 
   const { h, slug } = await openPluginBuild({ handlers, ticket: 'PF-conflict' })
   try {
-    await h.advanceRemote({ 'upstream.txt': 'upstream movement\n' }, 'advance main')
+    await h.advanceRemote({ 'rate-limit.txt': 'upstream audit\n' }, 'advance main')
     h.clock.advance(3_600_001)
     h.forge.setPrState(1, { state: 'open', mergeable: false })
     expect(await h.dispatcher.tick()).toEqual({
@@ -112,6 +124,11 @@ test('a plugin-selected forge drives conflict detection, reconcile publication, 
     expect(ofType(events, 'reconcile.completed')).toHaveLength(1)
     expect(h.forge.pushes).toHaveLength(1)
     expect(ofType(events, 'reconcile.rewritten')).toHaveLength(1)
+    expect(h.cliErrors).toEqual([])
+    const workspace = ofType(events, 'workspace.provisioned')[0]!.payload.ref
+    expect(await git(['show', 'HEAD:rate-limit.txt'], workspace)).toBe(
+      'upstream audit preserved\nfeature throttle after 5 preserved',
+    )
 
     h.forge.setPrState(1, { state: 'merged', sha: 'reconciled-plugin-squash' })
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
