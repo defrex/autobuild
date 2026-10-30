@@ -1,4 +1,5 @@
 import type { ScanCadence } from './scan-cadence'
+import type { BoundedEventReads } from './event-reads'
 import type { OperatorIdentity, OperatorPresence } from './operator-presence'
 export type { OperatorIdentity, OperatorPresence } from './operator-presence'
 import type { ReducerValueRequest, ReducerValue } from './reducer-values'
@@ -274,7 +275,7 @@ export interface SubscribeOptions {
   waitSeconds?: number
 }
 
-export interface BuildStore {
+export interface BuildStore extends BoundedEventReads {
   /** Optional provider-owned evidence. Absent/unknown evidence requires
    * cutover; journal write admission is checked separately before yield. */
   inspectDispatcherOverlap?(signal: AbortSignal): Promise<{
@@ -360,7 +361,9 @@ export interface BuildStore {
     makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null>
 
-  /** Events with seq strictly greater than `sinceSeq` (default 0), in order.
+  /** Complete suffix with seq strictly greater than `sinceSeq` (default 0), in order.
+   * Hosted adapters throw IncompleteEventReadError when another page exists;
+   * use getBuildEventPage to traverse explicit history.
    * When nothing newer exists and `opts.waitSeconds` is given (whole
    * seconds; clamped at the adapter's ceiling, never rejected), the adapter
    * honors the bound: it returns no later than the bound and as soon as an
@@ -462,9 +465,8 @@ export interface BuildStore {
     event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }>
-  /** Same atomic-deposit and ordering contracts as `appendWithArtifacts`:
-   * the batch event is validated before any retention prune of artifacts in
-   * the same deposit batch (AUT-322), and an invalid event leaves no trace.
+  /** Repository events in sequence order. Hosted adapters enforce the
+   * retained tail window and reject expired cursors.
    * The optional bounded wait mirrors `getEvents` exactly, including the
    * resolve-with-current-result abort contract of `opts.signal`. */
   getRepoEvents(
@@ -621,7 +623,9 @@ export interface BuildStore {
     expectedSeq: number,
     event: SessionEventWrite<T>,
   ): Promise<SessionEventEnvelope<T> | null>
-  /** Events with seq strictly greater than `sinceSeq` (default 0), in order.
+  /** Complete suffix with seq strictly greater than `sinceSeq` (default 0), in order.
+   * Hosted adapters throw IncompleteEventReadError when another page exists;
+   * use getBuildEventPage to traverse explicit history.
    * When nothing newer exists, an adapter honors `waitSeconds` with the
    * same clamp/early-return rules as stream reads (§7.6): whole seconds,
    * above 30 clamped to 30, returning as soon as an event lands.
