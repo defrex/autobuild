@@ -816,9 +816,11 @@ permanent-failure classifier), and `session-env.ts` (per-turn environment merge
 that fronts `bin/agent/ab` on `PATH`). The pi CLI owns its login and model
 catalog; the shipped bridge limits tools and refreshes each turn's subprocess
 environment without writing session state into the workspace. Adapters own
-native error extraction; processes own durable failure policy — the transcript
-is always deposited, and a turn's typed terminal always beats a late failure
-signal.
+native error extraction; processes own durable failure policy — transcript
+deposition is attempted, and a turn's typed terminal always beats a late failure
+signal. An oversized transcript deposition after a successful durable terminal
+preserves that terminal without failing or retrying the completed phase; without
+a terminal, the oversized write parks the phase as described below.
 
 **Plugin bootstrap and CLI composition.** `packages/core/src/plugins/load.ts` resolves
 repository-path modules from the config-bearing root and bare packages from an
@@ -1673,7 +1675,11 @@ store write, the HTTP method and route, exact UTF-8 request bytes, and the
 server message (including any reported ceiling). It parks with
 `non-retryable-phase-failure`; an operator answer authorizes a fresh attempt,
 which parks immediately again if still rejected. Store failures never select an
-alternate provider. Other store statuses retain their existing retry policy.
+alternate provider. After a successful durable terminal, an oversized transcript
+deposition during optional cleanup preserves that terminal without recording a
+phase failure or retrying the completed phase. Without a terminal, the oversized
+write follows the parking policy above. Other store statuses retain their
+existing retry policy.
 
 Ordinary silence, provider failures and session timeouts retain the runner's
 phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is

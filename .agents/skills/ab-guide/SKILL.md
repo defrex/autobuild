@@ -886,7 +886,11 @@ store write, the HTTP method and route, exact UTF-8 request bytes, and the
 server message (including any reported ceiling). It parks with
 `non-retryable-phase-failure`; an operator answer authorizes a fresh attempt,
 which parks immediately again if still rejected. Store failures never select an
-alternate provider. Other store statuses retain their existing retry policy.
+alternate provider. After a successful durable terminal, an oversized transcript
+deposition during optional cleanup preserves that terminal without recording a
+phase failure or retrying the completed phase. Without a terminal, the oversized
+write follows the parking policy above. Other store statuses retain their
+existing retry policy.
 
 Ordinary silence, provider failures and session timeouts retain the runner's
 phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is
