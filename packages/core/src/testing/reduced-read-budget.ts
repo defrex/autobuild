@@ -1,3 +1,4 @@
+import { restoreReplay } from '../kernel/replay-retention'
 import { reducerValueForClient } from '../store/remote/compatibility'
 import { RELEASED_CLIENTS } from '../store/remote/released-clients'
 import { decideNextFromFacts } from '../kernel/engine'
@@ -86,6 +87,39 @@ export async function reducedReadBudget(opts: {
     },
   })
   await store.createBuild({ slug, repo })
+  // Recovery artifacts must never be consulted for an already-present commit,
+  // including through fresh adapter instances.
+  for (const client of [store, await opts.fresh()]) {
+    let replayReads = 0
+    const recoveryStore = new Proxy(client, {
+      get(target, property) {
+        if (property === 'getArtifact')
+          return async (...args: Parameters<BuildStore['getArtifact']>) => {
+            replayReads++
+            return target.getArtifact(...args)
+          }
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const recovery = {
+      store: recoveryStore,
+      slug,
+      workspacePath: repo,
+      forge: new FakeForge(),
+      exec,
+    }
+    expect(await restoreReplay(recovery, 'a'.repeat(40))).toBe(true)
+    expect(replayReads).toBe(0)
+    expect(
+      await restoreReplay(
+        { ...recovery, exec: async () => ({ stdout: '', stderr: '', exitCode: 1 }) },
+        'a'.repeat(40),
+      ),
+    ).toBe(false)
+    expect(replayReads).toBe(1)
+  }
+
   await store.append(slug, {
     actor: KERNEL,
     type: 'runner.attached',

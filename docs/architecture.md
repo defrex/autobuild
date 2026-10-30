@@ -1481,6 +1481,8 @@ verification when build-owned config is unchanged, even when the old pin commit
 is no longer an ancestor. Changed config still supersedes while waiting.
 Ancestry gates cycles that run further steps; those cycles capture fresh config.
 Object packs retain newly introduced replay trees/blobs as well as commit bytes.
+Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.
+
 
 GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in
 `ports/forge/github.live.test.ts`, using `AB_RUN_LIVE_PORT_CONTRACTS=1` and an
