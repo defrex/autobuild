@@ -642,7 +642,7 @@ for (const length of [100, 10_000]) {
     expect({ raw, batches, named, discovery }).toEqual({
       raw: 0,
       batches: 3,
-      named: 9,
+      named: 12,
       discovery: 0,
     })
     for (const skew of ['version', 'value']) {

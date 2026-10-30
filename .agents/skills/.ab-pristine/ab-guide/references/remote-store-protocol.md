@@ -1195,6 +1195,15 @@ Conforming servers map failures as follows:
 | `501` | `unsupported-operation` | Optional latest artifact metadata capability is unavailable on the backing adapter |
 | `500` | `internal` | Any other unexpected backing or server failure; the thrown error message is returned |
 
+Clients classify a write response with HTTP 413 as `StoreWriteTooLargeError`,
+including platform responses with no valid protocol JSON body. Diagnostics
+include the HTTP method, route and exact sent UTF-8 request-body byte count,
+never request content or credentials. A valid server message is appended
+verbatim, preserving its ceiling; a platform rejection supplies no inferred
+ceiling. Ticket-asset validation and stream-batch ceiling errors retain their
+specialized types and messages. Reads and other statuses keep their existing
+error handling. Kernel phase operations treat the general error as permanent.
+
 Authentication runs before resource lookup, and session authorization runs
 before event catalog validation. A request may therefore receive `401` or
 `403` even if its resource or event body is also invalid.

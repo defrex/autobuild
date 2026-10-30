@@ -1,3 +1,4 @@
+import { StoreWriteTooLargeError } from '../store/remote/errors'
 import { readVerifyPipeline } from '../config/pipeline-source'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { RUNTIME_IDENTITY } from '../runtime-identity'
@@ -8221,4 +8222,155 @@ test('config refresh waits for concurrent siblings and repins before the next st
     kind: 'run-verify-stage',
     members: [{ kind: 'run-agent-verify', step: 'ui-app', skill: 'ab-verify-ui-app' }],
   })
+})
+
+const alternateConfig = `
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+[verify]
+steps = []
+[finalize]
+steps = []
+
+[roles.default]
+runtime = "scripted"
+[roles.plan]
+runtime = "scripted"
+model = "m-plan"
+alternates = [{ runtime = "pi", model = "kimi-alt" }]
+`
+for (const alternates of [false, true]) {
+  test(`kernel session write size rejection parks without provider substitution (alternates=${alternates})`, async () => {
+    const h = await makeHarness({ ...(alternates ? { configToml: alternateConfig } : {}) })
+    const append = h.store.append.bind(h.store)
+    let rejected = 0
+    let reject = true
+    h.store.append = async (...args) => {
+      if (args[1].type === 'session.started' && reject) {
+        rejected += 1
+        throw new StoreWriteTooLargeError('POST', '/builds/test/events', 123, 'ceiling 100 bytes')
+      }
+      return append(...args)
+    }
+    expect((await h.br.run()).status).toBe('blocked')
+    let events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'phase.failed').map((e) => e.payload)).toEqual([
+      {
+        phase: 'plan',
+        round: 1,
+        attempt: 1,
+        willRetry: false,
+        error:
+          'oversized store write: POST /builds/test/events (123 request bytes): ceiling 100 bytes',
+      },
+    ])
+    const escalation = ofType(events, 'escalation.raised').at(-1)!
+    expect(escalation.payload.policyCause).toBe('non-retryable-phase-failure')
+    expect(escalation.payload.question).toContain('oversized store write')
+    expect(escalation.payload.question).not.toContain('provider/runner')
+    expect(rejected).toBe(1)
+    const restarted = await makeHarness({
+      store: h.store,
+      seedPrelude: false,
+      ...(alternates ? { configToml: alternateConfig } : {}),
+    })
+    expect((await restarted.br.run()).status).toBe('blocked')
+    expect(rejected).toBe(1)
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: { id: escalation.payload.id, answer: 'retry', resolution: 'retry' },
+    })
+    expect((await restarted.br.run()).status).toBe('blocked')
+    expect(rejected).toBe(2)
+    events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'phase.failed')).toHaveLength(2)
+    expect(ofType(events, 'phase.failed').at(-1)!.payload.willRetry).toBe(false)
+    reject = false
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: ofType(events, 'escalation.raised').at(-1)!.payload.id,
+        answer: 'retry',
+        resolution: 'retry',
+      },
+    })
+    expect((await restarted.br.run()).status).toBe('running')
+  })
+}
+
+for (const terminal of [false, true]) {
+  test(`oversized transcript deposition respects durable terminal=${terminal}`, async () => {
+    const h = await makeHarness({
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        if (!terminal) table.plan = () => defaultTurnResult()
+        return table
+      },
+    })
+    const deposit = h.store.appendWithArtifacts.bind(h.store)
+    h.store.appendWithArtifacts = async (...args) => {
+      if (args[1].some((artifact) => artifact.kind === 'transcript'))
+        throw new StoreWriteTooLargeError('POST', '/builds/test/deposits', 123)
+      return deposit(...args)
+    }
+    expect((await h.br.run()).status).toBe(terminal ? 'running' : 'blocked')
+    const failures = ofType(await h.store.getEvents(SLUG), 'phase.failed')
+    expect(failures).toHaveLength(terminal ? 0 : 1)
+    if (!terminal) expect(failures[0]!.payload).toMatchObject({ attempt: 1, willRetry: false })
+  })
+}
+
+test('refusing the failure fact propagates without a second recording attempt', async () => {
+  const h = await makeHarness()
+  const append = h.store.append.bind(h.store)
+  let failures = 0
+  h.store.append = async (...args) => {
+    if (args[1].type === 'phase.failed') failures += 1
+    if (args[1].type === 'session.started' || args[1].type === 'phase.failed')
+      throw new StoreWriteTooLargeError('POST', '/builds/test/events', 123)
+    return append(...args)
+  }
+  await expect(h.br.run()).rejects.toBeInstanceOf(StoreWriteTooLargeError)
+  expect(failures).toBe(1)
+  expect(ofType(await h.store.getEvents(SLUG), 'escalation.raised')).toHaveLength(0)
+})
+
+test('a verify check store write parks its stage immediately', async () => {
+  const h = await makeHarness()
+  await seedPlanApproved(h.store)
+  await seedCodeApproved(h.store)
+  const append = h.store.append.bind(h.store)
+  let writes = 0
+  h.store.append = async (...args) => {
+    if (
+      args[1].type === 'verify.started' &&
+      'step' in args[1].payload &&
+      args[1].payload.step === 'types'
+    ) {
+      writes += 1
+      throw new StoreWriteTooLargeError('POST', '/builds/test/events', 123)
+    }
+    return append(...args)
+  }
+  expect((await h.br.run()).status).toBe('blocked')
+  const events = await h.store.getEvents(SLUG)
+  expect(ofType(events, 'phase.failed').map((e) => e.payload)).toEqual([
+    {
+      phase: 'verify:types',
+      round: 1,
+      attempt: 1,
+      willRetry: false,
+      error: 'oversized store write: POST /builds/test/events (123 request bytes)',
+    },
+  ])
+  expect(ofType(events, 'escalation.raised').at(-1)!.payload.policyCause).toBe(
+    'non-retryable-phase-failure',
+  )
+  await h.br.run()
+  expect(writes).toBe(1)
 })

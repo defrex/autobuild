@@ -1,3 +1,4 @@
+import { StoreWriteTooLargeError } from './errors'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
 import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
 import { CATALOG_IDENTITY_HEADER } from './version'
@@ -1448,5 +1449,73 @@ describe('latest artifact metadata compatibility', () => {
       expect(await store.getLatestArtifactMeta('build', 'pin')).toBeNull()
       expect(calls).toBe(2)
     })
+  }
+})
+
+describe('oversized store writes', () => {
+  for (const body of [
+    undefined,
+    '<html>too large</html>',
+    {},
+    { error: 'artifact exceeds 512 bytes', kind: 'validation' },
+  ]) {
+    test(`413 response ${JSON.stringify(body)} preserves request diagnostics`, async () => {
+      const { store, calls } = makeStore([
+        { status: 413, body, jsonThrows: typeof body === 'string' },
+      ])
+      const error = await rejectionOf(
+        store.putArtifact('build-a', { kind: 'plan', content: 'é🙂' }),
+      )
+      expect(error).toBeInstanceOf(StoreWriteTooLargeError)
+      expect(error).toMatchObject({
+        method: 'POST',
+        route: '/builds/build-a/artifacts',
+        requestBytes: Buffer.byteLength(JSON.stringify(calls[0]!.body)),
+      })
+      expect(error.message).toContain('oversized store write')
+      if (body && typeof body === 'object' && 'error' in body)
+        expect(error.message).toContain(body.error!)
+    })
+  }
+  test('PUT snapshot measures sent UTF-8 JSON', async () => {
+    const { store, calls } = makeStore([{ status: 413 }])
+    const error = await rejectionOf(
+      store.putReducerSnapshot({ kind: 'build', slug: 'build-a' }, 'test', {
+        version: 1,
+        cursor: 0,
+        state: 'é🙂',
+      }),
+    )
+    expect(error).toBeInstanceOf(StoreWriteTooLargeError)
+    expect(error).toMatchObject({
+      method: 'PUT',
+      requestBytes: Buffer.byteLength(JSON.stringify(calls[0]!.body)),
+    })
+  })
+})
+
+test('pre-serialized ticket asset requests retain general and specialized 413 errors', async () => {
+  for (const message of ['platform body limit', 'ticket asset exceeds 100-byte ceiling']) {
+    const { store, calls } = makeStore([
+      { body: { maxBytes: 26214400, maxEntries: 1000 } },
+      { status: 413, body: wireError(message, 'validation') },
+    ])
+    const error = await rejectionOf(
+      store.putTicketAsset('repo', 'ticket', {
+        kind: 'reference',
+        name: 'note',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'note.txt', content: new TextEncoder().encode('é🙂') }],
+      }),
+    )
+    if (message.startsWith('ticket asset')) {
+      expect(error.name).toBe('TicketAssetValidationError')
+      expect(error.message).toBe(message)
+    } else {
+      expect(error).toBeInstanceOf(StoreWriteTooLargeError)
+      expect(error).toMatchObject({
+        requestBytes: Buffer.byteLength(JSON.stringify(calls.at(-1)!.body)),
+      })
+    }
   }
 })

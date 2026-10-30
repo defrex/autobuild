@@ -898,6 +898,10 @@ export async function catalogSkewReadBudget(opts: {
       { kind: 'build', slug: opts.slug },
       { reducer: 'phaseFailures', args: { phase: 'plan', round: 1 } },
     ],
+    [
+      { kind: 'build', slug: opts.slug },
+      { reducer: 'phaseFailures', args: { phase: 'verify:unit', round: 1 } },
+    ],
   ] as const
   const expected = []
   for (const [scope, request] of reads)
