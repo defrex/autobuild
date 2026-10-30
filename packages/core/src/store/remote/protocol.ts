@@ -533,3 +533,5 @@ export const finishRepoTickResponseSchema = z
     events: z.array(repositoryEventEnvelopeWireSchema),
   })
   .nullable()
+
+export const nodeRewriteWireSchema = eventPayloadSchemas['node.rewritten'].nullable()

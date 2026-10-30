@@ -2204,3 +2204,31 @@ test('startup reduced-read incompatibility remains legible without history recon
   expect(reduced).toBe(1)
   expect(history).toBe(0)
 })
+
+test('current upstream rewrite satisfies attention after restart and clears on safe observation', async () => {
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'target.rewritten',
+    payload: {
+      branch: 'main',
+      previousSha: 'a'.repeat(40),
+      sha: 'b'.repeat(40),
+    },
+  })
+  let facts = (await readBuildFacts(store, 'b1')).value
+  const { conditions } = parseConditions(['attention'], [])
+  expect(matchState(conditions, facts.state)).toBe('attention')
+  await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'target.rewrite-cleared',
+    payload: {
+      branch: 'main',
+      sha: 'a'.repeat(40),
+    },
+  })
+  facts = (await readBuildFacts(store, 'b1')).value
+  expect(matchState(conditions, facts.state)).toBeNull()
+})

@@ -1,3 +1,4 @@
+import { observeTarget } from '../kernel/target-observation'
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import {
   capturedBuildConfig,
@@ -2019,17 +2020,11 @@ export class BuildRunner {
       let id: string
       let targetBase: string
       if (transaction === undefined) {
-        targetBase = await this.refreshReconcileBase()
+        targetBase = await this.refreshReconcileBase(true)
         const branch = facts.lastCreated?.payload.baseBranch
         if (branch === undefined) throw new Error('missing frozen target')
-        if (facts.log.restack.target?.sha !== targetBase) {
-          await store.append(slug, {
-            actor: KERNEL,
-            type: 'target.moved',
-            payload: { branch, sha: targetBase },
-          })
-          facts = (await readBuildFacts(store, slug)).value
-        }
+        // refreshReconcileBase admits the remote snapshot before any replay.
+        facts = (await readBuildFacts(store, slug)).value
         const description = await store.getArtifact(slug, 'pr-description')
         const title =
           facts.lastCreated?.payload.ticket.title ?? facts.lastCreated?.payload.ticket.id ?? slug
@@ -2169,7 +2164,7 @@ export class BuildRunner {
   }
 
   /** Snapshot the frozen target in a build-private ref without tracking-ref updates. */
-  private async refreshReconcileBase(): Promise<string> {
+  private async refreshReconcileBase(recordAccepted = false): Promise<string> {
     const baseBranch = await readBuildSelector(this.deps.store, this.deps.slug, 'baseBranch')
     if (baseBranch === undefined) {
       throw new Error(
@@ -2190,6 +2185,7 @@ export class BuildRunner {
           `${this.deps.forge.name} base snapshot did not return a commit SHA: ${JSON.stringify(sha)}`,
         )
       }
+      await this.admitReconcileBase(baseBranch, sha, recordAccepted)
       return sha
     }
 
@@ -2219,7 +2215,26 @@ export class BuildRunner {
           `${resolved.stderr.trim() || sha || '(no output)'}`,
       )
     }
+    await this.admitReconcileBase(baseBranch, sha, recordAccepted)
     return sha
+  }
+
+  private async admitReconcileBase(
+    branch: string,
+    sha: string,
+    recordAccepted: boolean,
+  ): Promise<void> {
+    const result = await observeTarget({
+      store: this.deps.store,
+      forge: this.deps.forge,
+      slug: this.deps.slug,
+      branch,
+      sha,
+      enforceUsedBaseline: true,
+      recordAccepted,
+      actor: KERNEL,
+    })
+    if (result === 'rejected') throw new Error(`upstream target rewrite on ${branch}: ${sha}`)
   }
 
   /**

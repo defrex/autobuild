@@ -324,10 +324,38 @@ it to exist. An unknown build returns `404 not-found`.
 | `putArtifact` | `POST /builds/{slug}/artifacts` | artifact input | `201` + build artifact metadata |
 | `getArtifact` | `GET /builds/{slug}/artifacts?kind={kind}&rev={n}` | `kind` is required and nonempty; optional `rev` is parsed below | `200` + artifact read; an absent `rev` parameter selects the latest revision; a missing kind/revision is `200 null` |
 | `getLatestArtifactMeta?` | `GET /builds/{slug}/artifact-meta?kind={kind}` | required nonblank `kind` | `200` + latest validated artifact metadata or `null`; no blob content |
+| `getNodeRewrite?` | `GET /builds/{slug}/node-rewrite?previous={oid}&beforePrevious={oid}` | optional full commit OIDs; selection and authorization below | `200` + `node.rewritten` payload `{id, previous, head}` or `null` |
 | `listArtifacts` | `GET /builds/{slug}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
 | `claimLease` | `POST /builds/{slug}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeat` | `POST /builds/{slug}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
 | `releaseLease` | `POST /builds/{slug}/lease/release` | holder request | `200 {"ok": true}`; a wrong holder is a successful no-op |
+
+### Indexed node rewrite receipts
+
+`getNodeRewrite` reads one guarded node publication receipt, without an event
+envelope. `id` is the publication transaction ID; `previous` and `head` are
+the previous and published commit OIDs. With neither query parameter, it returns
+the latest receipt. `previous` selects the latest receipt whose previous head
+equals that OID. `beforePrevious` takes precedence over `previous`: it selects
+the receipt immediately preceding the latest receipt whose previous head equals
+`beforePrevious`. A missing match or predecessor returns JSON `null`. Repeated
+previous heads can conservatively truncate a lineage proof.
+
+Each supplied query value must be exactly 40 or 64 lowercase hexadecimal
+characters, including when both parameters are supplied; an invalid value
+receives `400 validation`. This read requires repository authority. Build
+delegates (including build-runner and build-phase credentials) receive
+`403 auth` with `repository authority required` before query validation or
+receipt lookup.
+
+Both receipt selection and predecessor lookup use bounded indexes, returning
+at most one record independent of event history length. A backing store without
+this optional capability returns `501 unsupported-operation` with
+`rewrite index unsupported`. The shipped remote client propagates non-success
+responses, including a missing route on an older server; it never downloads
+history to reconstruct receipts. Missing receipts or unavailable reads cannot
+prove publication lineage, so target admission fails closed unless its other
+proofs establish safety.
 
 The event stream is append-only. The server assigns each build's sequences
 independently, starting at 1, and assigns the envelope timestamp. Successful

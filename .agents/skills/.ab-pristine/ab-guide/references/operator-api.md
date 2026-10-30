@@ -271,7 +271,7 @@ The default watch reports actionable conditions only:
 - `build.janitor-failing`: a build has reached the configured consecutive-failure threshold; a successful janitor attempt clears it.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
 
-- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, or
+- Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`, or
   conflicted `restack.replayed` events. `build.consent-ready` is the single
   signal for a ready consent or held merge, including first repository-wide
   discovery. Its target has the queue entry shape `{kind, branch, ticket?, build?}`.

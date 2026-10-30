@@ -655,11 +655,13 @@ export interface Forge {
   containsBuild?(workspacePath: string, branch: string, buildSlug: string): Promise<boolean>
   /** Post the build's summary comment (§7.5). */
   commentOnPr(workspacePath: string, number: number, body: string): Promise<void>
-  /** Optional checkout-less capability: the current tip of a remote branch.
-   * Throws when the branch does not exist (including 404); callers decide
-   * whether absence is an error or an `undefined`. Its absence retains the
-   * legacy host `git ls-remote` base resolution. */
+  /** Authoritative forge branch tip. Absence or failure must defer target
+   * observation; callers must never substitute dispatcher-host refs. */
   remoteBranchSha?(branch: string): Promise<string>
+  /** Prove ancestry of immutable commit OIDs in the authoritative repository.
+   * False means a proven non-descendant; absent capability or unknown objects
+   * must fail closed, never authorize replay. */
+  isCommitAncestor?(ancestor: string, descendant: string): Promise<boolean>
   /** Optional checkout-less capability: raw file bytes from the repository.
    * Ref omitted → the repository's default branch. Throws when the path does
    * not exist. Its absence retains reading configuration from a checkout. */

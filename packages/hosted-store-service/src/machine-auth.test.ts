@@ -174,7 +174,12 @@ test('every raw route family denies foreign project before parsing or mutation',
       ['GET', '/artifacts?kind=x'],
       ['POST', '/artifacts'],
       ['GET', '/artifact-list'],
-      ...(root.startsWith('/builds/') ? [['GET', '/artifact-meta?kind=x']] : []),
+      ...(root.startsWith('/builds/')
+        ? [
+            ['GET', '/artifact-meta?kind=x'],
+            ['GET', `/node-rewrite?previous=${'a'.repeat(40)}`],
+          ]
+        : []),
       ['GET', '/streams'],
       ['POST', '/streams'],
     ])

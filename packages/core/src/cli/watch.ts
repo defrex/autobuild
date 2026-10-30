@@ -109,6 +109,7 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
  * merge stays with the caller's skill.
  */
 export const BUILD_ATTENTION_EVENTS = [
+  'target.rewritten',
   'build.janitor-failing',
   'build.compatibility-deferred',
   'escalation.raised',
@@ -437,6 +438,8 @@ const SUMMARY_MAX = 200
  */
 export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildState | null): string {
   switch (event.type) {
+    case 'target.rewritten':
+      return `Upstream rewrite on ${event.payload.branch}: ${event.payload.previousSha} → ${event.payload.sha}; automatic adoption withheld`
     case 'verify.cancelled':
       return `verify:${event.payload.step} not run: cancelled by verify:${event.payload.cause.step} (attempt ${event.payload.attempt})`
     case 'verify.stage-failed':
@@ -800,6 +803,16 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
         const checkConsent = (stream: BuildStream): void => {
           if (filters.length || stop) return
+          const currentState = buildReducer.finish(stream.seed.build)
+          const rewrite = currentState.targetRewrite
+          if (rewrite) {
+            const identity = JSON.stringify(['target.rewritten', stream.slug, rewrite.seq])
+            if (!deliveredAttention.has(identity)) {
+              deliveredAttention.add(identity)
+              emit(rewrite, currentState)
+              if (stop) return
+            }
+          }
           const observation = consentReady(stream.seed, now())
           if (observation)
             emitObservation(
@@ -902,6 +915,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             (!filters.length && event.type === 'restack.replayed' && event.payload.conflicted)
           )
             emit(event, state)
+          if (event.type === 'target.rewritten')
+            deliveredAttention.add(JSON.stringify(['target.rewritten', stream.slug, event.seq]))
           checkConsent(stream)
           if (!filters.length && !stop) {
             const observation = mergeDecisionFromFacts(state, stream.seed.deferral, now())
