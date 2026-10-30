@@ -921,3 +921,27 @@ test('preparation facts require dispatcher authority and bounded diagnostic text
     }),
   ).toThrow('invalid payload')
 })
+
+test('account credential conditions validate only nonsecret diagnostics', () => {
+  const event = {
+    actor: DISPATCHER,
+    type: 'account.credentials-unavailable',
+    payload: {
+      name: 'billing',
+      descriptor: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' },
+      source: 'project-secrets',
+      remedy: 'ab secrets set BILLING_TOKEN',
+    },
+  } as const
+  expect(validateRepositoryEventWrite(event).payload).toEqual(event.payload)
+  expect(() =>
+    validateRepositoryEventWrite({ ...event, payload: { ...event.payload, token: 'forbidden' } }),
+  ).toThrow()
+  expect(
+    validateRepositoryEventWrite({
+      actor: DISPATCHER,
+      type: 'account.credentials-recovered',
+      payload: { name: 'billing' },
+    }).type,
+  ).toBe('account.credentials-recovered')
+})

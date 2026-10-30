@@ -75,7 +75,9 @@ test('fresh project environment, next tick mutations, key exclusion and redactio
   expect(JSON.stringify(logs)).not.toContain('project-two-marker')
   current = {}
   await dispatcher.tick()
-  expect(seen[2]!.KIMI_API_KEY).toBe('deployment')
+  expect(seen[2]!.KIMI_API_KEY).toBe('deployment') // Non-account deployment variables retain legacy precedence.
+  expect(JSON.parse(seen[2]!.AB_PROJECT_ACCOUNT_ENV!)).toEqual({})
+  expect(Object.keys(JSON.parse(seen[3]!.AB_PROJECT_ACCOUNT_ENV!))).toEqual(['KIMI_API_KEY'])
   current = { KIMI_API_KEY: 'replacement-marker' }
   await dispatcher.tick()
   expect(seen[4]!.KIMI_API_KEY).toBe('replacement-marker')

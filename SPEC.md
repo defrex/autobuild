@@ -4369,6 +4369,38 @@ and leaving ambient login untouched.
 Hosted validation uses write-only metadata and states that the first hosted
 build is the live check; local validation makes a minimal runtime request.
 
+Dispatch credential admission uses only effective primary and alternate routes,
+including internal roles and agent verify/finalize runners; unused descriptors
+remain readiness targets only. Local dispatch refuses missing selected sources
+before acquiring the repository lease. A nonempty environment slot counts when
+no local login record exists; a matching safely owned refreshing local record
+may supply it, while failed, mismatched or unsafe records fail closed. Startup
+inspects ready peer-owned records without claiming them, allowing a losing
+invocation to yield to the repository lease holder. Execution ownership is
+claimed only after acquiring that lease; foreign ownership then fails closed.
+Local worktree Claude routes can use the host login without a named token;
+sandbox and hosted routes require the configured slot. Presence checks make no
+inference request. Successor preflight inspects
+transferable predecessor ownership without claiming or rotating it; missing
+sources refuse yield and retain the running generation with upgrade attention.
+Actual successor admission checks again.
+
+Hosted dispatch uses the project-secret snapshot exclusively for selected account
+slots, including an empty snapshot; service environment and local logins cannot
+supply a fallback. Missing selected accounts hold new account-dependent work,
+including resumed work and harvest, while observation, policy repair, controls
+and cleanup continue. One durable unavailable condition per account carries its
+nonsecret descriptor, source and remedy; unchanged ticks append nothing, recovery
+or removal from routes clears it. A new dispatcher run never clears it. The next
+tick after setting `ab secrets set VARIABLE` (or `ab accounts login NAME --project`
+for ChatGPT renewal) admits work automatically. Local remedies retain
+`claude setup-token` plus setting the dispatcher variable, replacement of a Kimi
+membership key, or `ab accounts login NAME --local`. Missing credentials at a
+provisioning race are typed repository conditions, never infrastructure failures,
+setup failures or build escalations; genuine missing environments keep their
+infrastructure budget. Present rejected credentials keep account-specific rejection
+attention. Repository status, watch and both dashboards expose the same condition.
+
 Selected Claude/Kimi credentials stay out of process arguments: each invocation
 uses a private 0700 directory and a regular 0600 settings file, removed after
 normal exit, launch failure or cancellation. The settings preserve selected-account
