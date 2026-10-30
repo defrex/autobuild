@@ -302,6 +302,17 @@ function corpora(): unknown[][] {
     ...event,
   }))
   return [
+    [
+      {
+        type: 'account.credentials-unavailable',
+        payload: {
+          name: 'billing',
+          descriptor: { kind: 'claude-subscription', credentialEnv: 'BILLING' },
+          source: 'project-secrets',
+          remedy: 'set BILLING',
+        },
+      },
+    ],
     preparationCorpus,
     verifyStageCorpus,
     rollbackCorpus.slice(0, 1),
@@ -595,7 +606,7 @@ describe('reducer registry', () => {
         "recordedBaseShaValue": 1,
         "recoveryCheckpoint": 4,
         "repositoryAttention": 2,
-        "repositoryReadFacts": 33,
+        "repositoryReadFacts": 34,
         "repositoryStateEvents": 7,
         "sandboxStates": 1,
         "session": 1,

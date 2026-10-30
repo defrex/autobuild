@@ -474,3 +474,48 @@ for (const admitted of [false, true])
       await store.close()
     }
   })
+
+test('missing successor account credentials refuse yield and retain predecessor authority', async () => {
+  const { missingAccountCredentials, MissingAccountCredentialsError } = await import(
+    '../accounts/availability'
+  )
+  const failures: string[] = []
+  const writes: unknown[] = []
+  let claims = 0
+  const store = {
+    getRepo: async () => ({
+      lease: { holder: 'old', expiresAt: new Date(Date.now() + 60000).toISOString() },
+    }),
+    claimRepoLease: async () => {
+      claims++
+      return true
+    },
+    appendRepo: async (_repo: string, event: unknown) => {
+      writes.push(event)
+    },
+  } as unknown as BuildStore
+  const accepted = await prepareDispatcherYield({
+    store,
+    repo: 'repo',
+    handoff,
+    successor: 'new',
+    signal: new AbortController().signal,
+    validate: async () => {
+      throw new MissingAccountCredentialsError(
+        missingAccountCredentials(
+          { billing: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' } },
+          {},
+        ),
+      )
+    },
+    failure: async (reason) => {
+      failures.push(reason)
+    },
+  })
+  expect(accepted).toBe(false)
+  expect(failures[0]).toContain('BILLING_TOKEN')
+  expect(failures[0]).toContain('claude setup-token')
+  expect(writes).toEqual([])
+  expect(claims).toBe(0)
+  expect((await store.getRepo('repo'))?.lease?.holder).toBe('old')
+})

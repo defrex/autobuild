@@ -53,6 +53,7 @@ export function mergeIdentity(slug: string, pr: number): string {
 
 export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
   switch (event.type) {
+    case 'account.credentials-unavailable':
     case 'harvest.escalated':
     case 'harvest.recovery-exhausted':
     case 'dispatcher.forge-readiness-failed':
