@@ -48,16 +48,39 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    identifier constraints; memory, nearby adapter code, and passing tests over
    a fake or mock are not evidence of the real contract because they can
    repeat the author's assumption.
-3. Write the plan to `$AB_CONTEXT_DIR/plan.md`, deposit it, and finish:
+3. Check the concrete plan against [Fit one implement session](../ab-guide/references/spec-standard.md#fit-one-implement-session),
+   as described below. If it clearly will not fit, escalate instead of
+   depositing the plan or running `ab done`.
+4. When the plan fits, write it to `$AB_CONTEXT_DIR/plan.md`, deposit it, and finish:
 
    ```
    ab artifact put plan "$AB_CONTEXT_DIR/plan.md"
    ab done
    ```
 
-   `ab done` is your one terminal command — the phase is not complete until
+   `ab done` is the terminal command for this path — the phase is not complete until
    it succeeds, and nothing you print matters to the pipeline. If it reports
    a validation error, fix what it names and run it again.
+
+## Implement-session fit
+
+After exploring the code, apply the standard's reading, edit-site, and iteration
+signals to the concrete work the implementer must finish, with debugging
+headroom. Most plans need no estimate. The ceiling is a limit, not a target:
+ordinary large plans and plans near but comfortably under it proceed.
+
+When the required work clearly will not fit one implement session, stop:
+
+```
+ab escalate "…evidence that the plan will not fit; proposed seams, each resulting ticket's ownership, and the blocker graph…" --refs "$AB_CONTEXT_DIR/spec.md"
+```
+
+Propose the split using [Cut along seams](../ab-guide/references/spec-standard.md#cut-along-seams)
+and [Keep the blocker graph wide](../ab-guide/references/spec-standard.md#keep-the-blocker-graph-wide):
+favor independent work, blockers only for prerequisites, and a minimal
+contract-establishing prerequisite where needed. Put the evidence and concrete
+proposal in the escalation reason. The operator decides and files the split;
+do not deposit a plan or run `ab done` on this path.
 
 ## Verification selection
 
@@ -141,8 +164,8 @@ Some rounds carry no feedback at all — the loop's first round, and the first
 round after the spec is revised. Then neither file is there and the manifest
 has no `feedback` field; plan from the spec.
 
-Deposit a fresh `ab artifact put plan` on any round — revisions accumulate;
-never edit history.
+On any round that proceeds rather than escalates, deposit a fresh
+`ab artifact put plan` — revisions accumulate; never edit history.
 
 ## If the spec is the problem
 

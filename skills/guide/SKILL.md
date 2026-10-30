@@ -103,7 +103,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   select configured optional verify steps in its opening front matter; a fresh
   reviewer (no memory of prior rounds, by design) reviews both together and
   approves, asks for a revision, or escalates. The loop repeats until approval
-  or a policy limit.
+  or a policy limit. Both phases check [implement-session fit](references/spec-standard.md#fit-one-implement-session)
+  and escalate clearly oversized required work with a proposed split; see
+  `ab-plan` and `ab-plan-review` for the evidence and split requirements.
 - **`implement ⇄ code-review`** — the implementer executes the approved plan,
   committing locally; a fresh reviewer reads the diff against spec and plan.
   Same loop shape.
@@ -2618,8 +2620,8 @@ default, when you need to know what this repo's version says).
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. Its editable `references/setup.md` guides the init handoff. **Model-invocable.** |
 | `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
 | `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |
-| `ab-plan` | `plan` phase | Turn the spec into a plan another agent can implement without re-deriving the reasoning. Writes no product code. |
-| `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec, verdict `approve`/`revise`/`escalate`. |
+| `ab-plan` | `plan` phase | Turn the spec into a plan another agent can implement without re-deriving the reasoning. Checks implement-session fit and escalates clearly oversized work with a proposed split. Writes no product code. |
+| `ab-plan-review` | `plan-review` phase | Fresh skeptic: review the plan against the spec and check implement-session fit; escalate clearly oversized required work with a proposed split. Verdict `approve`/`revise`/`escalate`. |
 | `ab-implement` | `implement` phase | Execute the approved plan as local commits plus deposited notes. Never pushes. |
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a kernel-prepared single-change replay onto a frozen refreshed base; the kernel archives evidence and publishes with an exact expected-head guard. |

@@ -30,7 +30,7 @@
     "title": "One build, end to end",
     "group": "concepts",
     "description": "Follow a work ticket through planning, review, verification, pull request creation, and merge.",
-    "textHash": "2065a207dad036e3efda5491ae40ae97719ca9c539f917d454ebcbefa28f34b4",
+    "textHash": "0ee418199b487d434c4db3e5e0dec88410d13b2f1a5a5c1ff5e540c6c3a7ff55",
     "headings": [
       "The spec is the contract",
       "Produce, then review",
