@@ -39,6 +39,8 @@ If a leaf spec revision arrives during an unfinished reconcile, the same reconci
 
 Either reviewer approves, requests revisions with structured findings, or escalates a question.
 
+The planner and plan reviewer also check whether the required work fits one implement session. Most plans need no estimate; ordinary large plans and plans comfortably under the ceiling proceed. When the concrete work clearly exceeds that ceiling, the planner escalates before depositing a plan, or the plan reviewer escalates instead of requesting removal of required scope. The escalation carries evidence and a proposed split: seams, what each resulting ticket owns, and the blocker graph. See [sizing and splitting](spec-standard.md#fit-one-implement-session) for the sizing signals and seam guidance.
+
 - **Sessions.** Each phase gets its own session; the producer keeps it across a loop's rounds, and each reviewer round starts fresh.
 - **Context** passes between phases as durable artifacts: spec, approved plan, implementation notes, findings, and verification reports.
 
@@ -63,9 +65,11 @@ Once verification passes, the finalize agent writes the PR description; Autobuil
 
 ## When a human is needed
 
-After grooming, escalations are the judgment gates. A build parks with a recorded question on an unclear requirement, a persistent review disagreement, or an exhausted policy bound.
+After grooming, escalations are the judgment gates. A build parks with a recorded question on an unclear requirement, required work that clearly exceeds one implement session, a persistent review disagreement, or an exhausted policy bound.
 
 Your operator agent answers bounded questions from your instructions and brings unresolved product decisions to you. Restarting dispatch doesn't answer a question, and an answer doesn't force success.
+
+For an oversized-work escalation, your operator agent decides the split and files the resulting tickets, bringing unresolved product decisions to you. Autobuild does not split or file them automatically.
 
 Merge consent is a separate policy decision your operator agent manages. Repositories can require it even for a green build; verification, forge checks, and merge gates still apply. See [integration and merge policy](integration-overview.md).
 
