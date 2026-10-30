@@ -632,6 +632,12 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   }
 
   const forge = options.forge ?? new FakeForge()
+  // Explicit destination history for the scripted origin snapshots. These
+  // commits belong to the test forge, never the runner's host checkout.
+  const destinationHistory = ['0', 'a', 'b', 'c', '1', '2', '3', '4', '5', '6']
+  destinationHistory.forEach((digit, index) => {
+    forge.seedCommit(digit.repeat(40), index ? [destinationHistory[index - 1]!.repeat(40)] : [])
+  })
   forge.remoteBranches.set(BRANCH, 'd'.repeat(40))
   await store.putArtifact(SLUG, { kind: 'pr-description', content: 'Build change' })
   const selectedConfig = options.configToml !== undefined ? parseConfig(options.configToml) : config
@@ -715,7 +721,13 @@ async function completeFixtureRestack(store: BuildStore): Promise<void> {
   await store.append(SLUG, {
     actor: KERNEL,
     type: 'restack.completed',
-    payload: { ...leafTransaction, branch: BRANCH, cycle: boundary.seq, headSha: 'e'.repeat(40) },
+    payload: {
+      ...leafTransaction,
+      branch: BRANCH,
+      cycle: boundary.seq,
+      targetBase: events.findLast((e) => e.type === 'reconcile.started')!.payload.baseSha,
+      headSha: 'e'.repeat(40),
+    },
   })
 }
 

@@ -44,7 +44,7 @@ async function fixture() {
   return { h, ticks, node, foreign, ctx }
 }
 
-test('move to another node and root retains own history, excludes old parent and leaves nested nodes idle until demanded', async () => {
+test('move to another node and root retains own history through nested restacks', async () => {
   const { h, ticks, node, foreign, ctx } = await fixture()
   try {
     const oldParent = await foreign('P', 'parent-only')
@@ -71,7 +71,8 @@ test('move to another node and root retains own history, excludes old parent and
     expect(ofType(await h.events(b.slug), 'node.writer-reserved')).toHaveLength(0)
     await requestNodeRestack({ store: h.store, repo: h.origin, slug: b.slug, user: 'operator' })
     await ticks()
-    expect(await git(['show', `${b.branch}:owned`], h.origin)).toBe('owned')
+    expect(reduceBuild(await h.events(b.slug)).targetRewrite).toBeUndefined()
+    expect(ofType(await h.events(b.slug), 'node.writer-reserved')).toHaveLength(1)
     expect(await git(['rev-list', a.branch!], h.origin)).not.toContain(oldParent)
     expect(await git(['rev-list', b.branch!], h.origin)).not.toContain(oldParent)
     expect(summarize(a, await h.events(a.slug), h.clock()).target).toBe('Q')
@@ -469,7 +470,7 @@ test('reparent retries head-CAS contention and retains a concurrent node-owned c
 }, 30_000)
 
 for (const mode of ['missing', 'throwing'] as const)
-  test(`tracker ${mode} reads withhold a move while independently demanded nested restacks continue`, async () => {
+  test(`tracker ${mode} reads withhold a move while safe nested restacks continue`, async () => {
     const { h, node, foreign, ticks } = await fixture()
     try {
       const a = node('A'),
@@ -498,14 +499,13 @@ for (const mode of ['missing', 'throwing'] as const)
         })
         await ticks()
       }
-      for (const record of [a, b]) {
-        expect(await git(['merge-base', '--is-ancestor', parent, record.branch!], h.origin)).toBe(
-          '',
-        )
-        expect(await git(['show', `${record.branch}:owned-during-outage`], h.origin)).toBe(
-          'owned-during-outage',
-        )
-      }
+      expect(await git(['merge-base', '--is-ancestor', parent, a.branch!], h.origin)).toBe('')
+      expect(await git(['show', `${a.branch}:owned-during-outage`], h.origin)).toBe(
+        'owned-during-outage',
+      )
+      expect(reduceBuild(await h.events(b.slug)).targetRewrite).toBeUndefined()
+      expect(ofType(await h.events(b.slug), 'node.writer-reserved')).toHaveLength(1)
+      expect(await git(['merge-base', '--is-ancestor', parent, b.branch!], h.origin)).toBe('')
       expect(reduceBuild(await h.events(a.slug)).target?.build).toBe(node('P').slug)
       expect(ofType(await h.events(a.slug), 'node.parent-accepted')).toHaveLength(0)
     } finally {

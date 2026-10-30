@@ -476,6 +476,13 @@ export async function makeHarness(opts: {
       gatePresence: opts.gatePresence ?? 'present',
       ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
     })
+    // This fixture's served bare repository is the authoritative forge, even
+    // when FakeForge supplies the scripted PR surface.
+    const served = new LocalGitForge({ repoRoot: opts.localGitForge === true ? origin : remote })
+    const scriptedBranch = forge.remoteBranchSha.bind(forge)
+    forge.remoteBranchSha = async (branch) =>
+      forge.remoteBranches.has(branch) ? scriptedBranch(branch) : served.remoteBranchSha(branch)
+    forge.isCommitAncestor = (ancestor, descendant) => served.isCommitAncestor(ancestor, descendant)
     const recordPush = forge.pushBranch.bind(forge)
     forge.pushBranch = async (cwd, branch, sha) => {
       await recordPush(cwd, branch, sha)

@@ -5,6 +5,7 @@ import { SqliteBuildStore } from '../store/local/store'
 import { MemoryBlobStore } from '../store/memory'
 import {
   reducedReadBudget,
+  targetLineageReadBudget,
   countHistoricalRows,
   type ReducedReadCosts,
 } from '../testing/reduced-read-budget'
@@ -68,11 +69,13 @@ test('local SQL row budgets include adapter-internal persisted reads on fresh co
     await store.getRepoEvents('probe')
     expect(costs.events).toBe(100)
     expect(() => expect(costs.events).toBeLessThanOrEqual(6)).toThrow()
-    await reducedReadBudget({
+    const harness = {
       store,
       costs,
       fresh: async () => new SqliteBuildStore({ database, blobs }),
-    })
+    }
+    await reducedReadBudget(harness)
+    await targetLineageReadBudget(harness)
   } finally {
     database.close()
   }

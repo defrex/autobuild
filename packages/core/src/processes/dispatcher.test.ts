@@ -171,6 +171,7 @@ function harness(
     new FakeForge({
       ...(opts.prAttachments === true ? { prAttachments: true } : {}),
     })
+  if (!opts.forge) forge.seedBranch('main', BASE_SHA)
   const launches: string[] = []
   const execCalls: string[][] = []
   const execCwds: (string | undefined)[] = []
@@ -4243,11 +4244,9 @@ describe('Dispatcher janitor', () => {
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
 
-    // baseSha comes from `git ls-remote <repo> refs/heads/<base>` (§15.7).
+    // The authoritative fake forge supplies the destination SHA.
     expect(h.execCalls).toEqual([
-      ['git', 'ls-remote', REPO, 'refs/heads/main'],
       ['git', 'rev-parse', '--verify', `refs/heads/ab/${slug}^{commit}`],
-      ['git', 'ls-remote', REPO, 'refs/heads/main'],
     ])
     const events = await h.store.getEvents(slug)
     expect(events.at(-1)?.type).toBe('pr.conflicted')
@@ -4266,9 +4265,8 @@ describe('Dispatcher janitor', () => {
     expect(h.launches).toEqual([slug])
   })
 
-  test('legacy baseSha ls-remotes the physical checkout, not the origin-URL identity', async () => {
-    // A forge without `remoteBranchSha` falls back to git — against the
-    // checkout path, never the store identity (f_8061f912).
+  test('baseSha never reads the physical checkout for an origin-URL identity', async () => {
+    // The forge is authoritative even when a physical checkout exists.
     const h = harness({
       tickets: [readyTicket('T-1', { labels: [] })],
       repo: 'https://github.com/acme/app',
@@ -4284,9 +4282,7 @@ describe('Dispatcher janitor', () => {
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
     expect(h.execCalls).toEqual([
-      ['git', 'ls-remote', '/repos/checkout', 'refs/heads/main'],
       ['git', 'rev-parse', '--verify', `refs/heads/ab/${slug}^{commit}`],
-      ['git', 'ls-remote', '/repos/checkout', 'refs/heads/main'],
     ])
   })
 
@@ -9653,6 +9649,9 @@ test('target observations persist during a live implementation session without t
   const branch = `ab/${slug}`
   const original = 'd'.repeat(40)
   h.forge.remoteBranches.set(branch, original)
+  h.forge.seedCommit(BASE_SHA)
+  h.forge.seedCommit('b'.repeat(40), [BASE_SHA])
+  h.forge.seedCommit('c'.repeat(40), ['b'.repeat(40)])
   for (const sha of ['b'.repeat(40), 'c'.repeat(40), BASE_SHA]) {
     h.forge.remoteBranches.set('main', sha)
     await h.dispatcher.tick()
@@ -9663,8 +9662,8 @@ test('target observations persist during a live implementation session without t
     BASE_SHA,
     'b'.repeat(40),
     'c'.repeat(40),
-    BASE_SHA,
   ])
+  expect(facts.filter((e) => e.type === 'target.rewritten')).toHaveLength(1)
   expect(h.forge.rewrites).toEqual([])
   expect(h.forge.remoteBranches.get(branch)).toBe(original)
   expect(h.launches).toEqual([])
@@ -9697,7 +9696,8 @@ test('failed initial target observation does not spend dispatch budget and retri
   })
   const slug = await seedBuild(h, { attached: false, targetObserved: false })
   h.forge.remoteBranchSha = async () => {
-    throw new Error('forge unavailable')
+    if (unavailable) throw new Error('forge unavailable')
+    return BASE_SHA
   }
   const report = await h.dispatcher.tick()
   expect(h.launches).toEqual([slug])
@@ -10564,7 +10564,12 @@ test.each([
         json = { object: { sha: path.endsWith('/main') ? parent : head } }
       else if (path.includes('/branches/')) json = { commit: { sha: parent } }
       else if (path.includes('/compare/'))
-        json = { base_commit: { sha: hasPr ? parent : head }, ahead_by: 0, behind_by: 0 }
+        json = {
+          status: 'ahead',
+          base_commit: { sha: hasPr ? parent : head },
+          ahead_by: 0,
+          behind_by: 0,
+        }
       else throw new Error(`unexpected request ${path}`)
       const etag = JSON.stringify(json)
       if (representations.get(path) === etag && opts?.headers?.['If-None-Match'] === etag)
@@ -11225,6 +11230,7 @@ test('advisory work samples refresh head and target, deduplicate across restart,
   count = 2
   await h.dispatcher.tick()
   expect((await samples()).at(-1)?.head).toBe(head)
+  h.forge.seedCommit('d'.repeat(40), [BASE_SHA])
   h.forge.remoteBranches.set('main', 'd'.repeat(40))
   await h.dispatcher.tick()
   expect((await samples()).at(-1)?.sha).toBe('d'.repeat(40))
@@ -11298,6 +11304,7 @@ test('advisory work samples deduplicate persisted JSON values with reordered key
 test('deferred work distance comparisons preserve the known sample without diagnostics or log growth', async () => {
   const { ForgeRequestDeferred } = await import('../ports/forge-request-context')
   const forge = new FakeForge()
+  forge.seedBranch('main', BASE_SHA)
   let deferred = false
   let comparisons = 0
   forge.compareBranches = async () => {
@@ -11945,6 +11952,10 @@ test.each([10, 1000])(
     const forge = new FakeForge()
     const parent = 'b'.repeat(40)
     const head = 'c'.repeat(40)
+    forge.seedCommit(BASE_SHA)
+    forge.seedCommit(parent, [BASE_SHA])
+    forge.seedCommit(head, [parent])
+    forge.seedCommit('d'.repeat(40), [head])
     forge.remoteBranches.set('main', parent)
     forge.remoteBranches.set('ab-node/waiting', head)
     forge.nodeComparisons.set('main...ab-node/waiting', 1)
@@ -12225,6 +12236,8 @@ test('successful changed parent observation resets the quiet anchor', async () =
   const node = (await h.store.listBuilds())[0]!
   const before = reduceBuild(await h.store.getEvents(node.slug)).nodePolling!
   h.clock.advance(300_000)
+  h.forge.seedCommit(BASE_SHA)
+  h.forge.seedCommit('b'.repeat(40), [BASE_SHA])
   h.forge.remoteBranches.set('main', 'b'.repeat(40))
   h.forge.nodeComparisons.set(`main...${node.branch}`, 0)
   h.forge.nodeComparisons.set(`${node.branch}...main`, 1)
@@ -12283,4 +12296,65 @@ test('incomplete node observation cannot advance an idle deadline', async () => 
   expect(reduceBuild(await h.store.getEvents(node.slug)).nodePolling?.checkedAt).toBe(
     h.clock().toISOString(),
   )
+})
+
+for (const failure of ['transport', 'missing branch', 'capability absent'])
+  test(`target observation fails closed with stale local refs: ${failure}`, async () => {
+    const h = harness({
+      exec: async () => ({
+        stdout: `${'b'.repeat(40)}\trefs/heads/main\n`,
+        stderr: '',
+        exitCode: 0,
+      }),
+    })
+    const slug = await seedBuild(h)
+    await h.store.claimLease(slug, 'live', 3_600_000)
+    if (failure === 'capability absent')
+      Object.defineProperty(h.forge, 'remoteBranchSha', { value: undefined })
+    else
+      h.forge.remoteBranchSha = async () => {
+        throw new Error(failure)
+      }
+    const before = (await h.store.getEvents(slug)).filter((e) => e.type === 'target.moved')
+    const report = await h.dispatcher.tick()
+    expect(report.janitorDiagnostics.some((s) => s.includes('target observation failed'))).toBe(
+      true,
+    )
+    expect((await h.store.getEvents(slug)).filter((e) => e.type === 'target.moved')).toEqual(before)
+    expect(h.execCalls.some((cmd) => cmd[1] === 'ls-remote')).toBe(false)
+    expect(h.forge.rewrites).toEqual([])
+  })
+
+test('target read rate limits retain the accepted tip, enter cooldown, and recover without local refs', async () => {
+  const h = harness()
+  const slug = await seedBuild(h)
+  await h.store.claimLease(slug, 'live', 3_600_000)
+  let limited = true
+  let calls = 0
+  const resetAt = new Date(h.clock().getTime() + 60_000).toISOString()
+  h.forge.remoteBranchSha = async () => {
+    calls++
+    if (limited)
+      throw {
+        forgeFailure: 'autobuild.forge-failure.v1',
+        message: 'target rate limit',
+        details: { kind: 'rate-limited', resetAt },
+      }
+    return BASE_SHA
+  }
+  const before = (await h.store.getEvents(slug)).filter((e) => e.type === 'target.moved')
+  await h.dispatcher.tick()
+  expect(
+    (await h.store.getRepoEvents(REPO)).some((e) => e.type === 'dispatcher.forge-degraded'),
+  ).toBe(true)
+  await h.dispatcher.tick()
+  expect(calls).toBe(1)
+  expect((await h.store.getEvents(slug)).filter((e) => e.type === 'target.moved')).toEqual(before)
+  limited = false
+  h.clock.advance(60_001)
+  await h.dispatcher.tick()
+  expect(
+    (await h.store.getRepoEvents(REPO)).some((e) => e.type === 'dispatcher.forge-recovered'),
+  ).toBe(true)
+  expect(h.execCalls.some((cmd) => cmd[1] === 'ls-remote')).toBe(false)
 })

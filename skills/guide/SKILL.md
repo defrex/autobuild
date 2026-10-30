@@ -2678,6 +2678,15 @@ and `tickets.unblock` with the revision from `tickets.get` or `tickets.list`.
 
 ## Forge failure recovery
 
+Destination observation uses authoritative remote tips and fails closed on read
+or ancestry errors. External rewrites retain the accepted target and raise
+`target.rewritten` attention. Kernel node restacks instead require durable
+guarded publication receipts: the dispatcher proves at most 64 indexed hops per
+baseline and records them in `target.moved.lineage` for scoped runners. Missing
+proof or a longer gap still raises attention. See
+[destination observation and replay](references/restacking.md) for admission,
+recovery and read-cost bounds.
+
 Leaf restack and reconcile publication retry classified transient forge or transport
 failures six times after the initial attempt, waiting 30, 60, 120, 240, 300 and
 300 seconds. `publication.retry-scheduled` records the operation, frozen rewrite
