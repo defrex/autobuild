@@ -983,7 +983,7 @@ test('a provider without trusted rewrite capability refuses without using plain 
   expect(h.published).toEqual([])
 })
 
-test('a reconcile rewrite recorded lost is never retried, so settlement cannot fail the tick', async () => {
+test('a genuinely lost reconcile candidate is durably retired without retrying publication', async () => {
   const h = await seedRestackPublication()
   await h.store.append(SLUG, {
     actor: DISPATCHER,
@@ -996,6 +996,7 @@ test('a reconcile rewrite recorded lost is never retried, so settlement cannot f
       reason: 'replacement',
     },
   })
+  h.deps.publication!.recoverCandidate = async () => false
   let calls = 0
   h.deps.publication!.rewrite = async () => {
     calls++
@@ -1009,7 +1010,49 @@ test('a reconcile rewrite recorded lost is never retried, so settlement cannot f
     events.some((e) => e.type === 'reconcile.completed' || e.type === 'reconcile.rewritten'),
   ).toBe(false)
   expect(h.published).toEqual([])
+  expect(events.filter((event) => event.type === 'publication.candidate-retired')).toHaveLength(1)
 })
+
+test.each(['available', 'unavailable-inspection'] as const)(
+  'legacy loss with %s preserves guarded publication behavior',
+  async (outcome) => {
+    const h = await seedRestackPublication()
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'publication.lost',
+      payload: {
+        request: h.request.seq,
+        operation: 'reconcile',
+        branch: BRANCH,
+        sha: SHA,
+        reason: 'replacement',
+      },
+    })
+    h.deps.publication!.recoverCandidate = async () => {
+      if (outcome === 'unavailable-inspection') throw new Error('transport unavailable')
+      return true
+    }
+    let calls = 0
+    h.deps.publication!.rewrite = async (input) => {
+      expect(input.sha).toBe(SHA)
+      expect(input.expected).toBe(h.transaction.oldHead)
+      calls++
+      return { kind: 'published' }
+    }
+    if (outcome === 'unavailable-inspection')
+      await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow('transport unavailable')
+    else {
+      await settlePendingPublication(h.deps, SLUG)
+      await settlePendingPublication(h.deps, SLUG)
+    }
+    expect(calls).toBe(outcome === 'available' ? 1 : 0)
+    const events = await h.store.getEvents(SLUG)
+    expect(events.filter((event) => event.type === 'publication.candidate-retired')).toHaveLength(0)
+    expect(events.filter((event) => event.type === 'reconcile.completed')).toHaveLength(
+      outcome === 'available' ? 1 : 0,
+    )
+  },
+)
 
 test('lost and abandoned publication objects do not block trusted reconcile archives', async () => {
   const h = await seedRestackPublication(true)

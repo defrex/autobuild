@@ -1333,23 +1333,29 @@ the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
 recording completion; PR API work stays local. If that acknowledgement is lost
 after the push succeeds, the next launch observes the exact remote branch head and
-records the missing completion before allowing a replacement phase to run. If
-the commit is absent, release of the old workspace abandons its request and the
-replacement reruns the phase. Before every guest runner launch, the provider
-reasserts the normal receive-pack-free policy, so a failed policy
+records the missing completion before allowing a replacement phase to run.
+Available candidates continue publication; confirmed missing candidates require
+reconstruction by the producing phase or, for reconcile/restack, a fresh replay
+under the retained intent and frozen target. Before every guest runner launch,
+the provider reasserts the normal receive-pack-free policy, so a failed policy
 restore cannot expose publication authority to later setup or plugin code.
 Ordinary completion deletes the sandbox.
 
 A Vercel VM is disposable, not durable build state. Every execution records its
 Autobuild instance, deterministic sandbox name, and Vercel session id. After a
-lease expires, recovery first stops/deletes the exact old name and confirms its
-absence; only then does it provision the next generation. An interrupted create
-is retried with the same deterministic generation/name, so an unknown response
-cannot fan out duplicate VMs. Recovery uses the published build branch when it
-exists and otherwise the original recorded branch-cut SHA, never a newly moved
-base. Setup reruns and open sessions are reclaimed by the normal durable
+lease expires, recovery first fences the exact old name without deleting it.
+Before deletion, it verifies archival of reachable unpublished commits to private
+refs and records a durable preservation receipt, or records a loss receipt for
+confirmed absence. Unknown inspection or transport outcomes defer cleanup. Only
+after that boundary does it delete the old environment and provision the next
+generation. An interrupted create is retried with the same deterministic generation/name, so an unknown response
+cannot fan out duplicate VMs. Provisioning starts from the published build branch
+when it exists and otherwise the original recorded branch-cut SHA, then restores
+the exact preserved private refs with branch ancestry checks before sessions
+resume. Setup reruns and open sessions are reclaimed by the normal durable
 protocol. Uncommitted files and `.ab` scratch may be lost; Store events/artifacts
-and published Git checkpoints remain authoritative.
+and verified Git checkpoints remain authoritative. See the
+[workspace recovery contract](architecture.md#key-boundaries).
 
 Paused and policy-blocked builds release their sandbox after the execution
 lease expires. Resume creates a replacement and reruns setup. Graceful shutdown

@@ -1,3 +1,4 @@
+import { WorkspaceCleanupRequired } from '../types'
 function scopedProvider(options: ConstructorParameters<typeof VercelSandboxProvider>[0]) {
   const provider = new VercelSandboxProvider(options)
   const start = provider.harvestExecution.start
@@ -38,6 +39,8 @@ import {
   harvestSandboxName,
   validateVercelSandbox,
   isMissingVercelSandbox,
+  isUnavailableVercelSnapshot,
+  createVercelSdkFacade,
   vercelOidcTokenScope,
   vercelSdkCredentials,
   sourceCheckoutPath,
@@ -314,6 +317,10 @@ function harness(
   /** Snapshot rows keyed by the exact environment name the purge uses. */
   const snapshotLists = new Map<string, VercelSnapshotInfo[]>()
   const facade: VercelSandboxFacade = {
+    deleteByName: async () => {
+      await sandbox.delete()
+      return 'confirmed'
+    },
     get:
       options.facadeGet ??
       (async () =>
@@ -520,6 +527,12 @@ describe('VercelSandboxProvider', () => {
     expect(isMissingVercelSandbox({ response: { status: 404 } })).toBe(true)
     expect(
       isMissingVercelSandbox({
+        response: { status: 410 },
+        json: { error: { code: 'snapshot_not_found' } },
+      }),
+    ).toBe(true)
+    expect(
+      isUnavailableVercelSnapshot({
         response: { status: 410 },
         json: { error: { code: 'snapshot_not_found' } },
       }),
@@ -736,7 +749,7 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
   })
 
-  test('a failed distribution refresh deletes the reused sandbox and launches no execution', async () => {
+  test('a failed distribution refresh retains the reused sandbox and launches no execution', async () => {
     const h = harness({ failArchiveAfterFirst: true })
     const first = await h.provider.provision({
       repo: '/repo',
@@ -748,10 +761,10 @@ describe('VercelSandboxProvider', () => {
     await expect(
       h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
     ).rejects.toThrow(/archive fetch failed/)
-    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
 
-    // The deleted environment is not adopted by a later execution start.
+    // A subsequent start also refuses the failed refresh without deleting it.
     await expect(
       h.provider.buildExecution.start({
         slug: 'remote-build',
@@ -759,10 +772,10 @@ describe('VercelSandboxProvider', () => {
         instance: 'i-refresh-failed',
         workspaceRef: first.ref,
       }),
-    ).rejects.toThrow(/no longer exists/)
+    ).rejects.toThrow(/requires dispatcher-authorized cleanup/)
   })
 
-  test('fresh provisioning records the resolved version and a readback mismatch deletes the sandbox', async () => {
+  test('fresh provisioning records the resolved version and a readback mismatch retains the sandbox', async () => {
     const mismatch = harness({ markerReadback: 'corrupted' })
     await expect(
       mismatch.provider.provision({
@@ -773,7 +786,7 @@ describe('VercelSandboxProvider', () => {
     ).rejects.toThrow(
       /distribution identity marker readback mismatch.*wrote "1\.2\.3" but read "corrupted"/s,
     )
-    expect(mismatch.sandbox.deletes).toBe(1)
+    expect(mismatch.sandbox.deletes).toBe(0)
     expect(mismatch.sandbox.provisioned).toBe(false)
     expect(mismatch.sandbox.commands.some((command) => command.detached === true)).toBe(false)
 
@@ -1176,7 +1189,7 @@ describe('VercelSandboxProvider', () => {
     ).rejects.toThrow(
       /browser smoke[\s\S]*exit status: 1[\s\S]*server started[\s\S]*chromium missing[\s\S]*ab init --validate/,
     )
-    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
     expect(h.sandbox.provisioned).toBe(false)
     expect(h.sandbox.commands.some((command) => command.cmd === 'mkdir')).toBe(false)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
@@ -1298,10 +1311,11 @@ describe('VercelSandboxProvider', () => {
     await expect(
       provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
     ).rejects.toThrow(/tar exited 1/)
-    expect(first.deletes).toBe(1)
+    expect(first.deletes).toBe(0)
     expect(first.provisioned).toBe(false)
     // Recovery cleanup stops before deleting and confirming absence.
-    expect(first.stops).toBe(1)
+    expect(first.stops).toBe(0)
+    await first.delete()
 
     const workspace = await provider.provision({
       repo: '/repo',
@@ -1331,7 +1345,7 @@ describe('VercelSandboxProvider', () => {
     ])
   })
 
-  test('retains setup and cleanup diagnostics when deleting a partial sandbox fails', async () => {
+  test('retains setup diagnostics without attempting destructive cleanup', async () => {
     const h = harness()
     const cleanupError = new Error('sandbox delete failed')
     h.sandbox.failSetupCommand = 'tar'
@@ -1348,17 +1362,9 @@ describe('VercelSandboxProvider', () => {
       rejection = error
     }
 
-    expect(rejection).toBeInstanceOf(AggregateError)
-    const aggregate = rejection as AggregateError
-    expect(aggregate.errors).toHaveLength(2)
-    expect(aggregate.errors[0]).toBeInstanceOf(Error)
-    expect((aggregate.errors[0] as Error).message).toContain('tar exited 1')
-    expect(aggregate.errors[1]).toBeInstanceOf(Error)
-    expect((aggregate.errors[1] as Error).message).toContain(
-      'cleanup outcome is unknown and remains retryable: sandbox delete failed',
-    )
-    expect((aggregate.errors[1] as Error).cause).toBe(cleanupError)
-    expect(h.sandbox.deletes).toBe(1)
+    expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
+    expect((rejection as Error).message).toContain('tar exited 1')
+    expect(h.sandbox.deletes).toBe(0)
     expect(h.sandbox.provisioned).toBe(false)
   })
 
@@ -1369,7 +1375,7 @@ describe('VercelSandboxProvider', () => {
     await expect(
       h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
     ).rejects.toThrow(/could not provision Bun 1\.4\.0.*universal managed image/)
-    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
     expect(h.sandbox.provisioned).toBe(false)
     expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
@@ -1414,10 +1420,12 @@ describe('VercelSandboxProvider', () => {
       packageArchive: async () => new Uint8Array([1]),
     })
 
-    await provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' })
-    expect(incomplete.deletes).toBe(1)
-    expect(created).toBe(true)
-    expect(replacement.provisioned).toBe(true)
+    await expect(
+      provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
+    ).rejects.toBeInstanceOf(WorkspaceCleanupRequired)
+    expect(incomplete.deletes).toBe(0)
+    expect(created).toBe(false)
+    expect(replacement.provisioned).toBe(false)
   })
 
   test('installs and preflights every referenced runtime before the marker and preflights again before launch', async () => {
@@ -1561,7 +1569,7 @@ describe('VercelSandboxProvider', () => {
       }
       expect(Object.keys(parsed.workspace.config.runtimeProvisioning)).toEqual([runtime])
       expect(h.sandbox.provisioned).toBe(false)
-      expect(h.sandbox.deletes).toBe(1)
+      expect(h.sandbox.deletes).toBe(0)
       expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
       expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
     }
@@ -1598,7 +1606,7 @@ describe('VercelSandboxProvider', () => {
     expect(message).toContain('role "plan" alternate[0]')
     expect(message).toContain('workspace.config.runtimeProvisioning.plugin.preflight')
     expect(h.sandbox.provisioned).toBe(false)
-    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
     expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
@@ -1613,7 +1621,7 @@ describe('VercelSandboxProvider', () => {
       /runtime "plugin" preflight failed.*role "plan" alternate\[0\].*runtimeProvisioning\.plugin\.preflight/,
     )
     expect(h.sandbox.provisioned).toBe(false)
-    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
@@ -2295,8 +2303,8 @@ describe('VercelSandboxProvider', () => {
       outcome: 'absent',
       snapshots: { outcome: 'confirmed', deleted: 1 },
     })
-    // An absent environment is never stopped or deleted again.
-    expect(h.sandbox.deletes).toBe(1)
+    // Authorized cleanup also clears a possible stale name reservation.
+    expect(h.sandbox.deletes).toBe(2)
     expect(h.sandbox.snapshots).toEqual([])
   })
 
@@ -2646,7 +2654,7 @@ describe('VercelSandboxProvider origin mode (no checkout)', () => {
     const sandbox = new FakeSandbox()
     let createInput: Record<string, unknown> | undefined
     const facade: VercelSandboxFacade = {
-      get: async () => sandbox,
+      get: async () => (createInput ? sandbox : null),
       create: async (input) => {
         createInput = input as Record<string, unknown>
         return sandbox
@@ -3708,4 +3716,151 @@ test('ChatGPT policies rotate and missing credentials are fenced without stoppin
   expect(h.sandbox.stops).toBe(stops)
   expect(JSON.stringify(h.sandbox.policies.at(-1))).not.toContain('sentinel-chatgpt-third')
   expect(JSON.stringify(h.sandbox.policies.at(-1))).toContain('sentinel-unaffected-claude')
+})
+
+describe('Vercel SDK cleanup facade', () => {
+  const credentials = {
+    VERCEL_TOKEN: 'host-only',
+    VERCEL_TEAM_ID: 'team_test',
+    VERCEL_PROJECT_ID: 'prj_test',
+  }
+  test.each([204, 404, 410])(
+    'delete-by-name scopes the exact resource and acknowledges HTTP %s',
+    async (status) => {
+      const calls: { url: string; init?: RequestInit }[] = []
+      const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), init })
+        return new Response(null, { status })
+      }) as unknown as typeof globalThis.fetch
+      const facade = createVercelSdkFacade(credentials, fetch)
+      const signal = AbortSignal.timeout(5000)
+      expect(await facade.deleteByName!('named/environment', signal)).toBe(
+        status === 204 ? 'confirmed' : 'absent',
+      )
+      expect(calls).toHaveLength(1)
+      const url = new URL(calls[0]!.url)
+      expect(url.pathname).toBe('/api/v2/sandboxes/named%2Fenvironment')
+      expect(url.searchParams.get('projectId')).toBe('prj_test')
+      expect(url.searchParams.get('teamId')).toBe('team_test')
+      expect(calls[0]!.init).toMatchObject({
+        method: 'DELETE',
+        signal,
+        headers: { authorization: 'Bearer host-only' },
+      })
+    },
+  )
+  test.each([401, 403, 429, 500])(
+    'delete errors at HTTP %s never prove absence',
+    async (status) => {
+      const facade = createVercelSdkFacade(
+        credentials,
+        (async () => new Response(null, { status })) as unknown as typeof globalThis.fetch,
+      )
+      await expect(facade.deleteByName!('named')).rejects.toThrow(`HTTP ${status}`)
+    },
+  )
+  test('transport failure never proves absence', async () => {
+    const facade = createVercelSdkFacade(credentials, (async () => {
+      throw new Error('network unavailable')
+    }) as unknown as typeof globalThis.fetch)
+    await expect(facade.deleteByName!('named')).rejects.toThrow('network unavailable')
+  })
+  test('snapshot unavailable preserves stale identity for cleanup while 404 is absent', async () => {
+    let status = 410
+    const facade = createVercelSdkFacade(
+      credentials,
+      (async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: status === 410 ? 'snapshot_not_found' : 'not_found',
+              message: 'missing',
+            },
+          }),
+          { status, headers: { 'content-type': 'application/json' } },
+        )) as unknown as typeof globalThis.fetch,
+    )
+    const error = await facade.get('named').catch((error: unknown) => error)
+    expect(isUnavailableVercelSnapshot(error)).toBe(true)
+    status = 404
+    expect(await facade.get('named')).toBeNull()
+  })
+})
+
+test('preservation inspection failure restores scoped transport policy and retains every snapshot', async () => {
+  const h = harness()
+  const workspace = await h.provider.provision({
+    repo: '/repo',
+    baseBranch: 'main',
+    branch: 'ab/remote-build',
+  })
+  expect(await h.provider.recovery.fence!(workspace)).toEqual({ outcome: 'confirmed' })
+  const snapshots = h.sandbox.snapshots.map((snapshot) => snapshot.id)
+  const previousPolicies = h.sandbox.policies.length
+  h.sandbox.runCommand = async (input) => {
+    expect(JSON.stringify(input)).not.toContain('forge-secret')
+    throw new Error('inspection unavailable')
+  }
+  await expect(
+    h.provider.publication.preserve!({
+      ref: workspace.ref,
+      slug: 'remote-build',
+      branch: workspace.branch,
+      base: SHA,
+      candidates: [],
+    }),
+  ).rejects.toThrow('inspection unavailable')
+  const policies = h.sandbox.policies.slice(previousPolicies)
+  expect(JSON.stringify(policies[0])).toContain('receive')
+  expect(JSON.stringify(policies.at(-1))).not.toContain('receive')
+  expect(h.sandbox.deletes).toBe(0)
+  expect(h.sandbox.snapshots.map((snapshot) => snapshot.id)).toEqual(
+    expect.arrayContaining(snapshots),
+  )
+})
+
+test('fencing rechecks the provider and never purges snapshots on unknown outcome', async () => {
+  let unavailable = false
+  let gets = 0
+  const sandbox = new FakeSandbox()
+  const h = harness({
+    facadeGet: async () => {
+      gets++
+      if (unavailable) throw new Error('provider unavailable')
+      return sandbox
+    },
+  })
+  const handle = {
+    provider: 'vercel-sandbox',
+    ref: 'existing',
+    path: VERCEL_WORKSPACE_PATH,
+    branch: 'ab/remote-build',
+  }
+  expect(await h.provider.recovery.fence!(handle)).toEqual({ outcome: 'confirmed' })
+  unavailable = true
+  expect(await h.provider.recovery.fence!(handle)).toMatchObject({
+    outcome: 'unknown',
+    error: 'provider unavailable',
+  })
+  expect(gets).toBe(2)
+  expect(sandbox.deletes).toBe(0)
+  expect(sandbox.snapshots).toHaveLength(1)
+})
+
+test('absent filesystem fencing permits authorized stale-name deletion', async () => {
+  const h = harness({
+    facadeGet: async () => {
+      throw { response: { status: 410 }, json: { error: { code: 'snapshot_not_found' } } }
+    },
+  })
+  const handle = {
+    provider: 'vercel-sandbox',
+    ref: 'snapshot-gone',
+    path: VERCEL_WORKSPACE_PATH,
+    branch: 'ab/remote-build',
+  }
+  expect(await h.provider.recovery.fence!(handle)).toEqual({ outcome: 'absent' })
+  expect(h.sandbox.deletes).toBe(0)
+  expect(await h.provider.recovery.reap(handle)).toMatchObject({ outcome: 'absent' })
+  expect(h.sandbox.deletes).toBe(1)
 })
