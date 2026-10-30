@@ -1532,3 +1532,172 @@ test('rewrite index validates OIDs and fails closed without a history fallback',
     await server.stop()
   }
 })
+
+test('placement negotiation, service publication, and external forgery rejection', async () => {
+  const store = new MemoryBuildStore()
+  const repo = 'https://github.com/acme/placement'
+  let publications = 0,
+    health = 0
+  const server = createStoreServer({
+    store,
+    placement: async (requested) => {
+      expect(requested).toBe(repo)
+      publications++
+      return { status: 'known', placement: { hosted: true, origin: 'https://store.test' } }
+    },
+  })
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    const req = new Request(input, init)
+    if (new URL(req.url).pathname === '/health') health++
+    return server.fetch(req)
+  }) as typeof fetch
+  const client = new RemoteBuildStore({ url: 'https://store.test', fetchFn })
+  for (let i = 0; i < 3; i++)
+    expect(await client.getDispatchPlacement(repo)).toEqual({
+      status: 'known',
+      placement: { hosted: true, origin: 'https://store.test' },
+    })
+  expect(health).toBe(1)
+  expect(publications).toBe(3)
+  await store.ensureRepo(repo)
+  await expect(
+    client.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'dispatcher.placement-set',
+      payload: { hosted: false },
+    }),
+  ).rejects.toThrow('placement is published only by the service')
+  await expect(
+    client.appendRepoWithArtifacts(repo, [], () => ({
+      actor: KERNEL,
+      type: 'dispatcher.placement-set',
+      payload: { hosted: false },
+    })),
+  ).rejects.toThrow()
+  const oldServer = createStoreServer({ store })
+  let routes = 0
+  const old = new RemoteBuildStore({
+    url: 'https://old.test',
+    fetchFn: (async (input, init) => {
+      routes++
+      return oldServer.fetch(new Request(input, init))
+    }) as typeof fetch,
+  })
+  for (let i = 0; i < 3; i++)
+    expect(await old.getDispatchPlacement(repo)).toEqual({
+      status: 'unknown',
+      reason: 'unsupported-capability',
+    })
+  expect(routes).toBe(1)
+  for (const response of [
+    new Response('{}'),
+    new Response('{}', { status: 404 }),
+    new Response('{}', { status: 500 }),
+  ]) {
+    const invalid = new RemoteBuildStore({
+      url: 'https://bad.test',
+      fetchFn: (async (input) =>
+        new URL(String(input)).pathname === '/health'
+          ? Response.json({ capabilities: ['dispatch-placement-v1'] })
+          : response.clone()) as typeof fetch,
+    })
+    await expect(invalid.getDispatchPlacement(repo)).rejects.toThrow()
+  }
+})
+
+test('placement service/client budget reads only the incremental tail at 100 and 100,000 events', async () => {
+  const { placementReadBudget } = await import('@defrex/autobuild/testing')
+  const store = new MemoryBuildStore()
+  let registrations = 0,
+    calls = 0
+  const server = createStoreServer({
+    store,
+    requireRegistered: async () => {
+      registrations++
+    },
+    placement: async (repo) => {
+      calls++
+      return (await store.getReducerValue({ kind: 'repo', repo }, { reducer: 'dispatchPlacement' }))
+        .value as import('@defrex/autobuild/remote-store').DispatchPlacement
+    },
+  })
+  await placementReadBudget({
+    store,
+    fresh: async () =>
+      new RemoteBuildStore({
+        url: 'https://store.test',
+        fetchFn: (async (input, init) => server.fetch(new Request(input, init))) as typeof fetch,
+      }),
+  })
+  expect(calls).toBe(14)
+  expect(registrations).toBe(14)
+})
+
+test('placement requires project authority and registration, including dispatcher credentials', async () => {
+  const repo = 'https://github.com/acme/one'
+  const other = 'https://github.com/acme/two'
+  const store = new MemoryBuildStore()
+  let publications = 0
+  const client = (kind: 'project' | 'delegated', project: string, registered = true) => {
+    const server = createStoreServer({
+      store,
+      auth: {
+        authenticate: async () =>
+          ({
+            kind,
+            repo: project,
+            user: 'test',
+            credential: { purpose: 'dispatcher' },
+          }) as unknown as import('./machine-auth').MachinePrincipal,
+      },
+      requireRegistered: async () => {
+        if (!registered)
+          throw new (await import('./machine-auth')).MachineAuthError(403, 'project not registered')
+      },
+      placement: async () => {
+        publications++
+        return { status: 'known', placement: { hosted: false } }
+      },
+    })
+    return new RemoteBuildStore({
+      url: 'https://store.test',
+      token: 'test',
+      fetchFn: (async (input, init) => server.fetch(new Request(input, init))) as typeof fetch,
+    })
+  }
+  expect((await client('project', repo).getDispatchPlacement(repo)).status).toBe('known')
+  await expect(client('project', other).getDispatchPlacement(repo)).rejects.toThrow('wrong project')
+  await expect(client('delegated', repo).getDispatchPlacement(repo)).rejects.toThrow(
+    'placement requires project authority',
+  )
+  await expect(client('project', repo, false).getDispatchPlacement(repo)).rejects.toThrow(
+    'project not registered',
+  )
+  expect(publications).toBe(1)
+})
+
+test('placement retries failed health negotiation without masking transport failures', async () => {
+  const server = createStoreServer({
+    store: new MemoryBuildStore(),
+    placement: async () => ({ status: 'known', placement: { hosted: false } }),
+  })
+  let probes = 0
+  const client = new RemoteBuildStore({
+    url: 'https://store.test',
+    fetchFn: (async (input, init) => {
+      if (new URL(String(input)).pathname === '/health' && ++probes === 1)
+        throw new TypeError('network unavailable')
+      return server.fetch(new Request(input, init))
+    }) as typeof fetch,
+  })
+  await expect(client.getDispatchPlacement('repo')).rejects.toThrow('network unavailable')
+  expect(await client.getDispatchPlacement('repo')).toEqual({
+    status: 'known',
+    placement: { hosted: false },
+  })
+  expect(await client.getDispatchPlacement('repo')).toEqual({
+    status: 'known',
+    placement: { hosted: false },
+  })
+  expect(probes).toBe(2)
+})

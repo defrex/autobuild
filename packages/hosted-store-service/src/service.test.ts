@@ -885,3 +885,107 @@ test('hosted HTTP preserves tree validation refusals without reporting internal 
   expect(responses.at(-1)?.status).toBe(500)
   expect(reports).toEqual([failure])
 })
+
+test('first placement read publishes configuration without cron or account secrets', async () => {
+  const repo = 'https://github.com/acme/placement'
+  const backing = new MemoryBuildStore()
+  const publications: unknown[] = []
+  let enumerations = 0
+  const service = createHostedStoreService({
+    env: { ...env, CRON_SECRET: 'cron-secret', AB_DISPATCHER_ORIGIN: 'https://service.test' },
+    clock,
+    openStore: async () => backing,
+    openProjectRegistry: async () => ({
+      has: async (key) => key === repo,
+      list: async () => {
+        enumerations++
+        return []
+      },
+    }),
+    syncPlacement: async (key, desired) => {
+      expect(key).toBe(repo)
+      publications.push(desired)
+      return { status: 'known', placement: desired }
+    },
+  })
+  const client = clientFor(service)
+  expect(await client.getDispatchPlacement(repo)).toEqual({
+    status: 'known',
+    placement: { hosted: true, origin: 'https://service.test' },
+  })
+  expect(publications).toHaveLength(1)
+  expect(enumerations).toBe(0)
+  await expect(client.getDispatchPlacement('https://github.com/acme/missing')).rejects.toThrow(
+    'project not registered',
+  )
+  expect(publications).toHaveLength(1)
+})
+
+test('excluded placement and invalid configuration do not require dispatcher credentials', async () => {
+  const project = 'https://github.com/acme/excluded'
+  for (const selection of ['https://github.com/acme/selected', '']) {
+    const publications: unknown[] = []
+    const service = createHostedStoreService({
+      env: {
+        ...env,
+        AB_DISPATCHER_ORIGIN: 'https://service.test',
+        AB_DISPATCHER_REPOSITORIES: selection,
+        CRON_SECRET: 'cron-secret',
+      },
+      clock,
+      openStore: async () => new MemoryBuildStore(),
+      openProjectRegistry: async () => ({
+        has: async () => true,
+        list: async () => {
+          throw new Error('placement must not enumerate')
+        },
+      }),
+      syncPlacement: async (_repo, desired) => {
+        publications.push(desired)
+        return { status: 'known', placement: desired }
+      },
+    })
+    const client = clientFor(service)
+    if (selection) {
+      expect(await client.getDispatchPlacement(project)).toEqual({
+        status: 'known',
+        placement: { hosted: false },
+      })
+      expect(publications).toEqual([{ hosted: false }])
+    } else {
+      await expect(client.getDispatchPlacement(project)).rejects.toThrow()
+      expect(publications).toEqual([])
+      expect(await client.listBuilds()).toEqual([])
+    }
+  }
+})
+
+test('disabled dispatcher publishes false with or without an origin and never enumerates', async () => {
+  for (const cronSecret of [undefined, '', '   ']) {
+    for (const origin of [undefined, 'https://service.test']) {
+      const publications: unknown[] = []
+      const service = createHostedStoreService({
+        env: { ...env, CRON_SECRET: cronSecret, AB_DISPATCHER_ORIGIN: origin },
+        clock,
+        openStore: async () => new MemoryBuildStore(),
+        openProjectRegistry: async () => ({
+          has: async () => true,
+          list: async () => {
+            throw new Error('placement must not enumerate')
+          },
+        }),
+        syncPlacement: async (_repo, desired) => {
+          publications.push(desired)
+          return { status: 'known', placement: desired }
+        },
+      })
+      expect(
+        await clientFor(service).getDispatchPlacement('https://github.com/acme/project'),
+      ).toEqual({
+        status: 'known',
+        placement: { hosted: false },
+      })
+      expect(publications).toEqual([{ hosted: false }])
+    }
+  }
+})

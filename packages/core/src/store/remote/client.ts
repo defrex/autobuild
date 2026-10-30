@@ -1,3 +1,9 @@
+import {
+  DISPATCH_PLACEMENT_CAPABILITY,
+  placementCapabilitiesSchema,
+  dispatchPlacementSchema,
+} from './protocol'
+import type { DispatchPlacement } from '../../kernel/dispatch-placement'
 import { scanCadenceSchema, type ScanCadence } from '../scan-cadence'
 import { nodeRewriteWireSchema } from './protocol'
 import { ArtifactMetaUnsupportedError } from '../artifact-meta'
@@ -213,6 +219,24 @@ export class RemoteBuildStore implements BuildStore {
       autobuildVersion: opts.identity?.autobuildVersion ?? AUTOBUILD_VERSION,
       protocolVersion: opts.identity?.protocolVersion ?? REMOTE_STORE_PROTOCOL_VERSION,
     }
+  }
+
+  private placementCapability: Promise<boolean> | undefined
+
+  async getDispatchPlacement(repo: string): Promise<DispatchPlacement> {
+    this.placementCapability ??= (async () => {
+      const response = await this.raw('GET', '/health')
+      if (response.status === 404 || response.status === 405) return false
+      if (!response.ok) throw await this.toError(response)
+      const health = placementCapabilitiesSchema.parse(await response.json())
+      return health.capabilities?.includes(DISPATCH_PLACEMENT_CAPABILITY) ?? false
+    })().catch((error) => {
+      this.placementCapability = undefined
+      throw error
+    })
+    if (!(await this.placementCapability))
+      return { status: 'unknown', reason: 'unsupported-capability' }
+    return this.requestJson('GET', `${this.repoPath(repo)}/placement`, dispatchPlacementSchema)
   }
 
   async inspectDispatcherOverlap(signal: AbortSignal) {

@@ -658,5 +658,13 @@
   "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/selectHolder::advance": {
     "kind": "reduction",
     "reason": "Frontend-only pruning of the already consumed incremental projection on a lease sample; performs no store reads or journal reconstruction."
+  },
+  "packages/postgres-store/src/store.ts::PostgresBuildStore/placementValue::advance": {
+    "kind": "reduction",
+    "reason": "Adapter-owned canonical placement persistence: under the repository transaction lock, restore the saved reducer identity, advance only its unseen tail, and save before returning. This is the durable reducer read implementation, not a consumer replay."
+  },
+  "packages/postgres-store/src/store.ts::PostgresBuildStore/placementValue::finish": {
+    "kind": "reduction",
+    "reason": "Adapter-owned canonical placement persistence: under the repository transaction lock, restore the saved reducer identity, advance only its unseen tail, and save before returning. This is the durable reducer read implementation, not a consumer replay."
   }
 }

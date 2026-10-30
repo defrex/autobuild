@@ -285,3 +285,11 @@ export async function readDispatchUpgrade(store: Reader, repo: string) {
     'dispatchUpgrade',
   )
 }
+
+export function readDispatchPlacement(store: Reader, repo: string) {
+  return readValue<import('../kernel/dispatch-placement').DispatchPlacement>(
+    store,
+    { kind: 'repo', repo },
+    'dispatchPlacement',
+  )
+}

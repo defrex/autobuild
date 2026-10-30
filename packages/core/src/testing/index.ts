@@ -95,3 +95,5 @@ export { temporaryDirectories, temporaryOriginScratch } from './temp-directories
 
 export { RELEASED_REDUCER_VALUES } from '../store/remote/released-reducer-values'
 export { projectReducerValue } from '../store/reducer-value-validation'
+
+export { placementReadBudget } from './reduced-read-budget'
