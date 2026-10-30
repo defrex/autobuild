@@ -1,4 +1,5 @@
 import { DISPATCHER } from '../events/envelope'
+import { remoteBranchHead } from '../ports/forge/git-rewrite'
 import type { Forge, WorkspaceProvider } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { preserveGitCommits } from '../ports/workspace/commit-preservation'
@@ -101,11 +102,19 @@ export async function preserveWorkspaceBeforeRelease(deps: {
   } else {
     const rewrite = deps.forge.kernelRewrite ?? deps.forge.rewrite
     if (!rewrite) throw new Error('forge lacks immutable workspace commit archives')
-    const base = await rewrite.snapshot({
-      workspacePath: handle.path,
-      branch: handle.branch,
-      destinationRef: `refs/autobuild/reconcile/${deps.slug}/preservation`,
-    })
+    const remote = await remoteBranchHead(
+      deps.forge.kernelExec ?? deps.exec,
+      handle.path,
+      handle.branch,
+    )
+    const base =
+      remote === null
+        ? source.payload.base.sha
+        : await rewrite.snapshot({
+            workspacePath: handle.path,
+            branch: handle.branch,
+            destinationRef: `refs/autobuild/reconcile/${deps.slug}/preservation`,
+          })
     preserved = {
       outcome: 'preserved',
       heads: await preserveGitCommits({

@@ -186,6 +186,11 @@ Classified rate limits retain repository cooldown and consume no publication
 retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
 
+Preserved restoration checkpoints survive repeated replacement; a published
+reconcile or restack rewrite retires the old checkpoint.
+Recovery context applies to the following session and its repeated hydration; later
+sessions do not inherit obsolete reconstruction instructions.
+
 ## Ticket preparation before build creation
 
 Before claiming, the dispatcher journals a repository-scoped preparation intent;

@@ -530,7 +530,7 @@ describe('VercelSandboxProvider', () => {
         response: { status: 410 },
         json: { error: { code: 'snapshot_not_found' } },
       }),
-    ).toBe(false)
+    ).toBe(true)
     expect(
       isUnavailableVercelSnapshot({
         response: { status: 410 },
@@ -2303,8 +2303,8 @@ describe('VercelSandboxProvider', () => {
       outcome: 'absent',
       snapshots: { outcome: 'confirmed', deleted: 1 },
     })
-    // An absent environment is never stopped or deleted again.
-    expect(h.sandbox.deletes).toBe(1)
+    // Authorized cleanup also clears a possible stale name reservation.
+    expect(h.sandbox.deletes).toBe(2)
     expect(h.sandbox.snapshots).toEqual([])
   })
 
@@ -3765,7 +3765,7 @@ describe('Vercel SDK cleanup facade', () => {
     }) as unknown as typeof globalThis.fetch)
     await expect(facade.deleteByName!('named')).rejects.toThrow('network unavailable')
   })
-  test('snapshot unavailable lookup is present-stale, while 404 alone is absent', async () => {
+  test('snapshot unavailable preserves stale identity for cleanup while 404 is absent', async () => {
     let status = 410
     const facade = createVercelSdkFacade(
       credentials,
@@ -3845,4 +3845,22 @@ test('fencing rechecks the provider and never purges snapshots on unknown outcom
   expect(gets).toBe(2)
   expect(sandbox.deletes).toBe(0)
   expect(sandbox.snapshots).toHaveLength(1)
+})
+
+test('absent filesystem fencing permits authorized stale-name deletion', async () => {
+  const h = harness({
+    facadeGet: async () => {
+      throw { response: { status: 410 }, json: { error: { code: 'snapshot_not_found' } } }
+    },
+  })
+  const handle = {
+    provider: 'vercel-sandbox',
+    ref: 'snapshot-gone',
+    path: VERCEL_WORKSPACE_PATH,
+    branch: 'ab/remote-build',
+  }
+  expect(await h.provider.recovery.fence!(handle)).toEqual({ outcome: 'absent' })
+  expect(h.sandbox.deletes).toBe(0)
+  expect(await h.provider.recovery.reap(handle)).toMatchObject({ outcome: 'absent' })
+  expect(h.sandbox.deletes).toBe(1)
 })

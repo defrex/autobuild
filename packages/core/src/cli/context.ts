@@ -296,15 +296,31 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     materialized,
   }
 
+  // A receipt belongs to the next session, including repeated hydration. The
+  // preceding session start bounds that window without consuming notes on read.
+  const [earlier, latest] =
+    events.sessionStarts.length === 2 ? events.sessionStarts : [undefined, events.sessionStarts[0]]
+  const previousSession = (latest?.session === env.session ? earlier?.seq : latest?.seq) ?? 0
+  const loss =
+    events.workspaceLoss && events.workspaceLoss.seq > previousSession
+      ? events.workspaceLoss.payload
+      : undefined
+  const checkpoint = events.workspacePreservation
+  const preserved =
+    checkpoint && checkpoint.seq > previousSession && checkpoint.payload.heads.length
+      ? checkpoint.payload
+      : undefined
+  const recoveries = Object.values(events.candidateRecoveries).filter(
+    (recovery) =>
+      recovery && (events.candidateRecoverySeqs[recovery.operation] ?? 0) > previousSession,
+  )
+  const legacyRequest = events.publication.latestUncompletedRequest()
   if (
-    events.workspaceLoss ||
-    events.workspacePreservation ||
-    Object.keys(events.candidateRecoveries).length ||
-    (events.publication.latestUncompletedRequest() &&
-      events.publication.lostRecorded(events.publication.latestUncompletedRequest()!))
+    loss ||
+    preserved ||
+    recoveries.length ||
+    (legacyRequest && events.publication.lostRecorded(legacyRequest))
   ) {
-    const loss = events.workspaceLoss?.payload
-    const preserved = events.workspacePreservation?.payload
     const lines = ['# Workspace commit recovery', '']
     if (preserved) {
       lines.push(`Preserved from ${preserved.ref}, ${preserved.phase}@${preserved.round}:`)
@@ -323,7 +339,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
         `Known lost candidates: ${loss.shas.join(', ') || '(no SHA inventory was observable)'}. Additional unpublished SHAs are unavailable.`,
         '',
       )
-    for (const recovery of Object.values(events.candidateRecoveries)) {
+    for (const recovery of recoveries) {
       if (!recovery) continue
       lines.push(
         `${recovery.operation} candidate ${recovery.sha} was confirmed unavailable. Reconstruct its producer result under retained intent ${recovery.replacementId}; do not search for the retired candidate.`,

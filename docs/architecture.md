@@ -616,7 +616,13 @@ additional unpublished SHAs could not be inspected. Unknown fencing, inspection,
 transport, or receipt-write outcomes leave the workspace and snapshots intact.
 Fencing is revalidated after restart; a saved receipt alone never authorizes
 cleanup of a newer execution. Current recovery notes are linked by the session
-manifest's `workspaceRecovery` field.
+manifest's `workspaceRecovery` field. Recovery notes apply to the next session
+and repeat hydration within it; empty checkpoints produce no note. Checkpoints survive
+repeated replacement until a published reconcile or restack rewrite retires them,
+so an old preserved branch cannot overwrite that rewrite. Before the first
+branch publication, preservation compares against the recorded workspace base.
+A confirmed `snapshot_not_found` response means the sandbox filesystem is gone;
+cleanup records loss and deletes its stale name before replacement.
 
 **Store authority.** `packages/core/src/store/build-scope.ts` wraps every adapter with one
 build's authority. Own-build record/event/artifact/lease/subscription calls

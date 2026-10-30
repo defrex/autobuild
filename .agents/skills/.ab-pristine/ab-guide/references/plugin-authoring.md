@@ -87,9 +87,10 @@ Only dispatcher-authorized reap follows the durable fence and preservation/loss
 receipt. `provision` accepts exact `restoration` heads; branch ancestry must be
 verified, and detached producer objects must never overwrite the named branch.
 Provision/start failures signal `WorkspaceCleanupRequired` rather than deleting
-or implicitly recreating an existing checkout. A stale snapshot is a present
-unavailable environment, not authoritative absence. Provider errors must never
-be converted into loss evidence. Credentials stay in trusted transport policy,
+or implicitly recreating an existing checkout. A confirmed `snapshot_not_found`
+lookup establishes filesystem absence, while retaining the stale name for
+dispatcher-authorized deletion. Other provider failures remain unknown and must
+never be converted into loss evidence. Credentials stay in trusted transport policy,
 never guest environment or agent commands.
 
 ### Publication readback

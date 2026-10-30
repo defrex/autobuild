@@ -340,13 +340,14 @@ export function isUnavailableVercelSnapshot(error: unknown): boolean {
   return candidate.response?.status === 410 && candidate.json?.error?.code === 'snapshot_not_found'
 }
 
+/** Confirmed filesystem absence; an expired snapshot may still reserve the name. */
 export function isMissingVercelSandbox(error: unknown): boolean {
   if (error === null || typeof error !== 'object') return false
   const candidate = error as {
     response?: { status?: number }
     json?: { error?: { code?: string } }
   }
-  return candidate.response?.status === 404
+  return candidate.response?.status === 404 || isUnavailableVercelSnapshot(error)
 }
 
 export function createVercelSdkFacade(
@@ -361,6 +362,8 @@ export function createVercelSdkFacade(
           await Sandbox.get({ name, signal, resume: false, fetch, ...credentials }),
         )
       } catch (error) {
+        // Provision must retain the stale name so dispatcher cleanup can delete it.
+        if (isUnavailableVercelSnapshot(error)) throw error
         if (isMissingVercelSandbox(error)) return null
         throw error
       }
@@ -1297,13 +1300,20 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         try {
           // Never trust the in-process handle after restart or another resume.
           const sandbox = await this.facade.get(handle.ref, this.operationSignal())
-          if (sandbox === null) return { outcome: 'absent' }
+          if (sandbox === null) {
+            this.forget(handle.ref)
+            return { outcome: 'absent' }
+          }
           await sandbox.stop({ signal: this.operationSignal() })
           this.active.delete(handle.ref)
           this.uncertain.delete(handle.ref)
           this.sessions.set(handle.ref, sandbox)
           return { outcome: 'confirmed' }
         } catch (error) {
+          if (isMissingVercelSandbox(error)) {
+            this.forget(handle.ref)
+            return { outcome: 'absent' }
+          }
           return {
             outcome: 'unknown',
             error: error instanceof Error ? error.message : String(error),
@@ -1630,8 +1640,20 @@ export class VercelSandboxProvider implements WorkspaceProvider {
    * sandbox and, because deleting a sandbox never removes the automatic
    * snapshots its sessions created, for its snapshot storage too. */
   private async reap(ref: string, dispatcherAuthorized = false): Promise<WorkspaceReapOutcome> {
-    let sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
+    let sandbox: VercelSandboxHandle | null
+    try {
+      sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
+    } catch (error) {
+      if (!isMissingVercelSandbox(error)) throw error
+      sandbox = null
+    }
     if (sandbox === null) {
+      // A snapshot-unavailable lookup also leaves a stale name reservation.
+      if (dispatcherAuthorized) {
+        if (!this.facade.deleteByName)
+          throw new Error('sandbox facade lacks dispatcher-authorized deleteByName')
+        await this.facade.deleteByName(ref, this.operationSignal())
+      }
       // An environment can vanish without its snapshots; the purge still
       // applies and only a confirmed empty list may forget the reference.
       try {

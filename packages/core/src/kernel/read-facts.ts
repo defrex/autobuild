@@ -178,6 +178,9 @@ export interface BuildReadAcc {
       import('../events/payloads').EventPayload<'publication.candidate-retired'>
     >
   >
+  candidateRecoverySeqs: Partial<Record<'reconcile' | 'restack', number>>
+  /** The two latest logical session starts; continuations keep their root's start. */
+  sessionStarts: Array<{ session: string; seq: number }>
   tipSources: Record<string, string[]>
   gitTips: string[]
   reconcileTransaction?: import('../events/payloads').EventPayload<'reconcile.prepared'>
@@ -214,7 +217,7 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 5 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 6 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
@@ -249,6 +252,8 @@ export const buildReadFactsReducer = defineReducer({
     reconcileHistory: [],
     restackHistory: [],
     candidateRecoveries: {},
+    candidateRecoverySeqs: {},
+    sessionStarts: [],
     tipSources: {},
     gitTips: [],
     maxPlanRevision: -1,
@@ -324,6 +329,23 @@ export const buildReadFactsReducer = defineReducer({
         acc.summaryEligibleAfter = event.payload.eligibleAfter
       if (event.type === 'publication.requested' && event.payload.operation === 'finalize')
         acc.finalizePublicationRequested = true
+      // Keep checkpoints through repeated replacements, but never restore an old
+      // branch over a durably acknowledged rewrite of the public branch.
+      if (event.type === 'reconcile.rewritten' || event.type === 'restack.rewritten')
+        delete acc.workspacePreservation
+      if (event.type === 'session.started') {
+        const last = acc.sessionStarts.at(-1)
+        if (event.payload.continuation && last?.session === event.payload.continuation.predecessor)
+          acc.sessionStarts[acc.sessionStarts.length - 1] = {
+            ...last,
+            session: event.payload.session,
+          }
+        else
+          acc.sessionStarts = [
+            ...acc.sessionStarts.slice(-1),
+            { session: event.payload.session, seq: event.seq },
+          ]
+      }
       if (event.type === 'workspace.fenced') acc.workspaceFence = event
       if (event.type === 'workspace.commits-preserved') acc.workspacePreservation = event
       if (event.type === 'workspace.commits-lost') acc.workspaceLoss = event
@@ -351,6 +373,7 @@ export const buildReadFactsReducer = defineReducer({
         acc.restackHistory.push(event as Extract<AbEvent, { type: `restack.${string}` }>)
       if (event.type === 'publication.candidate-retired') {
         acc.candidateRecoveries[event.payload.operation] = event.payload
+        acc.candidateRecoverySeqs[event.payload.operation] = event.seq
         if (
           event.payload.operation === 'reconcile' &&
           acc.reconcileTransaction?.id === event.payload.id
@@ -493,6 +516,8 @@ export const buildReadFactsReducer = defineReducer({
     restackHistory: structuredClone(acc.restackHistory),
     gitTips: [...acc.gitTips],
     candidateRecoveries: structuredClone(acc.candidateRecoveries),
+    candidateRecoverySeqs: { ...acc.candidateRecoverySeqs },
+    sessionStarts: acc.sessionStarts.map((start) => ({ ...start })),
     tipSources: structuredClone(acc.tipSources),
     reconcileTransaction: acc.reconcileTransaction,
     reconcileReplay: acc.reconcileReplay,

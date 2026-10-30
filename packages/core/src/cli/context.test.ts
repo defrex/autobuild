@@ -1479,6 +1479,53 @@ test.each(['implement', 'reconcile'] as const)(
       expect(notes).toContain('do not search for the retired candidate')
       expect(manifest.materialized['workspace-recovery.md']).toBe('derived')
     }
+    const start = (session: string, predecessor?: string) =>
+      store.append(BUILD, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session,
+          role: phase,
+          runner: 'fake',
+          phase,
+          round: 1,
+          ...(predecessor
+            ? {
+                continuation: {
+                  predecessor,
+                  root: predecessor,
+                  handle: {
+                    version: 1 as const,
+                    runner: 'fake',
+                    nativeId: 'native',
+                    host: 'test',
+                    workspacePath: '/workspace',
+                  },
+                  cause: 'shutdown' as const,
+                  activeMs: 1,
+                  budgetMs: 1000,
+                },
+              }
+            : {}),
+        },
+      })
+    // The receiving session and its continuation keep the note; a later one does not.
+    for (const [session, predecessor] of [['s_test'], ['s_resumed', 's_test']] as const) {
+      await start(session, predecessor)
+      const resumed = await buildContext({
+        store,
+        env: makeEnv({ phase, round: 1, session }),
+        workspacePath: workspace,
+      })
+      expect(resumed.workspaceRecovery).toBeDefined()
+    }
+    await start('s_later')
+    const later = await buildContext({
+      store,
+      env: makeEnv({ phase: 'code-review', round: 1, session: 's_later' }),
+      workspacePath: workspace,
+    })
+    expect(later.workspaceRecovery).toBeUndefined()
   },
 )
 
@@ -1537,4 +1584,70 @@ test('workspace recovery notes relocate around tracked scratch', async () => {
   expect(await readFile(join(workspace, manifest.workspaceRecovery!), 'utf8')).toContain(
     'source environment is absent',
   )
+})
+
+test('empty preservation checkpoints do not materialize recovery instructions', async () => {
+  await seedPlanApproved()
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.commits-preserved',
+    payload: {
+      workspace: 1,
+      execution: 0,
+      ref: 'clean',
+      branch: `ab/${BUILD}`,
+      phase: 'implement',
+      round: 1,
+      heads: [],
+    },
+  })
+  const manifest = await buildContext({
+    store,
+    env: makeEnv({ phase: 'implement', round: 1 }),
+    workspacePath: workspace,
+  })
+  expect(manifest.workspaceRecovery).toBeUndefined()
+})
+
+test('restored checkpoint remains visible to its session after successful provision', async () => {
+  await seedPlanApproved()
+  const sha = '8'.repeat(40)
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.commits-preserved',
+    payload: {
+      workspace: 1,
+      execution: 0,
+      ref: 'old',
+      branch: `ab/${BUILD}`,
+      phase: 'implement',
+      round: 1,
+      heads: [
+        {
+          role: 'branch',
+          sha,
+          remoteRef: `refs/autobuild/archive/${BUILD}/${sha}`,
+          commits: [sha],
+        },
+      ],
+    },
+  })
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'fake',
+      ref: 'replacement',
+      path: workspace,
+      branch: `ab/${BUILD}`,
+      base: { source: 'existing', sha },
+    },
+  })
+  const manifest = await buildContext({
+    store,
+    env: makeEnv({ phase: 'implement', round: 1 }),
+    workspacePath: workspace,
+  })
+  expect(manifest.workspaceRecovery).toBeDefined()
+  expect(await readFile(join(workspace, manifest.workspaceRecovery!), 'utf8')).toContain(sha)
 })
