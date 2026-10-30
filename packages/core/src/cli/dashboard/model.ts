@@ -1,3 +1,4 @@
+import { repositoryReadFactsReducer } from '../../kernel/read-facts'
 import { workTargetDistance } from './target-distance'
 import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { projectRollback, type DashboardRollback } from './rollback'
@@ -1350,6 +1351,15 @@ export function buildDashboardFromProjected(
   const builds = enrichIntegrationRows(
     projectedBuilds.map((row) => enrichDrainingRow(row, upgrade.draining)),
   ).sort((a, b) => a.slug.localeCompare(b.slug))
+  const missingAccounts = Array.isArray(repositoryEvents)
+    ? repositoryReadFactsReducer.reduce(repositoryEvents).missingAccounts
+    : repositoryEvents.missingAccounts
+  const warningLines = [
+    ...(header.warningLines ?? []),
+    ...Object.values(missingAccounts).map(
+      (account) => `Missing credentials: ${account.remedy} [${account.source}]`,
+    ),
+  ]
   const harvestProjection = projectRepositoryHarvest(repositoryEvents)
   const settings = Array.isArray(repositoryEvents)
     ? reduceDispatchSettings(repositoryEvents)
@@ -1372,9 +1382,7 @@ export function buildDashboardFromProjected(
     ...(header.selection !== undefined ? { selection: header.selection } : {}),
     ...(header.standby !== undefined ? { standby: header.standby } : {}),
     ...(header.availableUpgrade !== undefined ? { availableUpgrade: header.availableUpgrade } : {}),
-    ...(header.warningLines !== undefined && header.warningLines.length > 0
-      ? { warningLines: header.warningLines }
-      : {}),
+    ...(warningLines.length > 0 ? { warningLines } : {}),
     ...(header.resumeInput !== undefined ? { resumeInput: header.resumeInput } : {}),
     builds,
     ...(harvestProjection.harvest !== undefined ? { harvest: harvestProjection.harvest } : {}),

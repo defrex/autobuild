@@ -1,3 +1,7 @@
+import {
+  missingAccountCredentials,
+  MissingAccountCredentialsError,
+} from '../../accounts/availability'
 import { accountPolicy, accountGuestEnvironment } from './account-policy'
 import { gitRewrite, parseRemoteHead } from '../forge/git-rewrite'
 import { delegateCredential } from '../../store/remote/credentials'
@@ -1137,6 +1141,7 @@ export interface VercelSandboxProviderOptions {
   exec?: Exec
   packageArchive?: () => Promise<Uint8Array>
   accounts?: () => import('../../config/accounts').Accounts
+  executionAccounts?: () => import('../../config/accounts').Accounts
   runtimeReferences?: RuntimeReferencesSource
   /** Checkout-less seam: the repository's HTTPS GitHub origin. Default reads
    * `git remote get-url origin` from `repo` on the host. */
@@ -1566,8 +1571,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
 
   private billingPolicy(base: NetworkPolicy, ref?: string): NetworkPolicy {
     if (ref?.startsWith('autobuild-sandbox-')) return base
-    const result = accountPolicy(base, this.options.accounts?.() ?? {}, this.options.env)
-    if (result.missing.length) throw new Error(`Missing credentials: ${result.missing.join('; ')}`)
+    const accounts = this.options.accounts?.() ?? {}
+    const required = this.options.executionAccounts?.() ?? accounts
+    const result = accountPolicy(base, accounts, this.options.env, required)
+    if (result.missing.length)
+      throw new MissingAccountCredentialsError(
+        missingAccountCredentials(required, this.options.env),
+      )
     return result.policy
   }
 
@@ -2052,7 +2062,12 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           ? undefined
           : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
       )
-      const refreshed = accountPolicy(base, accounts, this.options.env)
+      const refreshed = accountPolicy(
+        base,
+        accounts,
+        this.options.env,
+        this.options.executionAccounts?.() ?? accounts,
+      )
       try {
         await sandbox.update(
           { networkPolicy: refreshed.policy },
