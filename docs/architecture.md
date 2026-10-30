@@ -1920,7 +1920,12 @@ Hosted event reads use the bounded capabilities in `store/event-reads.ts`:
 repository cursors must be at least `max(0, head - 1000)`, and build pages
 contain at most 256 events with `cursor` and `hasMore`. PostgreSQL seeks and
 limits at the database boundary, including held reads; remote complete-array
-reads reject partial suffixes. Exact historical watch/wait seeds come from
+reads reject partial suffixes. Protocol 7 is next-minor preparation for 1.4;
+supported published protocol-6 clients retain complete bounded arrays and
+legacy `conflict` refusals. Same-line runtime and published identities are
+admitted together, and both health surfaces use the shared validated identity
+projection without store reads. See [wire compatibility](remote-store-protocol.md).
+Exact historical watch/wait seeds come from
 rolling server-owned checkpoints in `postgres-store/src/stream-seeds.ts`.
 The canonical reducer fold publishes its cache and trailing checkpoints
 atomically under a reader-only lock. Initial adoption is an explicit resumable

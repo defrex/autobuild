@@ -1285,6 +1285,16 @@ Build history uses pages of at most 256 events with continuation cursor and
 `IncompleteEventReadError` if another page exists. Local SQLite and memory
 full-history methods remain available.
 
+Protocol 7's page envelope is prepared for the next minor line, 1.4, without
+changing package versions. Supported published 1.2 and 1.3 clients retain
+protocol 6: complete build suffixes fitting one page return plain arrays;
+larger suffixes and expired repository cursors return legacy-decodable
+`conflict` errors. Bounds apply before protocol projection. Same-line admission
+accepts runtime and published ledger protocols. Public health advertises a
+validated same-line request's protocol, otherwise the service line's published
+protocol (or runtime protocol for an unpublished line), with truthful package
+version and support range and no store reads.
+
 Watch/wait resume uses exact server-owned historical seed checkpoints within
 the same 1,000-position window for build and repository streams, then reads
 only the gap. Ordinary reducer/catalog upgrades preserve in-window cursors:
