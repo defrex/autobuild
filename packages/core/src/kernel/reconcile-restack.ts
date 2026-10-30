@@ -96,75 +96,8 @@ export function requireRewrite(forge: Forge) {
   return forge.rewrite
 }
 
-/** Retain the resolved commit and its new trees/blobs before durable intent.
- * Commit bytes alone cannot reconstruct a cherry-pick's combined tree after a
- * disposable guest disappears. Base history remains in the authoritative Git
- * repository; this pack retains only objects introduced above that base. */
-export async function retainReplay(deps: RestackDeps, head: string, base: string) {
-  const result = await deps.exec(
-    [
-      'bash',
-      '-o',
-      'pipefail',
-      '-c',
-      'printf "%s\\n" "$1" "^$2" | git pack-objects --stdout --revs | base64 -w0',
-      'retain-replay',
-      head,
-      base,
-    ],
-    { cwd: deps.workspacePath },
-  )
-  if (result.exitCode !== 0 || result.stdout.trim() === '')
-    throw new Error(`cannot retain replay objects: ${result.stderr}`)
-  await deps.store.putArtifact(deps.slug, {
-    kind: `replay-objects-${head}`,
-    content: result.stdout.trim(),
-  })
-}
-export async function restoreReplay(deps: RestackDeps, sha: string): Promise<boolean> {
-  const artifact = await deps.store.getArtifact(deps.slug, `replay-objects-${sha}`)
-  if (artifact === null) return false
-  const content = new TextDecoder().decode(artifact.content)
-  if (!/^[A-Za-z0-9+/=]+$/.test(content)) throw new Error('invalid retained replay pack')
-  const temporary = (await deps.exec(['mktemp'], { cwd: deps.workspacePath })).stdout.trim()
-  if (temporary === '') throw new Error('cannot create retained replay input')
-  try {
-    for (let offset = 0; offset < content.length; offset += 16_384) {
-      const written = await deps.exec(
-        [
-          'sh',
-          '-c',
-          'printf %s "$1" >> "$2"',
-          'replay-chunk',
-          content.slice(offset, offset + 16_384),
-          temporary,
-        ],
-        { cwd: deps.workspacePath },
-      )
-      if (written.exitCode !== 0) throw new Error('cannot stage retained replay input')
-    }
-    const result = await deps.exec(
-      [
-        'bash',
-        '-o',
-        'pipefail',
-        '-c',
-        'base64 -d "$1" | git unpack-objects -q',
-        'restore-replay',
-        temporary,
-      ],
-      { cwd: deps.workspacePath },
-    )
-    if (
-      result.exitCode !== 0 ||
-      (await git(deps, ['cat-file', '-e', `${sha}^{commit}`], true)).exitCode !== 0
-    )
-      throw new Error(`cannot restore replay objects ${sha}`)
-  } finally {
-    await deps.exec(['rm', '-f', temporary], { cwd: deps.workspacePath })
-  }
-  return true
-}
+export { retainReplay, restoreReplay } from './replay-retention'
+import { restoreReplay } from './replay-retention'
 
 /** Restore a sandbox-only change from durable bytes without remote write access. */
 async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
