@@ -10,7 +10,7 @@ import { defineReducer } from '../kernel/incremental'
 
 export type OpenBuildWorkspace = EventPayload<'workspace.provisioned'>
 
-export const OPEN_BUILD_WORKSPACE_REDUCER_VERSION = 1
+export const OPEN_BUILD_WORKSPACE_REDUCER_VERSION = 2
 
 /** Latest `workspace.provisioned` not followed by a `workspace.released` —
  * the reducer deliberately ignores workspace events (liveness is the
@@ -24,7 +24,8 @@ export const openBuildWorkspaceReducer = defineReducer<
   initial: () => ({ open: null }),
   fold(acc, events) {
     for (const event of events) {
-      if (event.type === 'workspace.provisioned') acc.open = event.payload
+      if (event.type === 'workspace.provisioned' || event.type === 'workspace.cleanup-required')
+        acc.open = event.payload
       else if (event.type === 'workspace.released') acc.open = null
     }
   },

@@ -1,3 +1,4 @@
+import { restoreGitCommits } from './commit-preservation'
 import { publishBranch, remoteBranchHead, refreshBranchCache } from '../forge/git-rewrite'
 /**
  * Workspace adapter: git worktrees (SPEC §3.2). The worktree is disposable
@@ -322,7 +323,27 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return { source: 'local', sha, remoteError }
   }
 
-  async provision(opts: {
+  async provision(
+    opts: Parameters<WorkspaceProvider['provision']>[0],
+  ): Promise<WorkspaceProvisionResult> {
+    const handle = await this.provisionCore(opts)
+    if (opts.restoration?.length) {
+      await restoreGitCommits({
+        exec: this.exec,
+        workspacePath: handle.path,
+        branch: opts.branch,
+        heads: opts.restoration,
+        local: true,
+      })
+      handle.base = {
+        source: 'existing',
+        sha: await this.resolveCommit(handle.path, `refs/heads/${opts.branch}`),
+      }
+    }
+    return handle
+  }
+
+  private async provisionCore(opts: {
     repo: string
     baseBranch: string
     branch: string

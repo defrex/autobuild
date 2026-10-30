@@ -73,6 +73,13 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
         delete state.distance
         state.target = { seq: event.seq, ...event.payload }
         break
+      case 'publication.candidate-retired':
+        if (event.payload.operation === 'restack' && state.active?.id === event.payload.id) {
+          state.active = { ...state.active, id: event.payload.replacementId }
+          delete state.replay
+          delete state.intent
+        }
+        break
       case 'restack.prepared':
         state.active = event.payload
         delete state.replay
@@ -106,7 +113,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
   }
 }
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 7,
+  version: 8,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),

@@ -6,6 +6,9 @@ import {
   reconcileMissingAccounts,
   type MissingAccountCredential,
 } from '../accounts/availability'
+
+import { WorkspaceFenceUnknown, preserveWorkspaceBeforeRelease } from './workspace-preservation'
+import { WorkspaceCleanupRequired } from '../ports/types'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import type { TicketPreparation } from '../kernel/ticket-preparation'
 import { sampleTargetDistance } from '../kernel/target-distance'
@@ -1947,7 +1950,7 @@ export class Dispatcher {
         return
       }
       const priorGenerations = events.workspaceGenerations
-      const handle = await workspaces.provision({
+      const handle = await this.provisionWorkspace(slug, {
         // Local providers provision FROM the physical checkout; remote
         // providers ignore the value (their host seams are injected).
         repo: this.deps.checkout ?? this.deps.repo,
@@ -3950,6 +3953,32 @@ export class Dispatcher {
     }
   }
 
+  private async provisionWorkspace(
+    slug: string,
+    input: Parameters<WorkspaceProvider['provision']>[0],
+  ) {
+    const facts = (await readBuildFacts(this.store, slug)).value
+    try {
+      return await this.deps.workspaces.provision({
+        ...input,
+        restoration: facts.workspacePreservation?.payload.heads,
+      })
+    } catch (error) {
+      if (error instanceof WorkspaceCleanupRequired) {
+        await this.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'workspace.cleanup-required',
+          payload: {
+            ...error.workspace,
+            base: error.workspace.base ?? facts.latestWorkspace!.payload.base,
+            remote: this.deps.workspaces.publication !== undefined,
+          },
+        })
+      }
+      throw error
+    }
+  }
+
   private async confirmedWorkspacePublication(events: CurrentBuildFacts, slug: string) {
     const sha = await readBuildSelector(this.store, slug, 'publishedBranchHead')
     return sha === undefined ? undefined : { sha, cacheHeads: events.gitTips }
@@ -4020,6 +4049,16 @@ export class Dispatcher {
     // failure propagates — a stale workspace with an unrecorded pending
     // request is never reaped (the next tick retries).
     try {
+      await preserveWorkspaceBeforeRelease({
+        store: this.store,
+        slug,
+        owner: this.workspaceOwner(open)!,
+        forge: this.deps.forge,
+        exec: this.deps.exec,
+        reason,
+        now: this.deps.clock(),
+      })
+      events = (await readBuildFacts(this.store, slug)).value
       events = await settlePublicationFactsBeforeRelease(
         { store: this.store, settlePublication: this.settlePublication },
         slug,
@@ -4030,7 +4069,15 @@ export class Dispatcher {
       // Keep this generation and its pending work until forge recovery,
       // while allowing the sweep to supervise the remaining builds.
       if (error instanceof ForgeRequestDeferred) return false
-      throw error
+      if (!(error instanceof WorkspaceFenceUnknown)) throw error
+      await this.recordInfrastructureFailure(slug, events, {
+        provider: open.provider,
+        workspaceRef: open.ref,
+        operation: 'reconcile',
+        error,
+        cleanupPending: true,
+      })
+      return false
     }
     const attempt = (events.cleanupCounts[JSON.stringify(open.ref)] ?? 0) + 1
     try {
@@ -4111,6 +4158,16 @@ export class Dispatcher {
     // pending publication BEFORE any provider cleanup call, while the
     // workspace still exists. The guard's append failure propagates — the
     // release never proceeds past an unrecorded pending request.
+    await preserveWorkspaceBeforeRelease({
+      store: this.store,
+      slug,
+      owner,
+      forge: this.deps.forge,
+      exec: this.deps.exec,
+      reason,
+      now: this.deps.clock(),
+    })
+    events = (await readBuildFacts(this.store, slug)).value
     events = await settlePublicationFactsBeforeRelease(
       { store: this.store, settlePublication: this.settlePublication },
       slug,
@@ -4308,7 +4365,7 @@ export class Dispatcher {
           return 'deferred'
         }
         const priorGenerations = events.workspaceGenerations
-        const handle = await this.deps.workspaces.provision({
+        const handle = await this.provisionWorkspace(record.slug, {
           // Local providers provision FROM the physical checkout; remote
           // providers ignore the value (their host seams are injected).
           repo: this.deps.checkout ?? this.deps.repo,
@@ -5809,7 +5866,7 @@ export class Dispatcher {
           if (kicked === 'kicked') report.provisioning += 1
         } else {
           if (openWorkspace(facts) === null) {
-            const handle = await this.deps.workspaces.provision({
+            const handle = await this.provisionWorkspace(record.slug, {
               repo: checkout,
               baseBranch: state.baseBranch!,
               branch: record.branch!,
@@ -6050,7 +6107,7 @@ export class Dispatcher {
     if (openWorkspace(facts) === null) {
       let handle: WorkspaceProvisionResult
       try {
-        handle = await this.deps.workspaces.provision({
+        handle = await this.provisionWorkspace(record.slug, {
           repo: this.deps.checkout ?? this.deps.repo,
           baseBranch: record.branch,
           branch: record.branch,
