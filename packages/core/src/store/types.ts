@@ -390,6 +390,18 @@ export interface BuildStore {
    * sole authority, so there is nothing to refresh or invalidate. The
    * derivation is the shared `reduceBuildDigest` (store/digest.ts), so every
    * adapter answers identical results for identical logs. */
+  /** Indexed kernel publication receipt keyed by node and previous head.
+   * Omitting previous returns the latest receipt, also indexed. beforePrevious
+   * returns the receipt immediately preceding the latest receipt with that
+   * previous head (and takes precedence over previous). Both cursor and result
+   * use indexes; repeated previous heads may conservatively truncate a proof.
+   * One bounded record; absent capability fails closed. Never scans history. */
+  getNodeRewrite?(
+    slug: string,
+    previous?: string,
+    beforePrevious?: string,
+  ): Promise<EventPayload<'node.rewritten'> | null>
+
   getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>>
 
   putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta>

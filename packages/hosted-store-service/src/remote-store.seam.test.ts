@@ -1506,3 +1506,28 @@ describe('latest artifact metadata route', () => {
     })
   })
 })
+
+test('rewrite index validates OIDs and fails closed without a history fallback', async () => {
+  const store = new MemoryBuildStore()
+  await store.createBuild(sampleBuildInput('rewrite-node'))
+  let histories = 0
+  const events = store.getEvents.bind(store)
+  store.getEvents = async (...args) => {
+    histories++
+    return events(...args)
+  }
+  const server = startStoreServer({ store })
+  try {
+    const remote = new RemoteBuildStore({ url: server.url })
+    expect(await remote.getNodeRewrite('rewrite-node', 'a'.repeat(40))).toBeNull()
+    expect(await remote.getNodeRewrite('rewrite-node')).toBeNull()
+    await expect(remote.getNodeRewrite('rewrite-node', 'invalid')).rejects.toThrow()
+    await expect(remote.getNodeRewrite('rewrite-node', undefined, 'invalid')).rejects.toThrow()
+    expect(await remote.getNodeRewrite('rewrite-node', undefined, 'b'.repeat(40))).toBeNull()
+    Reflect.set(store, 'getNodeRewrite', undefined)
+    await expect(remote.getNodeRewrite('rewrite-node', 'a'.repeat(40))).rejects.toThrow()
+    expect(histories).toBe(0)
+  } finally {
+    await server.stop()
+  }
+})

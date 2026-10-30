@@ -119,3 +119,8 @@ Classify failures with `ForgeFailure` (API 1.8):
 Ordinary policy or permission refusals stay deferrals.
 
 Optional `observeRequests` observers count every wire request, including failures and pagination, attributed to a build when known, excluding skipped calls and credential discovery; no observer means "unknown", not zero. Keep tokens out of failures and telemetry.
+
+Destination polling requires authoritative `remoteBranchSha`; automatic restack
+admission also requires immutable `isCommitAncestor` proof. Failed reads or
+missing capabilities defer work. Proven upstream rewrites retain the accepted
+target and raise attention; local dispatcher refs never substitute for the forge.
