@@ -1,3 +1,4 @@
+import { IncompleteEventReadError, BUILD_EVENT_PAGE_SIZE } from './event-reads'
 import { repositoryReadFactsReducer } from '../kernel/read-facts'
 import { validateReducerValue } from './reducer-value-validation'
 import { READ_CATALOG_IDENTITY } from '../events/compatibility'
@@ -2928,6 +2929,30 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('getEvents', () => {
+      test('bounded page traversal is complete and array reads never return partial history', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('paged-history'))
+          for (let i = 0; i < BUILD_EVENT_PAGE_SIZE + 3; i++)
+            await store.append('paged-history', sampleEventWrite(`page-${i}`))
+          try {
+            expect(await store.getEvents('paged-history')).toHaveLength(BUILD_EVENT_PAGE_SIZE + 3)
+          } catch (error) {
+            expect(error).toBeInstanceOf(IncompleteEventReadError)
+          }
+          if (!store.getBuildEventPage) return
+          const seen: number[] = []
+          let cursor = 0
+          for (;;) {
+            const page = await store.getBuildEventPage('paged-history', cursor)
+            expect(page.events.length).toBeLessThanOrEqual(BUILD_EVENT_PAGE_SIZE)
+            seen.push(...page.events.map((event) => event.seq))
+            cursor = page.cursor
+            if (!page.hasMore) break
+          }
+          expect(seen).toEqual(Array.from({ length: BUILD_EVENT_PAGE_SIZE + 3 }, (_, i) => i + 1))
+        })
+      })
+
       test('since is strictly greater-than, in seq order; default 0 = all (§7.2)', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('since'))

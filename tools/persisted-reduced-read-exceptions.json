@@ -55,10 +55,6 @@
     "kind": "reduction",
     "reason": "Explicit reconstruction of selector closures from a validated JSON ledger, or empty-repository defaults; no event replay."
   },
-  "packages/core/src/store/remote/client.ts::RemoteBuildStore/subscribe::getEvents": {
-    "kind": "raw",
-    "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
-  },
   "packages/core/src/store/local/store.ts::SqliteBuildStore/subscribe::getEvents": {
     "kind": "raw",
     "reason": "Store adapter or scoped forwarding of caller-requested event output and cursor subscriptions."
@@ -74,16 +70,6 @@
   "packages/core/src/processes/build-runner.ts::selectVerifyDiffBase::reduce": {
     "kind": "reduction",
     "reason": "Pure reference reducer/selector over caller-supplied events; store-backed current decisions use typed persisted reads."
-  },
-  "packages/core/src/processes/build-runner.ts::BuildRunner/executeSessionChain::getEvents": {
-    "kind": "raw",
-    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
-    "cursor": true
-  },
-  "packages/core/src/processes/build-runner.ts::BuildRunner/executeSingleSession::getEvents": {
-    "kind": "raw",
-    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
-    "cursor": true
   },
   "packages/core/src/processes/dispatch-failure-budget.ts::dispatchFailureBudget::reduce": {
     "kind": "reduction",
@@ -112,11 +98,6 @@
   "packages/core/src/processes/harvest-execution-state.ts::classifyHarvestOutcome::reduceHarvest": {
     "kind": "reduction",
     "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
-  },
-  "packages/core/src/processes/harvest-runner.ts::HarvestRunner/executeSessionChain::getRepoEvents": {
-    "kind": "raw",
-    "reason": "Reads only the new session event suffix to find the actual terminal envelope after agent execution.",
-    "cursor": true
   },
   "packages/core/src/processes/harvest.ts::evaluateHarvestPressureFromDigests::reduceHarvest": {
     "kind": "reduction",
@@ -197,11 +178,6 @@
   "packages/core/src/operator/query.ts::latestDispatchConfigStatus::reduceDispatchStatus": {
     "kind": "reduction",
     "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
-  },
-  "packages/core/src/operator/registry.ts::<module>::getEvents": {
-    "kind": "raw",
-    "reason": "Operator cursor event listing returns the actual durable event envelopes.",
-    "cursor": true
   },
   "packages/core/src/kernel/auto-merge-default.ts::latestAutoMergeDefault::reduce": {
     "kind": "reduction",
@@ -371,10 +347,6 @@
     "kind": "reduction",
     "reason": "Compatibility reference branch for caller-supplied event arrays; production store-backed callers pass persisted facts."
   },
-  "packages/core/src/cli/harvest.ts::abHarvestStatus::getRepoEvents": {
-    "kind": "raw",
-    "reason": "Explicit requested event-history output; current status is read separately from persisted facts."
-  },
   "packages/core/src/cli/pr-summary-publication.ts::boundedSummary::currentPrAttachments": {
     "kind": "reduction",
     "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
@@ -419,10 +391,6 @@
     "kind": "reduction",
     "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
   },
-  "packages/core/src/cli/status.ts::abBuildStatus::getEvents": {
-    "kind": "raw",
-    "reason": "Explicit requested event-history output; current status is read separately from persisted facts."
-  },
   "packages/core/src/cli/wait.ts::attentionFrom::reduceBuild": {
     "kind": "reduction",
     "reason": "Pure presentation/reference overload for caller-supplied event arrays; production current-state callers pass persisted facts."
@@ -443,11 +411,6 @@
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/wait.ts::abWait/trackBuild::getEvents": {
-    "kind": "raw",
-    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
-    "cursor": true
-  },
   "packages/core/src/cli/wait.ts::abWait/trackBuild::advance": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
@@ -459,11 +422,6 @@
   "packages/core/src/cli/wait.ts::abWait/discoverBuilds::finish": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
-  },
-  "packages/core/src/cli/wait.ts::abWait/pollBuild::getEvents": {
-    "kind": "raw",
-    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
-    "cursor": true
   },
   "packages/core/src/cli/wait.ts::abWait/pollBuild::advance": {
     "kind": "reduction",
@@ -489,21 +447,11 @@
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
-  "packages/core/src/cli/watch.ts::abWatch/trackBuild::getEvents": {
-    "kind": "raw",
-    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
-    "cursor": true
-  },
   "packages/core/src/cli/watch.ts::abWatch/discoverBuilds::finish": {
     "kind": "reduction",
     "reason": "Cursor stream advancement or finish of the compound persisted seed, at exactly the emitted event prefix."
   },
   "packages/core/src/cli/watch.ts::abWatch/trackRepository::getRepoEvents": {
-    "kind": "raw",
-    "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
-    "cursor": true
-  },
-  "packages/core/src/cli/watch.ts::abWatch/pollBuild::getEvents": {
     "kind": "raw",
     "reason": "Actual cursor event stream, initialized from one persisted seed; never fetches an ordinary historical prefix.",
     "cursor": true
@@ -590,22 +538,9 @@
     "kind": "reduction",
     "reason": "Operator session log reduction; persisted value operation supports only build and repository scopes."
   },
-  "packages/hosted-store-service/src/remote-store-server.ts::createStoreServer/repoRoute::getRepoEvents": {
-    "kind": "raw",
-    "reason": "Prerequisite hosted request plumbing returns caller-requested event output; outside this consumer migration."
-  },
   "packages/hosted-store-service/src/remote-store-server.ts::createStoreServer/repoRoute::getRepoStateEvents": {
     "kind": "raw",
     "reason": "Prerequisite hosted request plumbing returns caller-requested event output; outside this consumer migration."
-  },
-  "packages/hosted-store-service/src/remote-store-server.ts::createStoreServer/buildRoute::getEvents": {
-    "kind": "raw",
-    "reason": "Prerequisite hosted request plumbing returns caller-requested event output; outside this consumer migration."
-  },
-  "packages/postgres-store/src/store.ts::PostgresBuildStore/subscribe::getEvents": {
-    "kind": "raw",
-    "cursor": true,
-    "reason": "Subscription delivers actual durable event envelopes after the subscriber cursor."
   },
   "packages/core/src/kernel/log-index.ts::foldLogIndex::advance": {
     "kind": "reduction",
@@ -658,5 +593,29 @@
   "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/selectHolder::advance": {
     "kind": "reduction",
     "reason": "Frontend-only pruning of the already consumed incremental projection on a lease sample; performs no store reads or journal reconstruction."
+  },
+  "packages/postgres-store/src/store.ts::PostgresBuildStore/getStreamSeed::finish": {
+    "kind": "reduction",
+    "reason": "Finish an exact durably persisted historical accumulator; no event replay or client reconstruction."
+  },
+  "packages/core/src/store/memory.ts::MemoryBuildStore/getStreamSeed::finish": {
+    "kind": "reduction",
+    "reason": "Finish an exact durably persisted historical accumulator; no event replay or client reconstruction."
+  },
+  "packages/core/src/store/event-reads.ts::readBuildPage::getEvents": {
+    "kind": "raw",
+    "reason": "Local adapter event-output fallback; hosted consumers use explicit bounded pages through a fixed target head."
+  },
+  "packages/core/src/store/event-reads.ts::readBuildRange::getEvents": {
+    "kind": "raw",
+    "reason": "Local adapter event-output fallback; hosted consumers use explicit bounded pages through a fixed target head."
+  },
+  "packages/core/src/store/event-reads.ts::readHarvestTail::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Explicit filtered harvest history, local adapter fallback only; hosted stores use indexed bounded pages."
+  },
+  "packages/core/src/store/remote/client.ts::RemoteBuildStore/getRepositoryTail::getRepoEvents": {
+    "kind": "raw",
+    "reason": "Forward the bounded hosted repository tail array, preserving typed expiry errors."
   }
 }
