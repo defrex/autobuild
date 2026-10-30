@@ -1,3 +1,4 @@
+import { createTerminalModeController } from './terminal-restore'
 import { inspectLocalAccountEnvironment } from '../accounts/local-owner'
 import {
   applyProjectAccountSnapshot,
@@ -372,6 +373,8 @@ const DEFAULT_TIMERS: TimerScheduler = {
 }
 
 export interface DispatchOpts {
+  viewer?: boolean
+  dispatchedBy?: string
   /** Repo the dispatcher serves (§12: one dispatcher per repo) — the cwd, or
    * in origin mode a private scratch root. Filesystem consumers only.
    * Callers without a checkout may pass a non-filesystem identity token
@@ -4953,6 +4956,74 @@ async function resolveOriginModeState(
  * path — is the served repository.
  */
 export async function abDispatch(opts: DispatchOpts): Promise<void> {
+  if (opts.viewer) {
+    if (opts.repository !== undefined)
+      throw new Error('--viewer requires a local checkout; omit --repository')
+    if (opts.intake !== undefined) throw new Error('--viewer cannot set startup intake')
+    if (opts.dispatchedBy !== undefined && !opts.dispatchedBy.trim())
+      throw new Error('--dispatched-by requires a nonblank label')
+    const state = await resolveRepoState({
+      targetRepo: opts.targetRepo,
+      exec: opts.exec,
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
+    })
+    const env = {
+      ...opts.env,
+      AB_STORE: state.storeRef,
+      ...(isRemoteStoreRef(state.storeRef)
+        ? { AB_TOKEN: projectToken(state.storeRef, state.repo, opts.env) }
+        : {}),
+    }
+    const opened = openStoreForRepoState(state, { env })
+    try {
+      const interactive =
+        opts.plain !== true && opts.terminal?.interactive === true && opts.input !== undefined
+      await new DispatchFrontend({
+        viewer: { ...(opts.dispatchedBy !== undefined ? { dispatchedBy: opts.dispatchedBy } : {}) },
+        repo: opts.repo ?? state.repo,
+        checkout: state.checkout,
+        store: opened.store,
+        storeRef: opened.storeRef,
+        env,
+        terminal: opts.terminal ?? {
+          columns: 100,
+          rows: 24,
+          interactive: false,
+          write: () => {},
+          modes: createTerminalModeController(
+            () => {},
+            () => {},
+          ),
+        },
+        input: opts.input ?? { start: () => () => {} },
+        ...(!interactive ? { plainOutput: opts.stdout } : {}),
+        ticketSource: async () =>
+          (
+            await openTicketSource(
+              {
+                targetRepo: state.checkout,
+                exec: opts.exec,
+                env,
+                storeRef: opened.storeRef,
+                stdout: opts.stdout,
+              },
+              'ab merge',
+            )
+          ).source,
+        once: opts.once === true,
+        ...(opts.intervalMs !== undefined ? { intervalMs: opts.intervalMs } : {}),
+        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        ...(opts.resolveDashboardRenderer !== undefined
+          ? { resolveDashboardRenderer: opts.resolveDashboardRenderer }
+          : {}),
+      }).run()
+    } finally {
+      await opened.store.close()
+    }
+    return
+  }
+  if (opts.dispatchedBy !== undefined) throw new Error('--dispatched-by requires --viewer')
   if (opts.wire !== undefined && opts.nonStoreWire !== undefined) {
     throw new Error('dispatch wire and nonStoreWire are mutually exclusive')
   }

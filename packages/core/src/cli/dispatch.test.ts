@@ -1,3 +1,4 @@
+import { parseDispatchArgs } from './dispatch-args'
 import { LocalGitForge } from '../ports/forge/local-git'
 import {
   temporaryDirectories as ownTempDirectories,
@@ -12638,4 +12639,62 @@ credentialEnv = "CLAUDE_TOKEN"
   } finally {
     await f.cleanup()
   }
+})
+
+test('viewer argument contract rejects startup mutations and checkout-less operation', () => {
+  for (const flags of [
+    ['--viewer', '--intake'],
+    ['--viewer', '--no-intake'],
+    ['--viewer', '--repository', 'https://example/repo'],
+    ['--dispatched-by', 'host'],
+    ['--viewer', '--dispatched-by', '  '],
+    ['--viewer', '--auto-merge'],
+  ])
+    expect(() => parseDispatchArgs(flags, {})).toThrow()
+  expect(
+    parseDispatchArgs(
+      ['--viewer', '--once', '--plain', '--interval', '2', '--dispatched-by', 'host'],
+      { AB_REPOSITORY: 'elsewhere' },
+    ),
+  ).toMatchObject({
+    viewer: true,
+    once: true,
+    plain: true,
+    intervalMs: 2000,
+    dispatchedBy: 'host',
+    repository: undefined,
+  })
+})
+
+test('viewer routing bypasses injected execution wiring and missing execution configuration', async () => {
+  const targetRepo = await mkdtemp(join(tmpdir(), 'ab-viewer-direct-'))
+  const lines: string[] = []
+  await realAbDispatch({
+    targetRepo,
+    env: {},
+    exec: spawnExec,
+    stdout: (line) => lines.push(line),
+    stderr: () => {},
+    viewer: true,
+    once: true,
+    plain: true,
+    wire: () => {
+      throw new Error('viewer entered execution wiring')
+    },
+  })
+  expect(lines.join('\n')).toContain('Waiting for dispatcher configuration')
+  await expect(
+    realAbDispatch({
+      targetRepo,
+      env: {},
+      exec: async () => {
+        throw new Error('origin fetch')
+      },
+      stdout: () => {},
+      stderr: () => {},
+      viewer: true,
+      repository: 'https://example/repo',
+      once: true,
+    }),
+  ).rejects.toThrow('local checkout')
 })

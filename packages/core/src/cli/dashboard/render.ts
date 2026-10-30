@@ -557,6 +557,15 @@ export const DASHBOARD_SESSION_LIVE_LEGEND =
 export const DASHBOARD_SESSION_PAUSED_LEGEND =
   'Keys: Up/Down scroll (paused)  Esc back  Ctrl-C quit'
 
+function modeLegend(model: DashboardModel, legend: string): string {
+  return model.viewer
+    ? legend
+        .replace('Up/Down select', 'Up/Down')
+        .replace('Ctrl-C quit', 'Ctrl-C close viewer')
+        .replace(/ {2}/g, ' ')
+    : legend
+}
+
 function buildLegend(build: DashboardBuild, detail: boolean): string {
   if (build.status === 'aborting' || build.status === 'cleaning') {
     return detail
@@ -1026,7 +1035,7 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
       ? dashboardControls(model, color, width, controlsCapacity(height, top.length))
-      : [truncate(paint(buildLegend(build, true), 'dim', color), width)]
+      : [truncate(paint(modeLegend(model, buildLegend(build, true)), 'dim', color), width)]
   if (height !== undefined && height <= 0) return []
   if (height !== undefined && height <= top.length) return top.slice(0, height)
   if (height !== undefined && height === top.length + 1) return [...top, ...controls]
@@ -1134,7 +1143,7 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
   ]
   const content = transcriptContent(view.transcript, width).map((line) => truncate(line, width))
   const controls = truncate(
-    paint('Keys: Up/Down scroll  Esc back  Ctrl-C quit', 'dim', color),
+    paint(modeLegend(model, 'Keys: Up/Down scroll  Esc back  Ctrl-C quit'), 'dim', color),
     width,
   )
   if (height !== undefined && height <= 0) return []
@@ -1212,7 +1221,10 @@ function renderSessionView(model: DashboardModel, opts: RenderOpts): string[] {
   const content = sessionContentLines(view, width).map((line) => truncate(line, width))
   const controls = truncate(
     paint(
-      view.follow ? DASHBOARD_SESSION_LIVE_LEGEND : DASHBOARD_SESSION_PAUSED_LEGEND,
+      modeLegend(
+        model,
+        view.follow ? DASHBOARD_SESSION_LIVE_LEGEND : DASHBOARD_SESSION_PAUSED_LEGEND,
+      ),
       'dim',
       color,
     ),
@@ -1562,7 +1574,7 @@ function dashboardControls(
               ? DASHBOARD_HARVEST_ACKNOWLEDGE_LEGEND
               : DASHBOARD_HARVEST_LEGEND
           : DASHBOARD_GLOBAL_LEGEND
-    return [truncate(paint(legend, 'dim', color), width)]
+    return [truncate(paint(modeLegend(model, legend), 'dim', color), width)]
   }
   return resumePanel(model, color, width, capacity)
 }
@@ -1812,10 +1824,39 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
  * truncation, and right-pinning share one geometry. Prefixing only after the
  * frame is composed preserves its logical line count (including truly blank
  * separators) and therefore leaves vertical budgeting unchanged. */
+export function renderViewerNotice(
+  viewer: { dispatchedBy?: string },
+  message: string,
+  width: number,
+  height: number,
+): string[] {
+  const contentWidth = dashboardContentWidth(width)
+  return [viewerIndicator(viewer, contentWidth), truncate(displayText(message), contentWidth)]
+    .slice(0, Math.max(0, height))
+    .map((line) => (width > 0 ? ` ${line}` : line))
+}
+
+export function viewerIndicator(viewer: { dispatchedBy?: string }, width: number): string {
+  const label =
+    viewer.dispatchedBy === undefined
+      ? 'viewer'
+      : `viewer · dispatched by ${displayText(viewer.dispatchedBy)}`
+  return width >= 6 && width < 9 ? 'viewer' : truncate(label, width)
+}
+
 export function renderDashboard(model: DashboardModel, opts: RenderOpts): string[] {
   const terminalWidth = Math.max(0, opts.width)
   const contentWidth = dashboardContentWidth(terminalWidth)
-  const lines = renderDashboardContent(model, { ...opts, width: contentWidth })
+  const viewerRows = model.viewer ? 1 : 0
+  const height = opts.height === undefined ? undefined : Math.max(0, opts.height - viewerRows)
+  const lines = renderDashboardContent(model, {
+    ...opts,
+    width: contentWidth,
+    ...(height !== undefined ? { height } : {}),
+  })
+  if (model.viewer && (opts.height === undefined || opts.height > 0)) {
+    lines.unshift(viewerIndicator(model.viewer, contentWidth))
+  }
   const leftGutter = terminalWidth > 0 ? ' ' : ''
 
   return lines.map((line) => (line === '' ? '' : `${leftGutter}${line}`))

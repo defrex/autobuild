@@ -54,6 +54,8 @@ export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
 type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity'
 
 export interface FrameSpec {
+  viewer?: { dispatchedBy?: string }
+  ground?: 'light'
   selection?: DashboardModel['selection']
   harvestSuspended?: boolean
   rollback?: boolean
@@ -501,6 +503,46 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     forgeReadiness: true,
     requires: ['Forge squash', 'Forge rebase', 'Allow squash merging', 'Allow rebase merging'],
   },
+  ...[180, 100]
+    .flatMap((columns) => [
+      {
+        id: `viewer-known-${columns}`,
+        scenario: 'happy' as const,
+        columns,
+        rows: 30,
+        viewer: { dispatchedBy: 'app.autobuild.run' },
+        requires: ['viewer · dispatched by app.autobuild.run', 'Ctrl-C close'],
+      },
+      {
+        id: `viewer-unknown-${columns}`,
+        scenario: 'happy' as const,
+        columns,
+        rows: 30,
+        viewer: {},
+        requires: ['viewer', 'Ctrl-C close'],
+      },
+      {
+        id: `viewer-session-${columns}`,
+        scenario: 'mixed' as const,
+        columns,
+        rows: 24,
+        viewer: { dispatchedBy: 'app.autobuild.run' },
+        session: {
+          slug: 'complete-dashboard-evidence',
+          sessionId: 's_live_capture',
+          stream: 'st_live_capture',
+          status: 'open' as const,
+          parts: SESSION_LIVE_PARTS,
+          follow: true,
+        },
+        requires: [
+          'viewer · dispatched by app.autobuild.run',
+          'following tail',
+          'Ctrl-C close viewer',
+        ],
+      },
+    ])
+    .flatMap((spec) => [spec, { ...spec, id: `${spec.id}-light`, ground: 'light' as const }]),
 ]
 
 const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 4')
@@ -1851,6 +1893,7 @@ async function capturePaint(
               : {}),
           }
         }),
+        ...(spec.viewer !== undefined ? { viewer: spec.viewer } : {}),
         ...(spec.standby !== undefined ? { standby: spec.standby } : {}),
         ...(spec.availableUpgrade !== undefined ? { availableUpgrade: spec.availableUpgrade } : {}),
         ...(spec.accountCredentials || spec.forgeReadiness
@@ -2025,6 +2068,19 @@ export async function captureDashboardFrames(
       const { lines, model } = await capturePaint(harness, spec)
       const rendered = renderDashboardFrameImage(lines, {
         columns: spec.columns,
+        ...(spec.ground === 'light'
+          ? {
+              palette: {
+                background: '#ffffff',
+                foreground: '#24292f',
+                red: '#cf222e',
+                green: '#1a7f37',
+                yellow: '#9a6700',
+                blue: '#0969da',
+                cyan: '#1b7c83',
+              },
+            }
+          : {}),
       })
       const textPath = join(outputDir, `${spec.id}.txt`)
       const pngPath = join(outputDir, `${spec.id}.png`)

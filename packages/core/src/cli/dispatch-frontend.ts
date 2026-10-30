@@ -53,6 +53,8 @@ import {
   moveDetailScroll,
   moveTranscriptScroll,
   renderDashboard,
+  viewerIndicator,
+  renderViewerNotice,
   revealDetailFocus,
   type DashboardRendererResolver,
 } from './dashboard/render'
@@ -99,6 +101,8 @@ interface ResumePrompt {
 }
 
 export interface DispatchFrontendOptions {
+  viewer?: { dispatchedBy?: string }
+  plainOutput?: (line: string) => void
   /** Repository identity (§12): the normalized origin, or the checkout path
    * when there is no origin. Every Store key uses this. */
   repo: string
@@ -165,11 +169,19 @@ export class DispatchFrontend {
   private actionTail: Promise<void> = Promise.resolve()
   private presentationRestored = false
   private operatorStopRequested = false
+  private viewerStopped: (() => void) | undefined
+  private viewerFacts: RepositoryReadFacts | undefined
+  private viewerPosition: string | undefined
+  private viewerReadAt = -Infinity
+  private lastPlainFrame: string | undefined
 
   constructor(private readonly opts: DispatchFrontendOptions) {
     this.runId = launchContext(opts.env)?.run ?? crypto.randomUUID()
     this.dispatchStatus = reduceDispatchStatus([], this.runId)
-    this.reader = presentationReader(opts.store, () => this.refresh?.admitted ?? true)
+    this.reader = presentationReader(
+      opts.store,
+      () => !this.presentationRestored && (this.refresh?.admitted ?? true),
+    )
     this.clock = opts.clock ?? systemClock
     this.repositoryFeed = new DispatchRepositoryFeed(this.reader, opts.repo, this.clock)
     this.standbyResolver = new StandbyIdentityResolver(this.reader, opts.repo, {
@@ -188,7 +200,20 @@ export class DispatchFrontend {
    * operator action. High-frequency dispatcher status is folded from deltas;
    * only the low-volume settings/Harvest facts needed by the dashboard model
    * are retained for their existing replay reducers. */
-  private async events(): Promise<RepositoryEvent[]> {
+  private async events(sampledPosition?: string): Promise<RepositoryEvent[]> {
+    if (this.opts.viewer) {
+      const position = sampledPosition ?? (await this.reader.getRepoChangePosition(this.opts.repo))
+      if (
+        position !== this.viewerPosition ||
+        this.clock().getTime() - this.viewerReadAt >= 10_000
+      ) {
+        this.viewerFacts = (await readRepositoryFacts(this.reader, this.opts.repo)).value
+        this.viewerPosition = position
+        this.viewerReadAt = this.clock().getTime()
+      }
+      this.dispatchStatus = this.viewerFacts!.status ?? reduceDispatchStatus([], this.runId)
+      return []
+    }
     const refresh = this.eventRefreshTail.then(async () => {
       const delta = await this.repositoryFeed.refresh(false)
       this.standbyResolver.ingest(this.repositoryFeed.identities)
@@ -273,7 +298,7 @@ export class DispatchFrontend {
             detailScrollLimit(
               next,
               dashboardContentWidth(this.opts.terminal.columns),
-              paintableRows(this.opts.terminal.rows),
+              this.contentHeight(),
             ),
           ),
         ),
@@ -288,14 +313,26 @@ export class DispatchFrontend {
     if (this.refresh !== undefined && !this.refresh.painting) return
     if (this.model === undefined) return
     const renderer = this.opts.resolveDashboardRenderer?.() ?? renderDashboard
-    this.region.update(
-      renderer(this.model, {
-        color: true,
-        width: this.opts.terminal.columns,
-        height: paintableRows(this.opts.terminal.rows),
-        now: this.clock().getTime(),
-      }),
-    )
+    const lines = renderer(this.model, {
+      color: this.opts.plainOutput === undefined,
+      width: this.opts.terminal.columns,
+      height: paintableRows(this.opts.terminal.rows),
+      now: this.clock().getTime(),
+    })
+    this.outputFrame(lines)
+  }
+
+  private outputFrame(lines: string[]): void {
+    if (this.presentationRestored) return
+    if (this.opts.plainOutput) {
+      const frame = lines.join('\n')
+      if (frame !== this.lastPlainFrame) this.opts.plainOutput(frame)
+      this.lastPlainFrame = frame
+    } else this.region.update(lines)
+  }
+
+  private contentHeight(): number {
+    return Math.max(0, paintableRows(this.opts.terminal.rows) - (this.opts.viewer ? 1 : 0))
   }
 
   private async loadConfig(kind: string, rev: number): Promise<Config> {
@@ -329,8 +366,12 @@ export class DispatchFrontend {
 
   private async readFrame(): Promise<void> {
     if (this.refresh !== undefined && !this.refresh.admitted) return
+    let sampledPosition: string | undefined
     const frame = await this.repositoryPoll.refresh({
-      position: () => this.reader.getRepoChangePosition(this.opts.repo),
+      position: async () => {
+        sampledPosition = await this.reader.getRepoChangePosition(this.opts.repo)
+        return sampledPosition
+      },
       now: () => this.clock().getTime(),
       revision: 0,
       enabled: !this.opts.once,
@@ -338,21 +379,33 @@ export class DispatchFrontend {
       admitted: () => this.refresh === undefined || this.refresh.admitted,
       nextPollMs: this.refresh?.intervalMs ?? 0,
       read: async ({ fullEnrichment }) => {
-        const repositoryEvents = await this.events()
+        const repositoryEvents = await this.events(sampledPosition)
         // Authority and rollback holds need the full durable reduction, not the
         // low-volume replay feed (which deliberately discards per-tick facts).
-        const repositoryFacts = (
-          await readRepositoryFacts(
-            this.reader,
-            this.opts.repo,
-            repositoryEvents.length || this.repositoryFeed.identities.length ? true : undefined,
-          )
-        ).value
+        const repositoryFacts =
+          this.viewerFacts ??
+          (
+            await readRepositoryFacts(
+              this.reader,
+              this.opts.repo,
+              repositoryEvents.length || this.repositoryFeed.identities.length ? true : undefined,
+            )
+          ).value
         const upgrades = repositoryFacts.upgrades
         const status = this.dispatchStatus
         const ref = status.effectiveConfig
         if (ref === undefined) {
-          if (status.health === 'failed' && status.warningNotice !== undefined)
+          if (this.opts.viewer) {
+            this.model = undefined
+            this.outputFrame(
+              renderViewerNotice(
+                this.opts.viewer,
+                status.warningNotice ?? 'Waiting for dispatcher configuration',
+                this.opts.terminal.columns,
+                paintableRows(this.opts.terminal.rows),
+              ),
+            )
+          } else if (status.health === 'failed' && status.warningNotice !== undefined)
             this.region.update([status.warningNotice])
           // Startup is incomplete: retry at the same position.
           return undefined
@@ -362,7 +415,7 @@ export class DispatchFrontend {
         try {
           observationCount = unclaimedObservationCount({
             digests: await this.reader.getRepoBuildDigests(this.opts.repo),
-            harvestEvents: repositoryEvents,
+            harvestEvents: this.opts.viewer ? repositoryFacts.harvest : repositoryEvents,
           })
         } catch {
           // Incomplete snapshots never acknowledge the sampled position.
@@ -372,9 +425,9 @@ export class DispatchFrontend {
         }
         this.cache ??= new DashboardBuildPollCache(this.reader, this.opts.repo, config)
         const snapshot = await this.cache.refresh(config, this.configRevision, fullEnrichment)
-        if (!this.opts.once)
+        if (!this.opts.once && !this.opts.viewer)
           await this.standbyResolver.refresh(this.runId, status.yieldedHolder, this.clock())
-        await this.repositoryFeed.save()
+        if (!this.opts.viewer) await this.repositoryFeed.save()
         if (!this.cache.isCurrent(snapshot)) return undefined
         return {
           repositoryEvents,
@@ -390,9 +443,10 @@ export class DispatchFrontend {
     if (frame === undefined) return
     let { repositoryEvents, repositoryFacts, upgrades, status } = frame
     const { config, snapshot } = frame
-    const standby = this.opts.once
-      ? undefined
-      : this.standbyResolver.current(this.runId, status.yieldedHolder, this.clock())
+    const standby =
+      this.opts.once || this.opts.viewer
+        ? undefined
+        : this.standbyResolver.current(this.runId, status.yieldedHolder, this.clock())
     this.observationCount = frame.observationCount
     this.refresh?.activity(snapshot.states.size > 0)
 
@@ -441,7 +495,9 @@ export class DispatchFrontend {
           config.capacity,
           this.clock(),
           migrationIdentity(
-            ticketMigrationsReducer.reduce(repositoryEvents),
+            this.opts.viewer
+              ? repositoryFacts.ticketMigrations
+              : ticketMigrationsReducer.reduce(repositoryEvents),
             config.tickets.source,
           ),
         ),
@@ -462,7 +518,7 @@ export class DispatchFrontend {
     ) {
       this.view = undefined
     }
-    this.model = projected
+    this.model = { ...projected, ...(this.opts.viewer ? { viewer: this.opts.viewer } : {}) }
     this.syncControls()
     this.paint()
     // The session view's live-read cycle rides the poll tick: one immediate
@@ -477,7 +533,7 @@ export class DispatchFrontend {
       const limit = sessionScrollLimit(
         view,
         this.opts.terminal.columns,
-        paintableRows(this.opts.terminal.rows),
+        this.contentHeight(),
         upgrade,
         this.model?.standby !== undefined,
       )
@@ -485,7 +541,7 @@ export class DispatchFrontend {
       const scroll = moveSessionScroll(
         view,
         this.opts.terminal.columns,
-        paintableRows(this.opts.terminal.rows),
+        this.contentHeight(),
         current,
         delta,
         upgrade,
@@ -505,7 +561,7 @@ export class DispatchFrontend {
         scroll: moveTranscriptScroll(
           this.view.transcript,
           this.opts.terminal.columns,
-          paintableRows(this.opts.terminal.rows),
+          this.contentHeight(),
           this.view.scroll,
           delta,
           this.model?.availableUpgrade !== undefined,
@@ -518,7 +574,7 @@ export class DispatchFrontend {
         scroll: moveDetailScroll(
           this.model,
           dashboardContentWidth(this.opts.terminal.columns),
-          paintableRows(this.opts.terminal.rows),
+          this.contentHeight(),
           this.view.scroll,
           delta,
         ),
@@ -546,7 +602,7 @@ export class DispatchFrontend {
       scroll: revealDetailFocus(
         { ...this.model!, view: candidate },
         dashboardContentWidth(this.opts.terminal.columns),
-        paintableRows(this.opts.terminal.rows),
+        this.contentHeight(),
         'session',
         candidate.scroll,
       ),
@@ -606,7 +662,7 @@ export class DispatchFrontend {
         scroll: revealDetailFocus(
           { ...this.model!, view: candidate },
           dashboardContentWidth(this.opts.terminal.columns),
-          paintableRows(this.opts.terminal.rows),
+          this.contentHeight(),
           'message',
           candidate.scroll,
         ),
@@ -670,7 +726,7 @@ export class DispatchFrontend {
           const limit = sessionScrollLimit(
             next,
             terminal.columns,
-            paintableRows(terminal.rows),
+            this.contentHeight(),
             this.model?.availableUpgrade !== undefined,
             this.model?.standby !== undefined,
           )
@@ -1033,29 +1089,32 @@ export class DispatchFrontend {
       },
       this.opts.refreshScheduler,
       this.opts.store.networkReads,
+      this.opts.viewer ? this.opts.intervalMs : undefined,
     )
-    this.listen()
-    this.opts.terminal.modes.enter(FOCUS_REPORTING_MODE)
-    this.suspension = installPresentationSuspension(
-      this.opts.terminal.modes,
-      () => {
-        this.refresh?.suspend()
-        this.cleanupInput?.()
-        this.cleanupInput = undefined
-      },
-      () => {
-        this.listen()
-        this.region.invalidate()
-        this.refresh?.resume()
-      },
-    )
-    this.paintTimer = setInterval(() => this.paint(), PAINT_MS)
-    this.paintTimer.unref?.()
+    if (!this.opts.plainOutput) this.listen()
+    if (!this.opts.plainOutput) this.opts.terminal.modes.enter(FOCUS_REPORTING_MODE)
+    if (!this.opts.plainOutput)
+      this.suspension = installPresentationSuspension(
+        this.opts.terminal.modes,
+        () => {
+          this.refresh?.suspend()
+          this.cleanupInput?.()
+          this.cleanupInput = undefined
+        },
+        () => {
+          this.listen()
+          this.region.invalidate()
+          this.refresh?.resume()
+        },
+      )
+    if (!this.opts.plainOutput) this.paintTimer = setInterval(() => this.paint(), PAINT_MS)
+    this.paintTimer?.unref?.()
     void this.refresh.request()
   }
 
   private requestOperatorStop(): void {
     this.operatorStopRequested = true
+    this.viewerStopped?.()
     this.restorePresentationForStop()
     void this.child?.stop(
       typeof this.opts.signal?.reason === 'string' ? this.opts.signal.reason : undefined,
@@ -1109,7 +1168,47 @@ export class DispatchFrontend {
     }
   }
 
+  private async runViewer(): Promise<void> {
+    // Viewing has no repository creation, lease, child, or dispatcher lifecycle writes.
+    if (this.opts.plainOutput) this.opts.plainOutput(viewerIndicator(this.opts.viewer!, 1000))
+    if (this.opts.signal?.aborted) return
+    const stopped = new Promise<void>((resolve) => {
+      this.viewerStopped = resolve
+    })
+    const stop = () => this.requestOperatorStop()
+    // A pending Promise and the adaptive scheduler's unref timers do not keep
+    // a plain viewer alive. This timer owns only the presentation lifetime.
+    const lifetime = setInterval(() => {}, 60_000)
+    this.opts.signal?.addEventListener('abort', stop, { once: true })
+    try {
+      await this.readFrame()
+      if (!this.opts.once && !this.operatorStopRequested) {
+        this.startPresentation()
+        await stopped
+      }
+    } catch (error) {
+      if (this.operatorStopRequested) return
+      this.outputFrame(
+        renderViewerNotice(
+          this.opts.viewer!,
+          `Viewer unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          this.opts.terminal.columns,
+          paintableRows(this.opts.terminal.rows),
+        ),
+      )
+      throw error
+    } finally {
+      clearInterval(lifetime)
+      this.opts.signal?.removeEventListener('abort', stop)
+      this.restorePresentationForStop()
+      await this.refresh?.join()
+      await this.actionTail
+      this.viewerStopped = undefined
+    }
+  }
+
   async run(): Promise<void> {
+    if (this.opts.viewer) return this.runViewer()
     await this.opts.store.ensureRepo(this.opts.repo)
     const actor = humanActor(buildControlUser(this.opts.env))
     if (this.opts.intake !== undefined) {

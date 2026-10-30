@@ -314,6 +314,7 @@ export interface DashboardCounter {
 }
 
 export interface DashboardModel {
+  viewer?: { dispatchedBy?: string }
   rollback?: DashboardRollback
   handoffs?: DashboardHandoff[]
   repo: string
