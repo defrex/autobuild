@@ -1,3 +1,4 @@
+import { repositoryReadFactsReducer } from '../kernel/read-facts'
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { OPERATOR_PRESENCE_TTL_MS, type OperatorPresence } from '../store/operator-presence'
 import { migrationIdentity } from '../kernel/ticket-migrations'
@@ -39,6 +40,7 @@ export interface RepositoryStatus extends DispatchSettings {
   rollbackHold?: DispatchUpgradeState['lastRollback']
   capacity?: DispatchCapacity
   warningLines?: string[]
+  missingAccounts?: RepositoryReadFacts['missingAccounts']
   dispatcher: DispatcherLiveness
   forgeRequests?: ForgeRequestCounts
   forgeRequestHotspot?: string
@@ -116,6 +118,9 @@ export function projectRepositoryStatus(
       ? { forgeDegradation: forgeHealthReducer.reduce(events) }
       : {}),
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
+    ...(Object.keys(repositoryReadFactsReducer.reduce(events).missingAccounts).length
+      ? { missingAccounts: repositoryReadFactsReducer.reduce(events).missingAccounts }
+      : {}),
     repo,
     operator: { registrations: [] },
     upgrades: dispatchUpgradeReducer.reduce(events),
@@ -151,6 +156,9 @@ export function repositoryStatusFromFacts(
 ): RepositoryStatus {
   const warningLines = facts.status ? forgeReadinessWarnings(facts.status) : []
   return {
+    ...(Object.keys(facts.missingAccounts).length
+      ? { missingAccounts: facts.missingAccounts }
+      : {}),
     repo,
     operator: { registrations: [] },
     upgrades: facts.upgrades,
@@ -212,6 +220,9 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const setting = (enabled: boolean): string => (enabled ? 'ON' : 'OFF')
   const active = status.ticketSourceDegradation
   return [
+    ...Object.values(status.missingAccounts ?? {}).map(
+      (account) => `Missing credentials: ${account.remedy} [${account.source}]`,
+    ),
     status.operator.registrations.length
       ? `operator: present (${status.operator.registrations.length} registrations)`
       : 'operator: absent',

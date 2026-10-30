@@ -454,6 +454,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           const childEnv: Record<string, string | undefined> = {
             ...env,
             ...snapshot.env,
+            AB_PROJECT_ACCOUNT_ENV: JSON.stringify(snapshot.env),
             AB_STORE: config.origin,
             AB_TOKEN: token,
             ...(resolutionFailed

@@ -482,6 +482,7 @@ import { dispatchStatusReducer } from './dispatch-status'
  * correlations outside it use the explicitly parameterized cache. */
 export const RECENT_DISPATCH_RUN_LIMIT = 16
 export interface RepositoryReadAcc {
+  missingAccounts: Record<string, import('../accounts/availability').MissingAccountCredential>
   preparation: ReturnType<typeof ticketPreparationReducer.initial>
   compatibility: CompatibilityState
   presence: Record<
@@ -534,7 +535,7 @@ export interface RepositoryReadAcc {
 export const repositoryReadFactsReducer = defineReducer({
   rawEvents: true,
   version:
-    5 +
+    6 +
     ticketMigrationsReducer.version +
     dispatchUpgradeReducer.version +
     ticketPreparationReducer.version +
@@ -550,6 +551,7 @@ export const repositoryReadFactsReducer = defineReducer({
     sandboxStatesReducer.version +
     dispatchStatusReducer('version').version,
   initial: (): RepositoryReadAcc => ({
+    missingAccounts: {},
     compatibility: initialCompatibility(),
     presence: {},
     preparation: ticketPreparationReducer.initial(),
@@ -592,6 +594,10 @@ export const repositoryReadFactsReducer = defineReducer({
     acc.config = effectiveConfigReducer.advance(acc.config, events)
     acc.sandboxes = sandboxStatesReducer.advance(acc.sandboxes, events)
     for (const event of projectEvents(events)) {
+      if (event.type === 'account.credentials-unavailable')
+        acc.missingAccounts[event.payload.name] = event.payload
+      if (event.type === 'account.credentials-recovered')
+        delete acc.missingAccounts[event.payload.name]
       if (event.type === 'change-presence.observed')
         acc.presence[event.payload.destination] = event.payload
       if (event.type === 'harvest.failed') {
@@ -690,6 +696,7 @@ export const repositoryReadFactsReducer = defineReducer({
     }
   },
   finish: (acc: RepositoryReadAcc) => ({
+    missingAccounts: structuredClone(acc.missingAccounts),
     compatibility: structuredClone(acc.compatibility),
     presence: structuredClone(acc.presence),
     preparation: ticketPreparationReducer.finish(acc.preparation),
