@@ -67,8 +67,12 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true })
 })
 
-const env = () => ({
+// A build session's AB_STORE names a live service; these fixtures must never
+// consult it, or its compatibility window decides whether they pass.
+const env = (): Record<string, string | undefined> => ({
   ...process.env,
+  AB_STORE: undefined,
+  AB_TOKEN: undefined,
   BUN_CONFIG_REGISTRY: registry,
   BUN_INSTALL_CACHE_DIR: join(scratch, 'cache'),
 })
@@ -150,6 +154,7 @@ describe('real Bun self-update of a registry install', () => {
         distRoot: dist,
         registry: async () => ({ status: 200, body: '{"version":"1.1.0"}' }),
         command,
+        env: env(),
         stdout: (line) => out.push(line),
         stderr: (line) => errs.push(line),
       })
