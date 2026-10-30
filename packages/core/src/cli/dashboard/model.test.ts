@@ -2440,3 +2440,35 @@ test.each([0, 1])('node without a PR uses one shared integration term (ahead=%s)
   expect(row.steps.find((s) => s.label === row.integration)).toBeDefined()
   if (ahead > 0) expect(row.steps.find((s) => s.label === 'empty')).toBeUndefined()
 })
+
+test('repository account attention uses the same source/remedy and clears on recovery', () => {
+  const header = {
+    repo: '/repos/app',
+    queued: 0,
+    activeCount: 0,
+    capacity: 1,
+    observationCount: 0,
+    observationLimit: 5,
+  }
+  const missing = {
+    name: 'billing',
+    descriptor: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' },
+    source: 'project-secrets',
+    remedy: 'account "billing" (BILLING_TOKEN): ab secrets set BILLING_TOKEN',
+  } as const
+  const event = {
+    repo: header.repo,
+    seq: 1,
+    ts: '2026-10-29T00:00:00Z',
+    actor: DISPATCHER,
+    type: 'account.credentials-unavailable',
+    payload: missing,
+  } as const
+  const held = buildDashboardFromProjected([], header, [event])
+  expect(held.warningLines).toEqual([`Missing credentials: ${missing.remedy} [project-secrets]`])
+  const recovered = buildDashboardFromProjected([], header, [
+    event,
+    { ...event, seq: 2, type: 'account.credentials-recovered', payload: { name: missing.name } },
+  ])
+  expect(recovered.warningLines).toBeUndefined()
+})

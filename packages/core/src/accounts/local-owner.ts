@@ -8,6 +8,7 @@ import type { ChatGPTState } from './chatgpt-state'
  * written before HTTP, and uncertain completion is terminal for that generation. */
 export class LocalAccountOwner {
   readonly id = randomUUID()
+  readonly injected = new Map<string, string>()
   constructor(
     readonly credentials: LocalCredentials,
     private readonly refresh = refreshChatGPT,
@@ -106,18 +107,64 @@ export async function renewLocalAccounts(
     if (descriptor.kind !== 'chatgpt-subscription') continue
     try {
       const record = owner.credentials.load(name)
-      if (!record || record.status === 'failed') {
-        delete env[descriptor.credentialEnv]
+      if (!record) {
+        if (owner.injected.get(descriptor.credentialEnv) === env[descriptor.credentialEnv])
+          delete env[descriptor.credentialEnv]
+        owner.injected.delete(descriptor.credentialEnv)
         continue
       }
+      if (
+        record.status === 'failed' ||
+        JSON.stringify(record.descriptor) !== JSON.stringify(descriptor)
+      )
+        throw new Error('ChatGPT account failed or descriptor changed; sign in again')
       owner.claim(name)
       claimed.add(name)
       // Only expose a still-valid access value during the rotating HTTP call.
       if (record.state.expiresAt > now) env[descriptor.credentialEnv] = record.state.accessToken
       else delete env[descriptor.credentialEnv]
       Object.assign(env, await owner.tick({ [name]: descriptor }, now))
+      owner.injected.set(descriptor.credentialEnv, env[descriptor.credentialEnv]!)
     } catch {
       delete env[descriptor.credentialEnv]
     }
   }
+}
+
+/** Inspect transferability without claiming ownership or consuming refresh state.
+ * Startup may allow a live peer solely for the pre-lease presence check; actual
+ * resolution must still claim after acquiring the repository lease.
+ */
+export function inspectLocalAccountEnvironment(
+  credentials: LocalCredentials,
+  accounts: Accounts,
+  env: Readonly<Record<string, string | undefined>>,
+  predecessorPid?: number,
+  allowLivePeer = false,
+): Record<string, string | undefined> {
+  const available = { ...env }
+  for (const [name, descriptor] of Object.entries(accounts)) {
+    if (descriptor.kind !== 'chatgpt-subscription') continue
+    try {
+      const record = credentials.load(name)
+      if (!record) continue
+      const ownerAvailable =
+        allowLivePeer ||
+        !record.owner ||
+        ownerProcessEnded(record.ownerPid) ||
+        (predecessorPid !== undefined && record.ownerPid === predecessorPid)
+      if (
+        record.status === 'ready' &&
+        (record.state.expiresAt > Date.now() ||
+          Date.now() >= (record.state.earliestRefreshAt ?? 0)) &&
+        ownerAvailable &&
+        JSON.stringify(record.descriptor) === JSON.stringify(descriptor)
+      )
+        available[descriptor.credentialEnv] = 'local-refreshing-source'
+      else delete available[descriptor.credentialEnv]
+    } catch {
+      delete available[descriptor.credentialEnv]
+    }
+  }
+  return available
 }

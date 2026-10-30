@@ -1,3 +1,4 @@
+import { missingAccountCredentials, MissingAccountCredentialsError } from '../accounts/availability'
 import { parkedSweepReadBudget } from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
@@ -116,6 +117,7 @@ function withReadyState(toml: string): string {
 
 function harness(
   opts: {
+    missingAccounts?: () => import('../accounts/availability').MissingAccountCredential[]
     clock?: ReturnType<typeof manualClock>
     tickets?: Ticket[]
     toml?: string
@@ -199,6 +201,7 @@ function harness(
           })),
     ...(opts.retiredWorkspaces === undefined ? {} : { retiredWorkspaces: opts.retiredWorkspaces }),
     forge: opts.dispatchForge ?? forge,
+    missingAccounts: opts.missingAccounts,
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
     ...(opts.repairBuildConfig ? { repairBuildConfig: opts.repairBuildConfig } : {}),
@@ -12357,4 +12360,86 @@ test('target read rate limits retain the accepted tip, enter cooldown, and recov
     (await h.store.getRepoEvents(REPO)).some((e) => e.type === 'dispatcher.forge-recovered'),
   ).toBe(true)
   expect(h.execCalls.some((cmd) => cmd[1] === 'ls-remote')).toBe(false)
+})
+
+test('missing account admission survives fresh kernels without build failures, then recovers automatically', async () => {
+  const accounts = {
+    billing: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' },
+  } as const
+  let available = false
+  const missingAccounts = () =>
+    missingAccountCredentials(
+      accounts,
+      available ? { BILLING_TOKEN: 'opaque' } : {},
+      'project-secrets',
+    )
+  const first = harness({ tickets: [readyTicket('CRED-1')], missingAccounts })
+  await first.dispatcher.tick({ resumeCurrent: true })
+  expect(first.launches).toEqual([])
+  expect(await first.store.listBuilds()).toEqual([])
+  for (let n = 0; n < 5; n++) {
+    const fresh = harness({ store: first.store, tickets: [readyTicket('CRED-1')], missingAccounts })
+    await fresh.dispatcher.tick({ resumeCurrent: true })
+    expect(fresh.launches).toEqual([])
+  }
+  let journal = await first.store.getRepoEvents(REPO)
+  expect(journal.filter((e) => e.type === 'account.credentials-unavailable')).toHaveLength(1)
+  available = true
+  const recovered = harness({
+    store: first.store,
+    tickets: [readyTicket('CRED-1')],
+    missingAccounts,
+  })
+  await recovered.dispatcher.tick({ resumeCurrent: true })
+  expect(recovered.launches).toHaveLength(1)
+  journal = await first.store.getRepoEvents(REPO)
+  expect(journal.filter((e) => e.type === 'account.credentials-recovered')).toHaveLength(1)
+  const record = (await first.store.listBuilds())[0]!
+  expect(
+    (await first.store.getEvents(record.slug)).some(
+      (e) => e.type === 'infrastructure.failed' || e.type === 'dispatch.failed',
+    ),
+  ).toBe(false)
+})
+test('a typed provisioning race records repository attention and spends no infrastructure attempts', async () => {
+  const accounts = {
+    billing: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' },
+  } as const
+  const h = harness({ tickets: [readyTicket('RACE-1')], missingAccounts: () => [] })
+  const provision = h.workspaces.provision.bind(h.workspaces)
+  h.workspaces.provision = async () => {
+    throw new MissingAccountCredentialsError(missingAccountCredentials(accounts, {}))
+  }
+  for (let n = 0; n < 5; n++) await h.dispatcher.tick({ resumeCurrent: true })
+  const record = (await h.store.listBuilds())[0]!
+  const events = await h.store.getEvents(record.slug)
+  expect(
+    events.some(
+      (e) =>
+        e.type === 'infrastructure.failed' ||
+        e.type === 'dispatch.failed' ||
+        e.type === 'escalation.raised',
+    ),
+  ).toBe(false)
+  h.workspaces.provision = provision
+  await h.dispatcher.tick({ resumeCurrent: true })
+  expect(h.launches).toHaveLength(1)
+})
+
+test('concurrent credential races serialize against the durable account condition', async () => {
+  const h = harness()
+  await h.dispatcher.tick()
+  const error = new MissingAccountCredentialsError(
+    missingAccountCredentials(
+      { billing: { kind: 'claude-subscription', credentialEnv: 'BILLING_TOKEN' } },
+      {},
+    ),
+  )
+  await Promise.all([
+    h.dispatcher.holdForMissingAccounts(error),
+    h.dispatcher.holdForMissingAccounts(error),
+  ])
+  expect(
+    (await h.store.getRepoEvents(REPO)).filter((e) => e.type === 'account.credentials-unavailable'),
+  ).toHaveLength(1)
 })
