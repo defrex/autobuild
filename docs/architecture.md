@@ -296,8 +296,11 @@ eligibility describe that same prefix. Ordinary polling, including the first
 batch on an old build, reads only events after the cursor and advances that seed
 event by event, preserving state at event N in each emitted record. Watch uses
 historical eligibility for baseline suppression; wait retains its separate
-current-attention registration policy. Only an explicit `--since` older than C
-reconstructs a historical prefix once in `cli/historical-build-state.ts`.
+current-attention registration policy. For an explicit `--since` older than C,
+hosted stores retrieve an exact server-owned checkpoint and read only the bounded delta; local adapters retain
+historical prefix reconstruction in `cli/historical-build-state.ts`. Hosted
+cursors outside the tail window fail without replay; see
+[hosted event bounds and exact resume](remote-store-protocol.md#hosted-event-bounds-and-exact-resume).
 Actual event listings, transcripts and cursor streams remain raw reads. The
 interactive terminal frontend retains its independently established incremental
 feed. `tools/persisted-reduced-reads.test.ts` scans production TypeScript calls
@@ -1960,3 +1963,25 @@ revokes credentials only; admin `projects remove` unregisters without purging.
 See [project deletion protocol](operator-api.md#permanent-project-deletion).
 
 The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
+
+
+Hosted event reads use the bounded capabilities in `store/event-reads.ts`:
+repository cursors must be at least `max(0, head - 1000)`, and build pages
+contain at most 256 events with `cursor` and `hasMore`. PostgreSQL seeks and
+limits at the database boundary, including held reads; remote complete-array
+reads reject partial suffixes. Protocol 7 is next-minor preparation for 1.4;
+supported published protocol-6 clients retain complete bounded arrays and
+legacy `conflict` refusals. Same-line runtime and published identities are
+admitted together, and both health surfaces use the shared validated identity
+projection without store reads. See [wire compatibility](remote-store-protocol.md).
+Exact historical watch/wait seeds come from
+rolling server-owned checkpoints in `postgres-store/src/stream-seeds.ts`.
+The canonical reducer fold publishes its cache and trailing checkpoints
+atomically under a reader-only lock. Initial adoption is an explicit resumable
+migration; later new identities rebuild once, then advance durably with deltas.
+Two live generations and permanent indexed retirement tombstones support
+adjacent runtimes without letting old processes evict newer ones. Watch/wait
+propagate expiry and integrity errors, preserving valid cursors across reducer
+upgrades. Expired cursors require re-arming without `--since` and status
+reconciliation. Harvest completion uses reduced session terminal receipts;
+explicit harvest history uses reverse indexed pages.

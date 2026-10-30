@@ -68,6 +68,14 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
     }
   }
   const getEvents = backing.getRepoEvents.bind(backing)
+  const getTail = backing.getRepositoryTail?.bind(backing)
+  if (getTail)
+    backing.getRepositoryTail = async (...args) => {
+      const events = await getTail(...args)
+      metrics.events++
+      metrics.rows += events.length
+      return events
+    }
   const getState = backing.getRepoStateEvents.bind(backing)
   const getSnapshot = backing.getReducerSnapshot.bind(backing)
   const getDigests = backing.getRepoBuildDigests.bind(backing)
@@ -200,7 +208,7 @@ export async function dispatchReadBudget(store: BuildStore, backing: BuildStore)
       expect(metrics.state - before.state).toBe(0)
       expect(metrics.snapshots - before.snapshots).toBe(0)
       expect(metrics.digests - before.digests).toBe(1)
-      expect(metrics.high - before.high).toBe(0)
+      expect(metrics.high - before.high).toBe(store === backing ? 0 : 1)
       recordReads ??= metrics.records - before.records
       expect(metrics.records - before.records).toBe(
         recordReads + (store === backing ? 0 : metrics.puts - before.puts),

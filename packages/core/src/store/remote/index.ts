@@ -66,3 +66,4 @@ export {
 export * from './released-clients'
 
 export { StoreWriteTooLargeError } from './errors'
+export * from '../event-reads'

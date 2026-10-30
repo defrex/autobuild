@@ -1,3 +1,4 @@
+import { readBuildPage } from '../store/event-reads'
 import { requestNodeRestack } from './restack'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
@@ -237,8 +238,9 @@ const buildEventsInput = z.strictObject({
     .number()
     .int()
     .min(0)
+    .safe()
     .describe(
-      'Event sequence cursor: return build events with seq strictly greater than this (0 = the whole log).',
+      'Event sequence cursor: return build events with seq strictly greater than this (0 = the first page).',
     ),
   waitSeconds: z
     .number()
@@ -551,21 +553,11 @@ export const TOOLS: readonly ToolEntry[] = [
     'builds.events',
     'Read one build’s event log after a cursor, optionally waiting (bounded, ≤30s) for new events — the polling companion to builds.get.',
     buildEventsInput,
-    '{events, cursor}: the new events in sequence order (each with seq, ts, actor, type, payload) and the cursor to pass next time — the last returned event’s seq, or the requested cursor when the page is empty.',
+    '{events, cursor, hasMore}: at most 256 new events in sequence order (each with seq, ts, actor, type, payload) and the cursor to pass next time — the last returned event’s seq, or the requested cursor when the page is empty.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof buildEventsInput>
       await requireRouteBuild(ctx.store, input.repo, input.slug)
-      let events = await ctx.store.getEvents(input.slug, input.cursor)
-      if (events.length === 0 && input.waitSeconds > 0) {
-        // The store interface offers subscribe but no bounded wait; polling
-        // keeps the handler finite. The schema caps waitSeconds at 30.
-        const deadline = Date.now() + input.waitSeconds * 1000
-        while (events.length === 0 && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 500))
-          events = await ctx.store.getEvents(input.slug, input.cursor)
-        }
-      }
-      return { events, cursor: events.length > 0 ? events.at(-1)!.seq : input.cursor }
+      return readBuildPage(ctx.store, input.slug, input.cursor, { waitSeconds: input.waitSeconds })
     },
   ),
   defineTool(

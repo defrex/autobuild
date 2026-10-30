@@ -53,11 +53,9 @@ import {
 import { createHostedOperatorSandboxService } from '@defrex/autobuild/operator-sandbox-host'
 import { createTicketServer, HOSTED_TICKET_OPERATIONS } from './remote-tickets'
 import {
-  AUTOBUILD_VERSION,
   clientIdentityError,
-  supportedClientRange,
+  healthIdentity,
   AUTOBUILD_VERSION_HEADER,
-  REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
 import { createStoreServer } from './remote-store-server'
@@ -868,9 +866,10 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           if (req.method === 'GET' && url.pathname === '/health') {
             return Response.json({
               ok: true,
-              autobuildVersion: AUTOBUILD_VERSION,
-              protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
-              supportedClientRange: supportedClientRange(),
+              ...healthIdentity(
+                req.headers.get(AUTOBUILD_VERSION_HEADER),
+                req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER),
+              ),
             })
           }
 

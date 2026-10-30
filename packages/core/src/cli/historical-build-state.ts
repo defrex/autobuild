@@ -10,6 +10,9 @@ export async function historicalBuildState(
   current: { cursor: number; value: BuildStreamSeed },
 ) {
   if (requested >= current.cursor) return current.value
+  if (store.getStreamSeed)
+    return (await store.getStreamSeed({ kind: 'build', slug }, requested))
+      .value as unknown as BuildStreamSeed
   const events = await store.getEvents(slug)
   return buildStreamSeedReducer.reduce(events.filter((event) => event.seq <= requested))
 }
@@ -22,6 +25,9 @@ export async function historicalRepositoryAttention(
   current: { cursor: number; value: ReturnType<typeof repositoryAttentionReducer.finish> },
 ) {
   if (requested >= current.cursor) return current.value
+  if (store.getStreamSeed)
+    return (await store.getStreamSeed({ kind: 'repo', repo }, requested))
+      .value as unknown as ReturnType<typeof repositoryAttentionReducer.finish>
   const events = await store.getRepoEvents(repo)
   return repositoryAttentionReducer.reduce(events.filter((event) => event.seq <= requested))
 }

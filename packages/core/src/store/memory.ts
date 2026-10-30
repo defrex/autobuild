@@ -1,5 +1,15 @@
 import { scanCadenceSchema, type ScanCadence } from './scan-cadence'
 import {
+  BUILD_EVENT_PAGE_SIZE,
+  REPOSITORY_TAIL_WINDOW,
+  assertResumeWindow,
+  validateEventCursor,
+  CheckpointIntegrityError,
+  RetiredSeedGenerationError,
+  type EventReadOptions,
+  type EventPage,
+} from './event-reads'
+import {
   operatorIdentitySchema,
   OPERATOR_PRESENCE_TTL_MS,
   type OperatorIdentity,
@@ -193,6 +203,20 @@ export class MemoryBuildStore implements BuildStore {
   private readonly streamLocks = new StreamLocks()
   private readonly sessions = new Map<string, SessionState>()
   /** Reducer snapshots (store/snapshots.ts), keyed by scope and reducer name. */
+  private readonly seedCheckpoints = new Map<string, Map<number, ReducerSnapshot>>()
+  private readonly seedGenerations = new Map<string, { live: string[]; retired: Set<string> }>()
+  private readonly seedLocks = new Map<string, Promise<unknown>>()
+  private async withSeedLock<T>(scope: SnapshotScope, body: () => Promise<T>): Promise<T> {
+    const key = snapshotScopeKey(scope)
+    const previous = this.seedLocks.get(key) ?? Promise.resolve()
+    const next = previous.catch(() => {}).then(body)
+    this.seedLocks.set(key, next)
+    try {
+      return await next
+    } finally {
+      if (this.seedLocks.get(key) === next) this.seedLocks.delete(key)
+    }
+  }
   private readonly snapshots = new Map<string, ReducerSnapshot>()
   /** `[repo, ticketId, kind, name]` → rows in revision order. A removal is a
    * tombstone row (`removed`, empty manifest) taking the next revision. */
@@ -951,6 +975,69 @@ export class MemoryBuildStore implements BuildStore {
     return this.repoState(repo).events.at(-1)?.seq ?? 0
   }
 
+  async getBuildEventPage(
+    slug: string,
+    since = 0,
+    opts?: EventReadOptions,
+  ): Promise<EventPage<AbEvent>> {
+    validateEventCursor(since)
+    if (opts?.through !== undefined) validateEventCursor(opts.through)
+    let more = false
+    const page = await readEventsWithWait({
+      read: async () => {
+        const through = Math.min(
+          this.state(slug).events.length,
+          opts?.through ?? Number.MAX_SAFE_INTEGER,
+        )
+        const selected = this.state(slug).events.slice(
+          since,
+          Math.min(through, since + BUILD_EVENT_PAGE_SIZE + 1),
+        )
+        more = selected.length > BUILD_EVENT_PAGE_SIZE
+        return structuredClone(selected.slice(0, BUILD_EVENT_PAGE_SIZE))
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
+    return { events: page, cursor: page.at(-1)?.seq ?? since, hasMore: more }
+  }
+  async getRepositoryTail(
+    repo: string,
+    since = 0,
+    opts?: EventReadOptions,
+  ): Promise<RepositoryEvent[]> {
+    validateEventCursor(since)
+    if (opts?.through !== undefined) validateEventCursor(opts.through)
+    return readEventsWithWait({
+      read: async () => {
+        const head = await this.getRepoHighWater(repo)
+        assertResumeWindow({ kind: 'repo', repo }, since, head)
+        return structuredClone(
+          this.repoState(repo).events.slice(since, Math.min(head, opts?.through ?? head)),
+        )
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
+  }
+  async getHarvestHistoryPage(
+    repo: string,
+    before = Number.MAX_SAFE_INTEGER,
+  ): Promise<EventPage<RepositoryEvent>> {
+    validateEventCursor(before)
+    const events = this.repoState(repo)
+      .events.filter((event) => event.seq < before && event.type.startsWith('harvest.'))
+      .reverse()
+    const page = structuredClone(events.slice(0, BUILD_EVENT_PAGE_SIZE))
+    return {
+      events: page,
+      cursor: page.at(-1)?.seq ?? before,
+      hasMore: events.length > BUILD_EVENT_PAGE_SIZE,
+    }
+  }
+
   /** The scope's log tail, or `undefined` for a scope that does not exist. */
   private snapshotTail(scope: SnapshotScope): number | undefined {
     const events =
@@ -963,7 +1050,85 @@ export class MemoryBuildStore implements BuildStore {
   async getReducerValue(scope: SnapshotScope, request: ReducerValueRequest): Promise<ReducerValue> {
     // Reject invalid requests before touching storage.
     resolveReducerValue(scope, request)
+    if (request.reducer === 'buildStreamSeed' || request.reducer === 'repositoryAttention')
+      return this.withSeedLock(scope, () => this.readSeedValue(scope, request))
+    return this.readValue(scope, request)
+  }
+
+  private async readSeedValue(
+    scope: SnapshotScope,
+    request: ReducerValueRequest,
+  ): Promise<ReducerValue> {
+    const { key } = resolveReducerValue(scope, request)
+    const scopeKey = snapshotScopeKey(scope)
+    if (this.snapshotTail(scope) === undefined) throw new Error('unknown reducer scope')
+    const generations = this.seedGenerations.get(scopeKey) ?? {
+      live: [],
+      retired: new Set<string>(),
+    }
+    if (generations.retired.has(key)) throw new RetiredSeedGenerationError()
+    if (generations.live.includes(key) && !this.snapshots.has(`${scopeKey}\u0000${key}`))
+      throw new CheckpointIntegrityError('missing canonical stream seed')
+    if (!generations.live.includes(key)) {
+      generations.live.push(key)
+      if (generations.live.length > 2) {
+        const retired = generations.live.shift()!
+        generations.retired.add(retired)
+        this.seedCheckpoints.delete(`${scopeKey}\u0000${retired}`)
+        this.snapshots.delete(`${scopeKey}\u0000${retired}`)
+      }
+      this.seedGenerations.set(scopeKey, generations)
+    }
+    return this.readValue(scope, request, {
+      latest: async (identity, through) => {
+        const checkpoints = this.seedCheckpoints.get(`${scopeKey}\u0000${identity}`)
+        const cursor = Math.max(-1, ...[...(checkpoints?.keys() ?? [])].filter((c) => c <= through))
+        return checkpoints?.get(cursor) ?? null
+      },
+      coverage: async (identity, cursor) =>
+        this.seedCheckpoints.get(`${scopeKey}\u0000${identity}`)?.has(cursor) ?? false,
+      publish: async (identity, snapshot, checkpoints) => {
+        const cacheKey = `${scopeKey}\u0000${identity}`
+        const next = new Map(this.seedCheckpoints.get(cacheKey))
+        for (const checkpoint of checkpoints)
+          next.set(checkpoint.cursor, structuredClone(checkpoint))
+        for (const cursor of next.keys())
+          if (cursor < snapshot.cursor - REPOSITORY_TAIL_WINDOW) next.delete(cursor)
+        this.seedCheckpoints.set(cacheKey, next)
+        this.snapshots.set(cacheKey, structuredClone(snapshot))
+      },
+    })
+  }
+
+  async getStreamSeed(scope: SnapshotScope, cursor: number): Promise<ReducerValue> {
+    validateEventCursor(cursor)
+    return this.withSeedLock(scope, async () => {
+      const head = this.snapshotTail(scope)
+      if (head === undefined) throw new Error('unknown reducer scope')
+      assertResumeWindow(scope, cursor, head)
+      const request = {
+        reducer: scope.kind === 'build' ? 'buildStreamSeed' : 'repositoryAttention',
+      }
+      const current = await this.readSeedValue(scope, request)
+      const { key, entry, reducer } = resolveReducerValue(scope, request)
+      const checkpoint = this.seedCheckpoints
+        .get(`${snapshotScopeKey(scope)}\u0000${key}`)
+        ?.get(cursor)
+      if (!checkpoint) throw new CheckpointIntegrityError('missing stream-seed checkpoint')
+      const state = checkpoint.state as { acc: unknown }
+      if (!entry.validate(state.acc))
+        throw new CheckpointIntegrityError('corrupt stream-seed checkpoint')
+      return { ...current, cursor, value: entry.value(reducer.finish(state.acc)) }
+    })
+  }
+
+  private async readValue(
+    scope: SnapshotScope,
+    request: ReducerValueRequest,
+    checkpoints?: import('./reducer-values').ReducerValueStorage['checkpoints'],
+  ): Promise<ReducerValue> {
     return readReducerValue(scope, request, {
+      ...(checkpoints ? { checkpoints } : {}),
       highWater: async () => {
         const tail = this.snapshotTail(scope)
         if (tail === undefined) throw new Error('unknown reducer scope')

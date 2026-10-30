@@ -268,6 +268,47 @@ export function scopeLocalStoreToPhaseSession(
         return event
       })
     },
+    ...(store.getBuildEventPage
+      ? {
+          async getBuildEventPage(
+            slug: string,
+            since?: number,
+            opts?: import('./event-reads').EventReadOptions,
+          ) {
+            own('getBuildEventPage', 'build', slug)
+            return store.getBuildEventPage!(slug, since, opts)
+          },
+        }
+      : {}),
+    ...(store.getRepositoryTail
+      ? {
+          async getRepositoryTail(
+            repo: string,
+            since?: number,
+            opts?: import('./event-reads').EventReadOptions,
+          ) {
+            own('getRepositoryTail', 'repo', repo)
+            return store.getRepositoryTail!(repo, since, opts)
+          },
+        }
+      : {}),
+    ...(store.getHarvestHistoryPage
+      ? {
+          async getHarvestHistoryPage(repo: string, before?: number) {
+            own('getHarvestHistoryPage', 'repo', repo)
+            return store.getHarvestHistoryPage!(repo, before)
+          },
+        }
+      : {}),
+    ...(store.getStreamSeed
+      ? {
+          async getStreamSeed(target: SnapshotScope, cursor: number) {
+            if (target.kind === 'build') own('getStreamSeed', 'build', target.slug)
+            else own('getStreamSeed', 'repo', target.repo)
+            return store.getStreamSeed!(target, cursor)
+          },
+        }
+      : {}),
     async getEvents(
       slug: string,
       sinceSeq?: number,
