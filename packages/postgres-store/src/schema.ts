@@ -1,3 +1,5 @@
+import { bootstrapStreamSeeds } from './stream-seed-bootstrap'
+import { STREAM_SEED_SCHEMA_DDL } from './stream-seeds'
 import { PROJECT_LIFECYCLE_DDL } from './project-lifecycle-schema'
 import { PostgresProjectRegistry } from './projects'
 import type { PostgresEnv } from './env'
@@ -1690,6 +1692,7 @@ export async function migratePostgres(
       await tx.unsafe(TICKET_STATES_DDL)
       await tx.unsafe(SCAN_CADENCE_DDL)
       await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
+      await tx.unsafe(STREAM_SEED_SCHEMA_DDL)
       await tx.unsafe(REPO_CHANGE_DDL)
       await tx.unsafe(AUTH_SCHEMA_DDL)
       const rows: { version: number; checksum: string }[] =
@@ -2055,6 +2058,7 @@ export async function migratePostgres(
       await assertTicketSchema(tx)
       await assertAuthSchema(tx)
     })
+    await bootstrapStreamSeeds(sql)
   } finally {
     await sql.close()
   }
