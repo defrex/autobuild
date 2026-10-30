@@ -9,6 +9,15 @@ description: "Diagnose configuration, idle dispatch, authentication, stalled bui
 
 Start from the symptom and recorded state. Your operator agent inspects the CLI and suggests fixes; you manage dispatcher processes and credentials.
 
+Local dispatch checks selected primary and alternate account credentials before
+taking the repository lease. Supply the configured environment slot or a local
+ChatGPT login (`bun ab accounts login NAME --local`). Hosted account absence
+appears once in repository attention: set `bun ab secrets set VARIABLE`, or
+renew with `bun ab accounts login NAME --project`. The next tick resumes without
+per-build retries or infrastructure-attempt consumption. Unused accounts do not
+block startup; present rejected credentials keep their rejection attention.
+See [account admission and remedies](accounts.md#dispatcher-admission).
+
 ## Invalid configuration
 
 **Symptom.** Startup reports a TOML syntax error, invalid config with field paths, or a runtime-routing error naming a role.
