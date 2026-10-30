@@ -40,6 +40,7 @@ export class DashboardRefresh {
     private readonly refresh: () => Promise<void>,
     private readonly time: RefreshScheduler = scheduler,
     private readonly networkReads = false,
+    private readonly cadenceMs?: number,
   ) {}
 
   get painting(): boolean {
@@ -141,6 +142,7 @@ export class DashboardRefresh {
 
   /** Current admission cadence, also used to bound presentation staleness. */
   get intervalMs(): number {
+    if (this.cadenceMs !== undefined) return this.cadenceMs
     if (this.networkReads && !this.focused) return 5000
     return this.live || this.time.now() < this.deadline ? 500 : 5000
   }
