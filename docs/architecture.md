@@ -1664,6 +1664,15 @@ a new classified failure parks again. There are zero automatic paid retries
 after this deferral. If evidence cannot be written, ordinary recovery applies;
 agent output and `no-terminal` alone never classify a read failure.
 
+A kernel store write rejected with HTTP 413 raises `StoreWriteTooLargeError`
+and records `phase.failed {willRetry:false}` on its first attempt, including
+for automatic restack and session preparation. Its diagnostic names an oversized
+store write, the HTTP method and route, exact UTF-8 request bytes, and the
+server message (including any reported ceiling). It parks with
+`non-retryable-phase-failure`; an operator answer authorizes a fresh attempt,
+which parks immediately again if still rejected. Store failures never select an
+alternate provider. Other store statuses retain their existing retry policy.
+
 Ordinary silence, provider failures and session timeouts retain the runner's
 phase failure limit (`BuildRunnerOpts.maxPhaseAttempts`, default 2). This is
 an internal runner option, not an accepted `[policy]` TOML key. Reconcile
