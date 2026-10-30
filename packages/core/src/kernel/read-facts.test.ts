@@ -155,3 +155,81 @@ test('repository run correlation stays bounded as stopped run history grows', as
     projectDispatcherLiveness(await store.getRepo('repo'), await store.getRepoEvents('repo'), now),
   )
 })
+
+test('published rewrites retire checkpoints while repeated provisioning retains them', () => {
+  const event = (seq: number, type: string, payload: unknown) =>
+    ({
+      seq,
+      type,
+      payload,
+      ts: '2026-01-01T00:00:00Z',
+      actor: KERNEL,
+    }) as import('../events/catalog').AbEvent
+  const receipt = event(1, 'workspace.commits-preserved', {
+    workspace: 1,
+    execution: 0,
+    ref: 'old',
+    branch: 'ab/build',
+    phase: 'implement',
+    round: 1,
+    heads: [
+      {
+        role: 'branch',
+        sha: 'a'.repeat(40),
+        remoteRef: 'refs/autobuild/archive/build/a',
+        commits: ['a'.repeat(40)],
+      },
+    ],
+  }) as Extract<import('../events/catalog').AbEvent, { type: 'workspace.commits-preserved' }>
+  let acc = buildReadFactsReducer.advance(buildReadFactsReducer.initial(), [receipt])
+  expect(buildReadFactsReducer.finish(acc).workspacePreservation).toEqual(receipt)
+  acc = buildReadFactsReducer.advance(roundtrip(acc), [
+    event(2, 'workspace.provisioned', {
+      provider: 'git-worktree',
+      ref: 'new',
+      path: '/new',
+      branch: 'ab/build',
+      base: { source: 'existing', sha: 'a'.repeat(40) },
+    }),
+  ])
+  expect(buildReadFactsReducer.finish(acc).workspacePreservation).toEqual(receipt)
+  acc = buildReadFactsReducer.advance(roundtrip(acc), [
+    event(3, 'reconcile.rewritten', {
+      id: 'rewrite',
+      attempt: 1,
+      branch: 'ab/build',
+      oldHead: 'a'.repeat(40),
+      oldBase: 'c'.repeat(40),
+      targetBase: 'd'.repeat(40),
+      changeSha: 'e'.repeat(40),
+      workspaceHead: 'a'.repeat(40),
+      localBranchHead: 'a'.repeat(40),
+      headSha: 'b'.repeat(40),
+      conflicted: false,
+      archives: [],
+    }),
+    event(4, 'workspace.commits-lost', {
+      workspace: 2,
+      execution: 0,
+      ref: 'new',
+      branch: 'ab/build',
+      phase: 'reconcile',
+      round: 1,
+      shas: ['b'.repeat(40)],
+      inventory: 'additional-shas-unavailable',
+      reason: 'absent after published rewrite',
+    }),
+  ])
+  expect(buildReadFactsReducer.finish(acc).workspacePreservation).toBeUndefined()
+  acc = buildReadFactsReducer.advance(roundtrip(acc), [
+    event(5, 'workspace.provisioned', {
+      provider: 'git-worktree',
+      ref: 'replacement',
+      path: '/replacement',
+      branch: 'ab/build',
+      base: { source: 'existing', sha: 'b'.repeat(40) },
+    }),
+  ])
+  expect(buildReadFactsReducer.finish(acc).workspacePreservation).toBeUndefined()
+  expect(buildReadFactsReducer.finish(acc).latestWorkspace?.payload.base.sha).toBe('b'.repeat(40))
+})

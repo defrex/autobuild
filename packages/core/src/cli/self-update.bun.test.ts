@@ -151,6 +151,9 @@ describe('real Bun self-update of a registry install', () => {
       const errs: string[] = []
       const result = await selfUpdate({
         targetRepo: owner,
+        // This registry-install fixture has no hosted service. Do not inherit
+        // the build runner's AB_STORE and probe its live compatibility window.
+        env: {},
         distRoot: dist,
         registry: async () => ({ status: 200, body: '{"version":"1.1.0"}' }),
         command,
