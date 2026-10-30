@@ -1079,7 +1079,8 @@ The hosted service publishes a durable advisory repository fact,
 `dispatcher.placement-set`, and serves its canonical `dispatchPlacement` reduction.
 The fact says whether this service dispatches a registered project; a hosted value
 includes its public `AB_DISPATCHER_ORIGIN`, never credentials. It is configured
-responsibility, not liveness. Unrecorded placement is unknown.
+responsibility, not liveness. Unrecorded placement is unknown. Bounded repository
+journal reads retain only the latest placement publication across run anchors.
 
 Cron and read-time publication share the `AB_DISPATCHER_REPOSITORIES` parser:
 unset selects every registered project, and an explicit normalized, deduplicated

@@ -1190,6 +1190,11 @@ if (testUrl)
         ])
         const log = await first.getRepoEvents(repo)
         expect(
+          (await second.getRepoStateEvents(repo)).filter(
+            (event) => event.type === 'dispatcher.placement-set',
+          ),
+        ).toEqual(log.filter((event) => event.type === 'dispatcher.placement-set').slice(-1))
+        expect(
           (await second.getReducerValue({ kind: 'repo', repo }, { reducer: 'dispatchPlacement' }))
             .value,
         ).toEqual({ status: 'known', placement: log.at(-1)!.payload })

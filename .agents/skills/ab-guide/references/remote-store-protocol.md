@@ -53,7 +53,8 @@ fragments (`AB_DISPATCHER_ORIGIN`, HTTPS in production). The fact records config
 responsibility, not dispatcher liveness or successful execution.
 
 The service publishes the advisory repository fact `dispatcher.placement-set`
-and serves its dedicated `dispatchPlacement` canonical reduction. Before answering
+and serves its dedicated `dispatchPlacement` canonical reduction. Bounded journal
+reads retain only the latest placement publication across run anchors. Before answering
 the read, it synchronizes the requested admitted project against the same shared
 `AB_DISPATCHER_REPOSITORIES` parser the cron uses. Unset selects every registered
 project; an explicit normalized, deduplicated CSV selects its intersection with
@@ -619,7 +620,7 @@ without a journal record, or a repository without builds.
 | `getRepo` | `GET /repos/{repo}` | none | `200` + `RepositoryRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendRepo` | `POST /repos/{repo}/events` | event write | `201` + repository event envelope |
 | `getRepoEvents` | `GET /repos/{repo}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + envelopes with `seq >` parsed `since`, in increasing sequence order |
-| `getRepoStateEvents` | `GET /repos/{repo}/state-events` | none | `200` + the bounded repository-journal subset (AUT-489): every durable event type (`ticket-preparation.*`, `harvest.*`, `orchestrator.sandbox.*`, the three dispatcher setting types, and cross-generation handoff correlation facts: target-prepared, yield-requested, upgrade-failed, handoff-started, terminal-released, takeover, drain-deadline, drain-settled and handoff-completed) plus, when the journal has one, the tail from the latest `dispatcher.run-started`, in increasing sequence order; served inside the repository-existence gate like `GET events`, so an unknown repository is `404` |
+| `getRepoStateEvents` | `GET /repos/{repo}/state-events` | none | `200` + the bounded repository-journal subset (AUT-489): every durable event type (`ticket-preparation.*`, `harvest.*`, `orchestrator.sandbox.*`, the three dispatcher setting types, and cross-generation handoff correlation facts: target-prepared, yield-requested, upgrade-failed, handoff-started, terminal-released, takeover, drain-deadline, drain-settled and handoff-completed) plus the latest-only `dispatcher.ticket-scan-completed` and `dispatcher.placement-set` facts and, when the journal has one, the tail from the latest `dispatcher.run-started`, in increasing sequence order; served inside the repository-existence gate like `GET events`, so an unknown repository is `404` |
 | `getReducerSnapshot` (repo scope) | `GET /repos/{repo}/snapshots/{reducer}?version={n}` | required `version` query value, a positive integer; `reducer` is a registry name (`^[A-Za-z][A-Za-z0-9._-]{0,63}$`) | `200` + `{"version", "cursor", "state"}` or `200 null` when absent, written by another reducer version, ahead of the journal's tail, or the repository has no journal record; an unknown repository is `404`, which the shipped client also maps to `null` |
 | `putReducerSnapshot` (repo scope) | `PUT /repos/{repo}/snapshots/{reducer}` | `{"version": int >= 1, "cursor": int >= 0, "state": JSON}`, at most 16 MiB (`413` above) | `200 {"written": boolean}`; the stored cursor never decreases, so a write at an equal or lower cursor (or an equal cursor at an equal or lower version) and one past the journal's tail answer `written: false` |
 | `appendRepoWithArtifacts` | `POST /repos/{repo}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using repository shapes |

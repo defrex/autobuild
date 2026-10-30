@@ -86,8 +86,8 @@ const fixtures: Record<string, RepositoryEvent[]> = {
 }
 
 describe('repositoryStateEventsReducer', () => {
-  test('version includes durable ticket preparation, migration and handoff semantics', () => {
-    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(7)
+  test('version includes latest-only placement alongside durable workflow facts', () => {
+    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(8)
   })
 
   for (const [name, log] of Object.entries(fixtures)) {

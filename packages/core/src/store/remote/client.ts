@@ -230,7 +230,10 @@ export class RemoteBuildStore implements BuildStore {
       if (!response.ok) throw await this.toError(response)
       const health = placementCapabilitiesSchema.parse(await response.json())
       return health.capabilities?.includes(DISPATCH_PLACEMENT_CAPABILITY) ?? false
-    })()
+    })().catch((error) => {
+      this.placementCapability = undefined
+      throw error
+    })
     if (!(await this.placementCapability))
       return { status: 'unknown', reason: 'unsupported-capability' }
     return this.requestJson('GET', `${this.repoPath(repo)}/placement`, dispatchPlacementSchema)

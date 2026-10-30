@@ -1675,3 +1675,29 @@ test('placement requires project authority and registration, including dispatche
   )
   expect(publications).toBe(1)
 })
+
+test('placement retries failed health negotiation without masking transport failures', async () => {
+  const server = createStoreServer({
+    store: new MemoryBuildStore(),
+    placement: async () => ({ status: 'known', placement: { hosted: false } }),
+  })
+  let probes = 0
+  const client = new RemoteBuildStore({
+    url: 'https://store.test',
+    fetchFn: (async (input, init) => {
+      if (new URL(String(input)).pathname === '/health' && ++probes === 1)
+        throw new TypeError('network unavailable')
+      return server.fetch(new Request(input, init))
+    }) as typeof fetch,
+  })
+  await expect(client.getDispatchPlacement('repo')).rejects.toThrow('network unavailable')
+  expect(await client.getDispatchPlacement('repo')).toEqual({
+    status: 'known',
+    placement: { hosted: false },
+  })
+  expect(await client.getDispatchPlacement('repo')).toEqual({
+    status: 'known',
+    placement: { hosted: false },
+  })
+  expect(probes).toBe(2)
+})
