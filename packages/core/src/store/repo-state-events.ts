@@ -52,9 +52,10 @@ export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
   ),
 ] as RepositoryEventType[]
 
-/** Latest-only measurements survive run turnover without retaining scan history. */
+/** Latest-only facts survive run turnover without retaining publication history. */
 export const REPOSITORY_LATEST_EVENT_TYPES: readonly RepositoryEventType[] = [
   'dispatcher.ticket-scan-completed',
+  'dispatcher.placement-set',
 ]
 const LATEST_TYPES = new Set<string>(REPOSITORY_LATEST_EVENT_TYPES)
 
@@ -125,7 +126,7 @@ export interface RepositoryStateEventsAcc {
 }
 
 /** Bump when `RepositoryStateEventsAcc` or its fold changes. */
-export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 7
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 8
 
 const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
   STATE_TYPES.has(event.type) ||
@@ -173,7 +174,7 @@ export interface JournalViewAcc {
 }
 
 /** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 8
+export const JOURNAL_VIEW_REDUCER_VERSION = 9
 
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {

@@ -149,6 +149,13 @@ invocation. With `AB_DISPATCHER_REPOSITORIES` unset, it serves all registered
 projects; an explicit list preserves its order and is intersected with current
 registration. An empty registry is a successful zero-project invocation.
 
+The service publishes known false placement when `CRON_SECRET` is unset or blank,
+without requiring a dispatcher origin. When enabled, it publishes durable dispatch
+placement from this selection, including
+excluded projects. Authorized project reads synchronize the same fact before
+answering; no account secrets are needed. See the
+[placement protocol](../../docs/remote-store-protocol.md#hosted-dispatch-placement).
+
 Hosted tickets are scoped to the credential's registered project. Lifecycle
 comes from that project's effective configuration; projects using external
 trackers keep the connection in their dispatcher and receive source feedback
