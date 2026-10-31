@@ -1,3 +1,4 @@
+import { recoverLostCandidate } from '../kernel/reconcile-restack'
 import { publicationRetryGate, retryPublicationEffect } from '../kernel/publication-retry'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { stat } from 'node:fs/promises'
@@ -76,8 +77,15 @@ export async function settlePendingPublication(
     (request.payload.operation === 'restack' || request.payload.operation === 'reconcile') &&
     request.payload.rewrite !== undefined &&
     events.publication.lostRecorded(request)
-  )
-    return
+  ) {
+    const recovered = await recoverLostCandidate({
+      ...deps,
+      slug,
+      probeCandidate: publication.recoverCandidate?.bind(publication),
+    })
+    if (recovered !== 'available') return
+    events = (await readBuildFacts(deps.store, slug)).value
+  }
 
   if (request.payload.operation === 'restack') {
     const record = await deps.store.getBuild(slug)

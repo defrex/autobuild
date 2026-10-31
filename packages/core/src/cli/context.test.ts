@@ -1421,3 +1421,233 @@ test('cancellation feedback belongs only to the routed implement receipt, never 
     expect(manifest.verifyStageFailure).toBeUndefined()
   }
 })
+
+test.each(['implement', 'reconcile'] as const)(
+  'recovery notes tell %s the known loss and survive repeated hydration',
+  async (phase) => {
+    await seedPlanApproved()
+    if (phase === 'reconcile') {
+      await store.append(BUILD, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: 'fresh-base' },
+      })
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'reconcile.started',
+        payload: { attempt: 1, baseSha: 'fresh-base' },
+      })
+    }
+    const sha = '9'.repeat(40)
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'workspace.commits-lost',
+      payload: {
+        workspace: 1,
+        execution: 0,
+        ref: 'gone',
+        branch: `ab/${BUILD}`,
+        phase,
+        round: 1,
+        shas: [sha],
+        inventory: 'additional-shas-unavailable',
+        reason: 'source environment is absent',
+      },
+    })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'publication.candidate-retired',
+      payload: {
+        request: 1,
+        operation: 'reconcile',
+        id: 'lost',
+        sha,
+        replacementId: 'replacement',
+      },
+    })
+    for (let hydration = 0; hydration < 2; hydration++) {
+      const manifest = await buildContext({
+        store,
+        env: makeEnv({ phase, round: 1 }),
+        workspacePath: workspace,
+      })
+      expect(manifest.workspaceRecovery).toBeDefined()
+      const notes = await readFile(join(workspace, manifest.workspaceRecovery!), 'utf8')
+      expect(notes).toContain(`${phase}@1`)
+      expect(notes).toContain(sha)
+      expect(notes).toContain('Additional unpublished SHAs are unavailable')
+      expect(notes).toContain('do not search for the retired candidate')
+      expect(manifest.materialized['workspace-recovery.md']).toBe('derived')
+    }
+    const start = (session: string, predecessor?: string) =>
+      store.append(BUILD, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session,
+          role: phase,
+          runner: 'fake',
+          phase,
+          round: 1,
+          ...(predecessor
+            ? {
+                continuation: {
+                  predecessor,
+                  root: predecessor,
+                  handle: {
+                    version: 1 as const,
+                    runner: 'fake',
+                    nativeId: 'native',
+                    host: 'test',
+                    workspacePath: '/workspace',
+                  },
+                  cause: 'shutdown' as const,
+                  activeMs: 1,
+                  budgetMs: 1000,
+                },
+              }
+            : {}),
+        },
+      })
+    // The receiving session and its continuation keep the note; a later one does not.
+    for (const [session, predecessor] of [['s_test'], ['s_resumed', 's_test']] as const) {
+      await start(session, predecessor)
+      const resumed = await buildContext({
+        store,
+        env: makeEnv({ phase, round: 1, session }),
+        workspacePath: workspace,
+      })
+      expect(resumed.workspaceRecovery).toBeDefined()
+    }
+    await start('s_later')
+    const later = await buildContext({
+      store,
+      env: makeEnv({ phase: 'code-review', round: 1, session: 's_later' }),
+      workspacePath: workspace,
+    })
+    expect(later.workspaceRecovery).toBeUndefined()
+  },
+)
+
+test('workspace recovery notes relocate around tracked scratch', async () => {
+  const git = async (...args: string[]) => {
+    const result = await spawnExec(['git', ...args], { cwd: workspace })
+    if (result.exitCode !== 0) throw new Error(result.stderr)
+    return result.stdout.trim()
+  }
+  await git('init', '-q')
+  await git('config', 'user.name', 'Test')
+  await git('config', 'user.email', 'test@example.com')
+  await mkdir(join(workspace, '.ab/implement'), { recursive: true })
+  const tracked = '.ab/implement/workspace-recovery.md'
+  await writeFile(join(workspace, tracked), 'repository-owned recovery document\n')
+  await git('add', '-f', tracked)
+  await git('commit', '-qm', 'legacy scratch')
+  const base = await git('rev-parse', 'HEAD')
+  await seedPlanApproved()
+  const source = await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'git-worktree',
+      ref: workspace,
+      path: workspace,
+      branch: `ab/${BUILD}`,
+      base: { source: 'remote', sha: base },
+    },
+  })
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.commits-lost',
+    payload: {
+      workspace: source.seq,
+      execution: 0,
+      ref: 'gone',
+      branch: `ab/${BUILD}`,
+      phase: 'implement',
+      round: 1,
+      shas: ['9'.repeat(40)],
+      inventory: 'additional-shas-unavailable',
+      reason: 'source environment is absent',
+    },
+  })
+  const manifest = await buildContext({
+    store,
+    env: makeEnv({ phase: 'implement', round: 1 }),
+    workspacePath: workspace,
+    exec: spawnExec,
+  })
+  expect(manifest.workspaceRecovery).not.toBe(tracked)
+  expect(await readFile(join(workspace, tracked), 'utf8')).toBe(
+    'repository-owned recovery document\n',
+  )
+  expect(await readFile(join(workspace, manifest.workspaceRecovery!), 'utf8')).toContain(
+    'source environment is absent',
+  )
+})
+
+test('empty preservation checkpoints do not materialize recovery instructions', async () => {
+  await seedPlanApproved()
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.commits-preserved',
+    payload: {
+      workspace: 1,
+      execution: 0,
+      ref: 'clean',
+      branch: `ab/${BUILD}`,
+      phase: 'implement',
+      round: 1,
+      heads: [],
+    },
+  })
+  const manifest = await buildContext({
+    store,
+    env: makeEnv({ phase: 'implement', round: 1 }),
+    workspacePath: workspace,
+  })
+  expect(manifest.workspaceRecovery).toBeUndefined()
+})
+
+test('restored checkpoint remains visible to its session after successful provision', async () => {
+  await seedPlanApproved()
+  const sha = '8'.repeat(40)
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.commits-preserved',
+    payload: {
+      workspace: 1,
+      execution: 0,
+      ref: 'old',
+      branch: `ab/${BUILD}`,
+      phase: 'implement',
+      round: 1,
+      heads: [
+        {
+          role: 'branch',
+          sha,
+          remoteRef: `refs/autobuild/archive/${BUILD}/${sha}`,
+          commits: [sha],
+        },
+      ],
+    },
+  })
+  await store.append(BUILD, {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'fake',
+      ref: 'replacement',
+      path: workspace,
+      branch: `ab/${BUILD}`,
+      base: { source: 'existing', sha },
+    },
+  })
+  const manifest = await buildContext({
+    store,
+    env: makeEnv({ phase: 'implement', round: 1 }),
+    workspacePath: workspace,
+  })
+  expect(manifest.workspaceRecovery).toBeDefined()
+  expect(await readFile(join(workspace, manifest.workspaceRecovery!), 'utf8')).toContain(sha)
+})
