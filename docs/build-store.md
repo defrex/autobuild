@@ -83,3 +83,21 @@ To add a backend:
 2. Pass the unchanged `describeBuildStoreContract` and `describeBlobStoreContract` suites from `@defrex/autobuild/testing`, on isolated fixtures with real persistence.
 
 To serve it to the shipped CLI, implement the normative remote store protocol, not a new route catalog. Meet its conformance section and test the real remote client against your server.
+
+## Hosted dispatch and local viewing
+
+A plain `ab dispatch` reads dispatch placement once before starting local execution.
+For a hosted project it opens the Store-only viewer automatically, displaying
+`viewer · dispatched by <host>` from the placement origin (including a nondefault
+port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+`--takeover` explicitly dispatches locally, with a warning that it can displace
+the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
+flags require `--takeover` when placement selects viewer.
+
+An unreadable placement fails closed with a typed error naming the cause:
+use `--viewer` to watch or `--takeover` to dispatch locally. Both explicit modes
+skip placement discovery. Older services without the capability and projects
+with unknown or nonhosted placement retain local dispatch behavior. Local stores
+need no placement request. Origin mode (`--repository` or `AB_REPOSITORY`) and
+hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
+liveness probe or a polling input.
