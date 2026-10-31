@@ -11,13 +11,21 @@ export function reconcileRewriteHead(payload: EventPayload<'reconcile.rewritten'
   return payload.observedHead ?? payload.headSha
 }
 
+const gitHistoryEvent =
+  /^(workspace\.provisioned|implement\.completed|code-review\.|restack\.|reconcile\.|finalize\.|pr\.)/
+
+/** Shared allocation-free gate for the history selector and its incremental fold. */
+export function referencesGitHistory(type: AbEvent['type']): boolean {
+  return gitHistoryEvent.test(type)
+}
+
 const oid = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 /** Only Git-related event fields are object tips. Content digests and attachment
  * hashes are not Git objects. Publication requests/losses describe attempts,
  * not retained Git history: their objects can die with a released workspace.
  * Successful phase facts and rewrite intents independently retain their tips. */
 export function referencedGitTips(events: readonly AbEvent[]): string[] {
-  const result = new Set<string>()
+  const sources = new Map<string, Set<string>>()
   const keys = new Set([
     'sha',
     'base',
@@ -33,19 +41,34 @@ export function referencedGitTips(events: readonly AbEvent[]): string[] {
     'localBranchHead',
     'observedHead',
   ])
-  function visit(value: unknown, key = ''): void {
+  function visit(value: unknown, result: Set<string>, key = ''): void {
     if (typeof value === 'string' && keys.has(key) && oid.test(value)) result.add(value)
-    else if (Array.isArray(value)) for (const item of value) visit(item)
+    else if (Array.isArray(value)) for (const item of value) visit(item, result)
     else if (value !== null && typeof value === 'object')
-      for (const [name, item] of Object.entries(value)) visit(item, name)
+      for (const [name, item] of Object.entries(value)) visit(item, result, name)
   }
   for (const event of events) {
-    if (
-      /^(workspace\.provisioned|implement\.completed|code-review\.|restack\.|reconcile\.|finalize\.|pr\.)/.test(
-        event.type,
-      )
-    )
-      visit(event.payload)
+    if (event.type === 'publication.candidate-retired')
+      sources.get(event.payload.sha)?.delete(`${event.payload.operation}:${event.payload.id}`)
+    if (!referencesGitHistory(event.type)) continue
+    const tips = new Set<string>()
+    visit(event.payload, tips)
+    for (const tip of tips) {
+      const ephemeral =
+        (event.type === 'reconcile.publish-intended' ||
+          event.type === 'restack.publish-intended') &&
+        event.payload.headSha === tip
+      const source = ephemeral ? `${event.type.split('.')[0]}:${event.payload.id}` : 'proven'
+      let refs = sources.get(tip)
+      if (!refs) {
+        refs = new Set()
+        sources.set(tip, refs)
+      }
+      refs.add(source)
+    }
   }
-  return [...result].sort()
+  return [...sources]
+    .filter(([, refs]) => refs.size > 0)
+    .map(([tip]) => tip)
+    .sort()
 }

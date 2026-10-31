@@ -10,7 +10,7 @@ import {
 import { awaitsConsent } from './landing-readiness'
 import { leafRestackReducer, type LeafRestackState } from './leaf-restack-state'
 import { landingCandidateId } from './landing-policy'
-import { referencedGitTips } from './reconcile-head'
+import { referencesGitHistory, referencedGitTips } from './reconcile-head'
 import { encodeLog } from './log-index-value'
 import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
 import { infrastructureFailureResetReducer } from '../processes/infrastructure-failure-budget'
@@ -156,7 +156,13 @@ export interface BuildReadAcc {
   summaryRequested: Record<string, Extract<AbEvent, { type: 'pr-summary.requested' }>>
   summaryEligibleAfter?: string
   finalizePublicationRequested: boolean
-  latestWorkspace?: Extract<AbEvent, { type: 'workspace.provisioned' }>
+  workspaceFence?: Extract<AbEvent, { type: 'workspace.fenced' }>
+  workspacePreservation?: Extract<AbEvent, { type: 'workspace.commits-preserved' }>
+  workspaceLoss?: Extract<AbEvent, { type: 'workspace.commits-lost' }>
+  latestWorkspace?: Extract<
+    AbEvent,
+    { type: 'workspace.provisioned' | 'workspace.cleanup-required' }
+  >
   findings: Record<string, import('../ontology').Finding>
   planFeedback: Record<string, import('../ontology').Feedback | null>
   feedback: Record<string, import('../ontology').Feedback | null>
@@ -166,6 +172,16 @@ export interface BuildReadAcc {
     { type: `reconcile.${string}` | 'workspace.provisioned' | 'phase.failed' }
   >[]
   restackHistory: Extract<AbEvent, { type: `restack.${string}` }>[]
+  candidateRecoveries: Partial<
+    Record<
+      'reconcile' | 'restack',
+      import('../events/payloads').EventPayload<'publication.candidate-retired'>
+    >
+  >
+  candidateRecoverySeqs: Partial<Record<'reconcile' | 'restack', number>>
+  /** The two latest logical session starts; continuations keep their root's start. */
+  sessionStarts: Array<{ session: string; seq: number }>
+  tipSources: Record<string, string[]>
   gitTips: string[]
   reconcileTransaction?: import('../events/payloads').EventPayload<'reconcile.prepared'>
   reconcileReplay?: import('../events/payloads').EventPayload<'reconcile.replayed'>
@@ -201,7 +217,7 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 4 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 6 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
@@ -235,6 +251,10 @@ export const buildReadFactsReducer = defineReducer({
     reconcileBases: {},
     reconcileHistory: [],
     restackHistory: [],
+    candidateRecoveries: {},
+    candidateRecoverySeqs: {},
+    sessionStarts: [],
+    tipSources: {},
     gitTips: [],
     maxPlanRevision: -1,
     seenTypes: [],
@@ -309,7 +329,28 @@ export const buildReadFactsReducer = defineReducer({
         acc.summaryEligibleAfter = event.payload.eligibleAfter
       if (event.type === 'publication.requested' && event.payload.operation === 'finalize')
         acc.finalizePublicationRequested = true
-      if (event.type === 'workspace.provisioned') acc.latestWorkspace = event
+      // Keep checkpoints through repeated replacements, but never restore an old
+      // branch over a durably acknowledged rewrite of the public branch.
+      if (event.type === 'reconcile.rewritten' || event.type === 'restack.rewritten')
+        delete acc.workspacePreservation
+      if (event.type === 'session.started') {
+        const last = acc.sessionStarts.at(-1)
+        if (event.payload.continuation && last?.session === event.payload.continuation.predecessor)
+          acc.sessionStarts[acc.sessionStarts.length - 1] = {
+            ...last,
+            session: event.payload.session,
+          }
+        else
+          acc.sessionStarts = [
+            ...acc.sessionStarts.slice(-1),
+            { session: event.payload.session, seq: event.seq },
+          ]
+      }
+      if (event.type === 'workspace.fenced') acc.workspaceFence = event
+      if (event.type === 'workspace.commits-preserved') acc.workspacePreservation = event
+      if (event.type === 'workspace.commits-lost') acc.workspaceLoss = event
+      if (event.type === 'workspace.provisioned' || event.type === 'workspace.cleanup-required')
+        acc.latestWorkspace = event
       if (event.type === 'plan-review.verdict')
         acc.planFeedback[String(event.payload.round + 1)] =
           event.payload.verdict === 'revise'
@@ -330,8 +371,41 @@ export const buildReadFactsReducer = defineReducer({
           event.payload.feedback ?? null
       if (event.type.startsWith('restack.'))
         acc.restackHistory.push(event as Extract<AbEvent, { type: `restack.${string}` }>)
-      for (const tip of referencedGitTips([event]))
-        if (!acc.gitTips.includes(tip)) acc.gitTips.push(tip)
+      if (event.type === 'publication.candidate-retired') {
+        acc.candidateRecoveries[event.payload.operation] = event.payload
+        acc.candidateRecoverySeqs[event.payload.operation] = event.seq
+        if (
+          event.payload.operation === 'reconcile' &&
+          acc.reconcileTransaction?.id === event.payload.id
+        )
+          delete acc.reconcileReplay
+        const sources = acc.tipSources[event.payload.sha]
+        if (sources) {
+          acc.tipSources[event.payload.sha] = sources.filter(
+            (source) => source !== `${event.payload.operation}:${event.payload.id}`,
+          )
+          if (!acc.tipSources[event.payload.sha]!.length) {
+            delete acc.tipSources[event.payload.sha]
+            acc.gitTips = acc.gitTips.filter((tip) => tip !== event.payload.sha)
+          }
+        }
+      }
+      // Most events carry no Git history. Skip the allocating history selector
+      // entirely on that hot path; retirement is handled independently above.
+      if (referencesGitHistory(event.type))
+        for (const tip of referencedGitTips([event])) {
+          const ephemeral =
+            (event.type === 'reconcile.publish-intended' ||
+              event.type === 'restack.publish-intended') &&
+            event.payload.headSha === tip
+          const source = ephemeral ? `${event.type.split('.')[0]}:${event.payload.id}` : 'proven'
+          if (!acc.tipSources[tip]) {
+            acc.tipSources[tip] = []
+            acc.gitTips.push(tip)
+          }
+          if (!acc.tipSources[tip]!.includes(source)) acc.tipSources[tip]!.push(source)
+        }
+
       if (
         event.type === 'reconcile.started' ||
         event.type === 'reconcile.completed' ||
@@ -383,7 +457,8 @@ export const buildReadFactsReducer = defineReducer({
         acc.created ??= event
         acc.lastCreated = event
       }
-      if (event.type === 'workspace.provisioned') acc.workspaceGenerations++
+      if (event.type === 'workspace.provisioned' || event.type === 'workspace.cleanup-required')
+        acc.workspaceGenerations++
       if (event.type === 'workspace.released') acc.latestRelease = event
       if (event.type === 'dispatch.failed') {
         acc.dispatchFailureCount++
@@ -433,6 +508,9 @@ export const buildReadFactsReducer = defineReducer({
     summaryEligibleAfter: acc.summaryEligibleAfter,
     finalizePublicationRequested: acc.finalizePublicationRequested,
     latestWorkspace: acc.latestWorkspace,
+    workspaceFence: acc.workspaceFence,
+    workspacePreservation: acc.workspacePreservation,
+    workspaceLoss: acc.workspaceLoss,
     planFeedback: structuredClone(acc.planFeedback),
     findings: structuredClone(acc.findings),
     feedback: structuredClone(acc.feedback),
@@ -440,6 +518,10 @@ export const buildReadFactsReducer = defineReducer({
     reconcileHistory: structuredClone(acc.reconcileHistory),
     restackHistory: structuredClone(acc.restackHistory),
     gitTips: [...acc.gitTips],
+    candidateRecoveries: structuredClone(acc.candidateRecoveries),
+    candidateRecoverySeqs: { ...acc.candidateRecoverySeqs },
+    sessionStarts: acc.sessionStarts.map((start) => ({ ...start })),
+    tipSources: structuredClone(acc.tipSources),
     reconcileTransaction: acc.reconcileTransaction,
     reconcileReplay: acc.reconcileReplay,
     firstWorkspace: acc.firstWorkspace,

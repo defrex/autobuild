@@ -285,6 +285,8 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'landing.native-enable-started',
     'landing.native-applied',
     'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
     'workspace.released',
     'build.completed',
   ])
@@ -508,8 +510,10 @@ test('plugin-selected workspace drives runner, PR polling, and terminal release 
       branch: BRANCH,
     },
   ])
-  expect(typesOf(await h.events(SLUG)).slice(-3)).toEqual([
+  expect(typesOf(await h.events(SLUG)).slice(-5)).toEqual([
     'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
     'workspace.released',
     'build.completed',
   ])
@@ -883,7 +887,13 @@ test('gated CLEAN auto-merge requested before finalize remains GitHub-native', a
   h.forge.setPrState(1, { state: 'merged', sha: 'native-squash' })
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
+  expect(typesOf(final).slice(-5)).toEqual([
+    'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
+    'workspace.released',
+    'build.completed',
+  ])
   expect(reduceBuild(final).outcome).toBe('merged')
 }, 30_000)
 
@@ -937,7 +947,13 @@ test('ungated auto-merge intent finalizes, guarded-squashes in janitor, and comp
   // The next ordinary observation settles the existing lifecycle vocabulary.
   expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
+  expect(typesOf(final).slice(-5)).toEqual([
+    'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
+    'workspace.released',
+    'build.completed',
+  ])
   expect(reduceBuild(final).status).toBe('done')
   expect(reduceBuild(final).outcome).toBe('merged')
   expect(typesOf(final)).not.toContain('escalation.raised')
@@ -1020,7 +1036,13 @@ test('local-git defers for missing identity, then merges under repository identi
   // A later independent state read observes the pending landing and completes.
   expect(await h.dispatcher.tick()).toEqual({ ...noRequests, merged: 1 })
   const final = await h.events(SLUG)
-  expect(typesOf(final).slice(-3)).toEqual(['pr.merged', 'workspace.released', 'build.completed'])
+  expect(typesOf(final).slice(-5)).toEqual([
+    'pr.merged',
+    'workspace.fenced',
+    'workspace.commits-preserved',
+    'workspace.released',
+    'build.completed',
+  ])
   expect(ofType(final, 'pr.merged')[0]!.payload.sha).toBe(landed)
   expect(await git(['show', '-s', '--format=%P', landed], h.origin)).toBe(initialBase)
   expect(await git(['show', '-s', '--format=%an <%ae>%n%cn <%ce>', landed], h.origin)).toBe(
@@ -3281,3 +3303,207 @@ skill = "verify-web-dashboard"
   ).toHaveLength(1)
   expect(h.cliErrors).toEqual([])
 }, 30_000)
+
+test('a bare retry reconstructs a lost reconcile publication under its frozen occurrence', async () => {
+  const { prepareRestack } = await import('../kernel/reconcile-restack')
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  const handlers = happyHandlers()
+  let reconstructed = 0
+  handlers.reconcile = async (cli) => {
+    reconstructed++
+    await cli.run(['context'])
+    const manifest = JSON.parse(
+      await readFile(join(cli.ws, cli.env.contextDir!, 'context.json'), 'utf8'),
+    )
+    expect(manifest.workspaceRecovery).toBeDefined()
+    expect(await readFile(join(cli.ws, manifest.workspaceRecovery), 'utf8')).toContain(
+      'Reconstruct',
+    )
+    await writeFileIn(cli.ws, 'rate-limit.txt', 'base audit behavior\nfeature throttle preserved\n')
+    await git(['add', 'rate-limit.txt'], cli.ws)
+    await git([...GIT_ID, 'cherry-pick', '--continue'], cli.ws)
+    const notes = await writeFileIn(
+      cli.ws,
+      manifest.notesPath,
+      'Reconstructed the lost resolver result.\n',
+    )
+    await cli.run(['done', '--notes', notes])
+  }
+  const h = await track(makeHarness({ handlers, tickets: [readyTicket('T-1')] }))
+  await h.dispatcher.tick()
+  await h.runLatest()
+  h.clock.advance(3_600_001)
+  h.forge.setPrState(1, { state: 'open', mergeable: false })
+  await h.dispatcher.tick()
+  const frozen = await h.advanceRemote(
+    { 'rate-limit.txt': 'base audit behavior\n' },
+    'advance target',
+  )
+  const before = await h.events(SLUG)
+  const workspace = ofType(before, 'workspace.provisioned').at(-1)!.payload
+  const base = ofType(before, 'workspace.provisioned')[0]!.payload.base.sha
+  await git(['fetch', '--no-tags', 'origin', 'main'], workspace.ref)
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'reconcile.started',
+    payload: { attempt: 1, baseSha: frozen },
+  })
+  const transaction = await prepareRestack(
+    {
+      store: h.store,
+      slug: SLUG,
+      workspacePath: workspace.ref,
+      forge: h.forgeAdapter,
+      exec: spawnExec,
+    },
+    { attempt: 1, branch: BRANCH, oldBase: base, targetBase: frozen, id: 'lost-transaction' },
+  )
+  // Remote-only target observation can arrive while the retained resolver is lost.
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'target.moved',
+    payload: { branch: 'main', sha: frozen },
+  })
+  const missing = '9'.repeat(40)
+  const notes = await h.store.putArtifact(SLUG, {
+    kind: 'reconcile-notes',
+    content: 'Lost committed resolver output.',
+  })
+  await h.store.append(SLUG, {
+    actor: KERNEL,
+    type: 'reconcile.publish-intended',
+    payload: {
+      ...transaction,
+      headSha: missing,
+      conflicted: true,
+      artifact: { kind: notes.kind, rev: notes.revision },
+    },
+  })
+  const request = await h.store.append(SLUG, {
+    actor: agentActor('reconcile', 'lost-session'),
+    type: 'publication.requested',
+    payload: {
+      operation: 'reconcile',
+      branch: BRANCH,
+      sha: missing,
+      rewrite: { ...transaction, conflicted: true },
+      artifact: { kind: notes.kind, rev: notes.revision },
+    },
+  })
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'publication.lost',
+    payload: {
+      request: request.seq,
+      operation: 'reconcile',
+      branch: BRANCH,
+      sha: missing,
+      reason: 'replacement',
+    },
+  })
+  await h.workspaces.release({ ...workspace, path: workspace.path ?? workspace.ref })
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'workspace.released',
+    payload: { ref: workspace.ref, reason: 'replacement' },
+  })
+  const replacement = await h.workspaces.provision({
+    repo: h.origin,
+    baseBranch: 'main',
+    branch: BRANCH,
+  })
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: { ...replacement, remote: false },
+  })
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'infrastructure.failed',
+    payload: {
+      provider: workspace.provider,
+      workspaceRef: workspace.ref,
+      instance: 'failed-archive',
+      operation: 'reconcile',
+      cause: 'provider-error',
+      attempt: 1,
+      retryable: true,
+      cleanupPending: false,
+      error: `archive publication rejected: fatal: bad object ${missing}`,
+    },
+  })
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'escalation.raised',
+    payload: {
+      id: 'archive-failure',
+      phase: 'reconcile',
+      source: 'policy',
+      policyCause: 'infrastructure-failure-limit',
+      question: `Archive ${missing} failed`,
+    },
+  })
+  // A later PR poll must not erase the retained resolver occurrence.
+  await h.store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'pr.conflicted',
+    payload: { baseSha: frozen },
+  })
+  const archived: string[] = []
+  const published: string[] = []
+  const archive = h.forgeAdapter.rewrite!.archive.bind(h.forgeAdapter.rewrite!)
+  const replace = h.forgeAdapter.rewrite!.replace.bind(h.forgeAdapter.rewrite!)
+  h.forgeAdapter.rewrite!.archive = async (input) => {
+    archived.push(input.sha)
+    return archive(input)
+  }
+  h.forgeAdapter.rewrite!.replace = async (input) => {
+    published.push(input.sha)
+    return replace(input)
+  }
+  const errors: string[] = []
+  expect(
+    await runCli(['answer', SLUG], {
+      workspacePath: h.origin,
+      processEnv: { USER: 'operator' },
+      exec: async (args, opts) =>
+        args.join(' ') === 'git remote get-url origin'
+          ? { stdout: h.origin, stderr: '', exitCode: 0 }
+          : spawnExec(args, opts),
+      openStore: () =>
+        new Proxy(h.store, {
+          get(target, key) {
+            if (key === 'close') return async () => {}
+            const value = Reflect.get(target, key, target)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        }),
+      stdout: () => {},
+      stderr: (line) => errors.push(line),
+    }),
+  ).toBe(0)
+  expect(errors).toEqual([])
+  h.clock.advance(3_600_001)
+  await h.dispatcher.tick({ acceptNewWork: false, resumeCurrent: true })
+  await h.runLatest()
+  const after = await h.events(SLUG)
+  expect(archived).not.toContain(missing)
+  expect(published).not.toContain(missing)
+  expect(reconstructed).toBe(1)
+  expect(ofType(after, 'publication.candidate-retired')).toHaveLength(1)
+  expect(ofType(after, 'reconcile.started')).toHaveLength(1)
+  const retirement = ofType(after, 'publication.candidate-retired')[0]!
+  const replacementReplay = ofType(after, 'reconcile.prepared').at(-1)!
+  expect(replacementReplay.payload.id).toBe(retirement.payload.replacementId)
+  expect(replacementReplay.payload.attempt).toBe(1)
+  expect(
+    ofType(after, 'restack.prepared').filter((event) => event.seq > retirement.seq),
+  ).toHaveLength(0)
+  expect(ofType(after, 'reconcile.prepared').at(-1)!.payload.targetBase).toBe(frozen)
+  expect(ofType(after, 'reconcile.prepared').at(-1)!.payload.id).not.toBe(transaction.id)
+  expect(ofType(after, 'reconcile.completed')).toHaveLength(1)
+  expect(ofType(after, 'infrastructure.failed')).toHaveLength(1)
+  expect((await readBuildFacts(h.store, SLUG)).value.gitTips).not.toContain(missing)
+  expect(ofType(after, 'escalation.raised')).toHaveLength(1)
+  expect(h.cliErrors).toEqual([])
+}, 30000)

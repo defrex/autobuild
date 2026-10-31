@@ -766,6 +766,20 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // ── 9. Post-PR epilogue (§15.7): finalize → (conflicted → reconcile →
   // verify:*)* → merged | closed. The dispatcher's janitor emits pr.* and
   // completes the build; the engine only ever runs reconcile here.
+  // Resume a retained resolver occurrence before considering a newly observed
+  // target. Candidate retirement removes its result, not its frozen intent.
+  if (
+    state.prState === 'conflicted' &&
+    (log.conflictReconcileStarted !== undefined || state.currentPhase?.phase === 'reconcile')
+  ) {
+    // A later conflict observation clears the log marker, but cannot retire
+    // an unfinished resolver or spend another occurrence during reconstruction.
+    const attempt =
+      log.conflictReconcileStarted?.attempt ??
+      state.currentPhase?.attempt ??
+      state.reconcileAttempts
+    return { kind: 'run-phase', phase: 'reconcile', round: attempt, reconcile: { attempt } }
+  }
   if (
     log.restack.target !== undefined &&
     (log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase) ||
@@ -775,18 +789,6 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
     return { kind: 'restack', trigger: 'awaiting-landing', cycle: cycleBoundary }
   }
   if (state.prState === 'conflicted' && log.lastConflict !== undefined) {
-    if (log.conflictReconcileStarted !== undefined) {
-      // Crashed reconcile: re-run the SAME attempt from its start (§15.6-C) —
-      // the reducer's reconcileAttempts is the kernel's own counter precisely
-      // so a re-run does not double-count.
-      const crashAttempt = log.conflictReconcileStarted.attempt
-      return {
-        kind: 'run-phase',
-        phase: 'reconcile',
-        round: crashAttempt,
-        reconcile: { attempt: crashAttempt },
-      }
-    }
     const nextAttempt = state.reconcileAttempts + 1
     const completed = log.lastReconcileCompleted
     if (completed !== undefined && completed.completedSeq < log.lastConflict.seq) {

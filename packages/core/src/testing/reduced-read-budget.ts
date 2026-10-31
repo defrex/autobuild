@@ -997,6 +997,55 @@ export async function parkedSweepReadBudget(opts: {
   const reset = () => {
     metrics.meta = metrics.bodies = metrics.bytes = metrics.historicalRows = blobReads = 0
   }
+  const recoverySlug = 'lost-candidate-read-budget'
+  await store.ensureRepo('/lost-candidate-read-budget')
+  await store.createBuild({ slug: recoverySlug, repo: '/lost-candidate-read-budget' })
+  const missing = '9'.repeat(40)
+  const transaction = {
+    id: 'lost',
+    attempt: 1,
+    branch: `ab/${recoverySlug}`,
+    oldHead: 'a'.repeat(40),
+    oldBase: 'b'.repeat(40),
+    targetBase: 'c'.repeat(40),
+    changeSha: 'd'.repeat(40),
+    workspaceHead: 'a'.repeat(40),
+    localBranchHead: 'a'.repeat(40),
+    conflicted: true,
+  }
+  const request = await store.append(recoverySlug, {
+    actor: KERNEL,
+    type: 'publication.requested',
+    payload: {
+      operation: 'reconcile',
+      branch: transaction.branch,
+      sha: missing,
+      rewrite: transaction,
+      artifact: { kind: 'reconcile-notes', rev: 0 },
+    },
+  })
+  await store.append(recoverySlug, {
+    actor: DISPATCHER,
+    type: 'publication.lost',
+    payload: {
+      request: request.seq,
+      operation: 'reconcile',
+      branch: transaction.branch,
+      sha: missing,
+      reason: 'replacement',
+    },
+  })
+  await store.append(recoverySlug, {
+    actor: KERNEL,
+    type: 'publication.candidate-retired',
+    payload: {
+      request: request.seq,
+      operation: 'reconcile',
+      id: transaction.id,
+      sha: missing,
+      replacementId: 'replacement',
+    },
+  })
   let seeded = 0
   for (const length of [100, 100_000]) {
     for (; seeded < length; seeded++) {
@@ -1005,6 +1054,22 @@ export async function parkedSweepReadBudget(opts: {
         type: 'build.auto-merge-cancelled',
         payload: {},
       })
+    }
+    const recoveryEvents = Reflect.get(store, 'builds').get(recoverySlug)
+      .events as import('../events/catalog').AbEvent[]
+    while (recoveryEvents.length < length)
+      await store.append(recoverySlug, {
+        actor: humanActor('budget'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+    await readBuildFacts(store, recoverySlug)
+    const recoverySlice = Array.prototype.slice
+    const recoveryBoundary = recoveryEvents.at(-1)!.seq
+    recoveryEvents.slice = function (start?: number, end?: number) {
+      const result = recoverySlice.call(this, start, end) as typeof recoveryEvents
+      metrics.historicalRows += result.filter((event) => event.seq <= recoveryBoundary).length
+      return result
     }
     // Instrument returned event rows, including getReducerValue's private
     // snapshot-tail reads (instrumenting getEvents alone would miss these).
@@ -1022,6 +1087,21 @@ export async function parkedSweepReadBudget(opts: {
     const dispatcher = opts.dispatcher()
     reset()
     for (let tick = 0; tick < 4; tick++) {
+      const { recoverLostCandidate } = await import('../kernel/reconcile-restack')
+      expect(
+        await recoverLostCandidate({
+          store,
+          slug: recoverySlug,
+          workspacePath: '/unused',
+          forge: new FakeForge(),
+          exec: async () => {
+            throw new Error('retired candidates must not be probed on idle reads')
+          },
+        }),
+      ).toBe('none')
+      expect(
+        (await readBuildFacts(store, recoverySlug)).value.candidateRecoveries.reconcile?.sha,
+      ).toBe(missing)
       await dispatcher.tick({ acceptNewWork: false })
     }
     expect(metrics).toEqual({
