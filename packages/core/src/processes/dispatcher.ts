@@ -4706,14 +4706,6 @@ export class Dispatcher {
       if (this.outOfBudget(opts)) break
       if (record.lease) {
         if (new Date(record.lease.expiresAt).getTime() > now) continue // healthy
-      } else if (now - new Date(record.updatedAt).getTime() < this.leaseTtlMs) {
-        const facts = await this.store.buildFacts(record.slug)
-        const cleanup = facts.state.verifyStage.cleanupExecutionSeq
-        if (
-          facts.lastExecution !== 'relaunch' &&
-          !(cleanup !== undefined && facts.state.verifyStage.executionSeq <= cleanup)
-        )
-          continue // absent lease within the first-claim grace (see DispatcherOpts)
       }
       const facts = await this.store.buildFacts(record.slug)
       const state = facts.state
@@ -4757,6 +4749,24 @@ export class Dispatcher {
       const decision = await this.decideBuild(record.slug, state, facts.log, report, true)
       if (decision === undefined) continue
       if (state.status === 'done' || state.status === 'aborted') continue
+      const orphanEligible = (state: BuildState) =>
+        !paused &&
+        state.status === 'running' &&
+        (state.kind !== 'node' || integrationCurrent(state)) &&
+        state.sessions.open.some((session) => session.suspensionCause === undefined)
+      const provedEnded =
+        facts.open === null &&
+        (facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch')
+      const cleanup = state.verifyStage.cleanupExecutionSeq
+      if (
+        !record.lease &&
+        now - new Date(record.updatedAt).getTime() < this.leaseTtlMs &&
+        facts.lastExecution !== 'relaunch' &&
+        !(cleanup !== undefined && state.verifyStage.executionSeq <= cleanup) &&
+        !(provedEnded && (decision.kind !== 'wait' || orphanEligible(state)))
+      )
+        continue // preserve first-claim grace, but never postpone proved-ended work
+
       if (
         state.kind === 'node' &&
         (!integrationCurrent(state) || facts.workspace === null) &&
@@ -4776,6 +4786,7 @@ export class Dispatcher {
       // proved end settles first (completion facts, lease release, publication)
       // and then falls through to the normal decision; a provider-proved loss
       // falls through to the existing stale path below.
+      let orphanRecoveryDue = orphanEligible(state) && facts.open === null
       const foreignExecution = facts.open
       // A provider- or log-proved end in the same generation re-attaches in
       // place: the guest finished its work, the workspace is still the
@@ -4812,6 +4823,10 @@ export class Dispatcher {
             foreignExecution,
           )
           if (settlement === 'running') continue
+          // Unknown liveness is never proof that an open execution is dead.
+          // Settlement may itself raise provider attention. Revalidate cleanup
+          // eligibility from the advanced canonical state before admission.
+          orphanRecoveryDue = orphanEligible((await this.store.buildFacts(record.slug)).state)
           if (settlement === 'settled') {
             report.settled += 1
             endedInPlace = true
@@ -4828,7 +4843,7 @@ export class Dispatcher {
       // build's, and replacing the environment would discard a healthy
       // generation. Only an unproven stale lease or a proved loss reaps.
       if (open !== null && this.workspaceOwner(open)?.recovery !== undefined && !endedInPlace) {
-        const parked = decision.kind === 'wait' && !publicationRecoveryDue
+        const parked = decision.kind === 'wait' && !publicationRecoveryDue && !orphanRecoveryDue
         const reason =
           state.status === 'paused'
             ? ('pause' as const)
@@ -4856,7 +4871,7 @@ export class Dispatcher {
       // fresh runner for a paused or blocked build whose workspace was just
       // reaped. Every other path that reaches this line with a wait decision
       // already continued earlier.
-      if (decision.kind === 'wait' && !publicationRecoveryDue) continue
+      if (decision.kind === 'wait' && !publicationRecoveryDue && !orphanRecoveryDue) continue
       if (
         facts.workspace === null &&
         this.deps.workspaces.recovery !== undefined &&
@@ -4872,8 +4887,26 @@ export class Dispatcher {
         // boundaries and the launch; this tick performs neither.
         continue
       }
-      const result = await this.launch(record.slug, launched, report)
-      if (result === 'scheduled') report.swept += 1
+      try {
+        const result = await this.launch(record.slug, launched, report)
+        if (result === 'scheduled') report.swept += 1
+      } catch (error) {
+        // Launchers normally record provider failures themselves. Preserve
+        // durable attention if orphan cleanup fails before that boundary,
+        // without counting an already-recorded failure twice.
+        if (orphanRecoveryDue && open !== null) {
+          const current = (await readBuildFacts(this.store, record.slug)).value
+          if (current.infrastructureCount === facts.infrastructureCount)
+            await this.recordInfrastructureFailure(record.slug, current, {
+              provider: open.provider,
+              workspaceRef: open.ref,
+              operation: 'start',
+              error,
+              cleanupPending: false,
+            })
+        }
+        throw error
+      }
     }
   }
 

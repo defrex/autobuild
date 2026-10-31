@@ -1869,8 +1869,16 @@ Verification stages are planned purely in `kernel/verify-stages.ts`, shared by
 leaf and integration decisions in `kernel/engine.ts`. The build runner keeps
 only live per-member handles and recovery contexts; durable starts, outcomes,
 cancellations and failed-stage receipts drive every barrier and restart.
-Fail-fast cancellation records facts before whole-execution teardown and
-replacement. `kernel/verify-stage-state.ts` owns occurrence/session associations,
+Normal stage transitions drain terminal-reached agent turns before stage-local
+interruption, retaining session budgets and parent shutdown. This closes session
+brackets and deposits trailing evidence before summary publication. Fail-fast
+cancellation records facts before immediate whole-execution teardown and replacement.
+The dispatcher's lease sweep treats eligible running orphaned open brackets as
+pending cleanup even on an engine wait. It excludes live leases/executions,
+blocked or paused builds and idle collecting nodes, then uses ordinary runner
+attachment/reclamation. Proved-ended pending work bypasses first-claim grace;
+healthy ended workspaces are reused and lost environments follow fenced recovery.
+The predicate uses existing canonical reduced facts and adds no event-log reads. `kernel/verify-stage-state.ts` owns occurrence/session associations,
 including escalation supersession and complete implement feedback references.
 
 Human access uses `postgres-store/src/organizations.ts` and the shared hosted
