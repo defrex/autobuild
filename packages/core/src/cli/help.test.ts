@@ -180,6 +180,9 @@ describe('layered CLI help catalog', () => {
         'outside sessions',
       ],
       dispatch: [
+        '--takeover',
+        'Hosted placement defaults to viewer',
+        'Unreadable placement fails closed',
         '--viewer',
         '--dispatched-by <label>',
         'Every viewer frame says viewer',

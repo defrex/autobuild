@@ -450,7 +450,11 @@ for the exceptions above.
   logical credentials, or records a reasoned `harvest.session.resume-fallback`
   and starts fresh. Orderly suspension spends no recovery attempt; real
   crashes retain recovery accounting.
-- Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode (including `--viewer`),
+- Human checkout dispatch defaults to viewer for hosted placement. Humans can use
+  `--takeover` to dispatch locally with a displacement warning; unreadable placement
+  fails closed and names `--viewer` and `--takeover` as explicit recovery choices.
+  These human defaults and overrides do not authorize operator-agent dispatch.
+- Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode (including `--viewer` and `--takeover`),
   and no dispatcher process-management commands. This applies when the
   dispatcher is lost, stopped, absent, or failing repeatedly. Its lease,
   process, and configuration management belong to the maintainer. Diagnose
