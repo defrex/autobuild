@@ -1,3 +1,5 @@
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
+import { readBuildFacts } from '../store/reduced-reads'
 import { missingAccountCredentials, MissingAccountCredentialsError } from '../accounts/availability'
 import { parkedSweepReadBudget } from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
@@ -5415,7 +5417,197 @@ describe('Dispatcher startup resume', () => {
 
 // ── Lease sweep (§15.6-C) ────────────────────────────────────────────────────
 
+async function attachParkedRunner(h: Harness, slug: string, store: BuildStore, toml: string) {
+  const { BuildRunner } = await import('./build-runner')
+  const { ScriptedAgentRunner } = await import('../ports/runner/fake')
+  const runner = new BuildRunner({
+    store: store.scopeBuild(slug),
+    config: parseConfig(withReadyState(toml)),
+    runtimes: {
+      scripted: {
+        runner: new ScriptedAgentRunner({
+          script: async () => {
+            throw new Error('must not rerun verifier')
+          },
+        }),
+        servesModels: [],
+      },
+    },
+    workspacePath: `/ws/ab/${slug}`,
+    branch: `ab/${slug}`,
+    slug,
+    exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+    forge: h.forge,
+    ids: sequentialIds(),
+    clock: h.clock,
+    instance: 'replacement',
+    host: 'test',
+  })
+  await runner.attach()
+  await store.releaseLease(slug, 'replacement')
+}
+
 describe('Dispatcher lease sweep', () => {
+  for (const guard of [
+    'paused',
+    'blocked',
+    'repository-paused',
+    'suspended',
+    'terminal',
+    'none',
+    'start-failure',
+  ] as const)
+    test(`orphan cleanup respects ${guard}`, async () => {
+      const h = harness({
+        toml: '[policy]\nmaxInfrastructureAttempts = 1\n',
+        onLaunch: () => {
+          throw new Error('sandbox start failed')
+        },
+      })
+      const slug = await seedAwaitingPr(h)
+      await h.store.ensureRepo(REPO)
+      if (guard !== 'none')
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'session.started',
+          payload: {
+            session: 'orphan',
+            role: 'verify',
+            runner: 'scripted',
+            phase: 'verify:e2e',
+            round: 1,
+          },
+        })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { provider: 'fake', workspaceRef: 'old', instance: 'old' },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { workspaceRef: 'old', instance: 'old', outcome: 'completed', exitCode: 0 },
+      })
+      if (guard === 'paused')
+        await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      if (guard === 'blocked')
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'escalation.raised',
+          payload: {
+            id: 'hold',
+            phase: 'verify:e2e',
+            source: 'agent',
+            question: 'Hold this build',
+          },
+        })
+      if (guard === 'repository-paused')
+        await h.store.appendRepo(REPO, {
+          actor: humanActor('operator'),
+          type: 'dispatcher.pause-set',
+          payload: { enabled: true },
+        })
+      if (guard === 'suspended')
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'session.suspended',
+          payload: {
+            session: 'orphan',
+            phase: 'verify:e2e',
+            round: 1,
+            cause: 'pause',
+            activeMs: 1,
+            transcript: { kind: 'transcript', rev: 0 },
+          },
+        })
+      if (guard === 'terminal')
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'closed-unmerged' },
+        })
+      if (guard === 'start-failure') {
+        await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow(
+          'sandbox start failed',
+        )
+        const events = await h.store.getEvents(slug)
+        expect(events.filter((e) => e.type === 'infrastructure.failed')).toHaveLength(1)
+        expect(
+          events.some(
+            (e) =>
+              e.type === 'escalation.raised' &&
+              e.payload.policyCause === 'infrastructure-failure-limit',
+          ),
+        ).toBe(true)
+        expect(buildNeedsAttention(events, reduceBuild(events))).toBe(true)
+        await h.dispatcher.tick({ acceptNewWork: false })
+        expect(
+          (await h.store.getEvents(slug)).filter((e) => e.type === 'infrastructure.failed'),
+        ).toHaveLength(1)
+      } else {
+        expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
+      }
+      expect(h.launches).toEqual([])
+    })
+
+  for (const lease of ['absent', 'expired', 'live'] as const)
+    for (const outcome of ['completed', 'relaunch'] as const)
+      test(`orphaned parked session after ${outcome} with ${lease} lease recovers once`, async () => {
+        const toml = '[roles.default]\nruntime = "scripted"\n'
+        const h = harness({
+          toml,
+          opts: { leaseTtlMs: 60_000 },
+          onLaunch: async (slug, store) => {
+            await attachParkedRunner(h, slug, store, toml)
+          },
+        })
+        const slug = await seedAwaitingPr(h)
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'session.started',
+          payload: {
+            session: 'orphan',
+            role: 'verify-e2e',
+            runner: 'scripted',
+            phase: 'verify:e2e',
+            round: 1,
+          },
+        })
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'fake', workspaceRef: 'old', instance: 'old' },
+        })
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance: 'old', workspaceRef: 'old', outcome, exitCode: 0 },
+        })
+        if (lease !== 'absent') {
+          await h.store.claimLease(slug, 'old', lease === 'live' ? 120_000 : 1)
+          h.clock.advance(2)
+        }
+        expect(
+          decideNext(await h.store.getEvents(slug), parseConfig(withReadyState(toml))),
+        ).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+        expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(
+          lease === 'live' ? 0 : 1,
+        )
+        expect(h.launches).toHaveLength(lease === 'live' ? 0 : 1)
+        const events = await h.store.getEvents(slug)
+        if (lease !== 'live') {
+          expect(reduceBuild(events).sessions.open).toHaveLength(0)
+          expect(events.findLast((e) => e.type === 'session.ended')?.payload).toMatchObject({
+            outcome: 'reclaimed',
+          })
+        }
+        await h.dispatcher.tick({ acceptNewWork: false })
+        const restarted = harness({ store: h.store, clock: h.clock, toml })
+        await restarted.dispatcher.tick({ acceptNewWork: false })
+        expect(restarted.launches).toEqual([])
+        expect(h.launches).toHaveLength(lease === 'live' ? 0 : 1)
+      })
+
   for (const operation of ['restack', 'reconcile'] as const)
     for (const exhausted of [false, true])
       for (const command of ['abort', 'pause', 'resume'] as const)
@@ -5561,6 +5753,64 @@ describe('Dispatcher lease sweep', () => {
             ),
           ).toHaveLength(1)
         })
+
+  test('orphan recovery with a lost workspace records provisioning failure and exhaustion', async () => {
+    const provider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      provision: async () => {
+        throw new Error('sandbox provisioning failed')
+      },
+      release: async () => {},
+    }
+    const h = harness({
+      workspaceProvider: provider,
+      toml: '[policy]\nmaxInfrastructureAttempts = 1\nmaxDispatchAttempts = 1\n',
+    })
+    const slug = await seedAwaitingPr(h)
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 'orphan',
+        role: 'verify',
+        runner: 'scripted',
+        phase: 'verify:e2e',
+        round: 1,
+      },
+    })
+    await h.store.append(slug, { actor: DISPATCHER, type: 'workspace.released', payload: {} })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'remote-test', workspaceRef: 'lost', instance: 'old' },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { workspaceRef: 'lost', instance: 'old', outcome: 'completed', exitCode: 0 },
+    })
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).provisioning).toBe(1)
+    await h.dispatcher.drainProvisioning()
+    const events = await h.store.getEvents(slug)
+    expect(
+      events.some((e) => e.type === 'infrastructure.failed' && e.payload.operation === 'provision'),
+    ).toBe(true)
+    expect(
+      events.some(
+        (e) =>
+          e.type === 'escalation.raised' &&
+          e.payload.policyCause === 'infrastructure-failure-limit',
+      ),
+    ).toBe(true)
+    expect(buildNeedsAttention(events, reduceBuild(events))).toBe(true)
+    expect(h.launches).toEqual([])
+  })
 
   test('a detached replacement launch failure stays under the infrastructure budget without rejecting', async () => {
     const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
@@ -6356,6 +6606,17 @@ describe('Dispatcher durable supervision', () => {
     const slug = await seedBuild(h, {
       workspaceRef: 'sandbox-g0',
       workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 'possibly-live',
+        role: 'implement',
+        runner: 'scripted',
+        phase: 'implement',
+        round: 1,
+      },
     })
     await h.store.append(slug, {
       actor: DISPATCHER,
@@ -8994,18 +9255,64 @@ command = "run"
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
     const h = harness({ store, clock })
-    const slugs = []
+    // Isolate sweep reads from PR policy polling in this budget harness.
+    h.forge.getPrState = async () => {
+      throw new ForgeRequestDeferred()
+    }
+    const budgetConfig = pipeline('verify', '')
+    budgetConfig.roles.default = { runtime: 'scripted' }
+    const slugs: string[] = []
     for (let n = 0; n < 3; n++) {
       const slug = await seedAwaitingPr(h, `budget-${n}`)
       slugs.push(slug)
-      await pin(h, slug, pipeline('verify', ''))
+      await pin(h, slug, budgetConfig)
     }
     await parkedSweepReadBudget({
       store,
       slugs,
-      dispatcher: () => harness({ store, clock }).dispatcher,
-      pin: (slug) => pin(h, slug, pipeline('verify', '')),
+      dispatcher: () => harness({ store, clock, forge: h.forge }).dispatcher,
+      pin: (slug) => pin(h, slug, budgetConfig),
       advance: () => clock.advance(120_000),
+      repairBoundary: async () => {
+        const slug = slugs[0]!
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'session.started',
+          payload: {
+            session: `orphan-${clock().getTime()}`,
+            role: 'verify',
+            runner: 'scripted',
+            phase: 'verify:e2e',
+            round: 1,
+          },
+        })
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'fake', workspaceRef: 'old', instance: 'old' },
+        })
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance: 'old', workspaceRef: 'old', outcome: 'completed', exitCode: 0 },
+        })
+        const recovery = harness({
+          store,
+          clock,
+          forge: h.forge,
+          onLaunch: (slug, store) =>
+            attachParkedRunner(h, slug, store, '[roles.default]\nruntime = "scripted"\n'),
+        })
+        await recovery.dispatcher.tick({ acceptNewWork: false })
+        expect(recovery.launches).toEqual([slug])
+        // The janitor observes the repaired bracket on its following pass.
+        await recovery.dispatcher.tick({ acceptNewWork: false })
+        const seq = (await readBuildFacts(store, slug)).value.state.lastSeq
+        await recovery.dispatcher.tick({ acceptNewWork: false })
+        await harness({ store, clock, forge: h.forge }).dispatcher.tick({ acceptNewWork: false })
+        expect((await readBuildFacts(store, slug)).value.state.lastSeq).toBe(seq)
+        expect(recovery.launches).toEqual([slug])
+      },
     })
   }, 30_000)
 

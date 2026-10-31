@@ -592,6 +592,10 @@ repeated names are errors. Plain string lists retain serial event sequences.
 Every member resolves post-reconcile policy, approved selection/`always`, then
 path applicability at stage entry. Only pass or skip satisfies a member. The
 next stage, or finalize after the last, waits for every member to pass or skip.
+On a normal stage transition the runner drains agent turns before stage-local
+shutdown: a terminal may precede trailing artifacts, transcript deposit and
+`session.ended`. Parent shutdown and session budgets still interrupt this drain;
+fail-fast retains immediate whole-execution cancellation.
 
 By default a failure lets all siblings finish; the settled stage routes once
 with every failed report, and no later stage runs. `failFast = true` on either
@@ -3389,6 +3393,18 @@ process attempts
 every actionable build on its first tick rather than waiting for the sweep;
 lease claiming stays the exclusivity gate, so a genuinely live old runner
 wins harmlessly.
+
+A running, unblocked, unpaused build with an orphaned open session has pending
+kernel cleanup even when the phase engine waits on its PR. With no live lease
+or execution, the next admitted sweep attaches a runner through ordinary session
+reclamation before summary and landing readiness can proceed. A provider-proved
+end reuses the healthy workspace; a proved loss uses fenced replacement. An
+unobserved open execution is not proof of death. Intentionally suspended sessions
+and idle collecting nodes do not trigger this cleanup. A proved-ended execution
+with actionable work or eligible cleanup bypasses absent-lease first-claim grace;
+never-attached builds retain grace. Detection uses canonical reduced facts, with
+no history replay or new poll. Existing infrastructure failure attention and
+retry budgets govern failed recovery.
 
 Verification's current result boundary also advances on `verify.config-captured`
 and `verify.config-superseded` (§16.1). These facts do not change reconcile

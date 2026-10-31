@@ -8351,6 +8351,10 @@ describe('abDispatch interactive keyboard controls', () => {
         },
       })
 
+      // This UI fixture represents a live turn. An unleased open bracket after
+      // a completed execution is now correctly reclaimed by the first sweep.
+      expect(await fx.store.claimLease('session-close', 'transcript-fixture', 120_000)).toBe(true)
+
       const term = fakeTerminal(true, { columns: 160, rows: 16 })
       run = abDispatch({
         targetRepo: fx.checkout,

@@ -111,6 +111,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   Same loop shape.
 - **`verify:*`** — ordered stages, each containing one or more step phases.
   Members run concurrently and the next stage waits for every pass or skip.
+  Normal transitions drain agent session settlement before stage-local shutdown;
+  parent shutdown and session budgets remain active.
   A failed stage sends every failed report to `implement` after its siblings
   settle; an optional `failFast` failure cancels unfinished siblings.
 - **`finalize`** — the agent writes the PR description; the kernel opens the
@@ -721,6 +723,9 @@ run, never passing evidence. Whole-execution teardown and replacement add a
 relaunch cost but prevent cancelled descendants from writing during implement.
 Restart reruns only members without outcomes, keeping the same attempt and every
 recorded outcome. One failed cycle spends one verify-attempt unit.
+On normal transitions, terminal-reached agent turns finish their trailing artifacts,
+transcript and session settlement before stage-local interruption. Fail-fast and
+actual execution shutdown still interrupt promptly; session budgets remain enforced.
 
 `verify.stage-failed` is the decisive full-feedback receipt. The legacy
 `feedback.verify` object still names the first failed report; the implement
@@ -2310,7 +2315,13 @@ Recovery retries an unaccepted attempt using its inherited handle. Suspended
 sessions reject old credentials permanently. `session.resume-fallback` records
 why native continuation could not be used (including remote workspaces), then
 ordinary fresh-session recovery applies. Unrelated open sessions are reclaimed
-without inventing transcripts. Dashboard history shows suspended and resumed
+without inventing transcripts. A running, unblocked, unpaused build with no live
+execution or lease and an eligible open bracket is actionable cleanup even when
+the engine waits on a PR. The next admitted sweep attaches through ordinary
+reclamation; live provider executions, intentionally suspended sessions and idle
+collecting nodes are excluded. Ended healthy workspaces are reused; lost ones
+follow fenced recovery. Detection reads reduced facts, never historical events.
+Dashboard history shows suspended and resumed
 segments separately, with their individual transcript refs and usage.
 
 The build phase budget counts active time across interruptions using the original
@@ -2614,8 +2625,8 @@ status, lease health, routing, or recovery.
 | Lease | Meaning |
 |---|---|
 | `held` | A runner holds an unexpired lease. The runner is live; inspect `PROGRESS` to see when it last wrote a durable fact. |
-| `expired` | The lease ran out — the runner is gone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. Re-attachment depends on the current engine decision: the lease sweep re-attaches actionable runner work, while a merged or closed PR awaits repository-level completion with no runner re-attachment pending. |
-| `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. A freshly launched build is the common case — read it together with progress, not alone. |
+| `expired` | The lease ran out; ownership is stale. A provider-proved live execution is left alone. `running` + `expired` is the **stale** case: the status is not lying, it simply has no "runner died" fact to record. Re-attachment depends on the current engine decision: the lease sweep re-attaches actionable runner work, including eligible orphaned open-session cleanup on an engine wait, while a merged or closed PR awaits repository-level completion with no runner re-attachment pending. |
+| `no-lease` | **Not necessarily dead.** A build that has not yet claimed its first lease reads this way, and the lease sweep deliberately grants an absent lease a first-claim grace window before acting. Proved-ended executions with pending engine work or eligible orphaned bracket cleanup bypass that grace; live leases still win. A freshly launched build is the common case — read it together with progress, not alone. |
 
 So `running` + `held` confirms liveness, while its progress age says whether
 the durable log is moving. For `running` + `expired`, inspect the build detail
