@@ -5617,6 +5617,120 @@ describe('session streams: close outcomes per exit path', () => {
 })
 
 describe('coalesced summary boundaries', () => {
+  for (const shutdown of [false, true])
+    test(`remote final verifier drains its terminal turn (parent shutdown: ${shutdown})`, async () => {
+      const parent = new AbortController()
+      const forge = new FakeForge()
+      forge.setPrState(7, { state: 'open', mergeable: true })
+      let release!: () => void
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let terminal!: () => void
+      const passed = new Promise<void>((resolve) => {
+        terminal = resolve
+      })
+      let calls = 0
+      const h = await makeHarness({
+        forge,
+        configToml: CONFIG_TOML.replace(
+          'steps = ["types", "unit", "e2e"]',
+          'steps = ["types", "unit", ["e2e"]]',
+        ),
+        workspaceRemote: true,
+        shutdownSignal: parent.signal,
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'verify-e2e': async (ctx) => {
+            calls++
+            await store.append(SLUG, {
+              actor: agentActor('verify-e2e', sessionOf(ctx)),
+              type: 'verify.completed',
+              payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
+            })
+            terminal()
+            await held
+            return defaultTurnResult('complete')
+          },
+        }),
+      })
+      await seedFinalized(h.store)
+      await h.store.append(SLUG, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: 'detected-base' },
+      })
+      await h.br.attach()
+      await h.br.step()
+      await completeFixtureRestack(h.store)
+      await h.br.step()
+      await h.br.step()
+      await h.br.step()
+      const previous = summaryBoundary(await h.store.getEvents(SLUG))!
+      const request = await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'pr-summary.requested',
+        payload: previous,
+      })
+      await h.store.append(SLUG, {
+        actor: KERNEL,
+        type: 'pr-summary.settled',
+        payload: { request: request.seq, disposition: 'skipped' },
+      })
+      let delivered!: () => void
+      const observed = new Promise<void>((resolve) => {
+        delivered = resolve
+      })
+      const subscribe = h.store.subscribe.bind(h.store)
+      let first = true
+      h.store.subscribe = (slug, opts, callback) => {
+        const stage = first
+        first = false
+        return subscribe(slug, opts, (event) => {
+          callback(event)
+          if (stage && event.type === 'verify.completed') delivered()
+        })
+      }
+      let configRead!: () => void
+      const recomputed = new Promise<void>((resolve) => {
+        configRead = resolve
+      })
+      // Observe the stage's asynchronous config read as well as delivery. The
+      // decision itself is synchronous immediately after this read returns.
+      // biome-ignore lint/complexity/useLiteralKeys: synchronize the real stage loop without adding a production test hook.
+      const capture = h.br['captureConfig'].bind(h.br)
+      // biome-ignore lint/complexity/useLiteralKeys: synchronize the real stage loop without adding a production test hook.
+      h.br['captureConfig'] = async () => {
+        const config = await capture()
+        if (calls === 1) configRead()
+        return config
+      }
+      const running = h.br.run()
+      await passed
+      await observed
+      await recomputed
+      // Deliver the event and drain the runnable microtasks while the agent's
+      // return is explicitly held. This is an event-loop barrier, not a timer.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(reduceBuild(await h.store.getEvents(SLUG)).sessions.open).toHaveLength(1)
+      if (shutdown) parent.abort()
+      release()
+      await running
+      const events = await h.store.getEvents(SLUG)
+      expect(calls).toBe(1)
+      if (shutdown) {
+        // Genuine remote execution shutdown keeps the bracket for recovery.
+        expect(reduceBuild(events).sessions.open).toHaveLength(1)
+        expect(events.filter((e) => e.type === 'pr-summary.requested')).toHaveLength(1)
+        return
+      }
+      expect(reduceBuild(events).sessions.open).toHaveLength(0)
+      expect(events.filter((e) => e.type === 'session.suspended')).toHaveLength(0)
+      const ended = events.findLast((e) => e.type === 'session.ended')!
+      const summary = events.findLast((e) => e.type === 'pr-summary.requested')!
+      expect(summary.seq).toBeGreaterThan(ended.seq)
+    })
+
   for (const remote of [false, true])
     for (const count of [3, 300]) {
       test(`${remote ? 'remote' : 'local'} verify with ${count} attachments publishes only after session settlement`, async () => {
