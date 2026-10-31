@@ -754,6 +754,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'dispatch': {
       const {
         viewer,
+        takeover,
         dispatchedBy,
         once,
         plain,
@@ -773,6 +774,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stdout,
         stderr,
         viewer,
+        takeover,
         ...(dispatchedBy !== undefined ? { dispatchedBy } : {}),
         once,
         plain,

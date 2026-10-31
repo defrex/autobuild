@@ -430,6 +430,7 @@ describe('abDispatch guards', () => {
           stderr: () => {},
           once: true,
           storeRef: 'https://store.example.test',
+          takeover: true,
         }),
       ).rejects.toThrow(/publication requires GITHUB_TOKEN or GH_TOKEN/)
     } finally {
@@ -12713,4 +12714,175 @@ test('viewer routing bypasses injected execution wiring and missing execution co
       once: true,
     }),
   ).rejects.toThrow('local checkout')
+})
+
+for (const plain of [true, false])
+  test(`hosted default direct dispatch uses viewer (plain=${plain}) before execution wiring`, async () => {
+    const { MemoryBuildStore } = await import('../store/memory')
+    const targetRepo = await mkdtemp(join(tmpdir(), 'ab-hosted-direct-'))
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(targetRepo)
+    let placementReads = 0
+    const service = {
+      store,
+      placement: async () => {
+        placementReads++
+        return { status: 'known', placement: { hosted: true, origin: 'https://app.autobuild.run' } }
+      },
+    }
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname
+        if (path === '/health') return Response.json({ capabilities: ['dispatch-placement-v1'] })
+        if (path.endsWith('/placement')) {
+          try {
+            return Response.json(await service.placement())
+          } catch {
+            return new Response('placement unavailable', { status: 503 })
+          }
+        }
+        if (path.endsWith('/change-position')) return Response.json({ position: '0' })
+        if (path.endsWith('/reducer-values')) {
+          const { version, cursor, value } = await store.getReducerValue(
+            { kind: 'repo', repo: targetRepo },
+            await request.json(),
+          )
+          return Response.json({ version, cursor, value })
+        }
+        if (/^\/repos\/[^/]+$/.test(path)) return Response.json(await store.getRepo(targetRepo))
+        throw new Error(`Unexpected viewer request: ${request.method} ${path}`)
+      },
+    })
+    const lines: string[] = []
+    try {
+      await realAbDispatch({
+        targetRepo,
+        env: {},
+        exec: spawnExec,
+        storeRef: server.url.origin,
+        stdout: (line) => lines.push(line),
+        stderr: () => {},
+        once: true,
+        plain,
+        wire: () => {
+          throw new Error('entered execution wiring')
+        },
+      })
+      expect(placementReads).toBe(1)
+      expect(lines.join('\n')).toContain('viewer · dispatched by app.autobuild.run')
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+test('unreadable placement never reaches execution wiring; explicit takeover warns and reaches config', async () => {
+  const targetRepo = await mkdtemp(join(tmpdir(), 'ab-unreadable-direct-'))
+  const server = Bun.serve({ port: 0, fetch: () => new Response('unavailable', { status: 503 }) })
+  const warnings: string[] = []
+  const opts = {
+    targetRepo,
+    env: {},
+    exec: spawnExec,
+    storeRef: server.url.origin,
+    stdout: () => {},
+    stderr: (line: string) => warnings.push(line),
+    once: true,
+    wire: () => {
+      throw new Error('entered execution wiring')
+    },
+  }
+  try {
+    await expect(realAbDispatch(opts)).rejects.toThrow('Cannot read dispatch placement')
+    await expect(realAbDispatch({ ...opts, takeover: true })).rejects.toThrow('autobuild.toml')
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('displace')
+    // Explicit viewer skips failed health discovery and proceeds to Store reads.
+    await expect(realAbDispatch({ ...opts, viewer: true })).rejects.not.toThrow(
+      'Cannot read dispatch placement',
+    )
+  } finally {
+    await server.stop(true)
+  }
+})
+
+for (const privateOpts of [
+  { kernelRunId: 'already-selected' },
+  {
+    env: {
+      AB_DISPATCH_LAUNCH_CONTEXT: JSON.stringify({
+        version: 1,
+        run: 'selected',
+        lineage: 'lineage',
+        originalInstall: '/install',
+      }),
+    },
+  },
+])
+  test(`private dispatcher preserves selected mode (${Object.keys(privateOpts)[0]})`, async () => {
+    const targetRepo = await mkdtemp(join(tmpdir(), 'ab-private-selection-'))
+    let requests = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        requests++
+        return new Response('unavailable', { status: 503 })
+      },
+    })
+    const warnings: string[] = []
+    try {
+      await expect(
+        realAbDispatch({
+          targetRepo,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => warnings.push(line),
+          storeRef: server.url.origin,
+          once: true,
+          takeover: true,
+          ...privateOpts,
+        }),
+      ).rejects.toThrow('autobuild.toml')
+      expect(requests).toBe(0)
+      expect(warnings).toEqual([])
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+test('explicit takeover enters execution wiring once while placement is unavailable', async () => {
+  const fx = await makeFixture([], happyHandlers())
+  let requests = 0
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => {
+      requests++
+      return new Response('unavailable', { status: 503 })
+    },
+  })
+  const warnings: string[] = []
+  try {
+    await expect(
+      realAbDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => warnings.push(line),
+        storeRef: server.url.origin,
+        once: true,
+        takeover: true,
+        wire: () => {
+          throw new Error('execution wiring reached')
+        },
+      }),
+    ).rejects.toThrow('execution wiring reached')
+    expect(requests).toBe(0)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('displace')
+  } finally {
+    await server.stop(true)
+    await fx.cleanup()
+  }
 })
