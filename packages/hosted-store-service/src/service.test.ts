@@ -9,6 +9,7 @@ import { parseConfig } from '@defrex/autobuild/testing'
 import {
   AUTOBUILD_VERSION,
   supportedClientRange,
+  RELEASE_LINE_PROTOCOLS,
   AUTOBUILD_VERSION_HEADER,
   RemoteBuildStore,
   REMOTE_STORE_PROTOCOL_VERSION,
@@ -75,7 +76,9 @@ describe('hosted store service', () => {
     expect(await health.json()).toEqual({
       ok: true,
       autobuildVersion: AUTOBUILD_VERSION,
-      protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+      protocolVersion:
+        RELEASE_LINE_PROTOCOLS[AUTOBUILD_VERSION.split('.').slice(0, 2).join('.')] ??
+        REMOTE_STORE_PROTOCOL_VERSION,
       supportedClientRange: supportedClientRange(),
     })
     expect(opens).toBe(0)

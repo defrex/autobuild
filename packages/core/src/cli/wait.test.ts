@@ -1074,6 +1074,7 @@ describe('wait resilience and read-only discipline', () => {
     let failNext = true
     const flaky: BuildStore = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getEvents') {
           return async (slug: string, sinceSeq?: number) => {
             if (failNext && (sinceSeq ?? 0) > 0) {
@@ -1131,6 +1132,7 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
     let digests = 0
     const fake: BuildStore = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getReducerValue') {
           return async (...args: Parameters<BuildStore['getReducerValue']>) => {
             if (args[0].kind === 'build' && args[1].reducer === 'buildStreamSeed') {
@@ -1368,6 +1370,7 @@ describe('wait remote bounded-wait cadence (AUT-368)', () => {
     let total = 0
     const fake: BuildStore = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getEvents') {
           return async (
             slug: string,
@@ -1655,6 +1658,7 @@ describe('wait remote bounded-wait cadence (AUT-368)', () => {
     // reaches it, the step throws — after b2 was registered in the same pass.
     const breaking = new Proxy(store, {
       get(target, prop) {
+        if (prop === 'getBuildEventPage') return undefined // Exercise the local array-reader seam.
         if (prop === 'getReducerValue')
           return async (...args: Parameters<BuildStore['getReducerValue']>) => {
             if (
@@ -2231,4 +2235,26 @@ test('current upstream rewrite satisfies attention after restart and clears on s
   })
   facts = (await readBuildFacts(store, 'b1')).value
   expect(matchState(conditions, facts.state)).toBeNull()
+})
+
+test('expired hosted wait resume refuses before canonical reconstruction', async () => {
+  const store = new MemoryBuildStore()
+  await seedRunningBuild(store, 'expired')
+  for (let i = 0; i < 1001; i++)
+    await store.append('expired', { actor: KERNEL, type: 'build.paused', payload: {} })
+  const h = harness(store)
+  await expect(
+    abWait({
+      ...h.base,
+      slugs: ['expired'],
+      since: encodeCursor({
+        v: 1,
+        repo: REPO,
+        store: `${REPO}/.autobuild`,
+        streams: { expired: 0 },
+      }),
+    }),
+  ).rejects.toThrow('Re-arm without --since')
+  expect(h.out).toEqual([])
+  expect((Reflect.get(store, 'snapshots') as Map<string, unknown>).size).toBe(0)
 })

@@ -14,8 +14,20 @@ import {
   parseBuildConfigMetadata,
   parseEffectiveBuildConfig,
 } from '../../processes/build-execution-state'
-import type { Artifact, BuildRecord, StreamRecord, StreamScope } from '../../store/types'
-import { projectBuild, type DashboardBuild } from './model'
+import type {
+  Artifact,
+  BuildRecord,
+  BuildStore,
+  StreamRecord,
+  StreamScope,
+} from '../../store/types'
+import { readBuildFacts } from '../../store/reduced-reads'
+import {
+  projectBuild,
+  projectBuildFromFacts,
+  type DashboardBuild,
+  type DashboardRowFacts,
+} from './model'
 
 /** The read-only BuildStore surface needed to construct dashboard build rows.
  * `listStreams` is optional: when present, build-scope records enrich each
@@ -24,6 +36,7 @@ import { projectBuild, type DashboardBuild } from './model'
  * metadata decorates each row with its pinned pipeline source and revision
  * (SPEC §16.1). */
 export interface DashboardBuildReader {
+  getReducerValue?: BuildStore['getReducerValue']
   listBuildsForRepo(repo: string): Promise<BuildRecord[]>
   getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]>
   listStreams?(scope: StreamScope): Promise<StreamRecord[]>
@@ -61,7 +74,17 @@ interface TerminalEntry {
   record: BuildRecord
 }
 
-type PollEntry = LiveEntry | TerminalEntry
+interface ReducedEntry {
+  kind: 'reduced'
+  cursor: number
+  record: BuildRecord
+  state: BuildState
+  workspace: boolean
+  provisioning: boolean
+  build: DashboardBuild | null
+}
+
+type PollEntry = LiveEntry | TerminalEntry | ReducedEntry
 
 function isTerminal(state: BuildState): boolean {
   // `build.aborted` acknowledges cancellation but begins the checkpointed
@@ -93,8 +116,9 @@ function validateDelta(slug: string, sinceSeq: number, events: AbEvent[]): void 
  * Process-local, display-only acceleration for the interactive dispatch frame.
  *
  * Every refresh still discovers records with `listBuildsForRepo(repo)`. A first-seen
- * stream is hydrated from seq 0; a cached dashboard-visible stream is read only
- * after its reduced `lastSeq`. Empty deltas preserve the exact reduction and
+ * stream uses persisted build facts when available, with no event reads; local
+ * readers without reduced values hydrate from seq 0, then read only after their
+ * reduced `lastSeq`. Empty deltas preserve the exact reduction and
  * projected row, so phase timing is not recomputed. Only fully completed
  * streams compact to tombstones; acknowledged aborts remain live through their
  * cleanup checkpoints and final completion.
@@ -179,6 +203,7 @@ export class DashboardBuildPollCache {
     state: BuildState,
     events: AbEvent[],
     config: Config,
+    facts?: DashboardRowFacts,
   ): Promise<DashboardBuild | null> {
     const [streams, artifact] = await Promise.all([
       this.readStreams(record.slug),
@@ -186,7 +211,9 @@ export class DashboardBuildPollCache {
     ])
     const pinnedConfig =
       artifact?.config !== undefined ? composeBuildConfig(artifact.config, config) : undefined
-    const build = projectBuild(record, state, config, events, streams, pinnedConfig)
+    const build = facts
+      ? projectBuildFromFacts(record, state, facts, config, streams, pinnedConfig)
+      : projectBuild(record, state, config, events, streams, pinnedConfig)
     if (build !== null && artifact !== undefined) {
       if (artifact.revision !== undefined) build.effectiveConfigRev = artifact.revision
       if (artifact.pipelineSource !== undefined) build.pipelineSource = artifact.pipelineSource
@@ -224,6 +251,35 @@ export class DashboardBuildPollCache {
         next.set(record.slug, { ...current, record })
         continue
       }
+
+      if (this.reader.getReducerValue !== undefined) {
+        const { cursor, value } = await readBuildFacts(
+          { getReducerValue: this.reader.getReducerValue.bind(this.reader) },
+          record.slug,
+        )
+        if (isTerminal(value.state)) {
+          next.set(record.slug, { kind: 'terminal', record })
+        } else {
+          next.set(record.slug, {
+            kind: 'reduced',
+            cursor,
+            record,
+            state: value.state,
+            workspace: value.workspace !== null,
+            provisioning: value.provisionMarker !== undefined,
+            build:
+              current?.kind === 'reduced' &&
+              current.cursor === cursor &&
+              !fullEnrichment &&
+              !configChanged &&
+              current.build?.ticketId === record.ticket?.id
+                ? current.build
+                : await this.projectRow(record, value.state, [], config, value),
+          })
+        }
+        continue
+      }
+      if (current?.kind === 'reduced') throw new Error('dashboard reader lost reduced values')
 
       const sinceSeq = current?.state.lastSeq ?? 0
       const delta = await this.reader.getEvents(record.slug, sinceSeq)
@@ -288,8 +344,9 @@ export class DashboardBuildPollCache {
       capacityBuilds.push({
         record: entry.record,
         state: entry.state,
-        workspace: entry.workspace.open !== null,
-        provisioning: entry.provisionMarker.marker !== null,
+        workspace: entry.kind === 'reduced' ? entry.workspace : entry.workspace.open !== null,
+        provisioning:
+          entry.kind === 'reduced' ? entry.provisioning : entry.provisionMarker.marker !== null,
       })
       states.set(slug, entry.state)
       if (entry.build !== null) builds.push(entry.build)
