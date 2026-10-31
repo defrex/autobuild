@@ -164,3 +164,8 @@ test('expired prior watch owners have bounded exact-run reads at 100 and 100000 
   await stoppedOwnerWatchReadBudget()
   // Seeding 100,000 validated events can exceed Bun's default timeout on shared runners.
 }, 30_000)
+
+test('hosted exact seeds have one canonical rebuild and gap-proportional warm reads', async () => {
+  const { hostedSeedReadBudget } = await import('../testing/reduced-read-budget')
+  await hostedSeedReadBudget()
+}, 30_000)

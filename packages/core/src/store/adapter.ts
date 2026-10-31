@@ -154,3 +154,4 @@ export { dispatchPlacementFactSchema } from '../events/repository'
 export type { DispatchPlacementFact } from '../events/repository'
 
 export { readDispatchPlacement } from './reduced-reads'
+export * from './event-reads'

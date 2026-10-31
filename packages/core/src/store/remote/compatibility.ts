@@ -95,7 +95,7 @@ export function compatibilityAdvice(
 
 /** Retain these wire identities and handlers until their lines leave the window.
  * Historical lines require explicit entries; the service's own line uses its
- * current protocol identity. Unknown historical protocols fail closed. */
+ * runtime and published protocol identities. Unknown historical protocols fail closed. */
 export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = Object.fromEntries(
   RELEASED_CLIENTS.filter(
     (entry) => entry.protocol && semver.gte(releaseLine(entry.version), CLIENT_POLICY_FLOOR),
@@ -114,21 +114,42 @@ export function clientIdentityError(
   const service = releaseVersion(serviceVersion)!
   const advice = compatibilityAdvice(client, serviceVersion, range)
   const parsed = releaseVersion(client)
-  const expected =
+  const publishedProtocol =
     parsed &&
-    (parsed.major === service.major && parsed.minor === service.minor
-      ? serviceProtocol
-      : releases.find((entry) => releaseLine(entry.version) === releaseLine(parsed.version))
-          ?.protocol)
+    releases.find((entry) => releaseLine(entry.version) === releaseLine(parsed.version))?.protocol
+  const sameLine = parsed && parsed.major === service.major && parsed.minor === service.minor
+  const admittedProtocol =
+    protocol !== null &&
+    (protocol === publishedProtocol || (sameLine && protocol === serviceProtocol))
   if (
     parsed &&
     semver.gte(releaseLine(parsed.version), CLIENT_POLICY_FLOOR) &&
     !advice &&
-    expected !== undefined &&
-    protocol === expected
+    admittedProtocol
   )
     return undefined
   return `remote store version mismatch: client Autobuild ${client ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${serviceVersion} protocol ${serviceProtocol}; ${advice ?? `supported clients ${formatClientRange(range)}; unsupported protocol identity`}; ${CLIENT_SUPPORT_POLICY}`
+}
+
+/** Public health never echoes an identity that admission would reject. */
+export function healthIdentity(
+  client: string | null,
+  protocol: string | null,
+  serviceVersion = AUTOBUILD_VERSION,
+  serviceProtocol = REMOTE_STORE_PROTOCOL_VERSION,
+) {
+  const sameLine = releaseVersion(client) && releaseLine(client!) === releaseLine(serviceVersion)
+  const published = RELEASED_CLIENTS.find(
+    (entry) => releaseLine(entry.version) === releaseLine(serviceVersion),
+  )?.protocol
+  return {
+    autobuildVersion: serviceVersion,
+    protocolVersion:
+      sameLine && !clientIdentityError(client, protocol, serviceVersion, serviceProtocol)
+        ? protocol!
+        : (published ?? serviceProtocol),
+    supportedClientRange: supportedClientRange(serviceVersion),
+  }
 }
 
 /** A successful server answer cannot be represented by this client's reducer. */
@@ -152,7 +173,11 @@ export class ReducerValueIncompatibilityError extends Error {
  * the release cannot represent is returned unchanged, so the client raises its
  * typed incompatibility error rather than misreading it. */
 export function reducerValueForClient<T extends { version: number; value: unknown }>(
-  client: { version: string | null; projects: boolean; catalogIdentity?: string | null },
+  client: {
+    version: string | null
+    projects: boolean
+    catalogIdentity?: string | null
+  },
   reducer: string,
   answer: T,
   releases = RELEASED_CLIENTS,

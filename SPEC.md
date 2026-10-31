@@ -1342,6 +1342,41 @@ decision reads stream content; outcomes travel only the typed CLI. Writers
 (agent runners emitting parts) and readers (operator UIs) are separate
 tickets; this section defines only the primitive.
 
+### Hosted event-read limits
+
+Hosted repository journals serve only cursors at or above
+`max(0, head - 1000)`, inclusive; an expired cursor returns typed
+`cursor-too-old` with the oldest servable cursor before any event rows are read.
+Build history uses pages of at most 256 events with continuation cursor and
+`hasMore`. The remote complete-suffix array method throws
+`IncompleteEventReadError` if another page exists. Local SQLite and memory
+full-history methods remain available.
+
+Protocol 7's page envelope is prepared for the next minor line, 1.4, without
+changing package versions. Supported published 1.2 and 1.3 clients retain
+protocol 6: complete build suffixes fitting one page return plain arrays;
+larger suffixes and expired repository cursors return legacy-decodable
+`conflict` errors. Bounds apply before protocol projection. Same-line admission
+accepts runtime and published ledger protocols. Public health advertises a
+validated same-line request's protocol, otherwise the service line's published
+protocol (or runtime protocol for an unpublished line), with truthful package
+version and support range and no store reads.
+
+Watch/wait resume uses exact server-owned historical seed checkpoints within
+the same 1,000-position window for build and repository streams, then reads
+only the gap. Ordinary reducer/catalog upgrades preserve in-window cursors:
+one serialized canonical rebuild per identity also captures the trailing
+checkpoints and saves both atomically, with no second event replay. Later
+requests and fresh processes reuse that durable result. Two identities per
+scope retain checkpoints; retired identities have permanent indexed tombstones
+and cannot re-admit themselves. Missing/corrupt checkpoint coverage fails with
+a typed integrity error. Appends never depend on checkpoint availability.
+Expired resume cursors terminate watch/wait with fresh-attachment instructions:
+re-arm without `--since`, reconcile status, and acknowledge the unavailable gap.
+Explicit harvest history uses reverse indexed filtered pages rather than a
+journal replay. See `docs/remote-store-protocol.md` for the wire contract,
+initial migration bootstrap and generation-retirement recovery.
+
 ## 8. The `ab` CLI
 
 The **only** channel between agents and the store — and the enforcement
