@@ -237,8 +237,23 @@ closes only presentation. All existing Store-level controls remain available:
 merge/hold, build and global pause/resume, blocked feedback/retry, intake/harvest
 gates, harvest resume/acknowledgement, discard and confirmed abort, plus navigation
 and session inspection. No current control requires a local dispatcher. Viewer
-rejects startup intake flags and explicit `--repository`; it does not infer mode
-or placement. Operator agents' prohibition on running dispatch includes viewer.
+rejects startup intake flags and explicit `--repository`.
+
+A plain `ab dispatch` reads dispatch placement once before starting local execution.
+For a hosted project it opens the Store-only viewer automatically, displaying
+`viewer · dispatched by <host>` from the placement origin (including a nondefault
+port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+`--takeover` explicitly dispatches locally, with a warning that it can displace
+the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
+flags require `--takeover` when placement selects viewer.
+
+An unreadable placement fails closed with a typed error naming the cause:
+use `--viewer` to watch or `--takeover` to dispatch locally. Both explicit modes
+skip placement discovery. Older services without the capability and projects
+with unknown or nonhosted placement retain local dispatch behavior. Local stores
+need no placement request. Origin mode (`--repository` or `AB_REPOSITORY`) and
+hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
+liveness probe or a polling input. Operator agents' prohibition on running dispatch includes viewer.
 
 Resident checkout-backed `ab dispatch` starts a launcher and one dispatcher
 **generation**. The launcher eagerly loads its own filesystem/process code,
@@ -1130,8 +1145,8 @@ provider. The core client negotiates once per instance and returns typed unknown
 (`unsupported-capability`) for older services, without probing the route or
 reconstructing state from events. Other failures remain failures. External event
 publication cannot forge service placement. Existing protocol identity and
-supported released reducer shapes remain unchanged. This fact changes no CLI
-dispatch decisions. See [the remote protocol](docs/remote-store-protocol.md#hosted-dispatch-placement)
+supported released reducer shapes remain unchanged. Checkout-backed dispatch uses this fact to select viewer mode before launching
+any local dispatcher; explicit takeover authorizes local execution. See [the remote protocol](docs/remote-store-protocol.md#hosted-dispatch-placement)
 for response shapes and authority semantics.
 
 ### 7.3 Persistence granularity

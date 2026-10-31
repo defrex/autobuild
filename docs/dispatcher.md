@@ -80,3 +80,21 @@ A restart loses nothing. The dispatcher continues each build from its recorded p
 Your operator agent is an external coding agent you direct, like Claude Code or Codex. It files and grooms tickets with you, operates the builds the repository's dispatcher dispatches, answers bounded escalations and manages merge consent, using the `ab` CLI locally or the same tools over MCP. You make the product calls. Autobuild never hosts or starts it, and its chat isn't part of the build's paper trail.
 
 Next: [operator surfaces](operator-surfaces.md) for the controls, [one build end to end](builds.md) for the phases.
+
+## Hosted dispatch and local viewing
+
+A plain `ab dispatch` reads dispatch placement once before starting local execution.
+For a hosted project it opens the Store-only viewer automatically, displaying
+`viewer · dispatched by <host>` from the placement origin (including a nondefault
+port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+`--takeover` explicitly dispatches locally, with a warning that it can displace
+the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
+flags require `--takeover` when placement selects viewer.
+
+An unreadable placement fails closed with a typed error naming the cause:
+use `--viewer` to watch or `--takeover` to dispatch locally. Both explicit modes
+skip placement discovery. Older services without the capability and projects
+with unknown or nonhosted placement retain local dispatch behavior. Local stores
+need no placement request. Origin mode (`--repository` or `AB_REPOSITORY`) and
+hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
+liveness probe or a polling input.

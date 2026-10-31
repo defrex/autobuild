@@ -1529,6 +1529,7 @@ export async function operatorTicketAssociationBudget() {
 
 /** Canonical placement stays warm across fresh consumers and long journals. */
 export async function placementReadBudget(opts: {
+  select?: (repo: string) => Promise<{ viewer: boolean; dispatchedBy?: string }>
   store: import('../store/memory').MemoryBuildStore
   fresh: () => Promise<{
     getDispatchPlacement(
@@ -1564,17 +1565,33 @@ export async function placementReadBudget(opts: {
     }
     expect(counter.rows).toBe(0)
     expect(counter.reducedCalls).toBe(5)
+    if (opts.select) {
+      counter.reset()
+      for (let i = 0; i < 5; i++) expect(await opts.select(repo)).toEqual({ viewer: false })
+      expect(counter.rows).toBe(0)
+      expect(counter.reducedCalls).toBe(5)
+    }
     await opts.store.appendRepo(repo, {
       actor: KERNEL,
       type: 'dispatcher.placement-set',
       payload: { hosted: true, origin: 'https://store.test' },
     })
     counter.reset()
+    if (opts.select) {
+      expect(await opts.select(repo)).toEqual({ viewer: true, dispatchedBy: 'store.test' })
+      expect(counter.rows).toBe(1)
+      counter.reset()
+    }
     expect(await (await opts.fresh()).getDispatchPlacement(repo)).toEqual({
       status: 'known',
       placement: { hosted: true, origin: 'https://store.test' },
     })
-    expect(counter.rows).toBe(1)
+    expect(counter.rows).toBe(opts.select ? 0 : 1)
+    counter.reset()
+    if (opts.select) {
+      expect(await opts.select(repo)).toEqual({ viewer: true, dispatchedBy: 'store.test' })
+      expect(counter.rows).toBe(0)
+    }
     counter.reset()
     await (await opts.fresh()).getDispatchPlacement(repo)
     expect(counter.rows).toBe(0)
