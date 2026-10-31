@@ -37,7 +37,7 @@ export interface PublicationLedger {
 }
 
 /** Bump when `PublicationLedger` or its fold changes. */
-export const PUBLICATION_STATE_REDUCER_VERSION = 6
+export const PUBLICATION_STATE_REDUCER_VERSION = 7
 
 function compact(event: AbEvent): LedgerItem | undefined {
   switch (event.type) {
@@ -45,6 +45,7 @@ function compact(event: AbEvent): LedgerItem | undefined {
       return { t: 'request', seq: event.seq, event }
     case 'restack.completed':
       return { t: 'restack', seq: event.seq, id: event.payload.id, head: event.payload.headSha }
+    case 'publication.candidate-retired':
     case 'restack.contended':
     case 'reconcile.contended':
       return { t: 'cancelled', seq: event.seq, request: event.payload.request }
