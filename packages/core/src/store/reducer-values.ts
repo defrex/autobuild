@@ -1,3 +1,4 @@
+import { CheckpointIntegrityError, REPOSITORY_TAIL_WINDOW } from './event-reads'
 import { READ_CATALOG_IDENTITY, projectStoredEvents } from '../events/compatibility'
 /** Named JSON answers over persisted incremental state. The event log remains authoritative. */
 import { z } from 'zod'
@@ -89,6 +90,11 @@ export interface ValueCacheRow {
   token: string
 }
 export interface ReducerValueStorage {
+  checkpoints?: {
+    publish(key: string, snapshot: ReducerSnapshot, checkpoints: ReducerSnapshot[]): Promise<void>
+    coverage(key: string, cursor: number): Promise<boolean>
+    latest(key: string, through: number): Promise<ReducerSnapshot | null>
+  }
   highWater(): Promise<number>
   read(key: string): Promise<ValueCacheRow | null>
   events(since: number, through: number): Promise<(AbEvent | RepositoryEvent)[]>
@@ -107,6 +113,7 @@ export async function readReducerValue(
   try {
     row = await storage.read(key)
   } catch {
+    if (storage.checkpoints) throw new CheckpointIntegrityError('unreadable canonical stream seed')
     /* unreadable cache is a miss */
   }
   // A concurrent reader may have persisted beyond our first boundary. Only a
@@ -136,16 +143,69 @@ export async function readReducerValue(
       cursor = snapshot.cursor
     }
   }
+  if (storage.checkpoints && row && !valid)
+    throw new CheckpointIntegrityError('corrupt canonical stream seed')
+  let recovering = false
+  if (storage.checkpoints && valid && !(await storage.checkpoints.coverage(key, cursor))) {
+    // A pre-checkpoint server may advance the shared canonical row during a
+    // rolling deploy or rollback. Its accumulator cannot supply the missing
+    // intermediate seeds. Refold only the uncovered suffix under the seed lock.
+    const checkpoint = await storage.checkpoints.latest(key, cursor)
+    if (checkpoint) {
+      const state = checkpoint.state as { identity?: unknown; acc?: unknown } | null
+      if (
+        checkpoint.version !== reducer.version ||
+        !Number.isSafeInteger(checkpoint.cursor) ||
+        checkpoint.cursor < 0 ||
+        checkpoint.cursor > cursor ||
+        state?.identity !== identity ||
+        !entry.validate(state.acc)
+      )
+        throw new CheckpointIntegrityError('corrupt recovery stream-seed checkpoint')
+      acc = structuredClone(state.acc)
+      cursor = checkpoint.cursor
+    } else {
+      // Initial legacy adoption with no checkpoint to resume from.
+      acc = reducer.initial()
+      cursor = 0
+    }
+    recovering = true
+  }
+  const start = cursor
   const delta = (await storage.events(cursor, boundary)).filter((event) => event.seq <= boundary)
   for (const event of delta) {
     if (event.seq !== cursor + 1) throw new Error('noncontiguous reducer log')
     cursor = event.seq
   }
   if (cursor !== boundary) throw new Error('incomplete reducer log')
-  acc = reducer.advance(acc, entry.adapt(projectStoredEvents(delta)))
+  const checkpoints: ReducerSnapshot[] = []
+  if (storage.checkpoints) {
+    const oldest = Math.max(0, boundary - REPOSITORY_TAIL_WINDOW)
+    const prefix = delta.filter((event) => event.seq <= oldest)
+    acc = reducer.advance(acc, entry.adapt(projectStoredEvents(prefix)))
+    if (start <= oldest)
+      checkpoints.push({
+        version: reducer.version,
+        cursor: oldest,
+        state: { identity, acc: structuredClone(acc) },
+      })
+    for (const event of delta) {
+      if (event.seq <= oldest) continue
+      acc = reducer.advance(acc, entry.adapt(projectStoredEvents([event])))
+      checkpoints.push({
+        version: reducer.version,
+        cursor: event.seq,
+        state: { identity, acc: structuredClone(acc) },
+      })
+    }
+  } else acc = reducer.advance(acc, entry.adapt(projectStoredEvents(delta)))
   const value = entry.value(reducer.finish(acc))
-  if (!valid || delta.length > 0) {
+  if (!valid || recovering || delta.length > 0) {
     const next = { version: reducer.version, cursor, state: { identity, acc } }
+    if (storage.checkpoints) {
+      await storage.checkpoints.publish(key, next, checkpoints)
+      return { version: reducer.version, cursor, value, catalogIdentity: READ_CATALOG_IDENTITY }
+    }
     try {
       if (row && !valid && row.snapshot.version === reducer.version)
         await storage.repair(key, row, next)

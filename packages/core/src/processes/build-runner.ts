@@ -1,5 +1,6 @@
 import { StoreWriteTooLargeError } from '../store/remote/errors'
 import { observeTarget } from '../kernel/target-observation'
+import { readBuildRange } from '../store/event-reads'
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import {
   capturedBuildConfig,
@@ -3675,7 +3676,7 @@ export class BuildRunner {
         this.releaseLateStart(turn.pending, target.runner)
       }
 
-      const since = await store.getEvents(slug, preSeq)
+      const since = await readBuildRange(store, slug, preSeq)
       const terminal = since.some(
         (event) =>
           spec.isTerminal(event) ||
@@ -3994,7 +3995,7 @@ export class BuildRunner {
     // The turn is over: what did the CLI leave in the log? Terminal = the
     // phase's terminal event for this round, or an `ab escalate` from this
     // session (§8.4: escalate is always an allowed terminal).
-    const since = await store.getEvents(slug, preSeq)
+    const since = await readBuildRange(store, slug, preSeq)
     const terminal = since.some(
       (event) =>
         spec.isTerminal(event) ||
