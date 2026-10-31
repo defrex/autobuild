@@ -1200,3 +1200,29 @@ test('independent SQLite handles read exact repository prefixes during appends',
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('repository tail enforces its window before selecting and honors through', async () => {
+  const store = openLocalStore(await freshRoot())
+  const repo = '/tail-window'
+  try {
+    await store.ensureRepo(repo)
+    for (let i = 0; i < 1002; i++)
+      await store.appendRepo(repo, {
+        actor: humanActor('test'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled: false },
+      })
+    expect(await store.getRepositoryTail(repo, 2)).toEqual(await store.getRepoEvents(repo, 2))
+    expect((await store.getRepositoryTail(repo, 2)).length).toBe(1000)
+    expect((await store.getRepositoryTail(repo, 3, { through: 5 })).map((e) => e.seq)).toEqual([
+      4, 5,
+    ])
+    expect(await store.getRepositoryTail(repo, 1002)).toEqual([])
+    await expect(store.getRepositoryTail(repo, 1)).rejects.toThrow('too old')
+    await expect(store.getRepositoryTail('/unknown', 0)).rejects.toThrow()
+    await expect(store.getRepositoryTail(repo, -1)).rejects.toThrow('cursor')
+    await expect(store.getRepositoryTail(repo, 2, { through: -1 })).rejects.toThrow('cursor')
+  } finally {
+    await store.close()
+  }
+})
