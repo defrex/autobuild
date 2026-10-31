@@ -39,9 +39,9 @@ const tickCounters = {
 export async function dispatchReadBudget(
   store: BuildStore,
   backing: BuildStore,
-  fixtureBatch?: (write: () => void) => void,
+  fillDiscarded?: (repo: string, count: number) => Promise<void>,
 ): Promise<void> {
-  await warmRestoreReadBudget(store, backing, true, fixtureBatch)
+  await warmRestoreReadBudget(store, backing, true, fillDiscarded)
   await viewerReadBudget(store, backing)
   const repo = '/dashboard-read-budget'
   await backing.ensureRepo(repo)
@@ -688,7 +688,7 @@ export async function warmRestoreReadBudget(
   store: BuildStore,
   backing: BuildStore,
   verify = true,
-  fixtureBatch: (write: () => void) => void = (write) => write(),
+  fillDiscarded?: (repo: string, count: number) => Promise<void>,
 ): Promise<unknown[]> {
   const { DispatchRepositoryFeed } = await import('../cli/dispatch-repository-feed')
   const reports = []
@@ -703,20 +703,16 @@ export async function warmRestoreReadBudget(
       })
     await append(false)
     await new DispatchRepositoryFeed(store, repo, () => new Date(0)).refresh()
-    // Batch fixture writes where the adapter supports a synchronous transaction;
-    // restoration itself always uses the normal public store boundary.
-    const pending: Promise<unknown>[] = []
-    fixtureBatch(() => {
+    // Local tests can populate identical irrelevant rows in one SQL statement.
+    // Restoration still uses the public store boundary on every adapter.
+    if (fillDiscarded && gap > 1) await fillDiscarded(repo, gap - 1)
+    else
       for (let i = 0; i < gap - 1; i++)
-        pending.push(
-          backing.appendRepo(repo, {
-            actor: DISPATCHER,
-            type: 'dispatcher.run-stopped',
-            payload: { run: 'discarded', outcome: 'normal' },
-          }),
-        )
-    })
-    await Promise.all(pending)
+        await backing.appendRepo(repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-stopped',
+          payload: { run: 'discarded', outcome: 'normal' },
+        })
     // New anchor makes the recovery seed independent of the gap.
     if (gap > 1)
       await backing.appendRepo(repo, {

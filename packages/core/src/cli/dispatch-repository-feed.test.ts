@@ -175,10 +175,30 @@ test.each([false, true])(
         store,
         memory
           ? undefined
-          : (write) => {
-              // Keep the large local fixture cheap without changing public read seams.
+          : async (repo, count) => {
+              // Bulk fixture construction avoids 100,000 separate SQLite transactions.
+              const { validateRepositoryEventWrite } = await import('../events/repository')
+              const event = validateRepositoryEventWrite({
+                actor: DISPATCHER,
+                type: 'dispatcher.run-stopped',
+                payload: { run: 'discarded', outcome: 'normal' },
+              })
               const sqlite = (store as unknown as { sqlite: import('bun:sqlite').Database }).sqlite
-              sqlite.transaction(write)()
+              const high = await store.getRepoHighWater(repo)
+              sqlite
+                .query(`WITH RECURSIVE gap(seq) AS (
+          SELECT 1 UNION ALL SELECT seq + 1 FROM gap WHERE seq < ?2
+        ) INSERT INTO repo_events (repo, seq, ts, actor, type, payload)
+          SELECT ?1, ?3 + seq, ?4, ?5, ?6, ?7 FROM gap`)
+                .run(
+                  repo,
+                  count,
+                  high,
+                  clock().toISOString(),
+                  JSON.stringify(event.actor),
+                  event.type,
+                  JSON.stringify(event.payload),
+                )
             },
       )
     } finally {
