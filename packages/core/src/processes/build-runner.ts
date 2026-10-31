@@ -2403,6 +2403,8 @@ export class BuildRunner {
       },
     )
     let decision: Decision = initial
+    let drain = false
+    let terminalDrain = false
     try {
       for (;;) {
         const observed = revision
@@ -2411,6 +2413,8 @@ export class BuildRunner {
           if (decision.kind === 'cancel-verify-stage') {
             await this.cancelVerifyStage(decision)
             await this.endCancelledVerifySessions(decision)
+          } else {
+            drain = terminalDrain
           }
           return
         }
@@ -2418,8 +2422,10 @@ export class BuildRunner {
           decision.members.some(
             (member) => !initial.members.some((first) => first.step === member.step),
           )
-        )
+        ) {
+          drain = terminalDrain
           return
+        }
         const members = await Promise.all(
           decision.members.map((member) =>
             member.kind === 'evaluate-verify' ? this.resolveVerify(member) : member,
@@ -2479,11 +2485,20 @@ export class BuildRunner {
         wake = undefined
         const facts = (await readBuildFacts(store, slug)).value
         decision = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
+        terminalDrain =
+          facts.state.status === 'running' &&
+          facts.state.pendingCommands.length === 0 &&
+          [...inFlight.keys()].every((key) => facts.state.verifyStage.outcomes[key] !== undefined)
+
         for (const entry of inFlight.values()) if (entry.error) throw entry.error
       }
     } finally {
       unsubscribe()
       this.deps.shutdownSignal?.removeEventListener('abort', onShutdown)
+      // A terminal can precede the adapter return. Let normal agent settlement
+      // close its bracket before stage-local shutdown can suspend it remotely.
+      // Parent shutdown and session budgets remain active throughout this drain.
+      if (drain) for (const entry of inFlight.values()) if (entry.agent) await entry.pending
       interrupted.abort()
       for (const entry of inFlight.values()) {
         // Fail-fast must reach whole-execution teardown even when an adapter

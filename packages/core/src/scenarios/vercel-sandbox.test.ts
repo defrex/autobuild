@@ -35,6 +35,13 @@ import {
 import { MemoryBuildStore } from '../store/memory'
 import { systemClock } from '../store/types'
 
+import { parseConfig } from '../config/load'
+import { Dispatcher } from '../processes/dispatcher'
+import { BuildRunner } from '../processes/build-runner'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import { settleSummaryRequests } from '../cli/pr-summary-publication'
+import { manualClock } from '../testing/fixed'
+
 const mkdtemp = ownTempDirectories(afterEach)
 
 const SHA = 'a'.repeat(40)
@@ -1015,3 +1022,230 @@ for (const upgrading of [false, true])
       await rm(tmp, { recursive: true, force: true })
     }
   }, 30_000)
+
+// A guest can exit successfully after a verifier's terminal but before its
+// session bracket closes. The next sweep must attach despite awaiting-pr.
+test.each(['orphaned', 'normal'] as const)(
+  'ended remote final verifier is summarized and considered for landing next tick (%s)',
+  async (mode) => {
+    const path = await mkdtemp(join(tmpdir(), 'ab-vercel-orphan-'))
+    const toml =
+      '[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "scripted"\n[verify]\nsteps = [["e2e"]]\n[verify.e2e]\nkind = "agent"\nskill = "verify-e2e"\n'
+    await writeFile(join(path, 'autobuild.toml'), toml)
+    const config = parseConfig(toml)
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const slug = 'orphaned-final-verifier'
+    const branch = `ab/${slug}`
+    const forge = new FakeForge({ headSha: SHA })
+    forge.seedBranch('main', BASE)
+    forge.seedBranch(branch, SHA)
+    forge.setPrState(1, { state: 'open', mergeable: true })
+    await store.createBuild({ slug, repo: path, branch, ticket: { source: 'fake', id: 'T-1' } })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: path,
+        baseBranch: 'main',
+        ticket: { source: 'fake', id: 'T-1', title: 'Recover verifier' },
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'fake',
+        ref: path,
+        path,
+        remote: true,
+        branch,
+        base: { source: 'remote', sha: BASE },
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'spec.imported',
+      payload: {
+        artifact: { kind: 'spec', rev: 0 },
+        ticket: { source: 'fake', id: 'T-1', title: 'Recover verifier' },
+      },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: 'main', sha: BASE },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'old', host: 'remote' },
+    })
+    await store.append(slug, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    await store.append(slug, {
+      actor: agentActor('plan', 'plan'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+    })
+    await store.append(slug, { actor: KERNEL, type: 'plan-review.started', payload: { round: 1 } })
+    await store.append(slug, {
+      actor: agentActor('plan-review', 'review'),
+      type: 'plan-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'plan-review', rev: 0 },
+      },
+    })
+    await store.append(slug, { actor: KERNEL, type: 'implement.started', payload: { round: 1 } })
+    await store.append(slug, {
+      actor: agentActor('implement', 'implement'),
+      type: 'implement.completed',
+      payload: {
+        round: 1,
+        commits: { base: BASE, head: SHA },
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
+    await store.append(slug, { actor: KERNEL, type: 'code-review.started', payload: { round: 1 } })
+    await store.append(slug, {
+      actor: agentActor('code-review', 'review'),
+      type: 'code-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'code-review', rev: 0 },
+      },
+    })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'e2e', attempt: 1 },
+    })
+    if (mode === 'orphaned')
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 'orphan',
+          role: 'verify-e2e',
+          runner: 'scripted',
+          phase: 'verify:e2e',
+          round: 1,
+        },
+      })
+    if (mode === 'orphaned')
+      await store.append(slug, {
+        actor: agentActor('verify-e2e', 'orphan'),
+        type: 'verify.completed',
+        payload: { step: 'e2e', attempt: 1, outcome: 'pass' },
+      })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 1, url: 'https://fake.forge/pr/1', headSha: SHA } },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'fake', workspaceRef: path, instance: 'old' },
+    })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: 'old', workspaceRef: path, outcome: 'completed', exitCode: 0 },
+    })
+    const tickets = new FakeTicketSource([])
+    await tickets.create(
+      { title: 'Recover verifier', body: '', labels: [] },
+      { requestedId: 'T-1' },
+    )
+    let launches = 0
+    let verifierCalls = 0
+    const exec: Exec = async () => ({
+      stdout: `${BASE}\trefs/heads/main\n`,
+      stderr: '',
+      exitCode: 0,
+    })
+    const dispatcher = () =>
+      new Dispatcher({
+        store,
+        config,
+        clock,
+        repo: path,
+        ids: sequentialIds(),
+        forge,
+        exec,
+        tickets,
+        workspaces: new FakeWorkspaceProvider({ root: path, mode: 'logical' }),
+        launchRunner: async () => {
+          launches++
+          const runner = new BuildRunner({
+            store: store.scopeBuild(slug),
+            config,
+            clock,
+            slug,
+            branch,
+            workspacePath: path,
+            instance: 'replacement',
+            host: 'test',
+            ids: sequentialIds(),
+            forge,
+            exec,
+            runtimes: {
+              scripted: {
+                runner: new ScriptedAgentRunner({
+                  script: async (ctx) => {
+                    verifierCalls++
+                    if (mode === 'orphaned') throw new Error('completed verifier must not rerun')
+                    await store.append(slug, {
+                      actor: agentActor('verify-e2e', ctx.opts.env.AB_SESSION!),
+                      type: 'verify.completed',
+                      payload: { step: 'e2e', attempt: 1, outcome: 'pass' },
+                    })
+                    await new Promise<void>((resolve) => setImmediate(resolve))
+                    return defaultTurnResult('complete')
+                  },
+                }),
+                servesModels: [],
+              },
+            },
+          })
+          await runner.run()
+          await store.releaseLease(slug, 'replacement')
+          await settleSummaryRequests({
+            store,
+            forge,
+            slug,
+            workspacePath: path,
+            storeRef: 'https://store.test',
+            clock,
+            holder: 'host',
+          })
+          return 'scheduled'
+        },
+      })
+    const d = dispatcher()
+    expect((await d.tick({ acceptNewWork: false })).swept).toBe(1)
+    await d.tick({ acceptNewWork: false })
+    await d.tick({ acceptNewWork: false })
+    const events = await store.getEvents(slug)
+    const ended = events.find((e) => e.type === 'session.ended')!
+    expect(ended).toBeDefined()
+    if (mode === 'orphaned') expect(ended.payload).toMatchObject({ outcome: 'reclaimed' })
+    expect(events.some((e) => e.type === 'session.suspended')).toBe(false)
+    expect(events.some((e) => e.type === 'pr-summary.requested')).toBe(true)
+    expect(events.some((e) => e.type === 'pr-summary.settled')).toBe(true)
+    expect(events.find((e) => e.type === 'landing.decided')?.payload).toMatchObject({
+      candidate: { head: SHA, parent: BASE },
+      mode: 'auto',
+      rule: { default: true },
+    })
+    expect(verifierCalls).toBe(mode === 'orphaned' ? 0 : 1)
+    expect((await readBuildFacts(store, slug)).value.state.sessions.open).toHaveLength(0)
+    await dispatcher().tick({ acceptNewWork: false })
+    expect(launches).toBe(mode === 'orphaned' ? 1 : 2)
+  },
+)

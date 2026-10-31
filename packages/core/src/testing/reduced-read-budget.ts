@@ -966,6 +966,7 @@ export async function parkedSweepReadBudget(opts: {
   dispatcher: () => Dispatcher
   pin: (slug: string) => Promise<void>
   advance: () => void
+  repairBoundary?: () => Promise<void>
 }) {
   const { store, slugs } = opts
   const kind = 'build-runner-effective-config'
@@ -1006,11 +1007,16 @@ export async function parkedSweepReadBudget(opts: {
         payload: {},
       })
     }
+    const seededTail = (await store.getEvents(slugs[0]!)).at(-1)!.seq
+    // Materialize runner-only reducer keys once, before measuring the next
+    // repair. Canonical first materialization is allowed; subsequent repairs
+    // must advance those durable values over new tail rows only.
+    await opts.repairBoundary?.()
     // Instrument returned event rows, including getReducerValue's private
     // snapshot-tail reads (instrumenting getEvents alone would miss these).
     const build = Reflect.get(store, 'builds').get(slugs[0]!)
     const events = build.events as import('../events/catalog').AbEvent[]
-    const historyTail = events.at(-1)!.seq
+    const historyTail = seededTail
     const slice = Array.prototype.slice
     events.slice = function (start?: number, end?: number) {
       const result = slice.call(this, start, end) as typeof events
@@ -1019,6 +1025,9 @@ export async function parkedSweepReadBudget(opts: {
     }
     opts.advance()
     await opts.dispatcher().tick({ acceptNewWork: false }) // warm durable projections
+    reset()
+    await opts.repairBoundary?.()
+    expect(metrics.historicalRows).toBe(0)
     const dispatcher = opts.dispatcher()
     reset()
     for (let tick = 0; tick < 4; tick++) {
