@@ -220,6 +220,10 @@ const storeResourceRoutes = new Set([
   'GET artifact-list',
   'GET artifact-meta',
   'GET node-rewrite',
+  // Bounded history reads (AUT-1016): watch/wait resume seeds and the paged
+  // harvest history, served inside the existence gates like `GET events`.
+  'GET stream-seed',
+  'GET harvest-history',
   // Repo-scoped batch read of build digests (AUT-487); handled by the store
   // server before the repo-existence gate, so an unknown repo is still
   // classified here and answers 200 from build records.
