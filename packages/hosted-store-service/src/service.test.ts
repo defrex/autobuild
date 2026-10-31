@@ -369,6 +369,37 @@ describe('hosted store service', () => {
     })
   })
 
+  test('bounded history routes reach the store server instead of the unclassified 404', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    let opens = 0
+    const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+      issueDispatcherCredential: async () => 'abp_1_fixture',
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo', 'acme/never']),
+      env,
+      clock,
+      openStore: async () => {
+        opens++
+        return backing
+      },
+    })
+    // Resumed watch/wait seeds and paged harvest history (AUT-1016) are
+    // store routes; unclassified, every current client's resume failed with
+    // `no route` against the hosted service.
+    for (const path of [
+      '/builds/never/stream-seed?cursor=0',
+      '/repos/acme%2Fnever/stream-seed?cursor=0',
+      '/repos/acme%2Fnever/harvest-history',
+    ]) {
+      const response = await service.fetch(
+        new Request(`http://hosted.test${path}`, { headers: machineHeaders }),
+      )
+      const body = (await response.json()) as { error?: string }
+      expect(body.error ?? '').not.toContain('no route')
+    }
+    expect(opens).toBeGreaterThan(0)
+  })
+
   test('snapshot routes classify as store routes for GET and PUT only', async () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
