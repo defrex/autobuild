@@ -411,3 +411,87 @@ test('public viewer bypasses the immutable launcher and execution config in non-
   expect(stdout).toContain('Waiting for dispatcher configuration')
   await expect(access(join(cwd, '.autobuild/runtime'))).rejects.toThrow()
 })
+
+for (const fail of [false, true])
+  test(`public hosted placement selects viewer before launcher (failure=${fail})`, async () => {
+    const { MemoryBuildStore } = await import('../store/memory')
+    const cwd = await mkdtemp(join(tmpdir(), 'ab-hosted-public-'))
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(cwd)
+    let reads = 0
+    const service = {
+      store,
+      placement: async () => {
+        reads++
+        if (fail) throw new Error('placement unavailable')
+        return {
+          status: 'known',
+          placement: { hosted: true, origin: 'https://app.autobuild.run:8443' },
+        }
+      },
+    }
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname
+        if (path === '/health') return Response.json({ capabilities: ['dispatch-placement-v1'] })
+        if (path.endsWith('/placement')) {
+          try {
+            return Response.json(await service.placement())
+          } catch {
+            return new Response('placement unavailable', { status: 503 })
+          }
+        }
+        if (path.endsWith('/change-position')) return Response.json({ position: '0' })
+        if (path.endsWith('/reducer-values')) {
+          const { version, cursor, value } = await store.getReducerValue(
+            { kind: 'repo', repo: cwd },
+            await request.json(),
+          )
+          return Response.json({ version, cursor, value })
+        }
+        if (/^\/repos\/[^/]+$/.test(path)) return Response.json(await store.getRepo(cwd))
+        throw new Error(`Unexpected viewer request: ${request.method} ${path}`)
+      },
+    })
+    const child = Bun.spawn(
+      [process.execPath, distributionPath('bin/ab.ts'), 'dispatch', '--plain'],
+      {
+        cwd,
+        env: { PATH: process.env.PATH, AB_STORE: server.url.origin },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    try {
+      const output = (async () => {
+        const reader = child.stdout.getReader()
+        let result = ''
+        for (;;) {
+          const chunk = await reader.read()
+          if (chunk.done) return result
+          result += new TextDecoder().decode(chunk.value)
+          if (result.includes('Waiting for dispatcher configuration')) child.kill('SIGINT')
+        }
+      })()
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        output,
+        new Response(child.stderr).text(),
+      ])
+      expect(reads).toBe(1)
+      if (fail) {
+        expect(code).toBe(1)
+        expect(stderr).toContain('--viewer')
+        expect(stderr).toContain('--takeover')
+      } else {
+        expect(code).toBe(0)
+        expect(stdout).toContain('viewer · dispatched by app.autobuild.run:8443')
+        expect(stderr).toBe('')
+      }
+      await expect(access(join(cwd, '.autobuild/runtime'))).rejects.toThrow()
+    } finally {
+      if (child.exitCode === null) child.kill('SIGINT')
+      await server.stop(true)
+    }
+  })
