@@ -1,3 +1,4 @@
+import { readBuildRange } from '../store/event-reads'
 import { nodeActivityKey, nodePollingSchedule } from '../kernel/node-polling'
 import { buildReadFactsReducer } from '../kernel/read-facts'
 import { formatRuntimeIdentity } from '../events/runtime'
@@ -1122,7 +1123,12 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     const events =
       opts.events === undefined
         ? undefined
-        : await context.store.getEvents(opts.slug, Math.max(0, current.cursor - opts.events))
+        : await readBuildRange(
+            context.store,
+            opts.slug,
+            Math.max(0, current.cursor - opts.events),
+            { through: current.cursor },
+          )
     const decision = await projectBuildDecision(opts.slug, facts, context.store)
     // Stream enrichment is presentation (SPEC §9): an unavailable read
     // degrades to payload-carried ids without a status, never a failure.

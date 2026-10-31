@@ -125,8 +125,15 @@ local warnings do not start durable attention retroactively. Explicit shutdown
 still stops dispatch without waiting for reporting recovery. Routine outcomes and self-healing failures stay silent.
 
 Every record carries a cursor; bounded watches end with a bare `{"cursor": …}`
-line. Re-arm only with `ab watch --operator --json --since <watch-cursor>`,
-using this standing watch's own cursor. Presence survives a re-arm gap of up to
+line. Normally re-arm with `ab watch --operator --json --since <watch-cursor>`,
+using this standing watch's own cursor. Hosted resume covers the most recent
+1,000 sequence positions (inclusive at head minus 1,000). On typed
+`cursor-too-old`, re-arm without `--since` and reconcile repository/build status;
+acknowledge that the expired historical gap cannot be recovered. Never retry
+from cursor zero. Normal re-arms retain their cursor, including after ordinary
+reducer upgrades. `checkpoint-integrity` is a terminal storage error;
+`retired-seed-generation` requires upgrade/restart before fresh attachment.
+ Presence survives a re-arm gap of up to
 five minutes after its last heartbeat on routine timeout/count completion.
 Termination (SIGINT, SIGTERM, SIGHUP or stdout EPIPE) attempts withdrawal within
 about two seconds; re-arming with the cursor re-registers the same ID/start.
@@ -146,7 +153,7 @@ Scope it to named slugs and explicit `--event` globs (for example,
 An extra monitor supplements the default standing watch.
 
 `ab wait [<slug>...] (--for <condition> | --event <glob>) [--since <cursor>] [--json]`
-blocks until a condition holds and prints one record. `--for` state conditions
+uses the same hosted resume window and expiry recovery as watch, and blocks until a condition holds and prints one record. `--for` state conditions
 are also satisfied immediately by a build already in that state; `--event` is
 satisfied only by new events. Conditions include `attention`,
 `blocked`, `paused`, `running`, `done`, `aborted`, `terminal`, `pr=merged`,
@@ -210,7 +217,9 @@ that appear after you arm. Finishing the initially queued set is no reason to st
 
 1. Check presence as above, then arm `ab watch --operator --json` with no slugs.
    Retain its own cursor and re-arm with
-   `ab watch --operator --json --since <watch-cursor>`.
+   `ab watch --operator --json --since <watch-cursor>`. If it reports
+   `cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge
+   the unavailable historical gap.
 2. Right after arming and after each timeout, run `ab builds --all --json`, adopt
    newly dispatched builds, inspect active builds with `ab build status <slug> --json`,
    and reconcile `ab repository status --json`. Historical attention is baselined
@@ -491,7 +500,9 @@ verification fails, file a repair child targeting that node and let it merge
 before retrying the node cycle.
 
 Watch for decisions and conflicts with `ab watch --operator --json`; save its opaque cursor
-and resume with `ab watch --operator --since <watch-cursor> --json`. Default attention includes
+and resume with `ab watch --operator --since <watch-cursor> --json`. On
+`cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge the
+unavailable historical gap. Default attention includes
 failed node verification (`integration.verification-failed`), node merges, node item conflicts, conflicted leaf replays and derived
 `build.consent-ready` observations, including already-ready merges on first
 repository-wide discovery. Readiness is identified by its durable
@@ -591,3 +602,9 @@ queued dependency presence and accepted re-parenting supply automatic demand.
 Nested nodes need independent demand. Inspect the shared parent commit distance
 readout; unknown is unavailable evidence, not zero. Existing transactions finish
 before fresh demand is evaluated. Leaves keep their usual restack points.
+
+
+For explicit MCP build history, `builds.events` returns at most 256 events with
+`cursor` and `hasMore`. Follow the cursor while `hasMore` is true; a single
+page is never evidence that a later terminal event is absent. Hosted repository
+event reads have a fixed 1,000-position tail window; do not replay from zero.

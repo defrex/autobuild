@@ -5,7 +5,8 @@ import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from '@defrex/autobu
 import { verifyAuditCapability } from './audit-capability'
 
 assert.equal(AUTOBUILD_VERSION, '1.3.0')
-await verifyAuditCapability('1.2.0', REMOTE_STORE_PROTOCOL_VERSION, true)
+await verifyAuditCapability('1.2.0', '6', true)
+await verifyAuditCapability('1.3.0', '6', true)
 await verifyAuditCapability('1.3.0', REMOTE_STORE_PROTOCOL_VERSION, true)
 console.log('audit service verified')
 

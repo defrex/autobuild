@@ -497,6 +497,10 @@ export interface RepositoryReadAcc {
     string,
     { count: number; latest: Extract<RepositoryEvent, { type: 'harvest.failed' }> }
   >
+  harvestTerminals: Record<
+    string,
+    Extract<RepositoryEvent, { type: 'harvest.proposals.submitted' | 'harvest.review.verdict' }>
+  >
   harvestVerdicts: Record<
     string,
     {
@@ -564,6 +568,7 @@ export const repositoryReadFactsReducer = defineReducer({
     harvestSessions: [],
     harvestSessionEndings: {},
     harvestFailures: {},
+    harvestTerminals: {},
     harvestVerdicts: {},
     harvestAuthorizations: {},
     latestHarvestResumedSeq: 0,
@@ -607,6 +612,11 @@ export const repositoryReadFactsReducer = defineReducer({
           latest: event,
         }
       }
+      if (
+        (event.type === 'harvest.proposals.submitted' || event.type === 'harvest.review.verdict') &&
+        event.actor.kind === 'agent'
+      )
+        acc.harvestTerminals[event.actor.session] = event
       if (event.type === 'harvest.review.verdict') {
         const key = JSON.stringify([event.payload.run, event.payload.round])
         acc.harvestVerdicts[key] = {
@@ -702,6 +712,7 @@ export const repositoryReadFactsReducer = defineReducer({
     preparation: ticketPreparationReducer.finish(acc.preparation),
     upgrades: dispatchUpgradeReducer.finish(acc.upgrades),
     harvestFailures: structuredClone(acc.harvestFailures),
+    harvestTerminals: structuredClone(acc.harvestTerminals),
     harvestVerdicts: structuredClone(acc.harvestVerdicts),
     harvestAuthorizations: structuredClone(acc.harvestAuthorizations),
     harvestExecutionStarts: { ...acc.harvestExecutionStarts },

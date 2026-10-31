@@ -1,3 +1,4 @@
+import { CursorTooOldError } from '../store/event-reads'
 import { DISPATCH_HANDOFF_EVENT_TYPES } from '../store/repo-state-events'
 import { type RepositoryEvent, validateRepositoryEventWrite } from '../events/repository'
 import { defineReducer } from '../kernel/incremental'
@@ -169,9 +170,9 @@ export class DispatchRepositoryFeed {
         this.validate(delta, cursor, true)
         // A failed prelaunch seed must not skip this invocation's config/start
         // even if a competing run advanced the bounded seed's anchor.
-        if (this.recovery) {
-          const recovery = await this.store.getRepoEvents(this.repo, this.boundary ?? 0)
-          this.validate(recovery, this.boundary ?? 0, true)
+        if (this.recovery && this.boundary !== undefined) {
+          const recovery = await this.store.getRepoEvents(this.repo, this.boundary)
+          this.validate(recovery, this.boundary, true)
           delta = [...new Map([...delta, ...recovery].map((e) => [e.seq, e])).values()].sort(
             (a, b) => a.seq - b.seq,
           )
@@ -202,8 +203,22 @@ export class DispatchRepositoryFeed {
       result = delta
       if (persist) await this.save()
     })
-    this.tail = next.catch(() => {})
-    return next.then(() => result)
+    const recovered = next.catch(async (error) => {
+      if (!(error instanceof CursorTooOldError)) throw error
+      const high = await this.store.getRepoHighWater(this.repo)
+      const seed = await this.store.getRepoStateEvents(this.repo)
+      this.validate(seed, 0, false)
+      this.replaceRetained(dispatchFrontendReducer.reduce(seed))
+      this.cursor = Math.max(high, seed.at(-1)?.seq ?? 0)
+      this.incompleteIdentities = true
+      this.ready = true
+      this.recovery = false
+      this.boundary = undefined
+      result = []
+      if (persist) await this.save()
+    })
+    this.tail = recovered.catch(() => {})
+    return recovered.then(() => result)
   }
 
   private replaceRetained(events: RepositoryEvent[]): void {

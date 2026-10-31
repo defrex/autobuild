@@ -59,16 +59,24 @@ without withdrawal support fall back silently. SIGKILL still relies on TTL expir
 
 Re-arm with `bun ab watch --operator --json --since <watch-cursor>` using only
 the standing watch's own cursor. This preserves one ID and original start time
-across a re-arm gap of up to five minutes. After termination withdraws presence,
+across a presence re-arm gap of up to five minutes. This presence TTL is separate
+from hosted event-window eligibility. After termination withdraws presence,
 the same cursor re-registers the same ID and start time. Reconcile current and
 newly dispatched builds after arming and on timeout. Keep operating after the initial work ends,
 until you end or hand off the role. `wait` does not heartbeat or carry registration
 identity: a separate unflagged diagnostic wait/watch must never replace the
 standing monitor or supply its resume cursor. MCP presence is deferred.
 
+Keep `--since` for normal re-arms. Hosted resume accepts cursors at or above
+`max(0, head - 1000)` in each monitored stream: the inclusive window is 1,000
+sequence positions behind its head. If a cursor is too old, re-arm without
+`--since` and reconcile repository and build status. That fresh attachment cannot
+recover the unavailable historical gap; status reconciliation does not restore
+one-off events from that gap.
+
 - **Default filter:** actionable attention only, such as escalations and ready merges awaiting consent. Add `--event` globs for routine lifecycle events.
 - **Starts now:** a fresh watch ignores history, so check current status too.
-- **Resumable:** pass the opaque cursor from the JSON output back with `--since` to receive events recorded while away. The final JSON line always carries one.
+- **Resumable:** pass the opaque cursor from the JSON output back with `--since` to receive events recorded while away within the hosted window described above. The final JSON line always carries one.
 - **Duration:** 30 minutes by default; `--timeout 0` keeps it open.
 
 ```
@@ -83,7 +91,7 @@ bun ab wait my-build --for attention --json --timeout 5m
 | 2 | Every named build ended without matching |
 | 3 | Timed out |
 
-Existing attention returns immediately, even with a cursor, so looping `wait` doesn't consume events. Use `watch --since` for that.
+Existing attention returns immediately, even with a cursor, so looping `wait` doesn't consume events. Use `watch --since` for that. Hosted `wait --since` uses the same inclusive 1,000-position resume window and too-old recovery described above: re-arm without `--since`, reconcile repository and build status, and account for the unavailable historical gap.
 
 ## Answer and pause
 
