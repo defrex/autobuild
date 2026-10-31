@@ -36,7 +36,12 @@ const tickCounters = {
 
 /** Run the actual frontend lifecycle with a deterministic child and manual
  * refreshes. Instrument the backing boundary, including HTTP server reads. */
-export async function dispatchReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
+export async function dispatchReadBudget(
+  store: BuildStore,
+  backing: BuildStore,
+  fixtureBatch?: (write: () => void) => void,
+): Promise<void> {
+  await warmRestoreReadBudget(store, backing, true, fixtureBatch)
   await viewerReadBudget(store, backing)
   const repo = '/dashboard-read-budget'
   await backing.ensureRepo(repo)
@@ -676,4 +681,124 @@ export async function ticketListReadBudget(
       }
     }
   }
+}
+
+/** Persisted caches isolate startup transfer from unrelated discarded history. */
+export async function warmRestoreReadBudget(
+  store: BuildStore,
+  backing: BuildStore,
+  verify = true,
+  fixtureBatch: (write: () => void) => void = (write) => write(),
+): Promise<unknown[]> {
+  const { DispatchRepositoryFeed } = await import('../cli/dispatch-repository-feed')
+  const reports = []
+  for (const gap of verify ? [1, 10_000, 100_000, 2] : [1, 10_000, 100_000]) {
+    const repo = `/warm-restore-${gap}`
+    await backing.ensureRepo(repo)
+    const append = (enabled: boolean) =>
+      backing.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled },
+      })
+    await append(false)
+    await new DispatchRepositoryFeed(store, repo, () => new Date(0)).refresh()
+    // Batch fixture writes where the adapter supports a synchronous transaction;
+    // restoration itself always uses the normal public store boundary.
+    const pending: Promise<unknown>[] = []
+    fixtureBatch(() => {
+      for (let i = 0; i < gap - 1; i++)
+        pending.push(
+          backing.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-stopped',
+            payload: { run: 'discarded', outcome: 'normal' },
+          }),
+        )
+    })
+    await Promise.all(pending)
+    // New anchor makes the recovery seed independent of the gap.
+    if (gap > 1)
+      await backing.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'latest',
+          pid: 1,
+          roleWarnings: [],
+          effectiveConfig: { kind: 'config', rev: 0 },
+        },
+      })
+    await append(true)
+    const metrics = { raw: 0, tails: 0, rows: 0, seeds: 0, seedRows: 0, cursors: [] as number[] }
+    const raw = backing.getRepoEvents.bind(backing)
+    const tail = backing.getRepositoryTail?.bind(backing)
+    const seed = backing.getRepoStateEvents.bind(backing)
+    backing.getRepoEvents = async (...args) => {
+      metrics.raw++
+      const events = await raw(...args)
+      metrics.rows += events.length
+      return events
+    }
+    if (tail)
+      backing.getRepositoryTail = async (...args) => {
+        metrics.tails++
+        metrics.cursors.push(args[1] ?? 0)
+        if (gap === 2 && metrics.tails === 1) {
+          for (let i = 0; i < 1001; i++)
+            await backing.appendRepo(repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.run-stopped',
+              payload: { run: 'racing', outcome: 'normal' },
+            })
+          await backing.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run: 'racing-anchor',
+              pid: 1,
+              roleWarnings: [],
+              effectiveConfig: { kind: 'config', rev: 0 },
+            },
+          })
+          await append(true)
+        }
+        const events = await tail(...args)
+        if (verify) expect(events.length).toBeLessThanOrEqual(1000)
+        metrics.rows += events.length
+        return events
+      }
+    backing.getRepoStateEvents = async (...args) => {
+      metrics.seeds++
+      const events = await seed(...args)
+      metrics.seedRows += events.length
+      return events
+    }
+    try {
+      const feed = new DispatchRepositoryFeed(store, repo, () => new Date(60_000))
+      await feed.refresh()
+      expect(feed.events.findLast((e) => e.type === 'dispatcher.pause-set')?.payload).toEqual({
+        enabled: true,
+      })
+      if (verify) {
+        expect(metrics.raw).toBe(0)
+        expect(metrics.seeds).toBe(gap === 1 ? 0 : 1)
+        expect(metrics.rows).toBe(gap === 1 ? 1 : 0)
+        expect(metrics.tails).toBe(gap === 2 ? 2 : 1)
+      }
+      reports.push({ gap, ...metrics, cursors: [...metrics.cursors] })
+      const before = metrics.rows
+      await feed.refresh()
+      expect(metrics.rows).toBe(before)
+    } finally {
+      backing.getRepoEvents = raw
+      if (tail) backing.getRepositoryTail = tail
+      backing.getRepoStateEvents = seed
+    }
+  }
+  if (verify)
+    expect((reports[1] as { seedRows: number }).seedRows).toBe(
+      (reports[2] as { seedRows: number }).seedRows,
+    )
+  return reports
 }
