@@ -785,6 +785,9 @@ export async function warmRestoreReadBudget(
         expect(metrics.seeds).toBe(gap === 1 ? 0 : 1)
         expect(metrics.rows).toBe(gap === 1 ? 1 : 0)
         expect(metrics.tails).toBe(gap === 2 ? 2 : 1)
+        expect(metrics.cursors).toEqual(
+          gap === 2 ? [1, await backing.getRepoHighWater(repo)] : [gap === 1 ? 1 : gap + 2],
+        )
       }
       reports.push({ gap, ...metrics, cursors: [...metrics.cursors] })
       const before = metrics.rows
