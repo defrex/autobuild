@@ -1,3 +1,4 @@
+import { isTerminalEventReadError } from '../store/event-reads'
 /**
  * The shared remote long-poll task machinery behind `ab watch` and `ab wait`
  * (AUT-334, corrected for `ab wait` in AUT-368, extracted in AUT-403). One
@@ -169,13 +170,18 @@ export function createRemotePollRunner(opts: RemotePollRunnerOpts): RemotePollRu
   // omits already-settled tasks is equivalent to awaiting the plain array
   // the one-shot drain used before the extraction.
   const tasks = new Set<Promise<void>>()
+  let terminalError: unknown
   /** Track a task and keep the set accurate as tasks settle, so the quiesce
    * drain also waits for tasks launched while it is awaiting. */
   const track = (task: Promise<void>): void => {
     tasks.add(task)
     void task.then(
       () => tasks.delete(task),
-      () => tasks.delete(task),
+      (error) => {
+        terminalError = error
+        requestStop()
+        tasks.delete(task)
+      },
     )
   }
 
@@ -196,6 +202,7 @@ export function createRemotePollRunner(opts: RemotePollRunnerOpts): RemotePollRu
           return
         }
       } catch (error) {
+        if (isTerminalEventReadError(error)) throw error
         // A cancelled held read is the command stopping, not a store
         // failure — never report it. The check stays on the external signal
         // (not the full guard), so a failure observed as the deadline
@@ -235,6 +242,7 @@ export function createRemotePollRunner(opts: RemotePollRunnerOpts): RemotePollRu
           await discovery.step()
           streak.onSuccess()
         } catch (error) {
+          if (isTerminalEventReadError(error)) throw error
           streak.onFailure(error)
         }
         // Unconditional — after the catch: streams registered before a
@@ -259,10 +267,12 @@ export function createRemotePollRunner(opts: RemotePollRunnerOpts): RemotePollRu
       // discovery task adds stream tasks mid-wait, and the caller's exit
       // decision must observe every task settled.
       while (tasks.size > 0) await Promise.all(tasks)
+      if (terminalError) throw terminalError
       return
     }
     // One-shot snapshot: tasks launched during the await are NOT awaited.
     await Promise.all([...tasks])
+    if (terminalError) throw terminalError
   }
 
   return {

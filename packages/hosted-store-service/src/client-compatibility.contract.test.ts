@@ -11,6 +11,7 @@ import {
   mintToken,
   AUTOBUILD_VERSION,
   RELEASE_LINE_PROTOCOLS,
+  RemoteBuildStore,
   REMOTE_STORE_PROTOCOL_VERSION,
   classifyClient,
   supportedClientRange,
@@ -527,3 +528,101 @@ for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.v
     }
   })
 }
+
+for (const serviceVersion of ['1.3.0', '1.4.0']) {
+  test(`bounded legacy event shapes and health on ${serviceVersion}`, async () => {
+    const store = new MemoryBuildStore()
+    const server = createStoreServer({
+      store,
+      identity: { autobuildVersion: serviceVersion, protocolVersion: '7' },
+    })
+    await store.createBuild({ slug: 'bounded', repo: 'repo' })
+    await store.ensureRepo('repo')
+    for (const publication of RELEASED_CLIENTS) {
+      const send = (path: string) =>
+        server.fetch(request(path, publication.version, undefined, admin, publication.protocol!))
+      const health = await (await send('/health')).json()
+      expect(health.autobuildVersion).toBe(serviceVersion)
+      expect(health.protocolVersion).toBe(serviceVersion === '1.3.0' ? '6' : '7')
+      const small = await send('/builds/bounded/events?since=0')
+      expect(storeWire.eventListSchema.parse(await small.json())).toEqual([])
+    }
+    for (const identity of [
+      { autobuildVersion: '1.3.0', protocolVersion: '6' },
+      { autobuildVersion: serviceVersion, protocolVersion: '7' },
+    ]) {
+      const client = new RemoteBuildStore({
+        url: 'https://test',
+        identity,
+        fetchFn: (async (input: URL | RequestInfo, init?: RequestInit) =>
+          server.fetch(new Request(input, init))) as typeof fetch,
+      })
+      expect((await client.inspectDispatcherOverlap(new AbortController().signal)).compatible).toBe(
+        true,
+      )
+      await client.close()
+    }
+    for (let i = 0; i < 1001; i++)
+      await store.appendRepo('repo', {
+        actor: { kind: 'human', user: 'test' },
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    for (const publication of RELEASED_CLIENTS) {
+      const response = await server.fetch(
+        request('/repos/repo/events?since=0', publication.version, undefined, admin, '6'),
+      )
+      expect(response.status).toBe(409)
+      const error = frozenWire[publication.version]!.errorBodySchema.parse(await response.json())
+      expect(error.kind).toBe('conflict')
+      expect(error.error).toContain('head 1001')
+      expect(error.error).toContain('oldest cursor 1')
+      expect(error.error).toContain('without --since')
+    }
+    for (let i = 0; i < 257; i++)
+      await store.append('bounded', {
+        actor: { kind: 'dispatcher' },
+        type: 'build.created',
+        payload: { ticket: { source: 'file', id: 'T' }, repo: 'repo', baseBranch: 'main' },
+      })
+    for (const publication of RELEASED_CLIENTS) {
+      const fits = await server.fetch(
+        request('/builds/bounded/events?since=1', publication.version, undefined, admin, '6'),
+      )
+      expect(fits.status).toBe(200)
+      expect(storeWire.eventListSchema.parse(await fits.json())).toHaveLength(256)
+      const response = await server.fetch(
+        request('/builds/bounded/events?since=0', publication.version, undefined, admin, '6'),
+      )
+      expect(response.status).toBe(409)
+      expect(
+        frozenWire[publication.version]!.errorBodySchema.parse(await response.json()).kind,
+      ).toBe('conflict')
+    }
+  })
+}
+
+test('outer public health validates source and published identities without opening storage', async () => {
+  const service = createHostedStoreService({
+    env: {
+      AB_STORE_SECRET: secret,
+      AB_POSTGRES_URL: 'postgres://unused/test',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'us-east-1',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    openStore: async () => {
+      throw new Error('health must not open storage')
+    },
+  })
+  for (const protocol of ['6', '7', 'invented']) {
+    const response = await service.fetch(request('/health', '1.3.0', undefined, admin, protocol))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      autobuildVersion: '1.3.0',
+      protocolVersion: protocol === '7' ? '7' : '6',
+    })
+  }
+})

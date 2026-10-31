@@ -111,6 +111,20 @@ function fakeFetch(responses: CannedResponse[]) {
       status,
       json: async () => {
         if (next.jsonThrows) throw new Error('invalid json')
+        // Array fixtures describe event contents; protocol 7 wraps build pages.
+        const call = calls.at(-1)!
+        if (
+          status < 400 &&
+          /\/builds\/[^/]+\/events\?/.test(call.url) &&
+          Array.isArray(next.body)
+        ) {
+          const events = next.body as { seq: number }[]
+          return {
+            events,
+            cursor: events.at(-1)?.seq ?? Number(new URL(call.url).searchParams.get('since') ?? 0),
+            hasMore: false,
+          }
+        }
         return next.body
       },
     } as Response

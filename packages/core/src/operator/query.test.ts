@@ -1301,3 +1301,29 @@ for (const enabled of [false, true]) {
     await expect(orchestratorConfig(store, REPO)).rejects.toThrow('invalid')
   })
 }
+
+test('MCP build event pages traverse several pages without gaps or duplication', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { buildRegistry } = await import('./registry')
+  const store = new MemoryBuildStore()
+  const repo = 'paged-operator',
+    slug = 'paged-operator'
+  await store.createBuild({ repo, slug })
+  for (let i = 0; i < 600; i++)
+    await store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+  const registry = buildRegistry({ store })
+  const seen: number[] = []
+  let cursor = 0
+  for (;;) {
+    const page = (await registry.call('builds.events', { repo, slug, cursor, waitSeconds: 0 })) as {
+      events: { seq: number }[]
+      cursor: number
+      hasMore: boolean
+    }
+    expect(page.events.length).toBeLessThanOrEqual(256)
+    seen.push(...page.events.map((e) => e.seq))
+    cursor = page.cursor
+    if (!page.hasMore) break
+  }
+  expect(seen).toEqual(Array.from({ length: 600 }, (_, i) => i + 1))
+})
