@@ -2229,7 +2229,7 @@ test('observation sample traffic stays flat as finished builds accumulate (AUT-4
 // --- AUT-534: the interactive surfaces' initial replays become bounded reads ---
 
 interface ProbeCall {
-  method: 'getRepoEvents' | 'getRepoStateEvents'
+  method: 'getRepoEvents' | 'getRepoStateEvents' | 'getRepositoryTail'
   sinceSeq?: number
   order: number
   failed: boolean
@@ -2275,19 +2275,19 @@ function frontendProbe(
           }
         }
       }
-      if (property === 'getRepoEvents') {
+      if (property === 'getRepoEvents' || property === 'getRepositoryTail') {
         return async (requestedRepo: string, sinceSeq = 0) => {
           const order = counter++
           if (opts.failPreLaunchFullRead === true && !launched) {
-            calls.push({ method: 'getRepoEvents', sinceSeq, order, failed: true })
+            calls.push({ method: property, sinceSeq, order, failed: true })
             throw new Error('pre-launch journal read unavailable')
           }
           try {
-            const result = await target.getRepoEvents(requestedRepo, sinceSeq)
-            calls.push({ method: 'getRepoEvents', sinceSeq, order, failed: false })
+            const result = await target[property](requestedRepo, sinceSeq)
+            calls.push({ method: property, sinceSeq, order, failed: false })
             return result
           } catch (error) {
-            calls.push({ method: 'getRepoEvents', sinceSeq, order, failed: true })
+            calls.push({ method: property, sinceSeq, order, failed: true })
             throw error
           }
         }
@@ -2582,7 +2582,9 @@ test('post-launch recovery survives a competitor anchor', async () => {
   // Recovery folds every event newer than the prelaunch boundary, even
   // though the bounded seed now excludes this child's start.
   const post = probe.calls.filter((call) => call.order > probe.launchOrder!)
-  expect(post.some((call) => call.method === 'getRepoEvents' && call.sinceSeq === 10)).toBe(true)
+  expect(post.some((call) => call.method === 'getRepositoryTail' && call.sinceSeq === 10)).toBe(
+    true,
+  )
   expect(post.some((call) => call.method === 'getRepoEvents' && call.sinceSeq === 0)).toBe(false)
   const model = JSON.parse(
     frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!,

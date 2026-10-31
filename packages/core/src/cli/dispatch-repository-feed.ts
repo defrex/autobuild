@@ -1,4 +1,4 @@
-import { CursorTooOldError } from '../store/event-reads'
+import { CursorTooOldError, REPOSITORY_TAIL_WINDOW } from '../store/event-reads'
 import { DISPATCH_HANDOFF_EVENT_TYPES } from '../store/repo-state-events'
 import { type RepositoryEvent, validateRepositoryEventWrite } from '../events/repository'
 import { defineReducer } from '../kernel/incremental'
@@ -106,6 +106,7 @@ export class DispatchRepositoryFeed {
   refresh(persist = true): Promise<RepositoryEvent[]> {
     let result: RepositoryEvent[] = []
     const next = this.tail.then(async () => {
+      let holder = this.holder
       let cursor = this.cursor
       let retained = this.retained
       let incompleteIdentities = this.incompleteIdentities
@@ -126,7 +127,11 @@ export class DispatchRepositoryFeed {
           dispatchFrontendReducer,
         )
         let restored = false
-        if (snapshot && snapshot.cursor <= high) {
+        if (
+          snapshot &&
+          snapshot.cursor <= high &&
+          high - snapshot.cursor <= REPOSITORY_TAIL_WINDOW
+        ) {
           try {
             const state = snapshot.state as {
               retained: RepositoryEvent[]
@@ -146,7 +151,7 @@ export class DispatchRepositoryFeed {
               throw new Error('invalid retained fact')
             if (state.holder !== undefined && typeof state.holder !== 'string')
               throw new Error('invalid holder')
-            this.holder = state.holder
+            holder = state.holder
             retained = dispatchFrontendReducer.advance({ ...state }, []).retained
             incompleteIdentities = true
             if (state.incompleteIdentities && retained.length === state.retained.length) {
@@ -166,12 +171,12 @@ export class DispatchRepositoryFeed {
           retained = dispatchFrontendReducer.reduce(seed)
           cursor = Math.max(high, seed.at(-1)?.seq ?? 0)
         }
-        delta = await this.store.getRepoEvents(this.repo, cursor)
+        delta = await this.readStartupTail(cursor)
         this.validate(delta, cursor, true)
         // A failed prelaunch seed must not skip this invocation's config/start
         // even if a competing run advanced the bounded seed's anchor.
         if (this.recovery && this.boundary !== undefined) {
-          const recovery = await this.store.getRepoEvents(this.repo, this.boundary)
+          const recovery = await this.readStartupTail(this.boundary)
           this.validate(recovery, this.boundary, true)
           delta = [...new Map([...delta, ...recovery].map((e) => [e.seq, e])).values()].sort(
             (a, b) => a.seq - b.seq,
@@ -182,14 +187,16 @@ export class DispatchRepositoryFeed {
         this.validate(delta, cursor, true)
         // A standby correlation may have supplied an older identity while the
         // delta read was pending. Keep those memoized facts in this commit.
+        holder = this.holder
         retained = this.retained
         incompleteIdentities = this.incompleteIdentities
       }
       if (delta.length > 0)
         retained = dispatchFrontendReducer.advance(
-          { retained, incompleteIdentities, holder: this.holder },
+          { retained, incompleteIdentities, holder },
           delta,
         ).retained
+      this.holder = holder
       this.cursor = Math.max(cursor, delta.at(-1)?.seq ?? 0)
       this.incompleteIdentities = true
       if (restoredKey !== undefined) {
@@ -208,17 +215,31 @@ export class DispatchRepositoryFeed {
       const high = await this.store.getRepoHighWater(this.repo)
       const seed = await this.store.getRepoStateEvents(this.repo)
       this.validate(seed, 0, false)
-      this.replaceRetained(dispatchFrontendReducer.reduce(seed))
-      this.cursor = Math.max(high, seed.at(-1)?.seq ?? 0)
+      const cursor = Math.max(high, seed.at(-1)?.seq ?? 0)
+      const delta = await this.readStartupTail(cursor)
+      this.validate(delta, cursor, true)
+      this.replaceRetained(
+        dispatchFrontendReducer.advance(
+          { retained: dispatchFrontendReducer.reduce(seed), incompleteIdentities: true },
+          delta,
+        ).retained,
+      )
+      this.cursor = Math.max(cursor, delta.at(-1)?.seq ?? 0)
       this.incompleteIdentities = true
       this.ready = true
       this.recovery = false
       this.boundary = undefined
-      result = []
+      result = delta
       if (persist) await this.save()
     })
     this.tail = recovered.catch(() => {})
     return recovered.then(() => result)
+  }
+
+  private readStartupTail(cursor: number): Promise<RepositoryEvent[]> {
+    if (!this.store.getRepositoryTail)
+      throw new Error('dashboard restoration requires getRepositoryTail')
+    return this.store.getRepositoryTail(this.repo, cursor)
   }
 
   private replaceRetained(events: RepositoryEvent[]): void {

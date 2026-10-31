@@ -91,8 +91,8 @@ for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
         throw new Error('offline')
       }
     const reads: number[] = []
-    const get = store.getRepoEvents.bind(store)
-    store.getRepoEvents = async (repo, since = 0) => {
+    const get = store.getRepositoryTail.bind(store)
+    store.getRepositoryTail = async (repo, since = 0) => {
       reads.push(since)
       return get(repo, since)
     }
@@ -170,7 +170,37 @@ test.each([false, true])(
     const root = await mkdtemp(join(tmpdir(), 'ab-dashboard-feed-'))
     try {
       const store = memory ? new MemoryBuildStore() : openLocalStore(root)
-      await dispatchReadBudget(store, store)
+      await dispatchReadBudget(
+        store,
+        store,
+        memory
+          ? undefined
+          : async (repo, count) => {
+              // Bulk fixture construction avoids 100,000 separate SQLite transactions.
+              const { validateRepositoryEventWrite } = await import('../events/repository')
+              const event = validateRepositoryEventWrite({
+                actor: DISPATCHER,
+                type: 'dispatcher.run-stopped',
+                payload: { run: 'discarded', outcome: 'normal' },
+              })
+              const sqlite = (store as unknown as { sqlite: import('bun:sqlite').Database }).sqlite
+              const high = await store.getRepoHighWater(repo)
+              sqlite
+                .query(`WITH RECURSIVE gap(seq) AS (
+          SELECT 1 UNION ALL SELECT seq + 1 FROM gap WHERE seq < ?2
+        ) INSERT INTO repo_events (repo, seq, ts, actor, type, payload)
+          SELECT ?1, ?3 + seq, ?4, ?5, ?6, ?7 FROM gap`)
+                .run(
+                  repo,
+                  count,
+                  high,
+                  clock().toISOString(),
+                  JSON.stringify(event.actor),
+                  event.type,
+                  JSON.stringify(event.payload),
+                )
+            },
+      )
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -707,9 +737,9 @@ test('recovery facts below a restored cursor still dirty the restored projection
   const high = store.getRepoHighWater.bind(store)
   let probes = 0
   store.getRepoHighWater = async (repo) => (++probes === 1 ? 0 : high(repo))
-  const events = store.getRepoEvents.bind(store)
+  const events = store.getRepositoryTail.bind(store)
   let fail = true
-  store.getRepoEvents = async (...args) => {
+  store.getRepositoryTail = async (...args) => {
     if (fail) throw new Error('offline')
     return events(...args)
   }
@@ -767,4 +797,183 @@ test('placement read budget is bounded across fresh readers', async () => {
       getDispatchPlacement: async (repo) => (await readDispatchPlacement(store, repo)).value,
     }),
   })
+})
+
+for (const gap of [1, 1000, 1001, 10_000]) {
+  test(`warm snapshot gap ${gap} selects bounded recovery and persists current authority`, async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(repo)
+    await setting(store)
+    await new DispatchRepositoryFeed(store, repo, clock).refresh()
+    for (let i = 0; i < gap - 1; i++) await start(store, `old-${i}`)
+    await setting(store, true)
+    let seeds = 0
+    const seed = store.getRepoStateEvents.bind(store)
+    store.getRepoStateEvents = async (...args) => {
+      seeds++
+      return seed(...args)
+    }
+    store.getRepoEvents = async () => {
+      throw new Error('raw startup suffix')
+    }
+    const feed = new DispatchRepositoryFeed(store, repo, clock)
+    await feed.refresh()
+    expect(seeds).toBe(gap > 1000 ? 1 : 0)
+    expect(feed.events.at(-1)?.payload).toEqual({ enabled: true })
+    const saved = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+      version: 4,
+    })
+    expect(saved?.cursor).toBe(gap + 1)
+    expect((saved!.state as { retained: unknown[] }).retained).toEqual(
+      [...feed.events, ...feed.identities].sort((a, b) => a.seq - b.seq),
+    )
+  })
+}
+
+for (const barrier of ['snapshot', 'before-seed', 'after-seed', 'tail']) {
+  for (const burst of [1, 1001]) {
+    test(`append ${burst} events at ${barrier} restoration barrier loses no updates`, async () => {
+      const store = new MemoryBuildStore()
+      await store.ensureRepo(repo)
+      await setting(store)
+      await new DispatchRepositoryFeed(store, repo, clock).refresh()
+      // Seed barriers must start on the stale-cache path.
+      if (barrier.includes('seed')) for (let i = 0; i < 1001; i++) await start(store, `old-${i}`)
+      const append = async () => {
+        for (let i = 1; i < burst; i++) await start(store, `racing-${i}`)
+        await setting(store, true)
+      }
+      let injected = false
+      const inject = async () => {
+        if (!injected) {
+          injected = true
+          await append()
+        }
+      }
+      const snapshot = store.getReducerSnapshot.bind(store)
+      const seed = store.getRepoStateEvents.bind(store)
+      const tail = store.getRepositoryTail.bind(store)
+      store.getReducerSnapshot = async (...args) => {
+        if (barrier === 'snapshot') await inject()
+        return snapshot(...args)
+      }
+      store.getRepoStateEvents = async (...args) => {
+        if (barrier === 'before-seed') await inject()
+        const events = await seed(...args)
+        if (barrier === 'after-seed') await inject()
+        return events
+      }
+      store.getRepositoryTail = async (...args) => {
+        if (barrier === 'tail') await inject()
+        return tail(...args)
+      }
+      const feed = new DispatchRepositoryFeed(store, repo, clock)
+      await feed.refresh()
+      await feed.refresh()
+      const full = await store.getRepoEvents(repo)
+      expect(reduceDispatchSettings(feed.events)).toEqual(reduceDispatchSettings(full))
+      expect(feed.identities.at(-1)).toEqual(
+        full.findLast((e) => e.type === 'dispatcher.run-started'),
+      )
+      expect(new Set(feed.events.map((e) => e.seq)).size).toBe(feed.events.length)
+      await feed.save(true)
+      const saved = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+        version: 4,
+      })
+      expect(saved?.cursor).toBe(full.at(-1)?.seq)
+      expect(await feed.refresh()).toEqual([])
+    })
+  }
+}
+
+test('a second startup overflow surfaces once and leaves restoration retryable', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  await new DispatchRepositoryFeed(store, repo, clock).refresh()
+  const tail = store.getRepositoryTail.bind(store)
+  let calls = 0
+  store.getRepositoryTail = async (...args) => {
+    calls++
+    for (let i = 0; i < 1001; i++) await start(store, `burst-${calls}-${i}`)
+    return tail(...args)
+  }
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await expect(feed.refresh()).rejects.toThrow('too old')
+  expect(calls).toBe(2)
+  expect(feed.events).toEqual([])
+  store.getRepositoryTail = tail
+  await feed.refresh()
+  expect(feed.events).toHaveLength(1)
+})
+
+test('startup requires bounded tail capability without history fallback', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  Object.defineProperty(store, 'getRepositoryTail', { value: undefined })
+  store.getRepoEvents = async () => {
+    throw new Error('history fallback')
+  }
+  await expect(new DispatchRepositoryFeed(store, repo, clock).refresh()).rejects.toThrow(
+    'requires getRepositoryTail',
+  )
+})
+
+test('stale recovery preserves authoritative settings, harvest and handoff projections', async () => {
+  const { handoffEvents } = await import('../../../../tools/handoff-capture')
+  const { randomHarvestJournal } = await import('../kernel/generators/repository-journals')
+  const { reduceHarvest } = await import('../kernel/harvest')
+  const { dispatchUpgradeReducer } = await import('../kernel/dispatch-upgrade')
+  const { dispatchFrontendReducer } = await import('./dispatch-repository-feed')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  await new DispatchRepositoryFeed(store, repo, clock).refresh()
+  for (const event of handoffEvents('old-build')) await store.appendRepo(repo, event)
+  for (const event of randomHarvestJournal(2, 100)) {
+    if (event.type === 'dispatcher.intake-set' || event.type === 'dispatcher.operator-reported')
+      event.actor = humanActor('test')
+    if (event.type === 'harvest.paused') {
+      event.actor = KERNEL
+      event.payload = {}
+    }
+    await store.appendRepo(repo, { actor: event.actor, type: event.type, payload: event.payload })
+  }
+  for (let i = 0; i < 1001; i++) await start(store, `old-${i}`)
+  await setting(store, true)
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.refresh()
+  const full = await store.getRepoEvents(repo)
+  expect(reduceDispatchSettings(feed.events)).toEqual(reduceDispatchSettings(full))
+  const { lastSeq: _seedSeq, ...seedHarvest } = reduceHarvest(feed.events)
+  const { lastSeq: _fullSeq, ...fullHarvest } = reduceHarvest(full)
+  expect(seedHarvest).toEqual(fullHarvest)
+  expect(dispatchUpgradeReducer.reduce(feed.events)).toEqual(dispatchUpgradeReducer.reduce(full))
+  expect([...feed.events, ...feed.identities].sort((a, b) => a.seq - b.seq)).toEqual(
+    dispatchFrontendReducer.reduce(full),
+  )
+})
+
+test('an expired failed-prelaunch boundary recovers current authority without historical replay', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await setting(store)
+  const seed = store.getRepoStateEvents.bind(store)
+  store.getRepoStateEvents = async () => {
+    throw new Error('offline')
+  }
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await expect(feed.warm()).rejects.toThrow('offline')
+  for (let i = 0; i < 1001; i++) await start(store, `new-${i}`)
+  await setting(store, true)
+  store.getRepoStateEvents = seed
+  store.getRepoEvents = async () => {
+    throw new Error('history replay')
+  }
+  await feed.refresh()
+  expect(feed.events.at(-1)?.payload).toEqual({ enabled: true })
+  expect(
+    feed.identities.map((e) => (e.type === 'dispatcher.run-started' ? e.payload.run : undefined)),
+  ).toEqual(['new-1000'])
+  expect(feed.incompleteIdentities).toBe(true)
 })

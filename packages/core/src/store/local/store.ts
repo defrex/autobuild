@@ -1,3 +1,4 @@
+import { assertResumeWindow, validateEventCursor, type EventReadOptions } from '../event-reads'
 import { scanCadenceSchema, type ScanCadence } from '../scan-cadence'
 import {
   operatorIdentitySchema,
@@ -29,7 +30,7 @@ import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from '..
  * content-addressed.
  */
 import { Database } from 'bun:sqlite'
-import { and, asc, desc, eq, gt, gte, inArray, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, lte, inArray, or, sql } from 'drizzle-orm'
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite'
 import { mkdirSync } from 'node:fs'
 import { access, copyFile, mkdtemp, rm } from 'node:fs/promises'
@@ -1439,6 +1440,49 @@ export class SqliteBuildStore implements BuildStore {
       // Hosted budget: held repository-event reads poll at most once per
       // second (AUT-394) — not the 25 ms stream default, which is
       // presentation content's cadence.
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
+  }
+
+  async getRepositoryTail(
+    repo: string,
+    since = 0,
+    opts?: EventReadOptions,
+  ): Promise<RepositoryEvent[]> {
+    validateEventCursor(since)
+    if (opts?.through !== undefined) validateEventCursor(opts.through)
+    return readEventsWithWait({
+      read: async () => {
+        this.requireRepo(repo)
+        const head = this.snapshotTail({ kind: 'repo', repo })!
+        assertResumeWindow({ kind: 'repo', repo }, since, head)
+        const rows = this.db
+          .select()
+          .from(repoEvents)
+          .where(
+            and(
+              eq(repoEvents.repo, repo),
+              gt(repoEvents.seq, since),
+              lte(repoEvents.seq, Math.min(head, opts?.through ?? head)),
+            ),
+          )
+          .orderBy(asc(repoEvents.seq))
+          .all()
+        return rows.map(
+          (row) =>
+            ({
+              repo: row.repo,
+              seq: row.seq,
+              ts: row.ts,
+              actor: row.actor,
+              type: row.type,
+              payload: row.payload,
+              ...(row.compatibility ? { compatibility: row.compatibility } : {}),
+            }) as RepositoryEvent,
+        )
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
       pollMs: EVENT_WAIT_POLL_MS,
     })
   }
