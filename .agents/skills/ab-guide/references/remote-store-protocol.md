@@ -58,6 +58,11 @@ requiring `AB_DISPATCHER_ORIGIN`. Cron authorization and read-time publication
 share this enablement check. When enabled, selection and origin configuration
 are validated before publication.
 
+Checkout dispatch uses known hosted placement to select viewer mode at startup.
+Unreadable placement fails closed; explicit `--viewer` and `--takeover` bypass
+discovery. Unknown placement preserves local execution. Origin/cron dispatch
+bypasses selection. This does not change leases or publication authority.
+
 The service publishes the advisory repository fact `dispatcher.placement-set`
 and serves its dedicated `dispatchPlacement` canonical reduction. Bounded journal
 reads retain only the latest placement publication across run anchors. Before answering

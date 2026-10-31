@@ -735,6 +735,34 @@ test('placement read budget is bounded across fresh readers', async () => {
   const store = new MemoryBuildStore()
   await placementReadBudget({
     store,
+    select: async (repo) => {
+      const { selectDispatchMode } = await import('./dispatch-mode')
+      const { resolveRepoStatePaths } = await import('./repo-state')
+      let reads = 0
+      const result = await selectDispatchMode(
+        {
+          targetRepo: '/checkout',
+          env: {},
+          exec: async () => {
+            throw new Error('unexpected exec')
+          },
+          stderr: () => {},
+        },
+        {
+          resolve: async () =>
+            resolveRepoStatePaths({ repo, checkout: '/checkout', storeRef: 'https://store.test' }),
+          open: () => ({
+            getDispatchPlacement: async (key) => {
+              reads++
+              return (await readDispatchPlacement(store, key)).value
+            },
+            close: async () => {},
+          }),
+        },
+      )
+      expect(reads).toBe(1)
+      return result
+    },
     fresh: async () => ({
       getDispatchPlacement: async (repo) => (await readDispatchPlacement(store, repo)).value,
     }),
