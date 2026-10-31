@@ -58,7 +58,10 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    change is now redundant, preserve an empty commit with `git commit
    --allow-empty --no-edit`; never skip away the build's identity. A clean
    replay already has its commit and still needs inspection and checks.
-3. Run the repository's required checks. The result must be exactly one commit
+3. Run fast checks that cover the resolution — typecheck, lint, unit or focused
+   tests. Skip slow suites (integration, end-to-end, browser): post-reconcile
+   verification reruns the configured steps, and a step the repository's
+   post-reconcile policy skips is a risk it chose. The result must be exactly one commit
    with exactly one parent equal to `replay.targetBase` (or `conflict.baseSha` for a
    node item) and exactly one terminal
    `Autobuild-Build: <build>` trailer. For node items use the source identity in
