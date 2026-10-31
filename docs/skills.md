@@ -12,7 +12,7 @@ Skills guide the agents that plan, implement, review and operate Autobuild, one 
 
 ## Strong defaults, yours to edit
 
-`ab init` installs the shipped skills as repository files under `.agents/skills/ab-<name>/`: a `SKILL.md` plus optional references or scripts. For example, tell `.agents/skills/ab-implement/SKILL.md` to use the shared database adapter, follow the existing error vocabulary and run the project's integration checks.
+`ab init` installs the shipped skills as repository files under `.agents/skills/ab-<name>/`: a `SKILL.md` plus optional references or scripts. For example, tell `.agents/skills/ab-implement/SKILL.md` to use the shared database adapter, follow the existing error vocabulary and run the project's codegen before committing.
 
 - Change how agents work, not the lifecycle's gates. Keep each skill's typed CLI contract: context, notes deposit and completion command.
 - Commit edits so every agent shares them.

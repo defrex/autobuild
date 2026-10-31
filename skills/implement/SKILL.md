@@ -51,9 +51,12 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    remains the starting point for continuation.
 2. Execute the plan. Commit in coherent increments with real messages —
    the commit history is part of the paper trail.
-3. Run the repo's checks yourself before finishing (the config's typecheck /
-   lint / test commands). A verify failure that a local run would have caught
-   is a wasted round trip.
+3. Run fast checks while you work when they help you — typecheck, lint, unit
+   or focused tests. Do not run slow suites (integration, end-to-end, browser)
+   that the configured verify steps will run anyway: verify runs them after
+   code review and hands any failure back to you, so running them here only
+   doubles their cost on every build. To confirm a fix for a failure a verify
+   report names, rerun just the failing tests.
 4. Write the manifest's `notesPath` (normally `$AB_CONTEXT_DIR/implement-notes.md`) — what
    you did, where you deviated from the plan and why, what the reviewer should
    look at hardest — then run `ab done --notes <notesPath>`. The notes bytes
