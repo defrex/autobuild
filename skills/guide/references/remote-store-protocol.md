@@ -1556,6 +1556,10 @@ is `{outcome:"completed", counters}` or `{outcome:"failed", error}`; events is
 empty for a quiet success or a matching dispatcher start/terminal pair for that
 holder. The validated batch and finished telemetry commit atomically. The reply
 is `{observation, events}` with assigned envelopes, or null on fencing failure.
+Unchanged standing ticket counts and diagnostics do not publish tick pairs. Changes to
+those counts or diagnostics, per-tick activity, recovery from a failed tick, and due
+attention retries still publish. The last published diagnostics remain visible while
+lease-fenced completion telemetry advances independently of the journal cursor.
 These operations never renew the lease. Repository records optionally expose
 `tick: {run, open?: {startedAt}, finished?: {run, startedAt, completedAt, ...completion}}`.
 They retain the previous completion while a new tick is open and after lease

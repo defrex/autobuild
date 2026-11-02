@@ -3,7 +3,8 @@ import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import { DISPATCHER } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { emptyTickReport } from './dispatcher'
-import { shouldPublishTick } from './tick-publication'
+import { dispatcherRunFactsReducer, repositoryReadFactsReducer } from '../kernel/read-facts'
+import { shouldPublishTick, shouldPublishTickFromFacts } from './tick-publication'
 
 const at = '2026-10-17T12:00:00.000Z'
 const report = emptyTickReport()
@@ -33,8 +34,18 @@ const baseline: RepositoryEvent = {
     dependencyDiagnostics,
   },
 }
-const decide = (value = report, events: RepositoryEvent[] = [baseline]) =>
-  shouldPublishTick(value, events, 'run', at)
+const decide = (value = report, events: RepositoryEvent[] = [baseline]) => {
+  const historical = shouldPublishTick(value, events, 'run', at)
+  expect(
+    shouldPublishTickFromFacts(
+      value,
+      repositoryReadFactsReducer.reduce(events),
+      dispatcherRunFactsReducer('run').reduce(events),
+      at,
+    ),
+  ).toBe(historical)
+  return historical
+}
 
 test('first sample, queue transitions and unchanged nonempty queues', () => {
   expect(decide(report, [])).toBe(true)
@@ -192,4 +203,59 @@ test('request outcome categories survive completed and failed event/tick payload
     }).payload,
   ).toMatchObject({ counters: completed })
   expect(decide({ ...report, forgeRequests })).toBe(false)
+})
+
+for (const key of ['invalidTickets', 'dependencyBlocked', 'creationWithheld'] as const) {
+  test(`suppresses standing ${key} but publishes its changes`, () => {
+    const standing = { ...report, [key]: 2 }
+    const previous = {
+      ...baseline,
+      payload: { ...baseline.payload, counters: { ...counters, [key]: 2 } },
+    }
+    expect(decide(standing, [previous])).toBe(false)
+    expect(decide({ ...standing, [key]: 1 }, [previous])).toBe(true)
+    expect(decide(report, [previous])).toBe(true)
+    expect(decide(standing, [{ ...previous, payload: { ...previous.payload, run: 'old' } }])).toBe(
+      true,
+    )
+    for (const [activity, value] of Object.entries(report)) {
+      if (
+        typeof value !== 'number' ||
+        ['queued', 'invalidTickets', 'dependencyBlocked', 'creationWithheld'].includes(activity)
+      )
+        continue
+      expect(
+        decide({ ...standing, [activity]: 1 }, [
+          {
+            ...previous,
+            payload: {
+              ...previous.payload,
+              counters: { ...previous.payload.counters, [activity]: 1 },
+            },
+          },
+        ]),
+      ).toBe(true)
+    }
+  })
+}
+for (const key of [
+  'blockedDiagnostics',
+  'janitorDiagnostics',
+  'ticketDiagnostics',
+  'creationDiagnostics',
+  'dependencyDiagnostics',
+] as const) {
+  test(`compares standing ${key} in order`, () => {
+    const previous = { ...baseline, payload: { ...baseline.payload, [key]: ['a', 'b'] } }
+    expect(decide({ ...report, [key]: ['a', 'b'] }, [previous])).toBe(false)
+    for (const next of [[], ['a'], ['a', 'c'], ['b', 'a'], ['a', 'b', 'c']])
+      expect(decide({ ...report, [key]: next }, [previous])).toBe(true)
+  })
+}
+test('absent historical optional state normalizes to empty', () => {
+  const previous = structuredClone(baseline)
+  delete previous.payload.blockedDiagnostics
+  delete previous.payload.creationDiagnostics
+  delete previous.payload.counters.creationWithheld
+  expect(decide(report, [previous])).toBe(false)
 })
