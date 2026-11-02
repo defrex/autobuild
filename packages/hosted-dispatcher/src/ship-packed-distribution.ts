@@ -4,7 +4,7 @@
  * ship in the hosted deployment.
  *
  * Next 16's default Turbopack builds never apply `outputFileTracingIncludes`
- * (see docs/hosted-dispatcher.md), so a `next build` alone cannot be relied on
+ * (see this package's README), so a `next build` alone cannot be relied on
  * to carry `.autobuild-dist/autobuild-<version>.tgz` into the `/api/dispatch`
  * function bundle. This post-build step appends the archive to the dispatch
  * route's `route.js.nft.json` — the trace file Vercel's Next builder consumes
@@ -12,7 +12,7 @@
  * Next itself computes `outputFileTracingIncludes` entries (relative from the
  * trace file's directory). It fails loudly when pack-distribution has not run
  * or the trace file is missing, so a deployment can never silently ship
- * without the archive.
+ * without the archive. `ab-hosted-dispatcher ship-deployment` runs it.
  *
  * It appends the distribution manifest the same way. Provisioning reads the
  * running version from the repository root's package.json, which no import
@@ -62,7 +62,8 @@ const ROUTE_DIRECTORY = join('server', 'app', 'api', 'dispatch')
 /** The operator HTTP route; retained legacy skill trace entry. */
 const OPERATOR_ROUTE_DIRECTORY = join('server', 'app', 'operator', '[[...path]]')
 
-async function findArchive(root: string): Promise<string> {
+/** The single packed archive under `<root>/.autobuild-dist/`. */
+export async function findArchive(root: string): Promise<string> {
   const dist = join(root, DIST_DIRECTORY)
   let entries: string[]
   try {
@@ -70,14 +71,14 @@ async function findArchive(root: string): Promise<string> {
   } catch {
     throw new Error(
       `no ${DIST_DIRECTORY}/ directory under ${root} — run ` +
-        '`bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .` before building',
+        '`ab-hosted-dispatcher pack-distribution --root <project>` before building',
     )
   }
   const archives = entries.filter((name) => /^autobuild-.+\.tgz$/.test(name)).sort()
   if (archives.length === 0) {
     throw new Error(
       `no autobuild-*.tgz in ${DIST_DIRECTORY}/ — run ` +
-        '`bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .` before building',
+        '`ab-hosted-dispatcher pack-distribution --root <project>` before building',
     )
   }
   if (archives.length > 1) {
@@ -96,7 +97,7 @@ async function readTrace(path: string): Promise<string[]> {
   } catch {
     throw new Error(
       `missing Next.js trace file ${path} — run this tool after \`next build\`; ` +
-        'if the dispatch route was renamed, update packages/hosted-dispatcher/src/ship-packed-distribution.ts',
+        'if the dispatch route was renamed, update ship-packed-distribution.ts in @defrex/autobuild-hosted-dispatcher',
     )
   }
   const parsed: unknown = JSON.parse(raw)

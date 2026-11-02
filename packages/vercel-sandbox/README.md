@@ -26,9 +26,10 @@ collides and fails startup as today.
 
 ## Hosted deployment bundle
 
-The hosted dispatcher's deploy-build stages a self-contained `bun build`
-bundle of this package into the repository-root `node_modules` and appends
-it to the dispatch route's trace, so a bare
-`@defrex/autobuild-vercel-sandbox` specifier resolves inside the deployed
-`/api/dispatch` function. The npm published package remains the real
-`src`.
+A hosted deployment ships this plugin when it lists the package in its
+`dependencies` (the default rule) or in `package.json` `autobuild.plugins`.
+The hosted dispatcher's `ship-deployment` step then stages a self-contained
+`bun build` bundle under the installed `@defrex/autobuild`'s `node_modules`
+and appends it to the dispatch route's trace. That lets a bare
+`@defrex/autobuild-vercel-sandbox` specifier resolve inside the deployed
+`/api/dispatch` function. The npm published package remains the real `src`.

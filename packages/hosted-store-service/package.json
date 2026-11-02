@@ -57,7 +57,7 @@
     "build": "bun run --bun next build",
     "start": "bun run --bun next start",
     "hosted-store": "bun server.ts",
-    "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts && bun ../../packages/hosted-dispatcher/src/ship-provider-plugin.ts"
+    "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/bin.ts ship-deployment --root . --plugin @defrex/autobuild-vercel-sandbox"
   },
   "dependencies": {
     "@defrex/autobuild-postgres-store": "workspace:*",
