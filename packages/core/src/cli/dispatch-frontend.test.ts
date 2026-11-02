@@ -3375,6 +3375,60 @@ test('a frame superseded by confirmAbort is discarded without a durable render w
   }
 })
 
+test('a failing dashboard poll journals one render warning per failure streak', async () => {
+  const { FakeRefreshScheduler } = await import('../testing/refresh-scheduler')
+  let failure: string | undefined
+  const h = await seedSessionViewHarness({
+    refreshScheduler: new FakeRefreshScheduler(),
+    wrapStore: (store) =>
+      new Proxy(store, {
+        get(target, key) {
+          if (key === 'getRepoChangePosition')
+            return async (repo: string) => {
+              if (failure !== undefined) throw new Error(failure)
+              return target.getRepoChangePosition(repo)
+            }
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }),
+  })
+  const control = h.frontend as unknown as {
+    refresh: { join(): Promise<void> }
+    renderOnce(): Promise<void>
+  }
+  const warnings = async () =>
+    (await h.store.getRepoEvents('/session-view-repo')).flatMap((event) =>
+      event.type === 'dispatcher.operator-reported' &&
+      event.payload.message.startsWith('dashboard render failed')
+        ? [event.payload.message]
+        : [],
+    )
+  try {
+    await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
+    await control.refresh.join()
+    // Each poll's message differs, as a moving "too old" cursor's would.
+    for (let poll = 0; poll < 5; poll++) {
+      failure = `cursor ${poll} is too old`
+      await control.renderOnce()
+    }
+    expect(await warnings()).toEqual(['dashboard render failed: cursor 0 is too old'])
+
+    failure = undefined
+    await control.renderOnce()
+    failure = 'store unavailable'
+    await control.renderOnce()
+    await control.renderOnce()
+    expect(await warnings()).toEqual([
+      'dashboard render failed: cursor 0 is too old',
+      'dashboard render failed: store unavailable',
+    ])
+  } finally {
+    failure = undefined
+    await h.finish()
+  }
+})
+
 test('handoff release retries a failed durable acknowledgement without reacquiring or repainting the terminal', async () => {
   const store = new MemoryBuildStore()
   const repo = '/handoff-release-retry'
