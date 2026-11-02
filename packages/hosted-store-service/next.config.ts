@@ -6,6 +6,8 @@ const config: NextConfig = {
     '@defrex/autobuild',
     '@defrex/autobuild-postgres-store',
     '@defrex/autobuild-hosted-store-service',
+    // Optional; listed so an installed dispatcher's TypeScript compiles.
+    '@defrex/autobuild-hosted-dispatcher',
   ],
   serverExternalPackages: ['better-auth', 'pg'],
   // Installed deployments explicitly supply their root (the deployment folder,
