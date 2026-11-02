@@ -68,6 +68,8 @@ describe('hosted-dispatcher package manifest', () => {
   test('exposes the runtime singleton and the dispatcher bin', () => {
     expect(Object.keys(manifest.bin ?? {})).toEqual(['ab-hosted-dispatcher'])
     expect(Object.keys(manifest.exports ?? {})).toContain('./runtime')
+    // ab-hosted-service-build resolves the deploy bin through this export.
+    expect(manifest.exports?.['./bin']).toEqual({ types: './src/bin.ts', import: './src/bin.ts' })
   })
 
   test('is publishable: non-private with public access', () => {

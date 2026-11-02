@@ -1,72 +1,90 @@
-#!/usr/bin/env bun
 /**
- * Ship the provider plugin package into the hosted deployment (AUT-517).
+ * Ship provider plugin packages into the hosted deployment's `/api/dispatch`
+ * function (AUT-517, defrex/autobuild#820).
  *
  * A bare package specifier resolves only through a `node_modules/` path, so
- * appending the plugin's source files to the dispatch route's trace alone
- * cannot make `@defrex/autobuild-vercel-sandbox` resolvable inside the
- * deployed `/api/dispatch` function (build extract-the-vercel,
- * finding f_0b59ab99). The runtime resolution root is `distributionRoot()`,
- * which — derived from this repository's own compiled Turbopack output — is
- * the REPOSITORY ROOT, not the Next project directory: the chunk holding
- * `distribution.ts` synthesizes `import.meta.url` from the source path and
- * resolves its absolute root six file-relative ups from the runtime chunk
- * (`<repoRoot>/packages/hosted-store-service/.next/server/chunks/`), which is
- * the repository root. `loadPlugins` therefore resolves bare specifiers
- * against `<repoRoot>/node_modules`.
+ * appending a plugin's source files to the dispatch route's trace alone cannot
+ * make it resolvable inside the deployed function (finding f_0b59ab99). At
+ * runtime `loadPlugins` falls back to the installation root,
+ * `distributionRoot()` — the installed `@defrex/autobuild` directory — and
+ * walks up from it looking for `node_modules/<pkg>`; the first directory it
+ * checks is `<distributionRoot>/node_modules/<pkg>`. This step stages a
+ * self-contained `bun build` bundle of each plugin exactly there and appends
+ * the staged files to the dispatch route's `route.js.nft.json`, relative to
+ * the trace file's directory. The bundle inlines the plugin-sdk closure and
+ * every dependency; node builtins stay external.
  *
- * The deployment's repo-root `node_modules` carries no `@defrex/autobuild`
- * either (the trace has zero `@defrex` entries — core is Turbopack-inlined),
- * so this step stages a self-contained `bun build` bundle of the plugin: the
- * bundle inlines the plugin-sdk closure (the shared capability object, its
- * validators, and transitive dependencies including `@vercel/sandbox`) and
- * evaluates with zero external module imports; node builtins stay external.
+ * In this source checkout `distributionRoot()` is the repository root, so the
+ * staging path is the workspace symlink `bun install` left in the root
+ * `node_modules`; it is replaced and, on a local run, put back. In an
+ * installed deployment the staging path is a nested directory `bun install`
+ * never creates, so the consumer's installed package is never touched.
  *
- * Staging targets `<repoRoot>/node_modules/@defrex/autobuild-vercel-sandbox/`
- * and every staged file is appended to the dispatch route's
- * `route.js.nft.json` computed relative to the trace file's directory —
- * seven `'..'` components up to the repository root (what `path.relative()`
- * yields from `…/.next/server/app/api/dispatch`), the same depth class as
- * the trace's existing `node_modules/.bun/**` entries. It fails loudly when the package, bundle
- * input, or trace is missing, so a deployment can never silently ship
- * without the plugin. Idempotent ACROSS PROCESSES: the bundle input is
- * located through the workspace tree, never through `node_modules`, so a
- * re-run in a fresh process still finds the source after a previous run
- * replaced the workspace symlink with the staged directory (finding
- * f_5b9ade16).
+ * Each staged `package.json` carries `"autobuildStagedBundle": true`. The
+ * plugin's source is found from the deployment's own installation
+ * (`node_modules/<pkg>` walking up from the project). Only the source
+ * checkout can resolve onto a staged bundle — a Vercel-cached re-run after
+ * staging replaced the workspace symlink (finding f_5b9ade16) — and then the
+ * source is located through the root `workspaces` tree instead. Bundles
+ * staged before the marker existed are recognized by their two-file shape,
+ * but only at the staging path: elsewhere that shape is an ordinary plugin.
  *
- * The npm published package remains the real `src` — only the deployment
- * stages the bundle. In a Vercel deployment build the staged directory
- * replaces the workspace symlink and persists there (the deployment never
- * runs `bun install` again). A developer-local run of `deploy:build` (no
- * `VERCEL` environment) removes the staged directory afterwards and restores
- * the workspace symlink, so a local run leaves the checkout exactly as
- * `bun install` had it and local test runs keep resolving the workspace
- * source. Staged files are build-time artifacts under `node_modules`
+ * Every staged bundle is imported once at build time and must evaluate to a
+ * valid plugin manifest; a failure at any step fails the build naming the
+ * package. A deployment build (`VERCEL` set) keeps the staged bundle — the
+ * function needs it. A developer-local run restores the installation as
+ * `bun install` had it. Staged files are build artifacts under `node_modules`
  * (gitignored, never committed).
  */
-import { lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  rmdir,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Dirent } from 'node:fs'
+import { distributionRoot as installedDistributionRoot } from '@defrex/autobuild/distribution'
+import { parsePluginManifest } from '@defrex/autobuild/plugin-sdk'
+import {
+  describeSelectionRule,
+  findInstalledPackage,
+  type PluginSelectionRule,
+} from './deployment-plugins'
 
-export interface ShipProviderPluginOptions {
-  /** Working directory the repository root is derived from; deploy:build
-   * runs in the Next project directory. */
+export interface ShipProviderPluginsOptions {
+  /** The Next project directory. */
   cwd?: string
   /** Next build output directory under the project directory. */
   distDir?: string
-  /** The plugin package specifier to stage. */
-  packageName?: string
-  /** Remove the staged directory after the trace append and re-create the
-   * workspace symlink it replaced. The deployment build (the default) must
-   * keep the staged bundle — its runtime resolution needs it; only a
-   * developer-local run (no `VERCEL` environment) should restore the link. */
-  restoreWorkspaceLink?: boolean
+  /** Plugin package specifiers to stage. */
+  packages: readonly string[]
+  /** The rule that selected `packages`, named in shipping errors. */
+  rule?: PluginSelectionRule
+  /** The installed `@defrex/autobuild` directory; staging goes under its
+   * `node_modules`. Defaults to `distributionRoot()` of this process. */
+  distributionRoot?: string
+  /** The Next output-file-tracing root; staged files must lie under it.
+   * Defaults to `AB_SERVICE_BUILD_ROOT`, else the workspace root above the
+   * project, else the project. */
+  traceRoot?: string
+  /** Restore the installation after the trace append. A deployment build
+   * must keep the staged bundles; only a developer-local run restores. */
+  restoreInstall?: boolean
   log?: (message: string) => void
 }
 
 export interface ShipProviderPluginResult {
-  repoRoot: string
+  packageName: string
+  /** Directory the bundle was built from (absolute). */
+  source: string
   /** Directory the bundle was staged into (absolute). */
   staging: string
   /** Staged files appended to (or already present in) the trace, relative to
@@ -74,21 +92,20 @@ export interface ShipProviderPluginResult {
   traceEntries: string[]
   appended: number
   bytes: number
-  /** Whether the staged directory was removed and the workspace symlink
-   * restored after staging (local runs only). */
-  restoredWorkspaceLink?: boolean
+  /** Whether the installation was restored after staging (local runs). */
+  restored: boolean
 }
 
 /** True when the run is a developer-local build: Vercel sets `VERCEL` in
  * every build environment — including a local `vercel build` — so an absent
- * `VERCEL` identifies exactly the plain local runs this tool's restore is
- * for. */
-export function restoresWorkspaceLinkIn(env: Record<string, string | undefined>): boolean {
+ * `VERCEL` identifies exactly the plain local runs the restore is for. */
+export function restoresInstallIn(env: Record<string, string | undefined>): boolean {
   return env.VERCEL === undefined
 }
 
 const TRACE_FILE = 'route.js.nft.json'
 const ROUTE_DIRECTORY = join('server', 'app', 'api', 'dispatch')
+const STAGED_MARKER = 'autobuildStagedBundle'
 
 /** Nearest ancestor directory whose package.json declares `workspaces` — the
  * same root manifest `readWorkspaceManifests` reads. Never a hardcoded
@@ -115,14 +132,10 @@ export async function findWorkspaceRoot(start: string): Promise<string> {
 }
 
 /** Directory of the plugin package's SOURCE, located through the repository
- * root's `workspaces` tree — never through `node_modules`. Resolving through
- * the installation would find the workspace link on the first run but the
- * STAGED bundle directory on every later run (staging replaces the symlink
- * and `bun install` does not relink a pre-existing directory, so the checkout
- * never self-heals), making the second deploy build target the staged
- * directory's nonexistent `src/` (finding f_5b9ade16). The workspace tree is
- * stable across runs. Pattern support mirrors tools/workspace-manifest-check.ts:
- * `directory/*` globs only. */
+ * root's `workspaces` tree. The fallback for a source checkout whose
+ * `node_modules` link was replaced by a staged bundle (finding f_5b9ade16);
+ * pattern support mirrors tools/workspace-manifest-check.ts: `directory/*`
+ * globs only. */
 async function resolvePackageSourceDirectory(
   repoRoot: string,
   packageName: string,
@@ -183,6 +196,60 @@ async function resolvePackageSourceDirectory(
   )
 }
 
+/** Whether `directory` holds a bundle a previous run staged: the marker, or,
+ * with `legacyShape`, the exact two-file shape bundles had before the marker
+ * existed. Only the staging path itself may be read by shape — an installed
+ * plugin elsewhere can legitimately ship exactly those two files. */
+async function isStagedBundle(directory: string, legacyShape: boolean): Promise<boolean> {
+  let manifest: Record<string, unknown>
+  try {
+    manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))
+  } catch {
+    return false
+  }
+  if (manifest[STAGED_MARKER] === true) return true
+  if (!legacyShape) return false
+  const exports = manifest.exports as Record<string, unknown> | undefined
+  if (exports?.['.'] !== './dist/index.js') return false
+  const entries = (await readdir(directory).catch(() => [])).sort()
+  const dist = await readdir(join(directory, 'dist')).catch(() => [])
+  return entries.join(',') === 'dist,package.json' && dist.join(',') === 'index.js'
+}
+
+/** The package's import entry: `exports["."]` (the `import` condition, then
+ * `default`), else `module`, else `main`. */
+async function entryFile(directory: string, packageName: string): Promise<string> {
+  const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as {
+    exports?: unknown
+    module?: unknown
+    main?: unknown
+  }
+  let target: unknown
+  const root =
+    typeof manifest.exports === 'object' && manifest.exports !== null
+      ? (manifest.exports as Record<string, unknown>)['.']
+      : manifest.exports
+  if (typeof root === 'string') target = root
+  else if (typeof root === 'object' && root !== null) {
+    const conditions = root as Record<string, unknown>
+    target = conditions.import ?? conditions.default
+  }
+  target ??= manifest.module ?? manifest.main
+  if (typeof target !== 'string' || target === '') {
+    throw new Error(`${join(directory, 'package.json')}: ${packageName} declares no import entry`)
+  }
+  const path = resolve(directory, target)
+  if (relative(directory, path).startsWith('..')) {
+    throw new Error(`${packageName}'s entry ${target} lies outside the package`)
+  }
+  try {
+    await lstat(path)
+  } catch {
+    throw new Error(`${packageName}'s entry ${path} does not exist`)
+  }
+  return path
+}
+
 /** Single self-contained ESM bundle of the plugin's entrypoint for the Bun
  * runtime. The plugin-sdk closure inlines; node builtins stay external. */
 async function buildBundle(entry: string): Promise<string> {
@@ -212,8 +279,8 @@ async function traceFiles(trace: string): Promise<string[]> {
     raw = await readFile(trace, 'utf8')
   } catch {
     throw new Error(
-      `missing Next.js trace file ${trace} — run this tool after \`next build\`; ` +
-        'if the dispatch route was renamed, update packages/hosted-dispatcher/src/ship-provider-plugin.ts',
+      `missing Next.js trace file ${trace} — run this step after \`next build\`; ` +
+        'if the dispatch route was renamed, update ship-provider-plugin.ts in @defrex/autobuild-hosted-dispatcher',
     )
   }
   const parsed: unknown = JSON.parse(raw)
@@ -227,97 +294,164 @@ async function traceFiles(trace: string): Promise<string[]> {
   return (parsed as { files: string[] }).files
 }
 
-/** Bundle the provider plugin, stage it into the repository-root
- * `node_modules`, and append the staged files to the dispatch route's trace. */
-export async function shipProviderPlugin({
-  cwd = process.cwd(),
-  distDir = '.next',
-  packageName = '@defrex/autobuild-vercel-sandbox',
-  restoreWorkspaceLink = false,
-  log = (message) => console.log(message),
-}: ShipProviderPluginOptions = {}): Promise<ShipProviderPluginResult> {
-  const repoRoot = await findWorkspaceRoot(cwd)
-  const packageDirectory = await resolvePackageSourceDirectory(repoRoot, packageName)
-  const packageManifest = JSON.parse(
-    await readFile(join(packageDirectory, 'package.json'), 'utf8'),
-  ) as { name?: unknown; version?: unknown }
-  if (typeof packageManifest.name !== 'string' || typeof packageManifest.version !== 'string') {
-    throw new Error(`${join(packageDirectory, 'package.json')} must declare name and version`)
-  }
-
-  const bundle = await buildBundle(join(packageDirectory, 'src', 'index.ts'))
-
-  // Stage into the repository-root node_modules. bun install leaves a
-  // workspace symlink there for the root devDependency; it must be replaced
-  // by a real directory (the deployment never runs bun install again). A
-  // pre-existing real directory — a previous run's staging, which bun install
-  // does not relink — is replaced too, so re-runs are clean.
-  const staging = join(repoRoot, 'node_modules', ...packageName.split('/'))
-  const existing = await lstat(staging).catch(() => undefined)
-  if (existing !== undefined) {
-    await rm(staging, { recursive: true })
-  }
-  await mkdir(join(staging, 'dist'), { recursive: true })
-  const stagedManifest = {
-    name: packageManifest.name,
-    version: packageManifest.version,
-    type: 'module',
-    exports: { '.': './dist/index.js' },
-  }
-  const stagedFiles = [
-    { name: 'package.json', contents: `${JSON.stringify(stagedManifest, null, 2)}\n` },
-    { name: join('dist', 'index.js'), contents: bundle },
-  ]
-  for (const file of stagedFiles) {
-    await writeFile(join(staging, file.name), file.contents)
-  }
-  const bytes = stagedFiles.reduce((total, file) => total + Buffer.byteLength(file.contents), 0)
-
-  const trace = join(cwd, distDir, ROUTE_DIRECTORY, TRACE_FILE)
-  const files = await traceFiles(trace)
-  const entries = stagedFiles.map((file) => relative(dirname(trace), join(staging, file.name)))
-  const missing = entries.filter((entry) => !files.includes(entry))
-  if (missing.length > 0) {
-    const parsed = JSON.parse(await readFile(trace, 'utf8'))
-    await writeFile(
-      trace,
-      `${JSON.stringify({ ...parsed, files: [...files, ...missing] }, null, 2)}\n`,
-    )
-  }
-  log(
-    `plugin package ${packageName} (${bytes} bytes, ${stagedFiles.length} file(s)) ` +
-      `${missing.length > 0 ? `appended ${missing.length} entr${missing.length === 1 ? 'y' : 'ies'} to` : 'already present in'} ${trace}`,
-  )
-  if (restoreWorkspaceLink) {
-    // A local run must leave the checkout as `bun install` had it: the staged
-    // directory would otherwise satisfy the manifest and keep `bun install`
-    // from ever relinking the workspace, so later local runs would resolve
-    // the plugin to the staged bundle instead of the workspace source. The
-    // link target is computed from the link's OWN directory (a relative
-    // symlink resolves from the directory containing the link):
-    // `<repoRoot>/node_modules/@defrex` + `../../packages/...` — exactly what
-    // `bun install` leaves.
-    const target = relative(dirname(staging), packageDirectory)
-    await rm(staging, { recursive: true })
-    await symlink(target, staging, 'dir')
-    log(`restored workspace symlink ${staging} -> ${target} (local run, no VERCEL environment)`)
-    return {
-      repoRoot,
-      staging,
-      traceEntries: entries,
-      appended: missing.length,
-      bytes,
-      restoredWorkspaceLink: true,
-    }
-  }
-  return { repoRoot, staging, traceEntries: entries, appended: missing.length, bytes }
+/** The default tracing root: `AB_SERVICE_BUILD_ROOT` (what the published
+ * build passes Next), else the workspace root above the project, else the
+ * project itself. */
+export async function defaultTraceRoot(
+  cwd: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<string> {
+  const explicit = env.AB_SERVICE_BUILD_ROOT?.trim()
+  if (explicit) return resolve(explicit)
+  return findWorkspaceRoot(cwd).catch(() => resolve(cwd))
 }
 
-if (import.meta.main) {
-  try {
-    await shipProviderPlugin({ restoreWorkspaceLink: restoresWorkspaceLinkIn(process.env) })
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error)
-    process.exit(1)
+async function exists(path: string): Promise<boolean> {
+  return lstat(path).then(
+    () => true,
+    () => false,
+  )
+}
+
+/** Bundle each plugin, stage it under the installed distribution's
+ * `node_modules`, validate it, and append the staged files to the dispatch
+ * route's trace. */
+export async function shipProviderPlugins({
+  cwd = process.cwd(),
+  distDir = '.next',
+  packages,
+  rule = 'flag',
+  distributionRoot = installedDistributionRoot(),
+  traceRoot,
+  restoreInstall = false,
+  log = (message) => console.log(message),
+}: ShipProviderPluginsOptions): Promise<ShipProviderPluginResult[]> {
+  const project = await realpath(cwd)
+  const tracing = await realpath(traceRoot ?? (await defaultTraceRoot(project)))
+  const installation = await realpath(distributionRoot)
+  const trace = join(project, distDir, ROUTE_DIRECTORY, TRACE_FILE)
+  // Fail on a missing trace before touching node_modules.
+  await traceFiles(trace)
+  const results: ShipProviderPluginResult[] = []
+  for (const packageName of packages) {
+    const selected = `selected by ${describeSelectionRule(rule)}`
+    const staging = join(installation, 'node_modules', ...packageName.split('/'))
+    if (relative(tracing, staging).startsWith('..')) {
+      throw new Error(
+        `cannot ship ${packageName}: its staging directory ${staging} lies outside the ` +
+          `output-file-tracing root ${tracing}`,
+      )
+    }
+
+    // Source: the deployment's own installation, unless that resolves onto a
+    // staged bundle (a source checkout re-run).
+    const installed = await findInstalledPackage(project, packageName)
+    if (installed === null) {
+      throw new Error(
+        `provider plugin ${packageName} is not installed in the deployment (${selected})`,
+      )
+    }
+    let source = await realpath(installed)
+    const installedAtStaging = resolve(installed) === staging
+    let healLink = false
+    if (await isStagedBundle(source, installedAtStaging)) {
+      source = await resolvePackageSourceDirectory(await findWorkspaceRoot(project), packageName)
+      healLink = installedAtStaging
+    }
+    const sourceManifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8')) as {
+      name?: unknown
+      version?: unknown
+    }
+    if (typeof sourceManifest.name !== 'string' || typeof sourceManifest.version !== 'string') {
+      throw new Error(`${join(source, 'package.json')} must declare name and version`)
+    }
+    const bundle = await buildBundle(await entryFile(source, packageName))
+
+    // What may already sit at the staging path: nothing, a staged bundle, or
+    // the source checkout's workspace symlink. Never an installed package.
+    const existing = await lstat(staging).catch(() => undefined)
+    let linkTarget: string | undefined
+    if (existing?.isSymbolicLink()) {
+      linkTarget = await readlink(staging)
+    } else if (existing !== undefined && !(await isStagedBundle(staging, true))) {
+      throw new Error(`refusing to replace installed package at ${staging} (${packageName})`)
+    }
+    const created = [join(installation, 'node_modules'), dirname(staging)].filter(
+      (path, index, all) => all.indexOf(path) === index && path !== staging,
+    )
+    const createdHere: string[] = []
+    for (const path of created) if (!(await exists(path))) createdHere.push(path)
+    if (existing !== undefined) await rm(staging, { recursive: true, force: true })
+
+    const stagedManifest = {
+      name: sourceManifest.name,
+      version: sourceManifest.version,
+      type: 'module',
+      exports: { '.': './dist/index.js' },
+      [STAGED_MARKER]: true,
+    }
+    const stagedFiles = [
+      { name: 'package.json', contents: `${JSON.stringify(stagedManifest, null, 2)}\n` },
+      { name: join('dist', 'index.js'), contents: bundle },
+    ]
+    try {
+      await mkdir(join(staging, 'dist'), { recursive: true })
+      for (const file of stagedFiles) await writeFile(join(staging, file.name), file.contents)
+      const bytes = stagedFiles.reduce((total, file) => total + Buffer.byteLength(file.contents), 0)
+
+      let namespace: { default?: unknown }
+      try {
+        namespace = await import(pathToFileURL(join(staging, 'dist', 'index.js')).href)
+        parsePluginManifest(namespace.default)
+      } catch (error) {
+        throw new Error(
+          `${packageName} is not an Autobuild plugin (${selected}): ` +
+            (error instanceof Error ? error.message : String(error)),
+        )
+      }
+
+      const files = await traceFiles(trace)
+      const entries = stagedFiles.map((file) => relative(dirname(trace), join(staging, file.name)))
+      const missing = entries.filter((entry) => !files.includes(entry))
+      if (missing.length > 0) {
+        const parsed = JSON.parse(await readFile(trace, 'utf8'))
+        await writeFile(
+          trace,
+          `${JSON.stringify({ ...parsed, files: [...files, ...missing] }, null, 2)}\n`,
+        )
+      }
+      log(
+        `plugin package ${packageName} (${bytes} bytes, ${stagedFiles.length} file(s)) staged at ${staging}; ` +
+          `${missing.length > 0 ? `appended ${missing.length} entr${missing.length === 1 ? 'y' : 'ies'} to` : 'already present in'} ${trace}`,
+      )
+      results.push({
+        packageName,
+        source,
+        staging,
+        traceEntries: entries,
+        appended: missing.length,
+        bytes,
+        restored: false,
+      })
+    } finally {
+      if (restoreInstall) {
+        // A local run leaves the installation as `bun install` had it: the
+        // workspace symlink back in place, or no trace of the staging.
+        await rm(staging, { recursive: true, force: true })
+        if (linkTarget !== undefined || healLink) {
+          const target = linkTarget ?? relative(dirname(staging), source)
+          await symlink(target, staging, 'dir')
+          log(
+            `restored workspace symlink ${staging} -> ${target} (local run, no VERCEL environment)`,
+          )
+        } else {
+          for (const path of createdHere.reverse()) await rmdir(path).catch(() => {})
+          log(`removed staged ${staging} (local run, no VERCEL environment)`)
+        }
+        const last = results.at(-1)
+        if (last?.packageName === packageName) last.restored = true
+      }
+    }
   }
+  return results
 }

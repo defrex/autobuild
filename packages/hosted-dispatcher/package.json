@@ -22,6 +22,10 @@
     "./distribution": {
       "types": "./src/ship-packed-distribution.ts",
       "import": "./src/ship-packed-distribution.ts"
+    },
+    "./bin": {
+      "types": "./src/bin.ts",
+      "import": "./src/bin.ts"
     }
   },
   "bin": {

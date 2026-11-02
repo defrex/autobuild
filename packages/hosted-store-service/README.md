@@ -86,11 +86,13 @@ application. `bun run hosted-store` serves machine routes only.
 ## Hosted dispatcher
 
 The dispatch kernel is not part of this package. The cron-authenticated
-`GET /api/dispatch` endpoint, its `pack-distribution` bin command, and the
-packed-distribution trace helper live in the separate
+`GET /api/dispatch` endpoint and its deploy-time bin live in the separate
 [`@defrex/autobuild-hosted-dispatcher`](https://github.com/defrex/autobuild/blob/main/packages/hosted-dispatcher/README.md)
 package; a deployment opts into building by installing it and mounting its
 route, and a deployment that only hosts state never attempts a dispatch tick.
+With the dispatcher installed, `ab-hosted-service-build` packs the guest
+distribution archive. It ships the archive and the selected provider plugins
+into `/api/dispatch`. The dispatcher README states the plugin selection rule.
 See the [operator procedure](https://github.com/defrex/autobuild/blob/main/docs/hosted-dispatcher.md) for the
 schedule, incident pauses, and behavior details.
 

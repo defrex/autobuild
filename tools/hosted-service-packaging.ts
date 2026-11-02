@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict'
 import { valid, prerelease, lt } from 'semver'
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import {
+  cp,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { SQL } from 'bun'
 import { installPackedDistribution } from '../packages/core/src/testing/packed-install'
 import {
@@ -81,6 +92,266 @@ async function paths(root: string): Promise<string[]> {
   return result
 }
 
+/** A local Build Output API build: project settings are fixtures, no account
+ * connection or deployment occurs. Vercel validates vercel.json itself. */
+async function vercelBuild(
+  cwd: string,
+  env: Record<string, string | undefined>,
+  settings: Record<string, string> = {},
+) {
+  await mkdir(join(cwd, '.vercel'), { recursive: true })
+  await writeFile(
+    join(cwd, '.vercel/project.json'),
+    JSON.stringify({
+      projectId: 'prj_packaging',
+      orgId: 'team_packaging',
+      projectName: 'packaging-check',
+      settings: {
+        framework: 'nextjs',
+        buildCommand: 'bun run build',
+        installCommand: 'bun install --frozen-lockfile',
+        nodeVersion: '22.x',
+        ...settings,
+      },
+    }),
+  )
+  const vercel = join(repoRoot, 'packages/hosted-store-service/node_modules/vercel/dist/index.js')
+  await command(['bun', vercel, 'build', '--yes'], cwd, {
+    ...env,
+    VERCEL_TELEMETRY_DISABLED: '1',
+    VERCEL_TOKEN: undefined,
+  })
+}
+
+const sha256 = async (path: string) =>
+  createHash('sha256')
+    .update(await readFile(path))
+    .digest('hex')
+
+const STAGED_PLUGIN = 'node_modules/@defrex/autobuild-vercel-sandbox'
+
+/** The dispatch trace entries this build ships: the archive, the distribution
+ * manifest and the staged plugin, resolved to absolute paths. */
+async function shippedTraceEntries(project: string): Promise<string[]> {
+  const trace = join(project, '.next/server/app/api/dispatch/route.js.nft.json')
+  const files = JSON.parse(await readFile(trace, 'utf8')).files as string[]
+  return files
+    .map((entry) => resolve(dirname(trace), entry))
+    .filter(
+      (path) =>
+        path.includes('/.autobuild-dist/') ||
+        path.endsWith('/@defrex/autobuild/package.json') ||
+        path.includes(`/@defrex/autobuild/${STAGED_PLUGIN}/`),
+    )
+    .sort()
+}
+
+/** Copy the dispatch function out of the Build Output, resolving the local
+ * build's `filePathMap` against `base`, into a standalone directory: exactly
+ * the files the deployed function would hold. */
+async function materializeDispatchFunction(base: string, into: string): Promise<string[]> {
+  const func = join(base, '.vercel/output/functions/api/dispatch.func')
+  await cp(func, into, { recursive: true })
+  const config = JSON.parse(await readFile(join(func, '.vc-config.json'), 'utf8')) as {
+    filePathMap?: Record<string, string>
+  }
+  for (const [target, source] of Object.entries(config.filePathMap ?? {})) {
+    await mkdir(dirname(join(into, target)), { recursive: true })
+    // Next links external packages under .next/node_modules; keep links.
+    await cp(resolve(base, source), join(into, target), { recursive: true, verbatimSymlinks: true })
+  }
+  return (await paths(into)).map((path) => path.slice(into.length + 1))
+}
+
+/** Assert the shipped dispatch function carries the guest archive, the
+ * distribution manifest and a runtime-resolvable provider plugin, and that
+ * both are found from the function's own files alone. */
+async function checkDispatchFunction(
+  base: string,
+  projectRel: string,
+  version: string,
+  probeRoot: string,
+  env: Record<string, string | undefined>,
+): Promise<{ archiveSha: string }> {
+  const func = join(probeRoot, 'func')
+  const files = await materializeDispatchFunction(base, func)
+  const archive = join(projectRel, `.autobuild-dist/autobuild-${version}.tgz`)
+  assert(files.includes(archive), `dispatch function lacks ${archive}`)
+  const packed = JSON.parse(
+    await command(['tar', '-xzOf', join(func, archive), 'package/package.json'], probeRoot, env),
+  )
+  assert.equal(packed.version, version)
+  const manifests = files.filter(
+    (path) =>
+      path.endsWith('@defrex/autobuild/package.json') &&
+      !path.includes('/@defrex/autobuild/node_modules/'),
+  )
+  assert.equal(manifests.length, 1, `expected one distribution manifest: ${manifests.join(', ')}`)
+  const distRel = dirname(manifests[0]!)
+  assert.equal(JSON.parse(await readFile(join(func, manifests[0]!), 'utf8')).version, version)
+  for (const file of ['package.json', 'dist/index.js'])
+    assert(files.includes(join(distRel, STAGED_PLUGIN, file)), `dispatch function lacks ${file}`)
+  // The compiled distributionRoot() is this same shipped directory: Turbopack
+  // embeds the inlined module's path relative to the tracing root.
+  const chunkReference = `${distRel}/packages/core/src/distribution.ts`
+  let embedded = false
+  for (const path of files.filter((file) => file.includes('.next/server/') && file.endsWith('.js')))
+    if ((await readFile(join(func, path), 'utf8')).includes(chunkReference)) embedded = true
+  assert(embedded, `no dispatch chunk embeds ${chunkReference}`)
+  // Resolve inside the function with no bun on PATH, no VERCEL_TOKEN and the
+  // installer disabled: only the shipped files can satisfy either lookup.
+  const probe = join(probeRoot, 'probe.ts')
+  const empty = join(probeRoot, 'empty')
+  await mkdir(empty)
+  await writeFile(
+    probe,
+    `import { diagnosePlugins } from ${JSON.stringify(join(repoRoot, 'packages/core/src/plugins/load.ts'))}
+import { findPrebuiltDistributionArchive } from ${JSON.stringify(join(repoRoot, 'packages/core/src/ports/workspace/distribution-archive.ts'))}
+const [installationRoot, projectRoot, empty] = process.argv.slice(2)
+const { reports } = await diagnosePlugins(['@defrex/autobuild-vercel-sandbox'], empty!, {
+  packageRoot: empty,
+  installationRoot,
+})
+const archive = await findPrebuiltDistributionArchive({}, [installationRoot!, projectRoot!])
+console.log(JSON.stringify({ reports, archive }))
+`,
+  )
+  const bunDirectory = dirname(process.execPath)
+  const PATH = (env.PATH ?? '')
+    .split(delimiter)
+    .filter((entry) => entry !== '' && entry !== bunDirectory && !Bun.which('bun', { PATH: entry }))
+    .join(delimiter)
+  const output = await command(
+    [process.execPath, '--no-install', probe, join(func, distRel), join(func, projectRel), empty],
+    empty,
+    { PATH, HOME: env.HOME, TMPDIR: env.TMPDIR },
+  )
+  const line = output.split('\n').find((text) => text.startsWith('{"reports"'))
+  assert(line, output)
+  const result = JSON.parse(line) as {
+    reports: { status: string; resolved?: string; notice?: string }[]
+    archive: string | null
+  }
+  assert.equal(result.reports.length, 1)
+  const [report] = result.reports
+  assert.equal(report?.status, 'skipped', JSON.stringify(report))
+  assert.equal(report?.resolved, join(func, distRel, STAGED_PLUGIN, 'dist/index.js'))
+  assert(report?.notice?.includes('builtin workspace-provider registration'), report?.notice)
+  assert.equal(result.archive, join(func, archive))
+  return { archiveSha: await sha256(join(func, archive)) }
+}
+
+/** Installed deployments with the dispatcher: a standalone template folder,
+ * and a template folder that is a Bun workspace member built twice. */
+async function checkDispatcherDeployments(
+  root: string,
+  template: Record<string, unknown> & { dependencies: Record<string, string> },
+  archives: Record<string, string>,
+  env: Record<string, string | undefined>,
+) {
+  const version = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).version
+  const pin = template.dependencies['@defrex/autobuild']!
+  const { overrides: _overrides, ...documented } = template
+  const dispatcherManifest = {
+    ...documented,
+    dependencies: {
+      ...template.dependencies,
+      '@defrex/autobuild-hosted-dispatcher': pin,
+      '@defrex/autobuild-vercel-sandbox': pin,
+    },
+  }
+  const vercelJson = await readFile(join(repoRoot, deploymentTemplatePaths[0]!, 'vercel.json'))
+
+  // Standalone: `vercel build` runs the build with VERCEL set, so the staged
+  // plugin persists into the function bundle.
+  const standalone = join(root, 'dispatcher-consumer')
+  await mkdir(standalone)
+  await writeFile(
+    join(standalone, 'package.json'),
+    JSON.stringify({ ...dispatcherManifest, overrides: archives }, null, 2),
+  )
+  await writeFile(join(standalone, 'vercel.json'), vercelJson)
+  const install = await installPackedDistribution([], standalone)
+  assert.equal(install.exitCode, 0, install.stdout + install.stderr)
+  await vercelBuild(standalone, env)
+  await mkdir(join(root, 'standalone-probe'))
+  await checkDispatchFunction(standalone, '', version, join(root, 'standalone-probe'), env)
+  console.log('Packed standalone dispatcher deployment passed')
+
+  // Workspace member at apps/autobuild, installed from the workspace root.
+  // Bun's isolated linker does not hoist the service's type tooling, so a
+  // member also declares what next build itself loads from the folder.
+  const service = JSON.parse(
+    await readFile(join(repoRoot, 'packages/hosted-store-service/package.json'), 'utf8'),
+  ).dependencies as Record<string, string>
+  const workspace = join(root, 'workspace-consumer')
+  const member = join(workspace, 'apps/autobuild')
+  await mkdir(member, { recursive: true })
+  await writeFile(
+    join(workspace, 'package.json'),
+    JSON.stringify({ private: true, workspaces: ['apps/*'], overrides: archives }, null, 2),
+  )
+  const tooling = ['typescript', '@types/bun', '@types/node', '@types/react', '@types/react-dom']
+  await writeFile(
+    join(member, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'autobuild-service',
+        ...dispatcherManifest,
+        dependencies: {
+          ...dispatcherManifest.dependencies,
+          ...Object.fromEntries(tooling.map((name) => [name, service[name]!])),
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  await writeFile(join(member, 'vercel.json'), vercelJson)
+  const memberInstall = await installPackedDistribution([], workspace)
+  assert.equal(memberInstall.exitCode, 0, memberInstall.stdout + memberInstall.stderr)
+  const lock = await readFile(join(workspace, 'bun.lock'))
+  const distributionRoot = await realpath(join(member, 'node_modules/@defrex/autobuild'))
+  assert(distributionRoot.startsWith(join(workspace, 'node_modules/')), distributionRoot)
+
+  // Run 1: a local build (no VERCEL) from the folder.
+  const local = { ...env, VERCEL: undefined }
+  await command(['bun', 'run', 'build'], member, local)
+  const archive = join(member, `.autobuild-dist/autobuild-${version}.tgz`)
+  const staged = join(distributionRoot, STAGED_PLUGIN)
+  const shipped = await shippedTraceEntries(member)
+  assert.deepEqual(
+    shipped,
+    [
+      archive,
+      join(distributionRoot, 'package.json'),
+      join(staged, 'dist/index.js'),
+      join(staged, 'package.json'),
+    ].sort(),
+  )
+  await stat(archive)
+  await stat(join(distributionRoot, 'package.json'))
+  await assert.rejects(stat(staged), 'a local run removes the staged plugin')
+  const firstArchive = await sha256(archive)
+  await command(['bun', 'install', '--frozen-lockfile'], workspace, env)
+  assert((await readFile(join(workspace, 'bun.lock'))).equals(lock), 'bun.lock changed')
+
+  // Run 2: `vercel build` at the workspace root, Root Directory the folder,
+  // in the same checkout as a Vercel build cache would leave it.
+  await vercelBuild(workspace, env, { rootDirectory: 'apps/autobuild' })
+  assert.deepEqual(await shippedTraceEntries(member), shipped)
+  await mkdir(join(root, 'workspace-probe'))
+  const { archiveSha } = await checkDispatchFunction(
+    workspace,
+    'apps/autobuild',
+    version,
+    join(root, 'workspace-probe'),
+    env,
+  )
+  assert.equal(archiveSha, firstArchive)
+  console.log('Packed workspace-member dispatcher deployment passed')
+}
+
 /** Real packed consumer, outside workspace resolution. This is intentionally a
  * live command rather than another expensive build in the unit test suite. */
 export async function checkHostedServicePackaging() {
@@ -122,7 +393,13 @@ export async function checkHostedServicePackaging() {
       NEXT_TELEMETRY_DISABLED: '1',
     }
     const archives: Record<string, string> = {}
-    for (const directory of ['.', 'packages/postgres-store', 'packages/hosted-store-service']) {
+    for (const directory of [
+      '.',
+      'packages/postgres-store',
+      'packages/hosted-store-service',
+      'packages/hosted-dispatcher',
+      'packages/vercel-sandbox',
+    ]) {
       const manifest = JSON.parse(await readFile(join(repoRoot, directory, 'package.json'), 'utf8'))
       const archive = join(root, `${manifest.name.replaceAll('/', '-').replace('@', '')}.tgz`)
       await command(
@@ -384,29 +661,7 @@ export async function checkHostedServicePackaging() {
     await server.exited
     server = undefined
     console.log('Production HTTP discovery and registration passed')
-    // A local Build Output API build: project settings are fixtures, no account
-    // connection or deployment occurs. Vercel validates vercel.json itself.
-    await mkdir(join(consumer, '.vercel'))
-    await writeFile(
-      join(consumer, '.vercel/project.json'),
-      JSON.stringify({
-        projectId: 'prj_packaging',
-        orgId: 'team_packaging',
-        projectName: 'packaging-check',
-        settings: {
-          framework: 'nextjs',
-          buildCommand: 'bun run build',
-          installCommand: 'bun install --frozen-lockfile',
-          nodeVersion: '22.x',
-        },
-      }),
-    )
-    const vercel = join(repoRoot, 'packages/hosted-store-service/node_modules/vercel/dist/index.js')
-    await command(['bun', vercel, 'build', '--yes'], consumer, {
-      ...env,
-      VERCEL_TELEMETRY_DISABLED: '1',
-      VERCEL_TOKEN: undefined,
-    })
+    await vercelBuild(consumer, env)
     const output = join(consumer, '.vercel/output')
     const config = await readFile(join(output, 'config.json'), 'utf8')
     assert(config.includes('oauth-protected-resource'))
@@ -421,6 +676,7 @@ export async function checkHostedServicePackaging() {
     const generated = JSON.parse(config) as { crons?: unknown[] }
     assert.equal(generated.crons?.length ?? 0, 0)
     console.log('Packed Vercel service deployment passed')
+    await checkDispatcherDeployments(root, manifest, archives, env)
   } finally {
     blobServer?.stop(true)
     if (server) {
