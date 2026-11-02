@@ -1,40 +1,49 @@
 import type { RepositoryEvent } from '../events/repository'
 import type { TickReport } from './dispatcher'
 
-/** Every counter and diagnostic is significant, including standing counts.
- * Queue depth alone may be unchanged and nonzero. */
+const standingCounters = ['invalidTickets', 'dependencyBlocked', 'creationWithheld'] as const
+const diagnostics = [
+  'blockedDiagnostics',
+  'janitorDiagnostics',
+  'ticketDiagnostics',
+  'creationDiagnostics',
+  'dependencyDiagnostics',
+] as const
+
+/** Standing state changes publish; activity publishes on every occurrence. */
+function reportRequiresPublication(
+  report: TickReport,
+  previous: RepositoryEvent | undefined,
+): boolean {
+  if (previous?.type !== 'dispatcher.tick-completed' || previous.payload.queued !== report.queued)
+    return true
+  for (const key of standingCounters)
+    if (report[key] !== (previous.payload.counters[key] ?? 0)) return true
+  for (const key of diagnostics) {
+    const before = previous.payload[key] ?? []
+    if (report[key].length !== before.length || report[key].some((value, i) => value !== before[i]))
+      return true
+  }
+  return Object.entries(report).some(
+    ([key, value]) =>
+      key !== 'queued' &&
+      key !== 'forgeRequests' &&
+      !standingCounters.some((standing) => standing === key) &&
+      typeof value === 'number' &&
+      value !== 0,
+  )
+}
+
 export function shouldPublishTick(
   report: TickReport,
   events: readonly RepositoryEvent[],
   run: string,
   startedAt: string,
 ): boolean {
-  if (
-    Object.entries(report).some(
-      ([key, value]) =>
-        key !== 'queued' &&
-        key !== 'forgeRequests' &&
-        (typeof value === 'number' ? value !== 0 : value.length > 0),
-    )
-  )
-    return true
-  // Queue and diagnostic readers reduce per run, so each run must publish
-  // its own baseline before quiet ticks can be suppressed.
   const previous = events.findLast(
     (e) => e.type === 'dispatcher.tick-completed' && e.payload.run === run,
   )
-  if (previous?.type !== 'dispatcher.tick-completed' || previous.payload.queued !== report.queued)
-    return true
-  if (
-    [
-      previous.payload.blockedDiagnostics ?? [],
-      previous.payload.janitorDiagnostics,
-      previous.payload.ticketDiagnostics,
-      previous.payload.creationDiagnostics ?? [],
-      previous.payload.dependencyDiagnostics,
-    ].some((list) => list.length > 0)
-  )
-    return true
+  if (reportRequiresPublication(report, previous)) return true
   const boundary = events.findLast(
     (e) =>
       (e.type === 'dispatcher.tick-completed' || e.type === 'dispatcher.tick-failed') &&
@@ -84,28 +93,7 @@ export function shouldPublishTickFromFacts(
   run: import('../kernel/read-facts').DispatcherRunFacts,
   startedAt: string,
 ): boolean {
-  if (
-    Object.entries(report).some(
-      ([key, value]) =>
-        key !== 'queued' &&
-        key !== 'forgeRequests' &&
-        (typeof value === 'number' ? value !== 0 : value.length > 0),
-    )
-  )
-    return true
-  const previous = run.completed
-  if (previous?.type !== 'dispatcher.tick-completed' || previous.payload.queued !== report.queued)
-    return true
-  if (
-    [
-      previous.payload.blockedDiagnostics ?? [],
-      previous.payload.janitorDiagnostics,
-      previous.payload.ticketDiagnostics,
-      previous.payload.creationDiagnostics ?? [],
-      previous.payload.dependencyDiagnostics,
-    ].some((list) => list.length > 0)
-  )
-    return true
+  if (reportRequiresPublication(report, run.completed)) return true
   if (run.tick?.type === 'dispatcher.tick-failed') return true
   return facts.attention.sources.some(
     ([, source]) =>
