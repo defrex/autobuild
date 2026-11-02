@@ -2874,7 +2874,11 @@ Repository tick telemetry is bounded mutable operational metadata, like leases.
 `beginRepoTick` persists the open boundary before unsafe work; `finishRepoTick`
 atomically replaces it with actual completion time and outcome and appends any
 validated tick boundaries. Both are fenced by the unexpired repository lease,
-and neither renews it. Quiet completions advance telemetry without advancing the
+and neither renews it. Unchanged standing ticket counts and diagnostics do not publish
+tick pairs. Changes to those counts or diagnostics, per-tick activity, recovery from a
+failed tick, and due attention retries still publish. The last published diagnostics
+remain visible while lease-fenced completion telemetry advances independently of the
+journal cursor. Quiet completions advance telemetry without advancing the
 journal. Readers refresh telemetry independently of event cursors, correlate it
 by run, and merge with historical completions by actual time; heartbeat never
 stands in for tick completion. Telemetry survives lease release. Safe shutdown
