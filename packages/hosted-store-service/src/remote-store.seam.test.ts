@@ -1370,6 +1370,8 @@ test('remote value reads send one bounded request and receive only a small JSON 
   await backing.close()
 })
 
+// Building the 100,000-event fixture and exercising real HTTP can exceed the
+// default five-second limit; the harness asserts read costs independently.
 test('hosted frontend read budget stays flat across thousands of journal events', async () => {
   const { dispatchReadBudget } = await import('@defrex/autobuild/testing')
   const backing = new MemoryBuildStore()
@@ -1400,7 +1402,7 @@ test('hosted frontend read budget stays flat across thousands of journal events'
   } finally {
     server.stop()
   }
-})
+}, 15_000)
 
 test('position endpoint reads only the counter and supports build-only and unknown repositories', async () => {
   const backing = new MemoryBuildStore()
