@@ -26,7 +26,8 @@
  * checkout can resolve onto a staged bundle — a Vercel-cached re-run after
  * staging replaced the workspace symlink (finding f_5b9ade16) — and then the
  * source is located through the root `workspaces` tree instead. Bundles
- * staged before the marker existed are recognized by their two-file shape.
+ * staged before the marker existed are recognized by their two-file shape,
+ * but only at the staging path: elsewhere that shape is an ordinary plugin.
  *
  * Every staged bundle is imported once at build time and must evaluate to a
  * valid plugin manifest; a failure at any step fails the build naming the
@@ -195,9 +196,11 @@ async function resolvePackageSourceDirectory(
   )
 }
 
-/** Whether `directory` holds a bundle a previous run staged: the marker, or
- * the exact two-file shape bundles had before the marker existed. */
-async function isStagedBundle(directory: string): Promise<boolean> {
+/** Whether `directory` holds a bundle a previous run staged: the marker, or,
+ * with `legacyShape`, the exact two-file shape bundles had before the marker
+ * existed. Only the staging path itself may be read by shape — an installed
+ * plugin elsewhere can legitimately ship exactly those two files. */
+async function isStagedBundle(directory: string, legacyShape: boolean): Promise<boolean> {
   let manifest: Record<string, unknown>
   try {
     manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))
@@ -205,6 +208,7 @@ async function isStagedBundle(directory: string): Promise<boolean> {
     return false
   }
   if (manifest[STAGED_MARKER] === true) return true
+  if (!legacyShape) return false
   const exports = manifest.exports as Record<string, unknown> | undefined
   if (exports?.['.'] !== './dist/index.js') return false
   const entries = (await readdir(directory).catch(() => [])).sort()
@@ -348,10 +352,11 @@ export async function shipProviderPlugins({
       )
     }
     let source = await realpath(installed)
+    const installedAtStaging = resolve(installed) === staging
     let healLink = false
-    if (await isStagedBundle(source)) {
+    if (await isStagedBundle(source, installedAtStaging)) {
       source = await resolvePackageSourceDirectory(await findWorkspaceRoot(project), packageName)
-      healLink = resolve(installed) === staging
+      healLink = installedAtStaging
     }
     const sourceManifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8')) as {
       name?: unknown
@@ -368,7 +373,7 @@ export async function shipProviderPlugins({
     let linkTarget: string | undefined
     if (existing?.isSymbolicLink()) {
       linkTarget = await readlink(staging)
-    } else if (existing !== undefined && !(await isStagedBundle(staging))) {
+    } else if (existing !== undefined && !(await isStagedBundle(staging, true))) {
       throw new Error(`refusing to replace installed package at ${staging} (${packageName})`)
     }
     const created = [join(installation, 'node_modules'), dirname(staging)].filter(

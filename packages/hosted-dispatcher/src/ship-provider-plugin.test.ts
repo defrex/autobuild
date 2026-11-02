@@ -337,6 +337,41 @@ describe('ship-provider-plugin: installed deployments', () => {
     expect(Bun.resolveSync(TINY, distributionRoot)).toBe(join(staging, 'dist', 'index.js'))
   }, 60_000)
 
+  test('an installed two-file JavaScript plugin ships from its own install, not the workspace tree', async () => {
+    // A published plugin may have exactly the legacy staged-bundle shape
+    // (package.json + dist/index.js); away from the staging path that shape
+    // is an ordinary package, never a source-checkout fallback.
+    const project = await temp('ab-ship-two-file-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot, link } = await installedFixture(project, project)
+    const installed = await realpath(link)
+    await rm(join(installed, 'src'), { recursive: true })
+    await mkdir(join(installed, 'dist'), { recursive: true })
+    await writeFile(
+      join(installed, 'package.json'),
+      JSON.stringify({
+        name: TINY,
+        version: '0.8.0',
+        type: 'module',
+        exports: { '.': './dist/index.js' },
+        peerDependencies: { '@defrex/autobuild': '*' },
+      }),
+    )
+    await writeFile(
+      join(installed, 'dist', 'index.js'),
+      `export default { name: 'tiny', apiVersion: '${PLUGIN_API_VERSION}' }\n`,
+    )
+    const [result] = await ship({
+      cwd: project,
+      packages: [TINY],
+      distributionRoot,
+      traceRoot: project,
+    })
+    expect(result!.source).toBe(installed)
+    const staged = join(result!.staging, 'dist', 'index.js')
+    parsePluginManifest((await import(pathToFileURL(staged).href)).default)
+  }, 60_000)
+
   test('a workspace member ships under the workspace tracing root and re-runs identically', async () => {
     const root = await temp('ab-ship-member-')
     await writeFile(
