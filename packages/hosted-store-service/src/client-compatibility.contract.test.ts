@@ -1,5 +1,6 @@
 import * as store120 from './compatibility-fixtures/store-v1.2.0'
 import * as store130 from './compatibility-fixtures/store-v1.3.0'
+import * as currentWire from '@defrex/autobuild/remote-store'
 import { RELEASED_CLIENTS, supportedPublishedLines } from '@defrex/autobuild/remote-store'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
@@ -484,7 +485,15 @@ for (const version of ['0.12.0', '0.13.0', '0.14.0'].filter(isSupported)) {
 const frozenWire: Record<string, typeof store120> = { '1.2.0': store120, '1.3.0': store130 }
 for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
   const version = publication.version
-  const wire = frozenWire[version] ?? (publication.protocol === '6' ? store130 : undefined)
+  // The checkout's own protocol line speaks the current decoders until a later
+  // line changes the protocol and freezes them as a fixture.
+  const wire =
+    frozenWire[version] ??
+    (publication.protocol === '6'
+      ? store130
+      : publication.protocol === REMOTE_STORE_PROTOCOL_VERSION
+        ? currentWire
+        : undefined)
   if (!wire) throw new Error(`missing supported wire fixture ${version}`)
   test(`published ${version} wire operations work against the current service`, async () => {
     const store = new MemoryBuildStore()
@@ -529,6 +538,10 @@ for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.v
   })
 }
 
+// Published protocol-6 clients receive the bounded legacy shapes; the current
+// line's own clients speak protocol 7.
+const LEGACY_CLIENTS = RELEASED_CLIENTS.filter((entry) => entry.protocol === '6')
+
 for (const serviceVersion of ['1.3.0', '1.4.0']) {
   test(`bounded legacy event shapes and health on ${serviceVersion}`, async () => {
     const store = new MemoryBuildStore()
@@ -538,7 +551,7 @@ for (const serviceVersion of ['1.3.0', '1.4.0']) {
     })
     await store.createBuild({ slug: 'bounded', repo: 'repo' })
     await store.ensureRepo('repo')
-    for (const publication of RELEASED_CLIENTS) {
+    for (const publication of LEGACY_CLIENTS) {
       const send = (path: string) =>
         server.fetch(request(path, publication.version, undefined, admin, publication.protocol!))
       const health = await (await send('/health')).json()
@@ -568,7 +581,7 @@ for (const serviceVersion of ['1.3.0', '1.4.0']) {
         type: 'dispatcher.intake-set',
         payload: { enabled: true },
       })
-    for (const publication of RELEASED_CLIENTS) {
+    for (const publication of LEGACY_CLIENTS) {
       const response = await server.fetch(
         request('/repos/repo/events?since=0', publication.version, undefined, admin, '6'),
       )
@@ -585,7 +598,7 @@ for (const serviceVersion of ['1.3.0', '1.4.0']) {
         type: 'build.created',
         payload: { ticket: { source: 'file', id: 'T' }, repo: 'repo', baseBranch: 'main' },
       })
-    for (const publication of RELEASED_CLIENTS) {
+    for (const publication of LEGACY_CLIENTS) {
       const fits = await server.fetch(
         request('/builds/bounded/events?since=1', publication.version, undefined, admin, '6'),
       )
@@ -617,12 +630,16 @@ test('outer public health validates source and published identities without open
       throw new Error('health must not open storage')
     },
   })
+  const line = AUTOBUILD_VERSION.split('.').slice(0, 2).join('.')
+  const published = RELEASE_LINE_PROTOCOLS[line] ?? REMOTE_STORE_PROTOCOL_VERSION
   for (const protocol of ['6', '7', 'invented']) {
-    const response = await service.fetch(request('/health', '1.3.0', undefined, admin, protocol))
+    const response = await service.fetch(
+      request('/health', AUTOBUILD_VERSION, undefined, admin, protocol),
+    )
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
-      autobuildVersion: '1.3.0',
-      protocolVersion: protocol === '7' ? '7' : '6',
+      autobuildVersion: AUTOBUILD_VERSION,
+      protocolVersion: protocol === REMOTE_STORE_PROTOCOL_VERSION ? protocol : published,
     })
   }
 })
