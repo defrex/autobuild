@@ -2475,7 +2475,11 @@ Dispatcher liveness is also visible through `ab repository status --json`:
 `dispatcher.holder` identifies the unexpired repository lease owner, independently
 of `latestRun`. Each run includes its recorded `runtime` (version, commit, and
 source kind/location), or null for unrecorded historical starts. Heartbeat age measures attributable renewals; tick age measures
-actual tick completion. Successful unchanged ticks leave no journal pair; bounded,
+actual tick completion. Unchanged standing ticket counts and diagnostics do not publish
+tick pairs. Changes to those counts or diagnostics, per-tick activity, recovery from a
+failed tick, and due attention retries still publish. The last published diagnostics
+remain visible while lease-fenced completion telemetry advances independently of the
+journal cursor. Successful unchanged ticks leave no journal pair; bounded,
 lease-fenced repository telemetry still records each actual completion and its
 outcome. Last-tick age refreshes independently of the event cursor and never uses
 heartbeat as completion evidence. Open telemetry protects unsafe work during
