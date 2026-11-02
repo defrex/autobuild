@@ -48,7 +48,8 @@ test('bounded event protocol rejects peers without the new required operations',
   expect(REMOTE_STORE_PROTOCOL_VERSION).toBe('7')
   expect(clientIdentityError(AUTOBUILD_VERSION, '4')).toContain('unsupported protocol identity')
   expect(clientIdentityError(AUTOBUILD_VERSION, '5')).toContain('unsupported protocol identity')
-  expect(clientIdentityError(AUTOBUILD_VERSION, '6')).toBeUndefined()
+  // Published protocol-6 lines stay admitted; this line's own clients speak 7.
+  expect(clientIdentityError('1.3.0', '6')).toBeUndefined()
   expect(clientIdentityError(AUTOBUILD_VERSION, '7')).toBeUndefined()
 })
 
