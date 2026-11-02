@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tell operators to bound `ab watch` under exit-only harnesses: `ab-operate` and `ab-guide` now run the standing watch unbounded only under a per-line monitor, and otherwise use `--count 1` and re-arm from the trailing cursor, because an unbounded watch never exits on a blocked build.
+
 ## v1.4.0 — 2026-11-02
 
 This release makes hosted operation more efficient and reliable: event and history reads are now bounded, including dashboard warm-restore catch-up, and resumed `ab watch` and `ab wait` sessions work correctly against hosted stores with gapless cursor resume. Hosted dispatch gains a viewer mode, with `ab dispatch --viewer`, a persistent indicator, and viewer mode as the default for hosted-dispatched projects, plus a backward-compatibility window for older hosted clients. Build robustness also improves: unpublished commits survive workspace replacement, pending kernel work resumes after execution ends, oversized store writes fail cleanly instead of retrying, and a lost rewrite publication no longer stalls every dispatcher tick. Safety checks are tighter too, with credentials verified before dispatch and exact repository identity required before a project can be deleted.
