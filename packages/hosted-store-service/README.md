@@ -17,8 +17,9 @@ Vercel. The template explicitly pins both this service and its required core
 peer to the same release. The package build command stages the complete application, migrates
 Postgres, then builds Next.js. No source checkout or patch is needed.
 
-Follow the [hosted service setup](https://github.com/defrex/autobuild/blob/main/docs/hosted-service.md)
-for the exact template, environment, checks, and upgrade procedure. Store-only
+Follow the [self-hosting guide](SELF-HOSTING.md) for the exact template,
+environment, checks, and upgrade procedure. It ships in this package; self-hosting
+is unsupported and buyer-beware. Store-only
 mode is the default: without the optional dispatcher, `/api/dispatch` returns
 503 with “dispatch runs elsewhere for this deployment”, and no cron is supplied.
 
@@ -71,7 +72,7 @@ See [remote store authority](../../docs/remote-store-protocol.md#7-authenticatio
   import; edits and restarts never resurrect removed projects.
 - `AB_WEB_MCP_RESOURCE` (optional): the protected resource the MCP server
   binds tokens to; defaults to `<BETTER_AUTH_URL>/mcp`. See the
-  [MCP server](https://github.com/defrex/autobuild/blob/main/docs/mcp.md).
+  [self-hosting guide's variables](SELF-HOSTING.md#service-variables).
 
 Removing an email blocks its next gateway request even if its database-backed
 session has not expired. Rotate `BETTER_AUTH_SECRET` to end every browser
@@ -93,8 +94,8 @@ route, and a deployment that only hosts state never attempts a dispatch tick.
 With the dispatcher installed, `ab-hosted-service-build` packs the guest
 distribution archive. It ships the archive and the selected provider plugins
 into `/api/dispatch`. The dispatcher README states the plugin selection rule.
-See the [operator procedure](https://github.com/defrex/autobuild/blob/main/docs/hosted-dispatcher.md) for the
-schedule, incident pauses, and behavior details.
+See the [self-hosting guide](SELF-HOSTING.md#dispatcher-enabled-deployment) for
+the schedule, function duration, and pausing.
 
 The Sandbox SDK authenticates with the deployment's own OIDC identity inside
 Vercel functions, so no `VERCEL_TOKEN` belongs on a hosted deployment either
@@ -164,9 +165,9 @@ trackers keep the connection in their dispatcher and receive source feedback
 from service ticket surfaces. This service has no Linear backend.
 `AB_TICKET_BACKEND` and `LINEAR_API_KEY` are ignored with one startup removal
 message, and all `AB_TICKET_*_STATE` lifecycle variables are removed and ignored.
-See [project ticket migration](../../docs/hosted-service.md#hosted-ticket-projects-and-v1-migration)
-for atomic v1 upgrades, owner `tickets assign-team` recovery, and the blob
-credentials/access/prefix required during populated-v1 deployment builds.
+Deployment builds migrate populated v1 ticket data atomically and need the
+blob credentials, access and prefix to do so; recover team assignment with the
+owner `ab-hosted-store tickets assign-team` command.
 
 
 The retired `AB_WEB_ALLOWED_EMAILS` variable is refused at startup, even if empty.

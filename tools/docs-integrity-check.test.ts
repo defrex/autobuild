@@ -1,9 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { checkDocsIntegrity } from './docs-integrity-check'
 import { renderDocsPage } from '../packages/website/src/docs'
+import { loadDocsPages } from '../packages/website/src/docs-content'
+import { REPO_URL } from '../packages/website/src/constants'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -16,7 +18,13 @@ async function fixture(files: Record<string, string>) {
   const root = await mkdtemp(join(tmpdir(), 'docs-integrity-'))
   roots.push(root)
   await mkdir(join(root, 'docs'))
-  for (const [name, text] of Object.entries(files)) await writeFile(join(root, 'docs', name), text)
+  await mkdir(join(root, 'packages'))
+  // Paths under packages/ are package Markdown; every other name is a docs file.
+  for (const [name, text] of Object.entries(files)) {
+    const path = name.startsWith('packages/') ? join(root, name) : join(root, 'docs', name)
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, text)
+  }
   return root
 }
 
@@ -117,4 +125,63 @@ test('unreadable Markdown targets and missing docs root fail closed', async () =
   expect(
     (await checkDocsIntegrity({ root, docsRoot: join(root, 'missing') })).length,
   ).toBeGreaterThan(0)
+})
+
+test('checks top-level package Markdown, including links into the repository on GitHub', async () => {
+  const root = await fixture({
+    'home.md': page('Home', '', ''),
+    'packages/one/README.md': [
+      '# One',
+      '',
+      '## Present',
+      '',
+      '[file](missing.md) [fragment](GUIDE.md#absent) [repo](' +
+        `${REPO_URL}/blob/main/packages/absent/README.md) [repo fragment](` +
+        `${REPO_URL}/blob/main/docs/home.md#absent)`,
+    ].join('\n'),
+    'packages/one/GUIDE.md': '# Guide\n\n## Section',
+    'packages/one/node_modules/dependency/README.md': '[ignored](missing.md)',
+    'packages/one/nested/NOTES.md': '[ignored](missing.md)',
+  })
+  const findings = (await checkDocsIntegrity({ root })).join('\n')
+  for (const target of [
+    'missing.md: ',
+    'GUIDE.md#absent',
+    `${REPO_URL}/blob/main/packages/absent/README.md`,
+    `${REPO_URL}/blob/main/docs/home.md#absent`,
+  ])
+    expect(findings).toContain(target)
+  expect(findings).not.toContain('node_modules')
+  expect(findings).not.toContain('NOTES.md')
+})
+
+test('accepts valid package links and ignores other hosts', async () => {
+  const root = await fixture({
+    'home.md': page('Home', '## Heading', ''),
+    'packages/one/README.md': [
+      '# One',
+      '',
+      '[guide](GUIDE.md#section) [self](#one) [sibling](../two/README.md)',
+      `[repo](${REPO_URL}/blob/main/packages/two/README.md#two) [tree](${REPO_URL}/tree/main/packages/two)`,
+      `[docs](${REPO_URL}/blob/main/docs/home.md#heading) [issues](${REPO_URL}/issues/1)`,
+      '[elsewhere](https://example.test/blob/main/missing.md)',
+    ].join('\n'),
+    'packages/one/GUIDE.md': '# Guide\n\n## Section',
+    'packages/two/README.md': '# Two',
+  })
+  expect(await checkDocsIntegrity({ root })).toEqual([])
+})
+
+test('the website publishes no page and no navigation link for package Markdown', async () => {
+  const pages = await loadDocsPages()
+  expect(pages.length).toBeGreaterThan(0)
+  for (const page of pages) {
+    expect(page.source.startsWith('docs/')).toBe(true)
+    expect(`${page.title} ${page.path} ${page.source}`).not.toMatch(/self-host/i)
+    const html = renderDocsPage(page, pages)
+    expect(html).not.toContain('SELF-HOSTING')
+    expect(html).not.toMatch(/self-hosting/i)
+  }
+  const guide = join(import.meta.dir, '../packages/hosted-store-service/SELF-HOSTING.md')
+  expect(relative(join(import.meta.dir, '../docs'), guide).startsWith('..')).toBe(true)
 })

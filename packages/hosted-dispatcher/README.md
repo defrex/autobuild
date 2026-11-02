@@ -7,8 +7,9 @@ tick per configured repository per invocation. It drives the same core
 pass runs — claim, provision, launch, observe, settle, merge PRs, janitor,
 lease sweep — and reuses `@defrex/autobuild-hosted-store-service`'s validated
 store environment for the signing secret. See the
-[operator procedure](../../docs/hosted-dispatcher.md) for the schedule,
-incident pauses, and behavior details.
+[self-hosting guide](https://github.com/defrex/autobuild/blob/main/packages/hosted-store-service/SELF-HOSTING.md#dispatcher-enabled-deployment)
+for the schedule, function duration, and pausing. Self-hosting is unsupported
+and buyer-beware.
 
 A deployment opts into building by installing the package and mounting the
 route: the Next.js app's `app/api/dispatch/route.ts` (in the hosted store
@@ -86,7 +87,7 @@ Dispatcher variables (server-only, like every secret; none reach the browser):
   `hosted: false` without requiring an origin.
 - `AB_DISPATCHER_BUDGET_SECONDS`: per-invocation work budget (default 240,
   clamped 10–780); pair it with the route's `maxDuration` as described in the
-  operator procedure.
+  [self-hosting guide](https://github.com/defrex/autobuild/blob/main/packages/hosted-store-service/SELF-HOSTING.md#function-duration-and-budget).
 - `AB_DISPATCHER_TOKEN_TTL_SECONDS`: an upper bound on stored cron credential
   lifetime (default 604800 — 7 days; minimum 3600). Actual expiry is capped at
   the invocation deadline plus 60 seconds. Successful and failed ticks delete
@@ -119,7 +120,7 @@ Dispatcher variables (server-only, like every secret; none reach the browser):
   archive. Unset, the kernel uses the archive
   `ab-hosted-dispatcher pack-distribution` wrote to `.autobuild-dist/` during
   the deployment build (required for a bundled deployment, which has no `bun`
-  to pack with at runtime — see the operator procedure).
+  to pack with at runtime).
 
 The Sandbox SDK authenticates with the deployment's own OIDC identity inside
 Vercel functions (the `x-vercel-oidc-token` request header, forwarded to the
@@ -135,7 +136,7 @@ deposit time, overridable with `AB_ARTIFACT_RETENTION_MAX_REVISIONS`.
 
 Manage projects through the deployment's database-authorized
 `ab-hosted-store projects list|add|remove` commands (mutations require
-`--user IDENTITY`); see [connected projects](../../docs/setup.md#connected-projects).
+`--user IDENTITY`); see [connected projects](https://github.com/defrex/autobuild/blob/main/packages/hosted-store-service/README.md#connected-projects).
 Migrate PostgreSQL before deployment. Deprecated `AB_WEB_REPOSITORIES` seeds
 registrations once per database, including standalone dispatcher deployments;
 subsequent changes to it are not administration. Forge token override keys are

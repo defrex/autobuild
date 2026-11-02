@@ -78,6 +78,7 @@
   "files": [
     "src",
     "README.md",
+    "SELF-HOSTING.md",
     "!src/**/*.test.ts",
     "!src/**/*.test.tsx",
     "!src/**/*.spec.ts",
