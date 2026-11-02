@@ -10,6 +10,7 @@ import {
   type ReleasedClient,
 } from '../packages/core/src/store/remote/released-clients'
 import type { ReleasedReducerValues } from '../packages/core/src/store/remote/released-reducer-values'
+import { REMOTE_STORE_PROTOCOL_VERSION } from '../packages/core/src/store/remote/version'
 
 export const COMPATIBILITY_ROOT = 'packages/core/src/store/remote'
 export interface CompatibilityCandidate {
@@ -277,9 +278,10 @@ export async function prepareReleaseCompatibility(input: {
       Object.keys(catalog.roots).some((name) => !Number.isInteger(catalog.versions[name]))
     )
       throw new Error(`missing supported identity or contract: ${entry.version}`)
-    // Protocol 6 is the retained handler family above the 1.2 floor. New wire
-    // families must deliberately retain and prove old handlers before releasing.
-    if (entry.protocol !== '6')
+    // Protocol 6 is the retained handler family above the 1.2 floor; the
+    // checkout's own protocol is served natively. New wire families must
+    // deliberately retain and prove old handlers before releasing.
+    if (entry.protocol !== '6' && entry.protocol !== REMOTE_STORE_PROTOCOL_VERSION)
       throw new Error(`missing retained handler evidence for protocol ${entry.protocol}`)
     for (const other of releases)
       if (
