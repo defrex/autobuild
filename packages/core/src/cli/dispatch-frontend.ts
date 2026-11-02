@@ -163,6 +163,8 @@ export class DispatchFrontend {
   private accepting = false
   private cleanupInput: (() => void) | undefined
   private refresh: DashboardRefresh | undefined
+  /** Set once a failure streak is journaled; cleared by the next good frame. */
+  private renderFailureReported = false
   private suspension: ReturnType<typeof installPresentationSuspension> | undefined
   private readonly reader: BuildStore
   private paintTimer: ReturnType<typeof setInterval> | undefined
@@ -1078,12 +1080,18 @@ export class DispatchFrontend {
       async () => {
         try {
           await this.readFrame()
+          this.renderFailureReported = false
         } catch (error) {
-          if (this.refresh?.admitted)
+          // One durable warning per failure streak, not per poll: a poll that
+          // fails on every tick would otherwise grow the journal it reads.
+          // Messages carry moving cursors, so they cannot serve as the dedup key.
+          if (this.refresh?.admitted && !this.renderFailureReported) {
+            this.renderFailureReported = true
             await this.report(
               `dashboard render failed: ${error instanceof Error ? error.message : String(error)}`,
               'warning',
             )
+          }
           throw error
         }
       },
