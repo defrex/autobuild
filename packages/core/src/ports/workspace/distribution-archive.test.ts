@@ -445,6 +445,19 @@ describe('findPrebuiltDistributionArchive', () => {
     expect((await readFile(path)).byteLength).toBeGreaterThan(0)
     expect(await findPrebuiltDistributionArchive({}, [root])).toBe(path)
   })
+
+  test('writePrebuiltDistributionArchive removes stale archives of other versions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-dist-stale-'))
+    cleanups.push(root)
+    const dir = join(root, PREBUILT_DISTRIBUTION_DIR)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'autobuild-0.0.1.tgz'), 'stale')
+    await writeFile(join(dir, 'notes.txt'), 'kept')
+    const path = await writePrebuiltDistributionArchive(root, async () => new Uint8Array([7]))
+    expect(await readFile(path)).toEqual(Buffer.from([7]))
+    expect(await findPrebuiltDistributionArchive({}, [root])).toBe(path)
+    expect(await readFile(join(dir, 'notes.txt'), 'utf8')).toBe('kept')
+  })
 })
 
 // `mock.module` is process-global, not per-file: `bun test` loads every file

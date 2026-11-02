@@ -20,17 +20,50 @@ it drives) and `@defrex/autobuild-hosted-store-service` (the environment
 parser and types); a deployment that installs it adds
 `bun add @defrex/autobuild-hosted-dispatcher`.
 
-Besides the endpoint driver, the package owns two deploy-time helpers:
+Besides the endpoint driver, the package owns the deploy-time
+`ab-hosted-dispatcher` bin, also exported as
+`@defrex/autobuild-hosted-dispatcher/bin`. A bundled deployment has neither
+`bun` nor a source tree at runtime, so the build has to carry everything the
+dispatch function installs and loads. The bin has two commands for that:
 
-- the `ab-hosted-dispatcher` bin with the `pack-distribution` command, which
-  packs the running distribution into `<root>/.autobuild-dist/autobuild-<version>.tgz`
-  during the deployment build (the hosted store service's `deploy:build` runs
-  it by path from the package directory:
-  `bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .`); and
-- the `ship-packed-distribution` trace helper, which appends that archive to
-  the dispatch route's Next.js trace file so the function bundle carries it
-  (the same `deploy:build` runs it by path from the package directory as its
-  final step: `bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts`).
+- `pack-distribution [--root DIR]`, run before `next build`, packs the installed
+  `@defrex/autobuild` into `<root>/.autobuild-dist/autobuild-<version>.tgz`.
+  It removes archives left over from other versions.
+- `ship-deployment [--root DIR] [--dist-dir DIR] [--plugin NAME]...`, run after
+  `next build`, appends the archive and the distribution manifest to the
+  `/api/dispatch` route's Next.js trace. It then stages each selected provider
+  plugin into the function bundle. It fails the build, naming the missing
+  piece, when it cannot ship the archive, the manifest or a selected plugin,
+  and when the archive's version differs from the installed `@defrex/autobuild`.
+
+The hosted store service's published `ab-hosted-service-build` runs both
+commands automatically when this package is installed.
+
+### Which provider plugins ship
+
+The first of these rules that applies decides:
+
+1. `ship-deployment --plugin NAME` flags.
+2. The deployment `package.json` field `"autobuild": { "plugins": [...] }`.
+   An explicit `[]` ships none.
+3. By default, each entry of the deployment's `dependencies` whose installed
+   `package.json` declares `@defrex/autobuild` in `peerDependencies`, as
+   provider plugins do. The default skips Autobuild's own service packages:
+   `@defrex/autobuild-hosted-store-service`,
+   `@defrex/autobuild-hosted-dispatcher` and `@defrex/autobuild-postgres-store`.
+
+Each selected package must be installed in the deployment and must bundle.
+Its bundle must also evaluate to a valid plugin manifest. Any failure fails
+the build, naming the package and the rule that selected it. The build
+imports each bundle once to validate it, so top-level code in a plugin runs
+during the build.
+
+A plugin ships as a self-contained `bun build` bundle staged at
+`node_modules/<plugin>` inside the installed `@defrex/autobuild` directory.
+That is the first place the dispatch runtime looks when it resolves a plugin
+from its installation. The deployment's own installed copy of the plugin is
+never modified. A local build without `VERCEL` set removes the staged bundle
+afterwards, so `node_modules` stays exactly as `bun install` left it.
 
 ## Dispatcher environment variables
 

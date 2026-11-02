@@ -40,7 +40,7 @@ import { cachedRuntime, resolveCachedGuestArchive } from '../../cli/dispatch-run
  * bytes installed and resolution never adds a second pack per tick.
  */
 import { createHash } from 'node:crypto'
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { distributionRoot, distributionPath } from '../../distribution'
 import { REMOTE_STORE_PROTOCOL_VERSION } from '../../store/remote/version'
@@ -247,16 +247,26 @@ export async function packageAutobuildDistribution(): Promise<Uint8Array> {
 
 /** Pack the running distribution into `<root>/.autobuild-dist/autobuild-<version>.tgz`
  * (the same bytes `bun pm pack` produces) and return the archive path. Meant
- * for a deployment's build step, where `bun` and the source tree exist. */
+ * for a deployment's build step, where `bun` and the source tree exist. Any
+ * other `autobuild-*.tgz` there is removed: a cached build folder from an
+ * earlier version would otherwise hold two archives, which the deployment
+ * refuses to ship. */
 export async function writePrebuiltDistributionArchive(
   root: string = distributionRoot(),
+  pack: () => Promise<Uint8Array> = packageAutobuildDistribution,
 ): Promise<string> {
   const version = await readDistributionIdentity()
-  const archive = await packageAutobuildDistribution()
+  const archive = await pack()
   const dir = join(root, PREBUILT_DISTRIBUTION_DIR)
   await mkdir(dir, { recursive: true })
-  const path = join(dir, distributionAssetName(version))
+  const name = distributionAssetName(version)
+  const path = join(dir, name)
   await writeFile(path, archive)
+  for (const entry of await readdir(dir)) {
+    if (entry !== name && entry.startsWith('autobuild-') && entry.endsWith('.tgz')) {
+      await rm(join(dir, entry), { force: true })
+    }
+  }
   return path
 }
 
