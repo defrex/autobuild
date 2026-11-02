@@ -162,12 +162,26 @@ satisfied only by new events. Conditions include `attention`,
 condition, 3 timeout, 4 interrupted. On 3 and 4 with `--json`, the output is a
 bare `{"cursor": …}` to resume from.
 
-Run long watches and waits in whatever background or monitor facility your
-harness provides, so the session stays responsive and you are woken when they
-emit. Use precisely the same resolved invocation and working directory as
-foreground commands, including inside background shells and harness monitors.
-Do not rely on a shell alias or function that those facilities may lose.
-Never block a foreground command for their whole duration.
+An unbounded watch streams: it prints each record and keeps running, so it
+does not exit when a build blocks. Match how you run it to how your harness
+wakes you:
+
+- **Woken on each new output line** (a monitor that streams stdout, such as
+  Claude Code's Monitor tool): run the standing watch unbounded there and act
+  on every line as it arrives.
+- **Woken only when a command exits** (a background shell such as Claude
+  Code's background Bash, or a plain blocking call): never run an unbounded
+  watch this way, because its records sit unread until it exits. Add
+  `--count 1` so the watch exits on its first record:
+  `ab watch --operator --json --count 1 [--since <watch-cursor>]`. Act on the
+  record, then re-arm at once from the trailing cursor line. Presence survives
+  the re-arm gap.
+
+`ab wait` exits on its first match, so it suits either kind. Use precisely the
+same resolved invocation and working directory as foreground commands,
+including inside background shells and harness monitors. Do not rely on a
+shell alias or function that those facilities may lose. Never block a
+foreground command for their whole duration.
 
 Ticket-source degradation records mean dispatch intake cannot evaluate the source;
 existing builds may still advance. Inspect `ab repository status --json` for the
@@ -215,8 +229,9 @@ Neither a loss observation nor a later retry authorizes dispatcher intervention.
 Operate the builds the repository's dispatcher dispatches, including new builds
 that appear after you arm. Finishing the initially queued set is no reason to stop.
 
-1. Check presence as above, then arm `ab watch --operator --json` with no slugs.
-   Retain its own cursor and re-arm with
+1. Check presence as above, then arm `ab watch --operator --json` with no slugs,
+   adding `--count 1` if your harness wakes you only on exit. Retain its own
+   cursor and re-arm with
    `ab watch --operator --json --since <watch-cursor>`. If it reports
    `cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge
    the unavailable historical gap.
