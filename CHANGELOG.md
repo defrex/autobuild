@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## v1.4.0 — 2026-11-02
+
+This release makes hosted operation more efficient and reliable: event and history reads are now bounded, including dashboard warm-restore catch-up, and resumed `ab watch` and `ab wait` sessions work correctly against hosted stores with gapless cursor resume. Hosted dispatch gains a viewer mode, with `ab dispatch --viewer`, a persistent indicator, and viewer mode as the default for hosted-dispatched projects, plus a backward-compatibility window for older hosted clients. Build robustness also improves: unpublished commits survive workspace replacement, pending kernel work resumes after execution ends, oversized store writes fail cleanly instead of retrying, and a lost rewrite publication no longer stalls every dispatcher tick. Safety checks are tighter too, with credentials verified before dispatch and exact repository identity required before a project can be deleted.
+
+- [#816](https://github.com/defrex/autobuild/pull/816) — Bound dashboard warm-restore catch-up reads
+- [#815](https://github.com/defrex/autobuild/pull/815) — Route bounded history reads through the hosted service, fixing resumed `ab watch`/`ab wait` against hosted stores
+- [#814](https://github.com/defrex/autobuild/pull/814) — Default hosted-dispatched projects to viewer mode
+- [#813](https://github.com/defrex/autobuild/pull/813) — Bound hosted event reads and preserve gapless cursor resume
+- [#812](https://github.com/defrex/autobuild/pull/812) — Resume pending kernel work after execution ends
+- [#811](https://github.com/defrex/autobuild/pull/811) — Preserve unpublished commits across workspace replacement
+- [#810](https://github.com/defrex/autobuild/pull/810) — Add ab dispatch --viewer with a persistent viewer indicator
+- [#809](https://github.com/defrex/autobuild/pull/809) — Record hosted dispatch placement as a durable project fact
+- [#807](https://github.com/defrex/autobuild/pull/807) — Treat oversized store writes as non-retryable phase failures
+- [#806](https://github.com/defrex/autobuild/pull/806) — Bound replay retention so large changes can reach verification
+- [#805](https://github.com/defrex/autobuild/pull/805) — Make ui-app verification complete in Vercel Sandbox
+- [#802](https://github.com/defrex/autobuild/pull/802) — Observe target heads only from the remote, never from local refs
+- [#801](https://github.com/defrex/autobuild/pull/801) — Check account credentials before dispatching work
+- [#800](https://github.com/defrex/autobuild/pull/800) — Enforce a backward-compatibility window for hosted clients
+- [#799](https://github.com/defrex/autobuild/pull/799) — Publish reconcile archives when commits exist only on the remote
+- [#798](https://github.com/defrex/autobuild/pull/798) — Make the website Copy as Markdown test deterministic
+- [#797](https://github.com/defrex/autobuild/pull/797) — Suppress journal events for unchanged ticket scans
+- [#796](https://github.com/defrex/autobuild/pull/796) — Require exact repository identity before deleting a project
+- [#795](https://github.com/defrex/autobuild/pull/795) — Avoid historical hosted ticket lookups during grooming
+- [#794](https://github.com/defrex/autobuild/pull/794) — Stop retrying rewrite publications recorded lost, which ended every dispatcher tick
+
 ## v1.3.0 — 2026-10-29
 
 This release lets hosted clients and servers run different reducer versions: remote clients now accept any reduced value their own shape can represent, and published 1.2.0 clients keep working because the service answers them from a frozen 1.2.0 catalog, though 1.2.0 users should still upgrade. Recurring store reads now have tighter bounds across hosted ticket listing, dashboard snapshot uploads, parked-build config reads, presence evidence and observation sampling. Dispatching is more resilient: watch keeps running through tick-reporting outages, ticket claims are recovered when build preparation fails, unfinished reconciles resume before revised specs are replanned, and hosted forge cooldowns are bounded and come with audited operator recovery. Credential handling also improves, with local account credentials kept out of Claude process arguments and hosted ChatGPT credentials refreshed before they expire.

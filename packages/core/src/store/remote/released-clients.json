@@ -22,5 +22,16 @@
       "tarball": "https://registry.npmjs.org/@defrex/autobuild/-/autobuild-1.3.0.tgz",
       "integrity": "sha512-TXc39kNb8EgM80f3+MhxzBVzFjMLhgYtWBGL40oJqJSekyHZiiuZhLOtQK8rQoWTvZB1k6XcwqBEOgl2JJgy3g=="
     }
+  },
+  {
+    "version": "1.4.0",
+    "publishedAt": "2026-11-02T16:33:21.961Z",
+    "protocol": "7",
+    "contract": "1.4.0.json",
+    "projects": true,
+    "catalogIdentity": "f9289449e0df64c1de972d7456cd4d50f179f06b36a20bed05ba91411573b194",
+    "provenance": {
+      "tag": "v1.4.0"
+    }
   }
 ]
