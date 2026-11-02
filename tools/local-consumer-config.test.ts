@@ -9,8 +9,8 @@ import { evaluateVerifyApplicability } from '../packages/core/src/kernel/verify-
 
 const REPO_ROOT = join(import.meta.dir, '..')
 
-const PRODUCER = { runtime: 'codex', model: 'gpt-6.1-sol', account: 'chatgpt' }
-const REVIEWER = { runtime: 'claude', model: 'claude-opus-5-5', account: 'claude' }
+const CODEX = { runtime: 'codex', model: 'gpt-6.1-sol', account: 'chatgpt' }
+const CLAUDE = { runtime: 'claude', model: 'claude-opus-5-5', account: 'claude' }
 
 test('repository builds in Vercel Sandbox on subscription-billed Claude Code and Codex', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
@@ -44,21 +44,21 @@ test('repository builds in Vercel Sandbox on subscription-billed Claude Code and
     chatgpt: { kind: 'chatgpt-subscription', credentialEnv: 'CHATGPT_ACCESS_TOKEN' },
   })
 
-  // Producers run on Codex and reviewers on Claude, each falling back to the
+  // Producers run on Claude and reviewers on Codex, each falling back to the
   // other provider. Every route bills a named subscription account: no Pi,
   // no gateway-qualified model id.
-  const expected: Record<string, typeof PRODUCER> = {
-    default: PRODUCER,
-    plan: PRODUCER,
-    implement: PRODUCER,
-    'plan-review': REVIEWER,
-    'code-review': REVIEWER,
+  const expected: Record<string, typeof CODEX> = {
+    default: CODEX,
+    plan: CLAUDE,
+    implement: CLAUDE,
+    'plan-review': CODEX,
+    'code-review': CODEX,
   }
   expect(Object.keys(config.roles).sort()).toEqual(Object.keys(expected).sort())
   for (const [key, primary] of Object.entries(expected)) {
     const role = config.roles[key]!
     expect(role).toMatchObject(primary)
-    const fallback = primary === PRODUCER ? REVIEWER : PRODUCER
+    const fallback = primary === CODEX ? CLAUDE : CODEX
     expect(role.alternates).toEqual([fallback])
   }
 
