@@ -32,7 +32,8 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  * The three sub-package rulings and the root ruling carry their rulings' pinned prose:
  *
  * - Hosted service packaging ships src/**, app/**, server.ts, Next config,
- *   a standalone deployment tsconfig, next-env.d.ts and the deployment template.
+ *   a standalone deployment tsconfig, next-env.d.ts, the deployment template
+ *   and SELF-HOSTING.md, the self-hosting guide every deployment installs.
  *   Tests in src and app, internal design briefs, caches and generated files
  *   remain excluded. The manifest remains the bounded allowlist authority.
  * - AUT-473 — `@defrex/autobuild-postgres-store` declares the same shape
@@ -168,13 +169,14 @@ export interface TarballRuling {
 }
 
 const HOSTED_STORE_SERVICE_RULING =
-  'Ruling (AUT-463, extended by AUT-490, extended by AUT-502): the @defrex/autobuild-hosted-store-service npm tarball ships exactly ' +
+  'Ruling (AUT-463, extended by AUT-490, extended by AUT-502): the @defrex/autobuild-hosted-store-service npm tarball ships ' +
   'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, src/**/*.spec.ts, and src/**/*.spec.tsx files (the within-segment * ' +
   'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
   'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
-  'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. The Next.js app/ tree, server.ts, next.config.ts, ' +
-  'vercel.json, tsconfig.json, next-env.d.ts, and the internal .impeccable/ surface brief are ' +
-  'release-checkout/Vercel surface and must not publish. If the ruling changes, update the ' +
+  'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. It also ships SELF-HOSTING.md, ' +
+  'the self-hosting guide every deployment installs, and the deployment surface: the Next.js app/ tree (minus its tests), server.ts, next.config.ts, ' +
+  'tsconfig.deploy.json, next-env.d.ts and the deployment/ template. The package-root vercel.json and tsconfig.json, the internal .impeccable/ ' +
+  'surface brief, caches and generated files are release-checkout surface and must not publish. If the ruling changes, update the ' +
   "'files' allowlist in packages/hosted-store-service/package.json and this check together."
 
 const POSTGRES_STORE_RULING =

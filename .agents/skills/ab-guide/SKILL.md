@@ -1384,7 +1384,7 @@ commit, and the PR; a refused or failed attempt is journaled too.
 `[upgrade] automatic` is a strict boolean, defaults to `true`, and hot-reloads.
 Resident checkout dispatchers check every 60 seconds, independently of tick cadence.
 Exact changed targets can include downgrades. Missing or inconsistent declared-pin
-metadata never falls back to installed mode. Self-hosting source launches follow
+metadata never falls back to installed mode. Source-mode launches follow
 the authoritative base commit using packaged-content and production-lock equality,
 without modifying operator or build worktrees. Equal-content advances still record
 the latest resolved target SHA. Compatible generations overlap through the durable draining handoff described above. `--once`, origin-mode and direct hot
@@ -1670,6 +1670,18 @@ main checkout's `.autobuild/`. `AB_TOKEN` overrides the exact service/project's
 saved credential for CI and other non-interactive hosts. A service override
 never borrows another service's credential. Build and harvest sessions keep
 their explicit scoped authority.
+
+## Self-hosting the service
+
+Connecting a project to an existing Autobuild service, as above, is the
+supported path. Running your own service instance, store-only or with its
+hosted dispatcher, is an unsupported, buyer-beware path: it is not fully
+production-ready, and its packaging, variables and procedure may change without
+notice. The deployment guide installs with the service package at
+`node_modules/@defrex/autobuild-hosted-store-service/SELF-HOSTING.md` inside the
+deployment folder; before that folder exists, read it at
+https://github.com/defrex/autobuild/blob/main/packages/hosted-store-service/SELF-HOSTING.md.
+Do not present self-hosting to users as a supported product feature.
 
 ## Source-agnostic ticket operations
 
