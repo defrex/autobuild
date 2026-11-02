@@ -172,8 +172,8 @@ skill = "finalize-changelog"
 # Runtime, model, and args per phase role. `default` is the inheritance base
 # and is never dispatched as a phase; every other role overrides each field
 # independently, and a declared args list replaces rather than unions.
-# Producers run on GPT and reviewers on Claude Opus, so a reviewer never
-# shares the implementer's blind spots. Each role falls back to the other
+# Producers run on Claude Opus because Claude is the larger subscription pool;
+# reviewers run on GPT for model diversity. Each role falls back to the other
 # provider's model when its own is overloaded or out of quota. Every route
 # names its billing account explicitly: Codex on the ChatGPT subscription,
 # Claude Code on the Claude subscription.
@@ -184,28 +184,28 @@ account = "chatgpt"
 alternates = [{ runtime = "claude", model = "claude-opus-5-5", account = "claude" }]
 
 [roles.plan]
-runtime = "codex"
-model = "gpt-6.1-sol"
-account = "chatgpt"
-alternates = [{ runtime = "claude", model = "claude-opus-5-5", account = "claude" }]
+runtime = "claude"
+model = "claude-opus-5-5"
+account = "claude"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol", account = "chatgpt" }]
 
 [roles.implement]
+runtime = "claude"
+model = "claude-opus-5-5"
+account = "claude"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol", account = "chatgpt" }]
+
+[roles.plan-review]
 runtime = "codex"
 model = "gpt-6.1-sol"
 account = "chatgpt"
 alternates = [{ runtime = "claude", model = "claude-opus-5-5", account = "claude" }]
 
-[roles.plan-review]
-runtime = "claude"
-model = "claude-opus-5-5"
-account = "claude"
-alternates = [{ runtime = "codex", model = "gpt-6.1-sol", account = "chatgpt" }]
-
 [roles.code-review]
-runtime = "claude"
-model = "claude-opus-5-5"
-account = "claude"
-alternates = [{ runtime = "codex", model = "gpt-6.1-sol", account = "chatgpt" }]
+runtime = "codex"
+model = "gpt-6.1-sol"
+account = "chatgpt"
+alternates = [{ runtime = "claude", model = "claude-opus-5-5", account = "claude" }]
 
 [policy]
 stallRounds = 3          # a finding surviving N review rounds escalates
