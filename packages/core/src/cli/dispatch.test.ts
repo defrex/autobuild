@@ -11136,6 +11136,129 @@ for (const queued of [false, true]) {
   })
 }
 
+for (const condition of ['dependency', 'invalid', 'creation'] as const) {
+  test(`quiet watch preserves standing ${condition} diagnostics with bounded journal`, async () => {
+    const clock = manualClock()
+    const creationKey = crypto.randomUUID()
+    const fx = await makeFixture(
+      condition === 'dependency'
+        ? [
+            readyTicket('T-blocked', { blockedBy: ['T-9'] }),
+            readyTicket('T-9', { state: 'In Progress' }),
+          ]
+        : condition === 'creation'
+          ? [readyTicket('T-creating', { creationKey })]
+          : [],
+      happyHandlers(),
+      `ticketScanIntervalSeconds = 1\n${DISPATCH_CONFIG_TOML}`,
+      clock,
+    )
+    const stop = new AbortController()
+    let ticks = 0
+    let baseline = 0
+    let initialDiagnostics: string[] = []
+    let changed = false
+    const listing = fx.tickets.listReady.bind(fx.tickets)
+    if (condition === 'invalid')
+      fx.tickets.listReady = async (criteria) => ({
+        ...(await listing(criteria)),
+        diagnostics: [changed ? 'invalid changed' : 'invalid original'],
+      })
+    try {
+      if (condition === 'creation') {
+        await fx.store.ensureRepo(fx.origin)
+        await fx.store.appendRepo(fx.origin, {
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run: 'h_idle',
+            observations: [{ build: 'origin', seq: 1 }],
+            scan: { kind: 'harvest-scan', rev: 0 },
+          },
+        })
+        await fx.store.appendRepo(fx.origin, {
+          actor: KERNEL,
+          type: 'harvest.proposal.id-reserved',
+          payload: {
+            run: 'h_idle',
+            proposalKey: 'idle',
+            id: creationKey,
+          },
+        })
+        await fx.store.appendRepo(fx.origin, { actor: KERNEL, type: 'harvest.paused', payload: {} })
+      }
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        kernelRunId: 'standing-idle',
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          ++ticks
+          const events = await fx.store.getRepoEvents(fx.origin)
+          const completions = events.filter((e) => e.type === 'dispatcher.tick-completed')
+          const status = reduceDispatchStatus(events, 'standing-idle')
+          const scan = events.findLast((e) => e.type === 'dispatcher.ticket-scan-completed')!
+          const counter =
+            condition === 'dependency'
+              ? 'dependencyBlocked'
+              : condition === 'invalid'
+                ? 'invalidTickets'
+                : 'creationWithheld'
+          expect(scan.type).toBe('dispatcher.ticket-scan-completed')
+          if (scan.type === 'dispatcher.ticket-scan-completed')
+            expect(scan.payload[counter]).toBe(changed && condition === 'creation' ? 0 : 1)
+          const completion = completions.at(-1)!
+          if (completion.type === 'dispatcher.tick-completed')
+            expect(completion.payload.counters[counter]).toBe(
+              changed && condition === 'creation' ? 0 : 1,
+            )
+
+          if (!changed) expect(status.diagnostics.length).toBeGreaterThan(0)
+          if (ticks === 1) initialDiagnostics = status.diagnostics
+          if (ticks === 10) baseline = events.length
+          const limit = condition === 'dependency' ? 1000 : 20
+          if (ticks >= 10 && ticks <= limit) {
+            expect(events.length).toBe(baseline)
+            expect(completions).toHaveLength(1)
+            expect(status.diagnostics).toEqual(initialDiagnostics)
+          }
+          const { readDispatcherLiveness } = await import('./dispatcher-liveness')
+          const { dispatcher } = await readDispatcherLiveness(fx.store, fx.origin, clock())
+          expect(dispatcher.state).toBe('held')
+          const { projectRepositoryStatus } = await import('./repository-status')
+          expect(projectRepositoryStatus(fx.origin, events, dispatcher).dispatcher).toEqual(
+            dispatcher,
+          )
+
+          expect(dispatcher.holder!.lastTickAt).toBe(clock().toISOString())
+          expect(dispatcher.holder!.lastTickAgeMs).toBe(0)
+          if (ticks === limit) {
+            changed = true
+            if (condition === 'dependency')
+              fx.tickets.add(readyTicket('T-blocked', { blockedBy: ['T-other'] }))
+            if (condition === 'creation')
+              fx.tickets.add(readyTicket('T-creating', { creationKey, state: 'Triage' }))
+          }
+          if (ticks > limit) {
+            expect(completions).toHaveLength(2)
+            expect(status.diagnostics).not.toEqual(initialDiagnostics)
+            if (ticks === limit + 3) stop.abort()
+          }
+          clock.advance(ticks === limit ? 1000 : 10)
+        },
+      })
+      expect(fx.tickets.claims).toEqual([])
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+}
+
 test('a holder change at begin fences the tick before ticket work', async () => {
   const fx = await makeFixture(readyTicket('fenced-ticket'), happyHandlers())
   const begin = fx.store.beginRepoTick.bind(fx.store)

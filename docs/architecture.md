@@ -558,8 +558,12 @@ kernel child is reaped, after which a non-SIGINT terminating signal is replayed
 in the frontend. A parent-liveness watch remains the detached-kernel fallback.
 The repository record carries constant-size, lease-holder-fenced tick telemetry:
 `beginRepoTick` opens the unsafe boundary, and `finishRepoTick` atomically closes
-it and appends selected tick facts. Successful unchanged ticks append nothing;
-queue transitions, counters, diagnostics, attention resets/retries, and failures
+it and appends selected tick facts. Unchanged standing ticket counts and diagnostics do
+not publish tick pairs. Changes to those counts or diagnostics, per-tick activity,
+recovery from a failed tick, and due attention retries still publish. The last published
+diagnostics remain visible while lease-fenced completion telemetry advances
+independently of the journal cursor. Successful unchanged ticks append nothing;
+queue transitions, activity counters, changed diagnostics, attention resets/retries, and failures
 retain their journal evidence. Buffered starts preserve actual `startedAt` for
 attention cooldowns; old starts use their envelope time. Liveness reads refresh
 the repository record even with an unchanged event cursor, merging matching-run
