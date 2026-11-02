@@ -1448,8 +1448,12 @@ describe('the real sub-package manifests', () => {
   const POSTGRES_AUT_500_FILES = [...AUT_490_BROADENED_FILES, '!src/testing/**']
   const AUT_500_FILES_BY_DIRECTORY: Record<string, string[]> = {
     'hosted-dispatcher': [...AUT_490_BROADENED_FILES, '!src/testing/**'],
+    // The self-hosting guide ships beside the README (AUT-1081).
     'hosted-store-service': [
-      ...AUT_490_BROADENED_FILES,
+      'src',
+      'README.md',
+      'SELF-HOSTING.md',
+      ...AUT_490_BROADENED_FILES.slice(2),
       '!src/testing/**',
       'app',
       'server.ts',

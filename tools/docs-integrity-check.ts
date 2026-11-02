@@ -1,5 +1,6 @@
 import { access, readFile, readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { REPO_URL } from '../packages/website/src/constants'
 import { loadDocsPages } from '../packages/website/src/docs-content'
 import { type DocsPage, renderDocsPage } from '../packages/website/src/docs'
 
@@ -27,11 +28,14 @@ export async function checkDocsIntegrity(
   options: {
     root?: string
     docsRoot?: string
+    /** Top-level Markdown in each package directory (READMEs, guides). */
+    packagesRoot?: string
     render?: (page: DocsPage, pages: DocsPage[]) => string
   } = {},
 ): Promise<string[]> {
   const root = resolve(options.root ?? join(import.meta.dir, '..'))
   const docsRoot = resolve(options.docsRoot ?? join(root, 'docs'))
+  const packagesRoot = resolve(options.packagesRoot ?? join(root, 'packages'))
   const findings: string[] = []
   try {
     let pages: DocsPage[] = []
@@ -58,10 +62,17 @@ export async function checkDocsIntegrity(
       htmlCache.set(path, html)
       return html
     }
-    async function validate(source: string, href: string) {
-      if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return
+    async function validate(source: string, href: string, authored = false) {
+      // Authored links into this repository's main branch must resolve in the
+      // checkout: package Markdown uses them because relative links break once
+      // installed. Rendered site chrome links the real repository instead.
+      const inRepository =
+        authored && href.startsWith(`${REPO_URL}/`)
+          ? /^(?:blob|tree)\/main\/(.+)$/.exec(href.slice(REPO_URL.length + 1))?.[1]
+          : undefined
+      if (inRepository === undefined && /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return
       try {
-        const [beforeFragment = '', fragment] = href.split('#')
+        const [beforeFragment = '', fragment] = (inRepository ?? href).split('#')
         const path = decodeURIComponent(beforeFragment.split('?')[0] ?? '')
         const anchor = fragment === undefined ? undefined : decodeURIComponent(fragment)
         let target: string
@@ -70,7 +81,8 @@ export async function checkDocsIntegrity(
           const route = routes.get(path.endsWith('/') ? path : `${path}/`)
           if (!route) throw new Error(`missing website route ${path}`)
           target = route
-        } else target = path ? resolve(dirname(source), path) : source
+        } else if (inRepository !== undefined) target = resolve(root, path)
+        else target = path ? resolve(dirname(source), path) : source
         await access(target)
         if (anchor && (target.endsWith('.md') || rendered.has(target))) {
           if (!ids(await targetHtml(target)).has(anchor))
@@ -103,7 +115,17 @@ export async function checkDocsIntegrity(
       const text = await readFile(source, 'utf8')
       const body = text.replace(/^---\n[\s\S]*?\n---\n/, '')
       for (const href of links(Bun.markdown.html(body, { headings: false })))
-        await validate(source, href)
+        await validate(source, href, true)
+    }
+    for (const entry of await readdir(packagesRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === 'node_modules') continue
+      const directory = join(packagesRoot, entry.name)
+      for (const name of (await readdir(directory)).filter((name) => name.endsWith('.md'))) {
+        const source = join(directory, name)
+        const text = await readFile(source, 'utf8')
+        for (const href of links(Bun.markdown.html(text, { headings: false })))
+          await validate(source, href, true)
+      }
     }
   } catch (error) {
     findings.push(`Cannot check docs integrity: ${String(error)}`)
