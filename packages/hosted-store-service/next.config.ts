@@ -8,9 +8,13 @@ const config: NextConfig = {
     '@defrex/autobuild-hosted-store-service',
   ],
   serverExternalPackages: ['better-auth', 'pg'],
-  // Installed deployments explicitly supply their root; source deployments
-  // retain workspace-wide resolution.
+  // Installed deployments explicitly supply their root (the deployment folder,
+  // or the workspace root above it); source deployments retain workspace-wide
+  // resolution and Next's inferred tracing root.
   turbopack: { root: process.env.AB_SERVICE_BUILD_ROOT ?? resolve(process.cwd(), '..', '..') },
+  ...(process.env.AB_SERVICE_BUILD_ROOT
+    ? { outputFileTracingRoot: process.env.AB_SERVICE_BUILD_ROOT }
+    : {}),
   // RFC 9728 discovery must exist at the origin root: MCP clients discover
   // the authorization server from `/.well-known/oauth-protected-resource` at
   // the resource URL's origin before falling back to path-based probes. The
@@ -43,11 +47,13 @@ const config: NextConfig = {
     }
   },
   // The hosted dispatcher installs the guest distribution from the archive
-  // `deploy:build` packs into .autobuild-dist/ (see docs/hosted-dispatcher.md);
-  // carry it into the cron route's function bundle. Both routes retain legacy
-  // operate-skill trace entries; neither executes operator turns. Next 16's
-  // Turbopack does not apply these includes, so ship-packed-distribution.ts
-  // appends the equivalent entries after deploy:build. Webpack uses them here.
+  // the build packs into .autobuild-dist/ (see the hosted-dispatcher package
+  // README); carry it into the cron route's function bundle. Both routes
+  // retain legacy operate-skill trace entries; neither executes operator
+  // turns. Next 16's Turbopack does not apply these includes, so
+  // `deploy:build` and `ab-hosted-service-build` both run
+  // `ab-hosted-dispatcher ship-deployment`, which appends the equivalent
+  // entries and the provider plugins. Webpack uses them here.
   outputFileTracingIncludes: process.env.AB_SERVICE_BUILD_ROOT
     ? {}
     : {

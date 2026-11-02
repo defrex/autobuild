@@ -1,8 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { buildDeployment, deploymentDependencies, stageDeployment } from './deploy-build'
+import { join, resolve } from 'node:path'
+import {
+  buildDeployment,
+  deploymentDependencies,
+  deploymentTraceRoot,
+  stageDeployment,
+} from './deploy-build'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -45,6 +50,52 @@ test('missing required dependency and installed broken dispatcher fail clearly',
   expect(deploymentDependencies(root).dispatcher).toBe(false)
   await dependency(root, '@defrex/autobuild-hosted-dispatcher', { '.': './index.ts' })
   expect(() => deploymentDependencies(root)).toThrow('runtime')
+  // A fresh root: Bun caches the resolution of the first manifest.
+  const older = await fixture()
+  await dependency(older, 'next', { './dist/bin/next': './next.js' })
+  await dependency(older, '@defrex/autobuild-hosted-dispatcher', { './runtime': './runtime.ts' })
+  expect(() => deploymentDependencies(older)).toThrow(
+    'installed @defrex/autobuild-hosted-dispatcher lacks the deploy bin',
+  )
+})
+test('with the dispatcher installed the build packs, migrates, builds, then ships', async () => {
+  const root = await fixture()
+  await dependency(root, 'next', { './dist/bin/next': './next.js' })
+  await dependency(root, '@defrex/autobuild-postgres-store', { '.': './index.ts' })
+  await dependency(root, '@defrex/autobuild-hosted-dispatcher', {
+    './runtime': './runtime.ts',
+    './bin': './bin.ts',
+  })
+  const bin = join(root, 'node_modules/@defrex/autobuild-hosted-dispatcher/bin.ts')
+  const calls: { args: string[]; env: Record<string, string> }[] = []
+  await buildDeployment(root, async (args, cwd, env) => {
+    expect(cwd).toBe(root)
+    calls.push({ args, env })
+    if (args[1] === 'build')
+      for (const path of ['tsconfig.json', 'next-env.d.ts']) await writeFile(join(root, path), '')
+  })
+  expect(calls.map(({ args }) => args)).toEqual([
+    [bin, 'pack-distribution', '--root', root],
+    [expect.stringContaining('bin.ts'), 'migrate'],
+    [expect.stringContaining('next'), 'build'],
+    [bin, 'ship-deployment', '--root', root],
+  ])
+  for (const { env } of calls) expect(env.AB_SERVICE_BUILD_ROOT).toBe(root)
+})
+test('the tracing root is the matching workspace root, else the folder itself', async () => {
+  const root = await fixture()
+  await writeFile(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*'] }))
+  await mkdir(join(root, 'apps/autobuild'), { recursive: true })
+  await mkdir(join(root, 'tools/autobuild'), { recursive: true })
+  expect(deploymentTraceRoot(join(root, 'apps/autobuild'))).toBe(root)
+  expect(deploymentTraceRoot(join(root, 'tools/autobuild'))).toBe(resolve(root, 'tools/autobuild'))
+  await writeFile(
+    join(root, 'package.json'),
+    JSON.stringify({ workspaces: { packages: ['tools/*'] } }),
+  )
+  expect(deploymentTraceRoot(join(root, 'tools/autobuild'))).toBe(root)
+  const standalone = await fixture()
+  expect(deploymentTraceRoot(standalone)).toBe(standalone)
 })
 test('migration precedes build and either failure is propagated', async () => {
   const root = await fixture()
@@ -57,6 +108,7 @@ test('migration precedes build and either failure is propagated', async () => {
       throw new Error('migration failed')
     }),
   ).rejects.toThrow('migration failed')
+  // Store-only: no pack step precedes migration.
   expect(calls).toHaveLength(1)
   expect(calls[0]?.[1]).toBe('migrate')
   calls.length = 0

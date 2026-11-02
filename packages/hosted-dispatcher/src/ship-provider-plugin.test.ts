@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -12,10 +13,14 @@ import {
 } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parsePluginManifest } from '@defrex/autobuild/plugin-sdk'
-import { restoresWorkspaceLinkIn, shipProviderPlugin } from './ship-provider-plugin'
+import { parsePluginManifest, PLUGIN_API_VERSION } from '@defrex/autobuild/plugin-sdk'
+import {
+  restoresInstallIn,
+  shipProviderPlugins,
+  type ShipProviderPluginsOptions,
+} from './ship-provider-plugin'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -25,53 +30,140 @@ afterEach(async () => {
 const REAL_ROOT = resolve(import.meta.dir, '..', '..', '..')
 const TRACE_DIRECTORY = join('.next', 'server', 'app', 'api', 'dispatch')
 const PACKAGE_NAME = '@defrex/autobuild-vercel-sandbox'
+const TINY = '@fixture/tiny-plugin'
 
-/** A fixture workspace root with a real `packages/vercel-sandbox` workspace
- * member (its `src/index.ts` symlinks to the REAL package source, so staged
- * bundles inline the genuine plugin-sdk closure), plus a Next project
- * directory holding a trace file. Mirrors the deployed layout:
- * `<root>/packages/hosted-store-service/.next/server/app/api/dispatch/
- * route.js.nft.json`, staged files seven directory levels below the root. The
- * source member is found through the workspace tree, never node_modules
- * (finding f_5b9ade16) — so no node_modules link is needed here. */
-async function fixture(traceFiles?: string[]): Promise<{ root: string; project: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'ab-ship-plugin-'))
-  temporary.push(root)
+async function temp(prefix: string): Promise<string> {
+  const path = await realpath(await mkdtemp(join(tmpdir(), prefix)))
+  temporary.push(path)
+  return path
+}
+
+async function writeTrace(project: string, files: string[] = ['/absolutely/not/real.js']) {
+  await mkdir(join(project, TRACE_DIRECTORY), { recursive: true })
+  await writeFile(
+    join(project, TRACE_DIRECTORY, 'route.js.nft.json'),
+    JSON.stringify({ version: 1, files }),
+  )
+}
+
+async function traceOf(project: string): Promise<string[]> {
+  return JSON.parse(await readFile(join(project, TRACE_DIRECTORY, 'route.js.nft.json'), 'utf8'))
+    .files
+}
+
+/** Every path under `root`, with symlinks reported (not followed). */
+async function tree(root: string): Promise<string[]> {
+  const result: string[] = []
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name)
+    result.push(`${relative(root, path)}${entry.isSymbolicLink() ? '@' : ''}`)
+    if (entry.isDirectory())
+      result.push(...(await tree(path)).map((child) => join(entry.name, child)))
+  }
+  return result.sort()
+}
+
+/** A plugin package directory. The real Vercel Sandbox plugin links its
+ * source (so staged bundles inline the genuine plugin-sdk closure); the tiny
+ * plugin default-exports a minimal manifest with no imports. */
+async function pluginPackage(directory: string, name: string, body?: string) {
+  await mkdir(join(directory, 'src'), { recursive: true })
+  await writeFile(
+    join(directory, 'package.json'),
+    JSON.stringify({
+      name,
+      version: '0.8.0',
+      type: 'module',
+      exports: { '.': { types: './src/index.ts', import: './src/index.ts' } },
+      peerDependencies: { '@defrex/autobuild': '*' },
+    }),
+  )
+  if (name === PACKAGE_NAME && body === undefined) {
+    await symlink(
+      join(REAL_ROOT, 'packages', 'vercel-sandbox', 'src', 'index.ts'),
+      join(directory, 'src', 'index.ts'),
+      'file',
+    )
+  } else {
+    await writeFile(
+      join(directory, 'src', 'index.ts'),
+      body ?? `export default { name: 'tiny', apiVersion: '${PLUGIN_API_VERSION}' }\n`,
+    )
+  }
+}
+
+/** The source checkout: a workspace root with a `packages/vercel-sandbox`
+ * member linked from the root `node_modules` as `bun install` leaves it, and
+ * a Next project at `packages/hosted-store-service`. The distribution root is
+ * the repository root. */
+async function sourceFixture(): Promise<{ root: string; project: string; link: string }> {
+  const root = await temp('ab-ship-plugin-')
   await writeFile(
     join(root, 'package.json'),
     JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }),
   )
   const project = join(root, 'packages', 'hosted-store-service')
-  await mkdir(join(project, TRACE_DIRECTORY), { recursive: true })
-  await writeFile(
-    join(project, TRACE_DIRECTORY, 'route.js.nft.json'),
-    JSON.stringify({ version: 1, files: traceFiles ?? ['/absolutely/not/real.js'] }),
-  )
-  const member = join(root, 'packages', 'vercel-sandbox')
-  await mkdir(join(member, 'src'), { recursive: true })
-  await writeFile(
-    join(member, 'package.json'),
-    JSON.stringify({ name: PACKAGE_NAME, version: '0.8.0', type: 'module' }),
-  )
-  await symlink(
-    join(REAL_ROOT, 'packages', 'vercel-sandbox', 'src', 'index.ts'),
-    join(member, 'src', 'index.ts'),
-    'file',
-  )
-  return { root, project }
+  await writeTrace(project)
+  await pluginPackage(join(root, 'packages', 'vercel-sandbox'), PACKAGE_NAME)
+  const link = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
+  await mkdir(dirname(link), { recursive: true })
+  await symlink(join('..', '..', 'packages', 'vercel-sandbox'), link, 'dir')
+  return { root, project, link }
 }
 
-describe('ship-provider-plugin', () => {
-  test('stages a self-contained bundle and appends it at the repository-root depth', async () => {
-    const { root, project } = await fixture()
+/** Bun's isolated-linker install: `node_modules/<pkg>` links into
+ * `node_modules/.bun/<pkg>@v/node_modules/<pkg>`, and the installed
+ * `@defrex/autobuild` lives under `.bun` too. `installRoot` holds
+ * `node_modules`; `project` is the Next project folder. */
+async function installedFixture(
+  installRoot: string,
+  project: string,
+  name = TINY,
+  body?: string,
+): Promise<{ distributionRoot: string; link: string }> {
+  const modules = join(installRoot, 'node_modules')
+  const store = join(modules, '.bun', `${name.replace('/', '+')}@0.8.0`, 'node_modules', name)
+  await pluginPackage(store, name, body)
+  const link = join(modules, ...name.split('/'))
+  await mkdir(dirname(link), { recursive: true })
+  await symlink(relative(dirname(link), store), link, 'dir')
+  const distributionRoot = join(
+    modules,
+    '.bun',
+    '@defrex+autobuild@1.0.0',
+    'node_modules',
+    '@defrex',
+    'autobuild',
+  )
+  await mkdir(distributionRoot, { recursive: true })
+  await writeFile(
+    join(distributionRoot, 'package.json'),
+    JSON.stringify({ name: '@defrex/autobuild', version: '1.0.0' }),
+  )
+  await writeTrace(project)
+  return { distributionRoot, link }
+}
+
+const ship = (options: Omit<ShipProviderPluginsOptions, 'log'>) =>
+  shipProviderPlugins({ log: () => {}, ...options })
+
+describe('ship-provider-plugin: source checkout', () => {
+  test('stages a self-contained bundle over the workspace link at the repository-root depth', async () => {
+    const { root, project, link } = await sourceFixture()
     const lines: string[] = []
-    const result = await shipProviderPlugin({ cwd: project, log: (m) => lines.push(m) })
-    expect(result.repoRoot).toBe(root)
+    const [result] = await shipProviderPlugins({
+      cwd: project,
+      packages: [PACKAGE_NAME],
+      distributionRoot: root,
+      log: (m) => lines.push(m),
+    })
+    expect(result!.staging).toBe(link)
+    expect(result!.source).toBe(join(root, 'packages', 'vercel-sandbox'))
 
     // The staged module must be self-contained: zero external module imports
-    // (node builtins excepted) — the deployment's repo-root node_modules
-    // carries no @defrex/autobuild and nothing else the closure needs.
-    const bundle = await readFile(join(result.staging, 'dist', 'index.js'), 'utf8')
+    // (node builtins excepted) — the deployment's node_modules carries
+    // nothing else the closure needs.
+    const bundle = await readFile(join(link, 'dist', 'index.js'), 'utf8')
     const imports = [...bundle.matchAll(/^import\s+[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1]!)
     const external = imports.filter(
       (specifier) => !specifier.startsWith('node:') && !builtinModules.includes(specifier),
@@ -79,62 +171,48 @@ describe('ship-provider-plugin', () => {
     expect(external).toEqual([])
     expect(bundle).toContain('autobuild-vercel-sandbox')
 
-    // Staged package.json is minimal and points at the bundle.
-    const stagedManifest = JSON.parse(
-      await readFile(join(result.staging, 'package.json'), 'utf8'),
-    ) as { name?: string; exports?: Record<string, string> }
+    // Staged package.json is minimal, carries the marker and points at the bundle.
+    const stagedManifest = JSON.parse(await readFile(join(link, 'package.json'), 'utf8'))
     expect(stagedManifest.name).toBe(PACKAGE_NAME)
     expect(stagedManifest.exports?.['.']).toBe('./dist/index.js')
+    expect(stagedManifest.autobuildStagedBundle).toBe(true)
 
-    // Trace entries are relative to the trace file's directory and reach the
-    // repository root in seven '..' components — the same depth class as the
-    // trace's existing node_modules/.bun/** entries, and the root the
-    // compiled distributionRoot() resolves.
+    // Trace entries are relative to the trace file's directory: seven '..'
+    // components from …/.next/server/app/api/dispatch to the repository root.
+    const files = await traceOf(project)
     const tracePath = join(project, TRACE_DIRECTORY, 'route.js.nft.json')
-    const { files } = JSON.parse(await readFile(tracePath, 'utf8'))
-    const stagedPaths = new Set(['package.json', join('dist', 'index.js')])
-    expect(result.traceEntries).toHaveLength(2)
-    for (const entry of result.traceEntries) {
+    expect(result!.traceEntries).toHaveLength(2)
+    for (const entry of result!.traceEntries) {
       expect(files).toContain(entry)
-      // Seven '..' components — what path.relative() yields from the trace
-      // file's directory (…/.next/server/app/api/dispatch) to the repo root:
-      // the same depth class as the trace's existing node_modules/.bun/**
-      // entries, and the root the compiled distributionRoot() resolves.
       expect(entry.split('/').filter((segment) => segment === '..')).toHaveLength(7)
-      const resolvedEntry = resolve(join(tracePath, '..'), entry)
-      expect(resolvedEntry.startsWith(result.staging)).toBe(true)
-      expect(stagedPaths.has(resolvedEntry.slice(result.staging.length + 1))).toBe(true)
+      expect(resolve(dirname(tracePath), entry).startsWith(`${link}/`)).toBe(true)
     }
-    expect(result.appended).toBe(2)
-    expect(result.bytes).toBeGreaterThan(0)
+    expect(result!.appended).toBe(2)
+    expect(result!.bytes).toBeGreaterThan(0)
     expect(lines.join('\n')).toContain('appended 2 entries to')
   }, 60_000)
 
-  test('is idempotent: a re-run appends nothing and leaves the trace unchanged', async () => {
-    const { project } = await fixture()
-    await shipProviderPlugin({ cwd: project, log: () => {} })
-    const tracePath = join(project, TRACE_DIRECTORY, 'route.js.nft.json')
-    const before = await readFile(tracePath, 'utf8')
-    const result = await shipProviderPlugin({ cwd: project, log: () => {} })
-    expect(result.appended).toBe(0)
-    expect(await readFile(tracePath, 'utf8')).toBe(before)
+  test('a re-run appends nothing and stages byte-identical files', async () => {
+    const { root, project, link } = await sourceFixture()
+    await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
+    const trace = await traceOf(project)
+    const bundle = await readFile(join(link, 'dist', 'index.js'))
+    const [result] = await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
+    expect(result!.appended).toBe(0)
+    expect(await traceOf(project)).toEqual(trace)
+    expect(await readFile(join(link, 'dist', 'index.js'))).toEqual(bundle)
   }, 60_000)
 
-  test('stages correctly when node_modules already holds a staged directory instead of the workspace link', async () => {
+  test('a staged bundle in place of the workspace link falls back to the workspace tree', async () => {
     // The state a SECOND deploy build sees in a fresh process (finding
-    // f_5b9ade16): the first run replaced the workspace symlink with the
-    // staged bundle and `bun install` does not relink a pre-existing
-    // directory. Bun's in-process module-resolution cache masks this state
-    // from same-process re-runs, so the fixture starts here without any
-    // symlink — node_modules holds a real staged-looking directory — and
-    // the run must still locate the SOURCE through the workspace tree and
-    // bundle it, never the staged dist/index.js.
-    const { root, project } = await fixture()
-    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
-    await rm(staged, { recursive: true, force: true })
-    await mkdir(join(staged, 'dist'), { recursive: true })
+    // f_5b9ade16): the first run replaced the workspace symlink and `bun
+    // install` does not relink a pre-existing directory. The bundle was staged
+    // before the marker existed, so it is recognized by its two-file shape.
+    const { root, project, link } = await sourceFixture()
+    await rm(link)
+    await mkdir(join(link, 'dist'), { recursive: true })
     await writeFile(
-      join(staged, 'package.json'),
+      join(link, 'package.json'),
       JSON.stringify({
         name: PACKAGE_NAME,
         version: '0.0.0-stale',
@@ -142,31 +220,37 @@ describe('ship-provider-plugin', () => {
         exports: { '.': './dist/index.js' },
       }),
     )
-    await writeFile(join(staged, 'dist', 'index.js'), '// stale staged bundle, not the source')
+    await writeFile(join(link, 'dist', 'index.js'), '// stale staged bundle, not the source')
 
-    const result = await shipProviderPlugin({ cwd: project, log: () => {} })
-    expect(result.staging).toBe(staged)
-    // Re-staged from the real source: the stale manifest version is gone and
-    // the bundle is the real plugin, not the stale placeholder.
-    const manifest = JSON.parse(await readFile(join(staged, 'package.json'), 'utf8')) as {
-      version?: string
-    }
-    expect(manifest.version).not.toBe('0.0.0-stale')
-    const bundle = await readFile(join(staged, 'dist', 'index.js'), 'utf8')
-    expect(bundle).not.toBe('// stale staged bundle, not the source')
+    const [result] = await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
+    expect(result!.source).toBe(join(root, 'packages', 'vercel-sandbox'))
+    const manifest = JSON.parse(await readFile(join(link, 'package.json'), 'utf8'))
+    expect(manifest.version).toBe('0.8.0')
+    const bundle = await readFile(join(link, 'dist', 'index.js'), 'utf8')
     expect(bundle).toContain('autobuild-vercel-sandbox')
-    expect(result.appended).toBe(2)
+    expect(result!.appended).toBe(2)
   }, 60_000)
 
+  async function runner(project: string, root: string): Promise<string> {
+    const script = join(project, 'ship-runner.ts')
+    await writeFile(
+      script,
+      `import { restoresInstallIn, shipProviderPlugins } from ${JSON.stringify(join(import.meta.dir, 'ship-provider-plugin.ts'))}
+await shipProviderPlugins({
+  packages: [${JSON.stringify(PACKAGE_NAME)}],
+  distributionRoot: ${JSON.stringify(root)},
+  restoreInstall: restoresInstallIn(process.env),
+})
+`,
+    )
+    return script
+  }
+
   test('a second run in a FRESH process succeeds after the first consumed the workspace link', async () => {
-    // Direct reproduction of the finding: two separate processes against one
-    // fixture. Run 1 stages over the symlink; run 2 (new process, no cached
-    // module resolution) must not abort with ENOENT on <staging>/src.
-    // VERCEL is pinned ON so both runs exercise the DEPLOYMENT branch (the
-    // staged bundle persists into the function bundle) — the ambient
-    // environment must not decide which branch a test exercises.
-    const { project } = await fixture()
-    const script = join(import.meta.dir, 'ship-provider-plugin.ts')
+    // Two separate processes against one fixture; VERCEL is pinned ON so
+    // both runs keep the staged bundle, as a deployment build does.
+    const { root, project } = await sourceFixture()
+    const script = await runner(project, root)
     for (let run = 1; run <= 2; run++) {
       const spawn = Bun.spawnSync({
         cmd: ['bun', script],
@@ -175,25 +259,17 @@ describe('ship-provider-plugin', () => {
         stdout: 'pipe',
         stderr: 'pipe',
       })
-      expect(spawn.exitCode).toBe(0)
       const output = `${spawn.stdout.toString()}${spawn.stderr.toString()}`
+      expect(spawn.exitCode).toBe(0)
       expect(output).toContain(run === 1 ? 'appended 2 entries to' : 'already present in')
       expect(output).not.toContain('restored workspace symlink')
     }
   }, 120_000)
 
   test('a fresh process WITHOUT VERCEL restores the workspace symlink (local run)', async () => {
-    // The developer-local path end-to-end: the CLI decides the restore from
-    // the environment, so the subprocess env explicitly OMITS VERCEL (a copy
-    // of process.env with VERCEL deleted — never the ambient environment,
-    // which differs between the sandbox and a developer machine). The run
-    // must leave the node_modules path a directory symlink to the workspace
-    // member, exactly as `bun install` would have left it.
-    const { root, project } = await fixture()
-    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
-    const script = join(import.meta.dir, 'ship-provider-plugin.ts')
+    const { root, project, link } = await sourceFixture()
+    const script = await runner(project, root)
     const { VERCEL: _omit, ...env } = process.env
-    expect('VERCEL' in env).toBe(false)
     const spawn = Bun.spawnSync({
       cmd: ['bun', script],
       cwd: project,
@@ -204,97 +280,179 @@ describe('ship-provider-plugin', () => {
     const output = `${spawn.stdout.toString()}${spawn.stderr.toString()}`
     expect(spawn.exitCode).toBe(0)
     expect(output).toContain('restored workspace symlink')
-    expect((await lstat(staged)).isSymbolicLink()).toBe(true)
-    // Assert on the RESOLVED target, not the raw link string: a dangling
-    // relative target is the failure class this must catch.
-    expect(await realpath(staged)).toBe(join(root, 'packages', 'vercel-sandbox'))
-    // The trace still describes the deployment layout (the staged files are
-    // appended there whether or not they persist locally).
-    const { files } = JSON.parse(
-      await readFile(join(project, TRACE_DIRECTORY, 'route.js.nft.json'), 'utf8'),
+    expect((await lstat(link)).isSymbolicLink()).toBe(true)
+    expect(await realpath(link)).toBe(join(root, 'packages', 'vercel-sandbox'))
+    // The trace still describes the deployment layout.
+    expect((await traceOf(project)).filter((entry) => entry.includes('node_modules'))).toHaveLength(
+      2,
     )
-    expect(files.filter((entry: string) => entry.includes('node_modules'))).toHaveLength(2)
   }, 120_000)
 
-  test('restoreWorkspaceLink restores the workspace symlink after staging', async () => {
-    const { root, project } = await fixture()
-    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
-    const lines: string[] = []
-    const result = await shipProviderPlugin({
+  test('restoreInstall heals a poisoned checkout (staged directory, no symlink)', async () => {
+    const { root, project, link } = await sourceFixture()
+    await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
+    expect((await lstat(link)).isDirectory()).toBe(true)
+    const [result] = await ship({
       cwd: project,
-      restoreWorkspaceLink: true,
-      log: (m) => lines.push(m),
+      packages: [PACKAGE_NAME],
+      distributionRoot: root,
+      restoreInstall: true,
     })
-    expect(result.restoredWorkspaceLink).toBe(true)
-    expect((await lstat(staged)).isSymbolicLink()).toBe(true)
-    // The resolved target is the fixture's packages/vercel-sandbox member —
-    // the assertion that catches a dangling relative target (the link must
-    // resolve, not merely exist).
-    expect(await realpath(staged)).toBe(join(root, 'packages', 'vercel-sandbox'))
-    // The trace file still contains the appended entries — the trace
-    // describes the deployment layout; it does not require the staged files
-    // to persist locally.
-    const { files } = JSON.parse(
-      await readFile(join(project, TRACE_DIRECTORY, 'route.js.nft.json'), 'utf8'),
-    )
-    expect(result.traceEntries.every((entry) => files.includes(entry))).toBe(true)
-    expect(lines.join('\n')).toContain('restored workspace symlink')
+    expect(result!.restored).toBe(true)
+    expect((await lstat(link)).isSymbolicLink()).toBe(true)
+    expect(await realpath(link)).toBe(join(root, 'packages', 'vercel-sandbox'))
   }, 60_000)
 
-  test('restoreWorkspaceLink heals a poisoned checkout (staged directory, no symlink)', async () => {
-    // The state an already-bitten developer's checkout is in: a previous
-    // deploy:build left a real staged directory in node_modules and `bun
-    // install` never relinked it. A local run must still end with the
-    // workspace symlink restored.
-    const { root, project } = await fixture()
-    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
-    await mkdir(join(staged, 'dist'), { recursive: true })
-    await writeFile(
-      join(staged, 'package.json'),
-      JSON.stringify({ name: PACKAGE_NAME, version: '0.0.0-stale' }),
-    )
-    const result = await shipProviderPlugin({
-      cwd: project,
-      restoreWorkspaceLink: true,
-      log: () => {},
-    })
-    expect(result.restoredWorkspaceLink).toBe(true)
-    expect((await lstat(staged)).isSymbolicLink()).toBe(true)
-    expect(await realpath(staged)).toBe(join(root, 'packages', 'vercel-sandbox'))
-  }, 60_000)
-
-  test('restoresWorkspaceLinkIn gates on the VERCEL environment variable', () => {
-    // Vercel sets VERCEL in every build environment — including a local
-    // `vercel build` — so a deployment build keeps the staged bundle.
-    expect(restoresWorkspaceLinkIn({ VERCEL: '1' })).toBe(false)
-    expect(restoresWorkspaceLinkIn({ VERCEL: 'production' })).toBe(false)
-    // A plain local `bun run deploy:build` has no VERCEL and restores.
-    expect(restoresWorkspaceLinkIn({})).toBe(true)
+  test('restoresInstallIn gates on the VERCEL environment variable', () => {
+    expect(restoresInstallIn({ VERCEL: '1' })).toBe(false)
+    expect(restoresInstallIn({ VERCEL: 'production' })).toBe(false)
+    expect(restoresInstallIn({})).toBe(true)
   })
+})
 
-  test('throws loudly when the plugin package is not a workspace member of the root', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ab-ship-plugin-'))
-    temporary.push(root)
+describe('ship-provider-plugin: installed deployments', () => {
+  test('stages under the installed distribution, leaving the installed package untouched', async () => {
+    const project = await temp('ab-ship-installed-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot, link } = await installedFixture(project, project)
+    const linkTarget = await realpath(link)
+    const [result] = await ship({
+      cwd: project,
+      packages: [TINY],
+      distributionRoot,
+      traceRoot: project,
+    })
+    const staging = join(distributionRoot, 'node_modules', '@fixture', 'tiny-plugin')
+    expect(result!.staging).toBe(staging)
+    expect(result!.source).toBe(linkTarget)
+    expect((await lstat(link)).isSymbolicLink()).toBe(true)
+    expect(await realpath(link)).toBe(linkTarget)
+    const files = await traceOf(project)
+    const traceDirectory = join(project, TRACE_DIRECTORY)
+    expect(
+      result!.traceEntries.map((entry) => relative(staging, resolve(traceDirectory, entry))).sort(),
+    ).toEqual(['dist/index.js', 'package.json'])
+    expect(result!.traceEntries.every((entry) => files.includes(entry))).toBe(true)
+    // The runtime resolves the bare specifier from the distribution root.
+    expect(Bun.resolveSync(TINY, distributionRoot)).toBe(join(staging, 'dist', 'index.js'))
+  }, 60_000)
+
+  test('a workspace member ships under the workspace tracing root and re-runs identically', async () => {
+    const root = await temp('ab-ship-member-')
     await writeFile(
       join(root, 'package.json'),
-      JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }),
+      JSON.stringify({ private: true, workspaces: ['apps/*'] }),
     )
-    const project = join(root, 'packages', 'hosted-store-service')
-    await mkdir(join(project, TRACE_DIRECTORY), { recursive: true })
-    await writeFile(join(project, TRACE_DIRECTORY, 'route.js.nft.json'), '{"version":1,"files":[]}')
-    await expect(shipProviderPlugin({ cwd: project, log: () => {} })).rejects.toThrow(
-      /not found in the workspace tree/,
-    )
-  })
-  test('throws loudly when the trace file is missing', async () => {
-    const { root, project } = await fixture()
-    await rm(join(project, TRACE_DIRECTORY), { recursive: true })
-    await expect(shipProviderPlugin({ cwd: project, log: () => {} })).rejects.toThrow(
-      /missing Next\.js trace file/,
-    )
-    expect(root).toBeDefined()
+    const project = join(root, 'apps', 'autobuild')
+    await mkdir(project, { recursive: true })
+    await writeFile(join(project, 'package.json'), '{"name":"autobuild-deployment"}')
+    const { distributionRoot } = await installedFixture(root, project)
+    const first = await ship({ cwd: project, packages: [TINY], distributionRoot, traceRoot: root })
+    const trace = await traceOf(project)
+    const staged = await readFile(join(first[0]!.staging, 'dist', 'index.js'))
+    const second = await ship({ cwd: project, packages: [TINY], distributionRoot, traceRoot: root })
+    expect(second[0]!.staging).toBe(first[0]!.staging)
+    expect(second[0]!.appended).toBe(0)
+    expect(await traceOf(project)).toEqual(trace)
+    expect(await readFile(join(second[0]!.staging, 'dist', 'index.js'))).toEqual(staged)
+    // Workspace-root node_modules lies outside the project folder.
+    for (const entry of first[0]!.traceEntries)
+      expect(entry.startsWith('../../../../../../../')).toBe(true)
   }, 60_000)
 
+  test('a local run restores the installation tree exactly', async () => {
+    const project = await temp('ab-ship-restore-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot } = await installedFixture(project, project)
+    const before = await tree(join(project, 'node_modules'))
+    const [result] = await ship({
+      cwd: project,
+      packages: [TINY],
+      distributionRoot,
+      traceRoot: project,
+      restoreInstall: true,
+    })
+    expect(result!.restored).toBe(true)
+    expect(await tree(join(project, 'node_modules'))).toEqual(before)
+    expect((await traceOf(project)).filter((entry) => entry.includes('tiny-plugin'))).toHaveLength(
+      2,
+    )
+  }, 60_000)
+
+  test('refuses to replace a real installed package at the staging path', async () => {
+    const project = await temp('ab-ship-refuse-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot } = await installedFixture(project, project)
+    const occupied = join(distributionRoot, 'node_modules', '@fixture', 'tiny-plugin')
+    await pluginPackage(occupied, TINY)
+    await expect(
+      ship({ cwd: project, packages: [TINY], distributionRoot, traceRoot: project }),
+    ).rejects.toThrow(/refusing to replace installed package at/)
+    expect(await readFile(join(occupied, 'src', 'index.ts'), 'utf8')).toContain('tiny')
+  }, 60_000)
+
+  test('a staging directory outside the tracing root is an error naming both paths', async () => {
+    const project = await temp('ab-ship-outside-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot } = await installedFixture(project, project)
+    const elsewhere = await temp('ab-ship-elsewhere-')
+    await expect(
+      ship({ cwd: project, packages: [TINY], distributionRoot, traceRoot: elsewhere }),
+    ).rejects.toThrow(new RegExp(`lies outside the output-file-tracing root ${elsewhere}`))
+  })
+
+  test('an uninstalled plugin names the package and the rule that selected it', async () => {
+    const project = await temp('ab-ship-missing-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot } = await installedFixture(project, project)
+    await expect(
+      ship({
+        cwd: project,
+        packages: ['@fixture/absent'],
+        rule: 'manifest',
+        distributionRoot,
+        traceRoot: project,
+      }),
+    ).rejects.toThrow(
+      'provider plugin @fixture/absent is not installed in the deployment (selected by package.json autobuild.plugins)',
+    )
+  })
+
+  test('a package that does not evaluate to a plugin manifest fails the build', async () => {
+    const project = await temp('ab-ship-not-plugin-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot } = await installedFixture(
+      project,
+      project,
+      '@fixture/not-plugin',
+      'export default { hello: 1 }\n',
+    )
+    await expect(
+      ship({
+        cwd: project,
+        packages: ['@fixture/not-plugin'],
+        rule: 'dependencies',
+        distributionRoot,
+        traceRoot: project,
+      }),
+    ).rejects.toThrow(
+      /@fixture\/not-plugin is not an Autobuild plugin \(selected by the default rule.*autobuild\.plugins/,
+    )
+  }, 60_000)
+
+  test('a missing trace fails before anything is staged', async () => {
+    const project = await temp('ab-ship-no-trace-')
+    await writeFile(join(project, 'package.json'), '{"name":"deployment"}')
+    const { distributionRoot } = await installedFixture(project, project)
+    await rm(join(project, TRACE_DIRECTORY), { recursive: true })
+    await expect(
+      ship({ cwd: project, packages: [TINY], distributionRoot, traceRoot: project }),
+    ).rejects.toThrow(/missing Next\.js trace file/)
+    await expect(lstat(join(distributionRoot, 'node_modules'))).rejects.toThrow()
+  })
+})
+
+describe('ship-provider-plugin: function-bundle evaluation', () => {
   test('the staged bundle evaluates in isolation at the compiled resolution root', async () => {
     // Reproduces the deployed condition in isolation: a temp directory T laid
     // out as the compiled function bundle is, with the staged plugin in
@@ -305,8 +463,8 @@ describe('ship-provider-plugin', () => {
     // [turbopack]_runtime.js — RUNTIME_PUBLIC_PATH three ups plus
     // RELATIVE_ROOT_PATH three ups; import.meta.url is synthesized from the
     // source path), which is T itself.
-    const { project } = await fixture()
-    const staged = await shipProviderPlugin({ cwd: project, log: () => {} })
+    const { root, project } = await sourceFixture()
+    const [staged] = await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
 
     const isolated = await mkdtemp(join(tmpdir(), 'ab-plugin-isolated-'))
     temporary.push(isolated)
@@ -316,9 +474,9 @@ describe('ship-provider-plugin', () => {
     await writeFile(chunkFile, '// placeholder for the compiled runtime chunk')
     const stagedDirectory = join(isolated, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
     await mkdir(join(stagedDirectory, 'dist'), { recursive: true })
-    await copyFile(join(staged.staging, 'package.json'), join(stagedDirectory, 'package.json'))
+    await copyFile(join(staged!.staging, 'package.json'), join(stagedDirectory, 'package.json'))
     await copyFile(
-      join(staged.staging, 'dist', 'index.js'),
+      join(staged!.staging, 'dist', 'index.js'),
       join(stagedDirectory, 'dist', 'index.js'),
     )
 
@@ -345,8 +503,8 @@ describe('ship-provider-plugin', () => {
     // (dispatch's `loadPlugins(config.plugins, targetRepo)`): the scratch
     // repository root is the repository candidate (no plugin there), the
     // isolated tree is the installation root the compiled chunk derives.
-    const { project } = await fixture()
-    const staged = await shipProviderPlugin({ cwd: project, log: () => {} })
+    const { root, project } = await sourceFixture()
+    const [staged] = await ship({ cwd: project, packages: [PACKAGE_NAME], distributionRoot: root })
 
     const isolated = await mkdtemp(join(tmpdir(), 'ab-plugin-isolated-'))
     temporary.push(isolated)
@@ -355,9 +513,9 @@ describe('ship-provider-plugin', () => {
     await writeFile(join(chunks, '[turbopack]_runtime.js'), '// placeholder runtime chunk')
     const stagedDirectory = join(isolated, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
     await mkdir(join(stagedDirectory, 'dist'), { recursive: true })
-    await copyFile(join(staged.staging, 'package.json'), join(stagedDirectory, 'package.json'))
+    await copyFile(join(staged!.staging, 'package.json'), join(stagedDirectory, 'package.json'))
     await copyFile(
-      join(staged.staging, 'dist', 'index.js'),
+      join(staged!.staging, 'dist', 'index.js'),
       join(stagedDirectory, 'dist', 'index.js'),
     )
 
