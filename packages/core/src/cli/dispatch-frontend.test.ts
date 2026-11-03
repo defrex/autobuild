@@ -156,6 +156,7 @@ test('once renders one durable snapshot without starting interactive presentatio
             payload: {
               run,
               queued: 3,
+              triage: 2,
               counters: tickCounters,
               janitorDiagnostics: ['routine janitor diagnostic'],
               ticketDiagnostics: [],
@@ -215,7 +216,9 @@ test('once renders one durable snapshot without starting interactive presentatio
   expect(snapshot.builds.map((build) => build.slug)).toContain(slug)
   expect(snapshot.queued).toBe(3)
   expect(snapshot.active).toEqual({ current: 1, limit: 4 })
-  expect(snapshot.observations.limit).toBe(9)
+  // The kernel's published triage count is retained across the later failure.
+  expect(snapshot.triage).toBe(2)
+  expect(snapshot).not.toHaveProperty('observations')
   expect(snapshot.warningLines).toEqual([
     'durable role warning',
     'Forge squash: squash disabled Enable squash',
@@ -345,8 +348,7 @@ test('frontend input and captured controls remain responsive while the kernel is
     payload: { enabled: false },
   })
   await waitFor(() => repositoryReads.some((read) => read.sinceSeq > 0), 'incremental repo cursor')
-  // The frontend journal cursor still advances incrementally. The independent
-  // observation scan legitimately performs its own full repository reduction.
+  // The frontend journal cursor still advances incrementally.
   expect(repositoryReads.filter((read) => read.sinceSeq > 0).length).toBeGreaterThan(0)
   // AUT-534: the initial fold is the bounded seed read (issued pre-launch by
   // the warm-up). With an empty-at-seed journal the seed leaves the cursor at
@@ -434,47 +436,43 @@ test('frontend input and captured controls remain responsive while the kernel is
   await running
 })
 
-test('frontend owns live observation pressure and retains the last factual sample on refresh failure', async () => {
-  const repo = '/pressure-repo'
+test('frontend renders the dispatcher-published triage count and never fabricates one', async () => {
+  const repo = '/triage-repo'
   const backing = new MemoryBuildStore()
   await backing.ensureRepo(repo)
   await backing.createBuild({ slug: 'source', repo })
-  await backing.append('source', {
-    actor: agentActor('implement', 's_observe_1'),
-    type: 'observation.recorded',
-    payload: { id: 'obs-1', kind: 'followup', summary: 'first pending observation' },
-  })
-
-  let failNextObservationRead = false
-  const store = new Proxy(backing, {
-    get(target, property) {
-      if (property === 'getRepoBuildDigests') {
-        return async (...args: Parameters<BuildStore['getRepoBuildDigests']>) => {
-          if (failNextObservationRead) {
-            failNextObservationRead = false
-            throw new Error('observation digest unavailable')
-          }
-          return target.getRepoBuildDigests(...args)
-        }
-      }
-      const value = Reflect.get(target, property, target) as unknown
-      return typeof value === 'function' ? value.bind(target) : value
-    },
-  }) as BuildStore
+  const tick = (run: string, extra: Record<string, unknown>) =>
+    backing.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-completed',
+      payload: {
+        run,
+        queued: 0,
+        ...extra,
+        counters: tickCounters,
+        janitorDiagnostics: ['janitor diagnostic'],
+        ticketDiagnostics: ['ticket diagnostic'],
+        creationDiagnostics: ['creation diagnostic'],
+        dependencyDiagnostics: [
+          'incomplete blocker',
+          'absent blocker',
+          'dependency cycle',
+          'self dependency',
+        ],
+      },
+    })
 
   const childDone = deferred<DispatchChildResult>()
-  const frames: Array<{ current: number; limit: number; warnings: readonly string[] }> = []
+  const frames: Array<{ triage: number | undefined; warnings: readonly string[] }> = []
+  let childRun: string | undefined
   let output = ''
   const write = (chunk: string): void => {
     output += chunk
   }
-  // The first failed sample must remain dashboard-silent and never produce a
-  // complete model carrying a fabricated zero.
-  failNextObservationRead = true
   const frontend = new DispatchFrontend({
     repo,
     storeRef: 'memory',
-    store,
+    store: backing,
     env: {},
     terminal: {
       write,
@@ -486,14 +484,11 @@ test('frontend owns live observation pressure and retains the last factual sampl
     input: { start: () => () => {} },
     once: false,
     resolveDashboardRenderer: () => (model) => {
-      frames.push({
-        current: model.observations.current,
-        limit: model.observations.limit,
-        warnings: model.warningLines ?? [],
-      })
+      frames.push({ triage: model.triage, warnings: model.warningLines ?? [] })
       return ['frame']
     },
     launchChild: ({ run }) => {
+      childRun = run
       const startup = backing
         .appendRepoWithArtifacts(
           repo,
@@ -519,40 +514,16 @@ test('frontend owns live observation pressure and retains the last factual sampl
             },
           }),
         )
-        .then(() =>
-          backing.appendRepo(repo, {
-            actor: DISPATCHER,
-            type: 'dispatcher.tick-completed',
-            payload: {
-              run,
-              queued: 0,
-              observations: 99,
-              counters: tickCounters,
-              janitorDiagnostics: ['janitor diagnostic'],
-              ticketDiagnostics: ['ticket diagnostic'],
-              creationDiagnostics: ['creation diagnostic'],
-              dependencyDiagnostics: [
-                'incomplete blocker',
-                'absent blocker',
-                'dependency cycle',
-                'self dependency',
-              ],
-            },
-          }),
-        )
+        // A legacy display key has no visible effect, and an unsampled tick
+        // leaves the count unknown rather than zero.
+        .then(() => tick(run, { observations: 99 }))
       return { completed: startup.then(() => childDone.promise), async stop() {} }
     },
   })
 
   const running = frontend.run()
-  await waitFor(() => !failNextObservationRead, 'initial failed observation refresh')
-  expect(frames).toHaveLength(0)
-  expect(output).not.toContain('observation digest unavailable')
-  await waitFor(
-    () => frames.some((frame) => frame.current === 1 && frame.limit === 7),
-    'first factual pressure sample',
-  )
-  expect(frames.some((frame) => frame.current === 99)).toBe(false)
+  await waitFor(() => frames.length > 0, 'first frame before any triage sample')
+  expect(frames.every((frame) => frame.triage === undefined)).toBe(true)
   expect(frames.flatMap((frame) => frame.warnings)).toEqual([])
   const completed = (await backing.getRepoEvents(repo)).find(
     (item) => item.type === 'dispatcher.tick-completed',
@@ -569,267 +540,26 @@ test('frontend owns live observation pressure and retains the last factual sampl
     ],
   })
 
-  await backing.append('source', {
-    actor: agentActor('implement', 's_observe_2'),
-    type: 'observation.recorded',
-    payload: { id: 'obs-2', kind: 'followup', summary: 'second pending observation' },
-  })
-  await waitFor(() => frames.some((frame) => frame.current === 2), 'recorded observation refresh')
-
-  const firstClaim = await backing.appendRepoWithArtifacts(
-    repo,
-    [{ kind: 'harvest-scan', content: '{}' }],
-    (artifacts) => ({
-      actor: KERNEL,
-      type: 'harvest.started',
-      payload: {
-        run: 'h_dispositioned',
-        observations: [
-          { build: 'source', seq: 1 },
-          { build: 'source', seq: 2 },
-        ],
-        scan: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
-      },
-    }),
-  )
-  await waitFor(() => frames.some((frame) => frame.current === 0), 'claimed pressure refresh')
-  await backing.appendRepoWithArtifacts(
-    repo,
-    [{ kind: 'harvest-report', content: '{}' }],
-    (artifacts) => ({
-      actor: KERNEL,
-      type: 'harvest.completed',
-      payload: {
-        run: 'h_dispositioned',
-        dispositions: [
-          {
-            occurrence: { build: 'source', seq: 1 },
-            action: 'suppressed',
-            proposalKey: 'first',
-          },
-          {
-            occurrence: { build: 'source', seq: 2 },
-            action: 'suppressed',
-            proposalKey: 'second',
-          },
-        ],
-        report: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
-      },
-    }),
-  )
-  expect(firstClaim.event.type).toBe('harvest.started')
-
-  await backing.append('source', {
-    actor: agentActor('implement', 's_observe_3'),
-    type: 'observation.recorded',
-    payload: { id: 'obs-3', kind: 'followup', summary: 'released observation' },
-  })
-  await waitFor(() => frames.some((frame) => frame.current === 1), 'new pending observation')
-  const beforeSecondClaim = frames.length
-  await backing.appendRepoWithArtifacts(
-    repo,
-    [{ kind: 'harvest-scan', content: '{}' }],
-    (artifacts) => ({
-      actor: KERNEL,
-      type: 'harvest.started',
-      payload: {
-        run: 'h_released',
-        observations: [{ build: 'source', seq: 3 }],
-        scan: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
-      },
-    }),
-  )
-  await waitFor(
-    () => frames.slice(beforeSecondClaim).some((frame) => frame.current === 0),
-    'second claimed refresh',
-  )
+  await tick(childRun!, { triage: 4 })
+  await waitFor(() => frames.some((frame) => frame.triage === 4), 'published triage count')
+  // A failed kernel tick keeps the last published value.
+  const beforeFailure = frames.length
   await backing.appendRepo(repo, {
-    actor: KERNEL,
-    type: 'harvest.failed',
-    payload: {
-      run: 'h_released',
-      step: 'file',
-      attempt: 1,
-      error: 'ticket provider unavailable',
-      willRetry: false,
-    },
-  })
-  for (const attempt of [1, 2]) {
-    await backing.appendRepo(repo, {
-      actor: KERNEL,
-      type: 'harvest.recovery-requested',
-      payload: { run: 'h_released', attempt, limit: 2 },
-    })
-    await backing.appendRepo(repo, {
-      actor: KERNEL,
-      type: 'harvest.resumed',
-      payload: {},
-    })
-    await backing.appendRepo(repo, {
-      actor: KERNEL,
-      type: 'harvest.failed',
-      payload: {
-        run: 'h_released',
-        step: 'file',
-        attempt: attempt + 1,
-        error: 'ticket provider unavailable',
-        willRetry: false,
-      },
-    })
-  }
-  const beforeRelease = frames.length
-  await backing.appendRepo(repo, {
-    actor: KERNEL,
-    type: 'harvest.recovery-exhausted',
-    payload: {
-      run: 'h_released',
-      step: 'file',
-      error: 'ticket provider unavailable',
-      attempts: 2,
-      limit: 2,
-      releasedObservations: [{ build: 'source', seq: 3 }],
-      committedDispositions: [],
-      pendingProposals: [
-        {
-          proposalKey: 'released',
-          action: 'create',
-          observations: [{ build: 'source', seq: 3 }],
-        },
-      ],
-    },
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-failed',
+    payload: { run: childRun!, error: 'tracker offline' },
   })
   await waitFor(
-    () => frames.slice(beforeRelease).some((frame) => frame.current === 1),
-    'released pressure refresh',
+    () => frames.slice(beforeFailure).some((frame) => frame.warnings.length > 0),
+    'failed tick frame',
   )
-
-  const repoEventsBeforeFailure = (await backing.getRepoEvents(repo)).length
-  const buildEventsBeforeFailure = (await backing.getEvents('source')).length
-  const framesBeforeFailure = frames.length
-  failNextObservationRead = true
-  await backing.claimRepoLease(repo, 'force-pressure-refresh', 60_000)
-  await waitFor(
-    () =>
-      !failNextObservationRead &&
-      frames.slice(framesBeforeFailure).some((frame) => frame.current === 1),
-    'retained pressure refresh',
-  )
-  expect(
-    frames
-      .slice(framesBeforeFailure)
-      .flatMap((frame) => frame.warnings)
-      .join('\n'),
-  ).not.toContain('observation digest unavailable')
-  expect(output).not.toContain('observation digest unavailable')
-  expect((await backing.getRepoEvents(repo)).length).toBe(repoEventsBeforeFailure)
-  expect((await backing.getEvents('source')).length).toBe(buildEventsBeforeFailure)
+  expect(frames.at(-1)?.triage).toBe(4)
+  expect(frames.some((frame) => frame.triage === 0)).toBe(false)
+  expect(output).not.toContain('observations')
 
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
 })
-
-test('the terminal observation sample reads a missing journal record as an empty journal (AUT-524)', async () => {
-  const repo = '/missing-record-repo'
-  const backing = new MemoryBuildStore()
-  await backing.ensureRepo(repo)
-  await backing.createBuild({ slug: 'source', repo })
-  await backing.append('source', {
-    actor: agentActor('implement', 's_observe_1'),
-    type: 'observation.recorded',
-    payload: { id: 'obs-1', kind: 'followup', summary: 'first pending observation' },
-  })
-
-  // The missing-record stand-in: `getRepo` answers null (no journal record on
-  // a hosted store) while `getRepoEvents` rejects with the adapters'
-  // unknown-repo message — but ONLY for the sample's single-arg call.
-  // `renderOnce`'s first statement awaits `events()`, whose two-arg
-  // incremental read must succeed for any frame to paint, so failing every
-  // `getRepoEvents` call could never reach the path under decision. In the
-  // real missing-record state every call would reject; the resulting `events()`
-  // failure is presentation retention outside the sample, which this arity
-  // split deliberately scopes away.
-  let sampleJournalReads = 0
-  const store = new Proxy(backing, {
-    get(target, property) {
-      if (property === 'getRepo') return async () => null
-      if (property === 'getRepoEvents') {
-        return async (...args: Parameters<BuildStore['getRepoEvents']>) => {
-          if (args.length === 1) {
-            sampleJournalReads += 1
-            throw new Error(`unknown repo "${repo}"`)
-          }
-          return target.getRepoEvents(...args)
-        }
-      }
-      const value = Reflect.get(target, property, target) as unknown
-      return typeof value === 'function' ? value.bind(target) : value
-    },
-  }) as BuildStore
-
-  const frames: Array<{ current: number; limit: number }> = []
-  const frontend = new DispatchFrontend({
-    repo,
-    storeRef: 'memory',
-    store,
-    env: {},
-    terminal: {
-      write: () => {},
-      modes: createTerminalModeController(
-        () => {},
-        () => {},
-      ),
-      columns: 100,
-      rows: 24,
-      interactive: true,
-    },
-    input: { start: () => () => {} },
-    once: false,
-    resolveDashboardRenderer: () => (model) => {
-      frames.push({ current: model.observations.current, limit: model.observations.limit })
-      return ['frame']
-    },
-    launchChild: ({ run }) => {
-      const completed = backing
-        .appendRepoWithArtifacts(
-          repo,
-          [
-            {
-              kind: 'dispatcher-effective-config',
-              content: JSON.stringify({
-                capacity: 1,
-                roles: { default: { runtime: 'claude' } },
-                policy: { harvestThreshold: 7 },
-                tickets: { source: 'file', readyState: 'ready' },
-              }),
-            },
-          ],
-          (artifacts) => ({
-            actor: DISPATCHER,
-            type: 'dispatcher.run-started',
-            payload: {
-              run,
-              pid: 999,
-              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
-              roleWarnings: [],
-            },
-          }),
-        )
-        .then(() => ({ outcome: 'normal', exitCode: 0 }) as const)
-      return { completed, async stop() {} }
-    },
-  })
-
-  const running = frontend.run()
-  // The missing journal record reads as an empty journal: the sample counts
-  // the digest observations (1) instead of retaining a stale count or staying
-  // frameless, and the sample never touches the journal read it cannot serve.
-  await waitFor(
-    () => frames.some((frame) => frame.current === 1 && frame.limit === 7),
-    'missing-record frame with the digest-derived count',
-  )
-  expect(sampleJournalReads).toBe(0)
-  await running
-}, 30_000)
 
 test('harvest run controls preserve the frontend no-action compatibility report', async () => {
   const invoke = async (
@@ -2099,13 +1829,13 @@ test('Enter keeps today’s behavior for sessions without a stream', async () =>
   await finish()
 })
 
-test('observation sample traffic stays flat as finished builds accumulate (AUT-487)', async () => {
+test('frontend repository traffic stays flat as finished builds accumulate (AUT-487)', async () => {
   const repo = '/digest-pressure-repo'
 
   const runOnce = async (finishedBuilds: number) => {
     const backing = new MemoryBuildStore()
     await backing.ensureRepo(repo)
-    // One active build carrying a single unclaimed observation.
+    // One active build that renders a row.
     await backing.createBuild({ slug: 'active', repo })
     await backing.append('active', {
       actor: KERNEL,
@@ -2117,7 +1847,7 @@ test('observation sample traffic stays flat as finished builds accumulate (AUT-4
       type: 'observation.recorded',
       payload: { id: 'obs-1', kind: 'followup', summary: 'unclaimed observation' },
     })
-    // Finished builds: no unclaimed observations.
+    // Finished builds render no rows.
     for (let index = 1; index <= finishedBuilds; index += 1) {
       const slug = `finished-${index}`
       await backing.createBuild({ slug, repo })
@@ -2150,7 +1880,7 @@ test('observation sample traffic stays flat as finished builds accumulate (AUT-4
       },
     }) as unknown as BuildStore
 
-    let observationCount: number | undefined
+    let rendered = false
     const frontend = new DispatchFrontend({
       repo,
       storeRef: 'memory',
@@ -2169,7 +1899,7 @@ test('observation sample traffic stays flat as finished builds accumulate (AUT-4
       input: { start: () => () => {} },
       once: true,
       resolveDashboardRenderer: () => (model) => {
-        observationCount = model.observations.current
+        rendered = model.builds.some((build) => build.slug === 'active')
         return ['frame']
       },
       launchChild: ({ run }) => {
@@ -2206,20 +1936,18 @@ test('observation sample traffic stays flat as finished builds accumulate (AUT-4
       },
     })
     await frontend.run()
-    return { counts, observationCount }
+    return { counts, rendered }
   }
 
   const baseline = await runOnce(1)
   const more = await runOnce(4)
 
-  // The observation count is unchanged by the extra finished builds (AC 2).
-  expect(baseline.observationCount).toBe(1)
-  expect(more.observationCount).toBe(baseline.observationCount)
+  expect(baseline.rendered).toBe(true)
+  expect(more.rendered).toBe(true)
 
-  // The observation-pressure sample's own store traffic (one journal read +
-  // one digest read) is identical regardless of finished-build count. The
-  // dashboard row cache may still read row-rendering histories on its first
-  // refresh, but that is outside the sample and unchanged in behavior.
+  // Repository-scoped store traffic is identical regardless of finished-build
+  // count. The dashboard row cache may still read row-rendering histories on
+  // its first refresh, which this repository-scoped check deliberately excludes.
   const sampleMethods = ['getRepo', 'getRepoEvents', 'getRepoBuildDigests'] as const
   for (const method of sampleMethods) {
     expect(more.counts.get(method) ?? 0).toBe(baseline.counts.get(method) ?? 0)
@@ -2260,8 +1988,8 @@ function frontendProbe(
           const order = counter++
           try {
             // The failure is confined to the pre-launch window: the warm-up
-            // seed attempt is what must fail; the observation sample's own
-            // bounded reads (post-launch) stay served.
+            // seed attempt is what must fail; later bounded reads
+            // (post-launch) stay served.
             if (opts.failBounded === true && !launched) throw new Error('bounded read unavailable')
             const result =
               opts.boundedReturnsFull === true
@@ -2498,8 +2226,8 @@ test('the interactive frontend seeds its initial fold with the bounded read befo
     failed: false,
   })
 
-  // Warm reads use the consumed cursor; observation counting adds no
-  // independent repository history scan.
+  // Warm reads use the consumed cursor; nothing adds an independent
+  // repository history scan.
   const post = probe.calls.filter((call) => call.order > probe.launchOrder!)
   expect(post.length).toBeGreaterThan(0)
   expect(post.every((call) => call.method !== 'getRepoEvents' || (call.sinceSeq ?? 0) > 0)).toBe(
@@ -2517,7 +2245,7 @@ test('the interactive frontend seeds its initial fold with the bounded read befo
   ) as DashboardModel
   expect(model.queued).toBe(3)
   expect(model.warningLines).toEqual(['durable role warning'])
-  expect(model.observations.limit).toBe(9)
+  expect(model).not.toHaveProperty('observations')
 })
 
 test('a failed bounded seed launches immediately and recovers from the prelaunch boundary', async () => {
@@ -3000,7 +2728,9 @@ for (const mode of [
       expect(calls.getRepoChangePosition ?? 0).toBe(expected)
       expect(calls.listBuilds ?? 0).toBe(0)
       expect(calls.listBuildsForRepo ?? 0).toBe(full)
-      expect(calls.getRepoBuildDigests ?? 0).toBe(full)
+      // The frontend no longer samples observation pressure, so a full
+      // refresh reads no repository digest batch.
+      expect(calls.getRepoBuildDigests ?? 0).toBe(0)
       expect(calls.getRepoEvents ?? 0).toBe(full)
       expect(calls.getRepo ?? 0).toBe(full)
       expect(calls.getArtifact ?? 0).toBe(mode.endsWith('live') ? full : 0)

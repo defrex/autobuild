@@ -15,7 +15,6 @@ function model(status: 'running' | 'paused' = 'running'): DashboardModel {
     repo: 'owner/repo',
     queued: 0,
     active: { current: 1, limit: 2 },
-    observations: { current: 0, limit: 5 },
     drained: false,
     repositoryPaused: false,
     defaultAutoMerge: false,

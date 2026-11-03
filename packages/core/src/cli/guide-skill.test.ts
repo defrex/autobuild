@@ -207,23 +207,23 @@ describe('ab-guide — init behavior', () => {
 })
 
 describe('ab-guide — dispatch dashboard summary', () => {
-  test('documents the live queue and observation-count grammar', () => {
+  test('documents the live triage, queue and active grammar', () => {
     const section = headingSection('## Dispatch dashboard')
     expect(section).toBeDefined()
     const compact = section?.replace(/\s+/g, ' ') ?? ''
+    expect(compact).toContain('`triage <count> | queue <depth> | active <current>/<limit>`')
+    expect(compact).not.toContain('observations <current>/<limit>')
     expect(compact).toContain(
-      '`queue <depth> | active <current>/<limit> | observations <current>/<limit>`',
+      '`triage` is the number of tickets in the configured triage state (`[tickets].triageState`',
     )
+    expect(compact).toContain('only for an interactive dashboard')
+    expect(compact).toContain('It shows `–` when the source cannot enumerate states')
+    expect(compact).toContain('a failed read keeps the last value, appends nothing')
+    expect(compact).toContain('never reads the ticket source')
     expect(compact).toContain('`queue` is the ready-ticket queue depth')
     expect(compact).toContain(
       '`active` is the current nonterminal-build count against root `capacity`',
     )
-    expect(compact).toContain(
-      '`observations` is the count of recorded observation occurrences not yet claimed by a Harvest snapshot against `policy.harvestThreshold`',
-    )
-    expect(compact).toContain('refreshes that display value directly from the BuildStore')
-    expect(compact).toContain('failed refresh retains the last successful count')
-    expect(compact).toContain('appends no transport event')
     expect(compact).not.toContain('`obs`')
     expect(compact).not.toContain('`drift`')
     expect(compact).not.toContain('renders as `/0`')

@@ -1620,8 +1620,8 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       paint('Autobuild', 'bold', color),
       displayText(basename(model.repo)),
       paint(
-        `queue ${model.queued} | active ${model.active.current}/${model.active.limit}${capacityExplanation(model.capacity)} | ` +
-          `observations ${model.observations.current}/${model.observations.limit}`,
+        `triage ${model.triage ?? '–'} | queue ${model.queued} | ` +
+          `active ${model.active.current}/${model.active.limit}${capacityExplanation(model.capacity)}`,
         'dim',
         color,
       ),

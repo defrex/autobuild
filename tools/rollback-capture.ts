@@ -84,8 +84,6 @@ export function rollbackCapture(
       queued: model.queued,
       activeCount: model.active.current,
       capacity: model.active.limit,
-      observationCount: model.observations.current,
-      observationLimit: model.observations.limit,
     },
     rollbackEvents(stage),
   )

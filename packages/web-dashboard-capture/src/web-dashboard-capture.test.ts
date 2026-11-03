@@ -43,7 +43,6 @@ function models(): WebFixtureModels {
   const base = {
     repo: 'fixture/repo',
     queued: 0,
-    observations: { current: 0, limit: 5 },
     defaultAutoMerge: false,
   }
   const happy: DashboardModel = {

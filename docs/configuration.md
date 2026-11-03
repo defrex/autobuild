@@ -2671,14 +2671,11 @@ uses the oldest unclaimed observation, counts only later same-repository
 `pr.merged` facts from other builds, and ignores aborted and closed-unmerged
 builds. Whichever trigger fires, Harvest claims the complete current
 accumulation and records `count`, `drift`, or `both` on the durable start fact.
-The dashboard header reports
-`queue <depth> | active <current>/<limit> | observations <current>/<limit>`.
-The observation current value is the unclaimed occurrence count and its limit is
-`policy.harvestThreshold`. The interactive frontend refreshes that display-only
-count directly from the BuildStore, retains the last successful value with a
-diagnostic after a failed refresh, and appends no transport event. The separate
-`policy.harvestMaxDrift` trigger is configured here but is not shown in the
-header. The repository lease and fixed per-run recovery budget are implementation
+Unclaimed observation pressure is not shown in the dashboard header, which
+reads `triage <count> | queue <depth> | active <current>/<limit>`. A running or
+paused Harvest row shows its run's observations, and `ab harvest status`
+reports Harvest state. Neither `policy.harvestThreshold` nor
+`policy.harvestMaxDrift` is displayed in the header. The repository lease and fixed per-run recovery budget are implementation
 invariants, not additional configuration fields.
 
 ## `[tickets]`
@@ -3522,12 +3519,11 @@ action. Check the gates in this order:
    deliberately excluded from the queue.
 
 If the expected work is observation harvesting instead of a ticket, check the
-acknowledged harvest gate, the dashboard's unclaimed `observations` count, and
-the configured triggers. Harvest starts when `policy.harvestThreshold`
-unclaimed observations exist or when `policy.harvestMaxDrift` other builds have
-merged since the oldest one; a drift limit of zero disables the second
-condition. The header shows count pressure against `harvestThreshold`; drift
-progress is not shown. Harvest does not consume build capacity.
+acknowledged harvest gate, `ab harvest status`, and the configured triggers.
+Harvest starts when `policy.harvestThreshold` unclaimed observations exist or
+when `policy.harvestMaxDrift` other builds have merged since the oldest one; a
+drift limit of zero disables the second condition. The dashboard header shows
+neither count nor drift pressure. Harvest does not consume build capacity.
 
 ### Authentication failures
 
