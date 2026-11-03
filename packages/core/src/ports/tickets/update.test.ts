@@ -31,7 +31,7 @@ describe('ticket update validation', () => {
 
   test('current reachable failures retain specific diagnostics', () => {
     expect(() => validateTicketUpdate({})).toThrow(
-      /invalid ticket update — update must name at least one of title, body, labels, kind, or target/,
+      /invalid ticket update — update must name at least one of title, body, labels, issue links, kind, or target/,
     )
     expect(() => validateTicketUpdate({ title: '   ' })).toThrow(
       /invalid ticket update — title: title must not be blank/,

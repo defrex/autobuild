@@ -369,8 +369,8 @@ describe('ab-guide — shipped-skill coverage (AC10)', () => {
 describe('ab-guide — ticket grooming coverage', () => {
   test('documents every configured-source write form and its state boundary', () => {
     for (const form of [
-      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]',
-      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]',
+      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--json]',
+      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--json]',
       'ab ticket block <id> <blocker-id[,blocker-id...]> [--json]',
       'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]',
     ]) {
@@ -475,8 +475,8 @@ describe('ab-guide — durable build-control coverage', () => {
 describe('ab-guide — source-agnostic ticket operations', () => {
   test('documents every command form and machine-readable option', () => {
     for (const form of [
-      '`ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]`',
-      '`ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]`',
+      '`ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--json]`',
+      '`ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--json]`',
       '`ab ticket block <id> <blocker-id[,blocker-id...]> [--json]`',
       '`ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]`',
       '`ab ticket list [--state <state>] [--labels a,b] [--json]`',

@@ -715,6 +715,69 @@ describe('agent tool registry contract', () => {
     expectJsonClean(tool)
   })
 
+  test('issue links default to closes and match their routes; unsupported sources refuse', async () => {
+    const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
+    const route = api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+        ticketBackend: routeWorld.backend,
+      }),
+    )
+    const tool = toolFor(toolWorld)
+    const tickets = `/operator/v1/repos/${encodeURIComponent(repo)}/tickets`
+    const request = {
+      title: 'Linked',
+      body: 'linked body',
+      issueLinks: [{ issue: 824 }, { issue: 820, intent: 'refs' }],
+    }
+    const created = await route('POST', tickets, request)
+    expect(created.status).toBe(201)
+    const createdTool = (await tool('tickets.create', { repo, ...request })) as {
+      ticket: { ref: { id: string }; issueLinks: unknown }
+    }
+    expectEqual(createdTool, created.body)
+    expectEqual(createdTool.ticket.issueLinks, [
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'closes' },
+    ])
+    const id = createdTool.ticket.ref.id
+    const patch = { issueLinks: [{ issue: 5 }] }
+    const updated = await route('PATCH', `${tickets}/${id}`, patch)
+    expect(updated.status).toBe(200)
+    expectEqual(await tool('tickets.update', { repo, id, ...patch }), updated.body)
+    const shown = (await tool('tickets.get', { repo, id })) as { ticket: { issueLinks: unknown } }
+    expectEqual(shown.ticket.issueLinks, [{ issue: 5, intent: 'closes' }])
+
+    const duplicate = { issueLinks: [{ issue: 1 }, { issue: 1, intent: 'refs' }] }
+    expect((await route('PATCH', `${tickets}/${id}`, duplicate)).status).toBe(400)
+    expect(
+      await toolFailure(() => tool('tickets.update', { repo, id, ...duplicate })),
+    ).toMatchObject({ kind: 'validation' })
+    expect(
+      await toolFailure(() =>
+        tool('tickets.create', { repo, title: 't', body: 'b', issueLinks: [{ issue: 0 }] }),
+      ),
+    ).toMatchObject({ kind: 'validation' })
+
+    Object.assign(routeWorld.source, { issueLinks: false })
+    Object.assign(toolWorld.source, { issueLinks: false })
+    const refused = await route('PATCH', `${tickets}/AUT-1`, { issueLinks: [] })
+    expect(refused.status).toBe(409)
+    expect(refused.body).toMatchObject({ kind: 'refusal', code: 'issue-links-unsupported' })
+    const refusedTool = await toolFailure(() =>
+      tool('tickets.update', { repo, id: 'AUT-1', issueLinks: [] }),
+    )
+    expectEqual(refusedTool, refused.body)
+    expect(
+      await toolFailure(() =>
+        tool('tickets.create', { repo, title: 't', body: 'b', issueLinks: [{ issue: 1 }] }),
+      ),
+    ).toMatchObject({ kind: 'refusal', code: 'issue-links-unsupported' })
+  })
+
   test('tickets.block and tickets.unblock match their routes', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
