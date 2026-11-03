@@ -300,7 +300,9 @@ explicitly choose root or a node, evaluate the repository's effective merge
 policy, and explain the merge flow to the human. Ask when intent is unclear.
 
 `ab ticket create|update|block|unblock|list|show|move|states` file, edit, and
-move tickets; the `ab-tickets` skill covers the tracker's details. Moving a
+move tickets; the `ab-tickets` skill covers the tracker's details. A ticket
+filed from a forge issue carries it with `--issues N` (`closes`), or
+`--issues N:refs` when the work only partly addresses it. Moving a
 ticket into the ready state sends it to dispatch — do that only when the
 ticket genuinely conforms and the human's intent is clear.
 
@@ -360,9 +362,12 @@ that does the job, and say what you are doing before you do it:
   resumes under the revised spec and its publication is confirmed.
 - `tickets.list`, `tickets.get` — read the ticket queue and one ticket. A long
   queue pages with `limit`, `offset` and `order`; `total` counts every match.
-- `tickets.create` — file a new ticket from a conversation.
+- `tickets.create` — file a new ticket from a conversation. A ticket filed
+  from a forge issue carries it in `issueLinks` as `{issue}` (intent `closes`,
+  the default) or `{issue, intent: "refs"}` when the work only partly
+  addresses it.
 - `tickets.update`, `tickets.block`, `tickets.unblock` — edit fields and
-  blocker relations.
+  blocker relations. `issueLinks` on update replaces the whole set.
 - `tickets.move` — move a ticket between workflow states. Moving a ticket
   into the ready state sends it to dispatch — do that only when the ticket
   genuinely conforms and the human's intent is clear.

@@ -124,8 +124,8 @@ JSON bodies are strict: unknown fields are rejected.
 | `POST …/bulk-control` | `{"action":"pause"\|"resume"}`. The hold fact, intake fact, then eligible build events are written in that order. |
 | `POST …/harvest/control` | `{"action":"toggle-gate"}` or `{"action":"run","run":"…"}`. A run action is bound to that concrete projected run. |
 | `POST …/tickets/states` | `{name,about?}` → `{state,created}`; requires attributed operator identity (`tickets.state.create` in MCP). Hosted duplicate names are refused case-insensitively. |
-| `POST …/tickets` | `{"title":"…","body":"…","labels"?:[],"state"?:"…","blockedBy"?:[],"kind"?:"work"|"node","target"?:"id"|null}`; omitted state preserves the backend default. |
-| `PATCH …/tickets/{id}` | Any nonempty subset of `title`, `body`, complete-replacement `labels`, `kind` (`work` or `node`), and nullable `target` (null clears). Body bytes are not normalized. |
+| `POST …/tickets` | `{"title":"…","body":"…","labels"?:[],"state"?:"…","blockedBy"?:[],"issueLinks"?:[{"issue":N,"intent"?:"closes"|"refs"}],"kind"?:"work"|"node","target"?:"id"|null}`; omitted state preserves the backend default, and omitted intent is `closes`. A backend that cannot store issue links refuses with `code: "issue-links-unsupported"`. |
+| `PATCH …/tickets/{id}` | Any nonempty subset of `title`, `body`, complete-replacement `labels`, complete-replacement `issueLinks` (`[]` clears), `kind` (`work` or `node`), and nullable `target` (null clears). Body bytes are not normalized. |
 | `POST …/tickets/{id}/move` | `{"state":"backend state name"}`. |
 | `POST …/tickets/{id}/block` | `{"blockerIds":["…"]}`. |
 | `POST …/tickets/{id}/unblock` | `{"blockerIds":["…"]}`. |

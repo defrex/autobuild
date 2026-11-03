@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto'
 import type { Ticket, TicketMutation, TicketSource } from '../types'
+import { normalizeIssueLinks } from './issue-links'
 
 /** Content versions intentionally return to the same value after an exact revert. */
 export function ticketRevision(
-  ticket: Pick<Ticket, 'title' | 'body' | 'labels' | 'state' | 'blockedBy' | 'kind' | 'target'> & {
+  ticket: Pick<
+    Ticket,
+    'title' | 'body' | 'labels' | 'state' | 'blockedBy' | 'kind' | 'target' | 'issueLinks'
+  > & {
     comments?: Ticket['comments']
     attachments?: unknown
   },
 ): string {
+  const issueLinks = normalizeIssueLinks(ticket.issueLinks ?? [])
   return createHash('sha256')
     .update(
       JSON.stringify([
@@ -20,6 +25,11 @@ export function ticketRevision(
         [...new Set(ticket.blockedBy ?? [])].sort(),
         ...(ticket.comments !== undefined || ticket.attachments !== undefined
           ? [ticket.comments ?? null, ticket.attachments ?? null]
+          : []),
+        // Appended only when nonempty so revisions of tickets without links,
+        // in every source, stay exactly what they were before links existed.
+        ...(issueLinks.length > 0
+          ? [['issueLinks', issueLinks.map((link) => [link.issue, link.intent])]]
           : []),
       ]),
     )

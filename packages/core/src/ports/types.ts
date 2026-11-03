@@ -89,6 +89,18 @@ export interface Ticket {
   blockersResolved?: boolean
   /** Source-local ids of tickets declared as blockers. Absent ≡ none. */
   blockedBy?: string[]
+  /** Forge issues this ticket addresses, sorted by issue number. Absent ≡ none
+   * or unsupported by the source. */
+  issueLinks?: IssueLink[]
+}
+
+export type IssueLinkIntent = 'closes' | 'refs'
+
+/** One forge issue a ticket addresses: `closes` fully resolves it, `refs`
+ * only partly addresses it. */
+export interface IssueLink {
+  issue: number
+  intent: IssueLinkIntent
 }
 
 export interface TicketCriteria {
@@ -129,6 +141,9 @@ export interface TicketDraft {
   /** Source-local blocker ids, recorded natively at creation (§13). An
    * adapter must record every one or throw — never discard silently. */
   blockedBy?: string[]
+  /** Forge issues this ticket addresses. An adapter without the `issueLinks`
+   * capability must refuse, never discard. */
+  issueLinks?: IssueLink[]
 }
 
 /** One node of the dependency graph, as this source sees it. */
@@ -172,6 +187,8 @@ export interface TicketUpdate {
    * Names need not already exist in the source; adapters own any
    * provider-side label-registry reconciliation. */
   labels?: string[]
+  /** A complete issue-link replacement. An explicit empty array clears links. */
+  issueLinks?: IssueLink[]
 }
 
 /** One workflow state of a source that can enumerate them. */
@@ -223,6 +240,10 @@ export interface TicketSource {
   /** Opt in only when kind/target persistence, graph validation and complete
    * enumeration are supported at every write boundary, including guarded writes. */
   readonly integrationTree?: boolean
+  /** Opt in only when issue links are persisted and returned at every write
+   * boundary, including create and guarded writes. Sources without it refuse
+   * any write naming issue links. */
+  readonly issueLinks?: boolean
   /** Every lifecycle state, including archived/completed tickets; no ready gate. */
   listAll?(): Promise<TicketListing>
   /** Import support: the same pure id policy used by create, for mutation-free preflight. */

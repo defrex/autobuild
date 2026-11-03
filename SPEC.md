@@ -2470,6 +2470,18 @@ dependency-blocked ticket stays
 queued source work rather than becoming a blocked build: the runtime `blocked`
 status is for builds awaiting a human.
 
+**Forge issue links.** A ticket may record the forge issues it addresses, each
+as `{issue, intent}`: `issue` is a positive issue number and `intent` is
+`closes` (the default; the work fully resolves the issue) or `refs` (the work
+only partly addresses it). Issue numbers are unique within a ticket and reads
+return links sorted by number; absent means none. Create sets links; update
+replaces the whole set, and an empty set clears it. Sources declare support.
+A source that cannot store links refuses any create or update that names
+them, including an empty set, with a typed error naming the source, before
+anything is written; it never drops them. Writes that name no links are
+unaffected. `ab ticket create` and `update` take `--issues N[:refs],...`;
+operator and MCP ticket requests take `issueLinks`. Links are ticket metadata.
+
 In repositories with integration nodes, a blocker that has a build resolves only
 when its change identity is present in the dependent's sampled target head
 (the configured root branch when no target is set). Source completion or an
@@ -4286,14 +4298,15 @@ revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
-kind, target, id, blockers, creation key and reference comments are read-only. It saves only
+kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
 changed fields with the opening revision. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; reverting identical content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links. Reverting identical
+content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
 cover structured comments and portable attachments. Legacy file comments change

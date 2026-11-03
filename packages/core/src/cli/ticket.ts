@@ -3,6 +3,7 @@ import { readTicketTree } from '../operator/tickets'
 import { updateTicketTarget } from '../kernel/node-parent'
 import { createForge } from '../ports/forge/create'
 import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/tree'
+import { formatIssueLinks, parseIssueLinkList } from '../ports/tickets/issue-links'
 import { readBuildFacts } from '../store/reduced-reads'
 import { exportTickets, importTickets, directMigration } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
@@ -89,6 +90,8 @@ export interface TicketCreateOpts extends TicketCommandOpts {
   /** Source-local ids of tickets that must complete before this one is
    * dispatched (§13). Validated against the configured source before create. */
   blockedBy?: string[]
+  /** Forge issues the ticket addresses; sources without support refuse. */
+  issueLinks?: import('../ports/types').IssueLink[]
 }
 
 export interface TicketUpdateOpts extends TicketCommandOpts {
@@ -101,6 +104,8 @@ export interface TicketUpdateOpts extends TicketCommandOpts {
   bodyFile?: string
   /** Complete label replacement. An explicit [] clears labels. */
   labels?: string[]
+  /** Complete issue-link replacement. An explicit [] clears links. */
+  issueLinks?: import('../ports/types').IssueLink[]
 }
 
 export interface TicketBlockerOpts extends TicketCommandOpts {
@@ -287,6 +292,7 @@ function ticketSummary(ticket: Ticket): string {
   if (ticket.blockedBy !== undefined && ticket.blockedBy.length > 0) {
     fields.push(`— blocked by: ${ticket.blockedBy.join(', ')}`)
   }
+  if (ticket.issueLinks?.length) fields.push(`— issues: ${formatIssueLinks(ticket.issueLinks)}`)
   if (ticket.ref.url !== undefined) fields.push(`— ${ticket.ref.url}`)
   return fields.join(' ')
 }
@@ -307,6 +313,7 @@ function ticketDetail(ticket: Ticket, assets: TicketAssetSummary[] = []): string
   if (ticket.blockedBy !== undefined && ticket.blockedBy.length > 0) {
     lines.push(`  blocked by: ${ticket.blockedBy.join(', ')}`)
   }
+  if (ticket.issueLinks?.length) lines.push(`  issues:  ${formatIssueLinks(ticket.issueLinks)}`)
   if (ticket.ref.url !== undefined) lines.push(`  url:     ${ticket.ref.url}`)
   if (assets.length > 0) lines.push('  assets:', ...assets.map(assetLine))
   lines.push('  body:')
@@ -331,6 +338,7 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
       body,
       ...(opts.labels !== undefined ? { labels: opts.labels } : {}),
       ...(opts.blockedBy !== undefined ? { blockedBy: opts.blockedBy } : {}),
+      ...(opts.issueLinks !== undefined ? { issueLinks: opts.issueLinks } : {}),
       ...(opts.state !== undefined ? { state: opts.state } : {}),
     },
     {
@@ -348,7 +356,10 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
     ticket.blockedBy !== undefined && ticket.blockedBy.length > 0
       ? ` — blocked by ${ticket.blockedBy.join(', ')}`
       : ''
-  opts.stdout(`ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${blockers}${url}`)
+  const issues = ticket.issueLinks?.length ? ` — ${formatIssueLinks(ticket.issueLinks)}` : ''
+  opts.stdout(
+    `ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${blockers}${issues}${url}`,
+  )
 }
 
 export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
@@ -360,6 +371,7 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
     ...(opts.title !== undefined ? { title: opts.title } : {}),
     ...(body !== undefined ? { body } : {}),
     ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
+    ...(opts.issueLinks !== undefined ? { issueLinks: [...opts.issueLinks] } : {}),
   }
   const updated =
     patch.target === undefined
@@ -767,9 +779,9 @@ export async function abTicketStateCreate(opts: TicketStateCreateOpts): Promise<
 }
 
 const CREATE_USAGE =
-  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--kind work|node] [--target <id> | --no-target] [--json] (§8.8)'
+  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--kind work|node] [--target <id> | --no-target] [--json] (§8.8)'
 const UPDATE_USAGE =
-  'usage: ab ticket update <id> [--kind work|node] [--target <id> | --no-target] [--title <title>] [--body <file>] [--labels a,b] [--expected-revision <opaque>] [--json] (§8.8)'
+  'usage: ab ticket update <id> [--kind work|node] [--target <id> | --no-target] [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--expected-revision <opaque>] [--json] (§8.8)'
 const BLOCK_USAGE =
   'usage: ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json] (§8.8)'
 const UNBLOCK_USAGE =
@@ -874,6 +886,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
           state: 'value',
           labels: 'value',
           'blocked-by': 'value',
+          issues: 'value',
           json: 'boolean',
         },
         TICKET_USAGE,
@@ -887,6 +900,8 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       if (state !== undefined && state.trim() === '') throw new Error(TICKET_USAGE)
       const labels = stringFlag(parsed, 'labels')
       const blockedBy = stringFlag(parsed, 'blocked-by')
+      const issues = stringFlag(parsed, 'issues')
+      const issueLinks = issues === undefined ? [] : parseIssueLinkList(issues)
       await abTicketCreate({
         ...opts,
         ...metadataFlags(parsed),
@@ -895,6 +910,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(state !== undefined ? { state } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
         ...(blockedBy !== undefined ? { blockedBy: commaList(blockedBy) } : {}),
+        ...(issueLinks.length > 0 ? { issueLinks } : {}),
         json: parsed.flags.has('json'),
       })
       return
@@ -917,14 +933,15 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
           title: 'value',
           body: 'value',
           labels: 'value',
+          issues: 'value',
           'expected-revision': 'value',
           json: 'boolean',
         },
         TICKET_USAGE,
       )
       const [id, ...extra] = parsed.positionals
-      const hasUpdate = ['title', 'body', 'labels', 'kind', 'target', 'no-target'].some((flag) =>
-        parsed.flags.has(flag),
+      const hasUpdate = ['title', 'body', 'labels', 'issues', 'kind', 'target', 'no-target'].some(
+        (flag) => parsed.flags.has(flag),
       )
       if (id === undefined || id.trim() === '' || extra.length > 0 || !hasUpdate) {
         throw new Error(TICKET_USAGE)
@@ -932,6 +949,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       const title = stringFlag(parsed, 'title')
       const bodyFile = stringFlag(parsed, 'body')
       const labels = stringFlag(parsed, 'labels')
+      const issues = stringFlag(parsed, 'issues')
       if (bodyFile !== undefined && bodyFile.trim() === '') {
         throw new Error(TICKET_USAGE)
       }
@@ -943,6 +961,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(title !== undefined ? { title } : {}),
         ...(bodyFile !== undefined ? { bodyFile } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
+        ...(issues !== undefined ? { issueLinks: parseIssueLinkList(issues) } : {}),
         json: parsed.flags.has('json'),
       })
       return
