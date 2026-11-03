@@ -1,7 +1,10 @@
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { readBuildFacts } from '../store/reduced-reads'
 import { missingAccountCredentials, MissingAccountCredentialsError } from '../accounts/availability'
-import { parkedSweepReadBudget } from '../testing/reduced-read-budget'
+import {
+  flaggedWorkspaceSweepReadBudget,
+  parkedSweepReadBudget,
+} from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { GitHubForge } from '../ports/forge/github'
@@ -5549,8 +5552,11 @@ describe('Dispatcher lease sweep', () => {
           payload: { outcome: 'closed-unmerged' },
         })
       if (guard === 'start-failure') {
-        await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow(
-          'sandbox start failed',
+        // Contained per build: the start failure is durable and the tick
+        // still completes.
+        const report = await h.dispatcher.tick({ acceptNewWork: false })
+        expect(report.janitorDiagnostics).toContainEqual(
+          expect.stringContaining('sandbox start failed'),
         )
         const events = await h.store.getEvents(slug)
         expect(events.filter((e) => e.type === 'infrastructure.failed')).toHaveLength(1)
@@ -7446,13 +7452,21 @@ describe('publication loss before workspace release', () => {
       },
     })
 
-    // The guard's append failure propagates: the sweep (and with it the
-    // release) never proceeds past an unrecorded pending request.
-    await expect(fixture.h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow(
-      /injected store outage on publication\.lost/,
-    )
+    // The guard's append failure is recorded against the build: the release
+    // never proceeds past an unrecorded pending request, and the tick still
+    // completes.
+    await fixture.h.dispatcher.tick({ acceptNewWork: false })
     expect(fixture.reapCalls).toEqual([])
     const events = await fixture.h.store.getEvents(fixture.slug)
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'infrastructure.failed' &&
+          event.payload.operation === 'reconcile' &&
+          event.payload.cleanupPending &&
+          /injected store outage on publication\.lost/.test(event.payload.error),
+      ),
+    ).toHaveLength(1)
     expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
     expect(events.some((event) => event.type === 'infrastructure.cleanup-attempted')).toBe(false)
   })
@@ -9373,6 +9387,48 @@ command = "run"
       },
     })
   }, 30_000)
+
+  test('flagged workspace sweep read budget stays bounded at 100 and 100,000 events', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    let reaps = 0
+    let launches = 0
+    const fixture = flaggedWorkspaceFixture({
+      preservation: async () => {
+        throw new Error(`chdir /vercel/sandbox/workspace: no such file or directory`)
+      },
+    })
+    const provider: WorkspaceProvider = {
+      ...fixture.provider,
+      recovery: {
+        ...fixture.provider.recovery!,
+        reap: async () => {
+          reaps++
+          throw new Error('a failing preservation must never reach reap')
+        },
+      },
+    }
+    const build = (): Harness =>
+      harness({
+        store,
+        clock,
+        workspaceProvider: provider,
+        toml: '[policy]\nmaxInfrastructureAttempts = 1000\n',
+        onLaunch: () => {
+          launches++
+        },
+      })
+    const slug = 'flagged-budget'
+    await seedFlaggedWorkspace(build(), slug, { attached: true, ended: true })
+    await flaggedWorkspaceSweepReadBudget({
+      store,
+      slug,
+      dispatcher: () => build().dispatcher,
+      advance: () => clock.advance(10 * 60_000),
+      effects: () => ({ reaps, launches }),
+    })
+    expect({ reaps, launches }).toEqual({ reaps: 0, launches: 0 })
+  }, 60_000)
 
   for (const table of ['verify', 'finalize'] as const) {
     for (const change of ['add', 'remove', 'rename'] as const) {
@@ -12869,10 +12925,17 @@ test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
         throw new Error('receipt store unavailable')
       return append(...args)
     }
-    if (failure === 'preservation' || failure === 'receipt')
-      await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('unavailable')
-    else await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.tick({ acceptNewWork: false })
     expect(reaped).toBe(0)
+    if (failure !== 'reap')
+      expect(
+        (await h.store.getEvents(slug)).filter(
+          (event) =>
+            event.type === 'infrastructure.failed' &&
+            event.payload.operation === 'reconcile' &&
+            event.payload.cleanupPending,
+        ),
+      ).toHaveLength(1)
     expect(
       (await h.store.getEvents(slug)).some((event) => event.type === 'workspace.released'),
     ).toBe(false)
@@ -12889,6 +12952,190 @@ test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
     ).toHaveLength(1)
   },
 )
+
+/** A recovery-capable provider whose environment `g0` was flagged
+ * `cleanup-required`; it records every recovery call in order. */
+function flaggedWorkspaceFixture(opts: { preservation?: () => Promise<never> } = {}) {
+  const calls: string[] = []
+  const generations: Array<number | undefined> = []
+  const provider: WorkspaceProvider = {
+    name: 'flagged-fixture',
+    preservation: async () => {
+      calls.push('preserve')
+      if (opts.preservation) return opts.preservation()
+      return { outcome: 'absent' }
+    },
+    recovery: {
+      fence: async () => {
+        calls.push('fence')
+        return { outcome: 'confirmed' }
+      },
+      reap: async (handle) => {
+        calls.push(`reap:${handle.ref}`)
+        return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 0 } }
+      },
+    },
+    provision: async (input) => {
+      calls.push(`provision:g${input.generation ?? 0}`)
+      generations.push(input.generation)
+      return {
+        provider: 'flagged-fixture',
+        ref: `g${input.generation ?? 0}`,
+        path: '/vercel/sandbox/workspace',
+        branch: input.branch,
+        base: { source: 'existing', sha: BASE_SHA },
+      }
+    },
+    release: async () => {},
+  }
+  return { provider, calls, generations }
+}
+
+async function seedFlaggedWorkspace(
+  h: Harness,
+  slug: string,
+  opts: { attached?: boolean; ended?: boolean } = {},
+): Promise<void> {
+  await seedBuild(h, {
+    slug,
+    ticketId: `T-${slug}`,
+    workspace: false,
+    attached: opts.attached ?? false,
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'workspace.cleanup-required',
+    payload: {
+      provider: 'flagged-fixture',
+      ref: 'g0',
+      path: '/vercel/sandbox/workspace',
+      remote: true,
+      branch: `ab/${slug}`,
+      base: { source: 'existing', sha: BASE_SHA },
+    },
+  })
+  if (opts.ended) {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'flagged-fixture', workspaceRef: 'g0', instance: 'old' },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { workspaceRef: 'g0', instance: 'old', outcome: 'completed', exitCode: 0 },
+    })
+  }
+}
+
+describe('cleanup-required workspaces are replaced, never launched into', () => {
+  test('a dispatch retry reaps the flagged environment and provisions the next generation', async () => {
+    const fixture = flaggedWorkspaceFixture()
+    const slug = 'flagged-dispatch'
+    const h = harness({
+      tickets: [readyTicket(`T-${slug}`)],
+      workspaceProvider: fixture.provider,
+      onLaunch: () => {
+        fixture.calls.push('launch')
+      },
+    })
+    await seedFlaggedWorkspace(h, slug)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.drainProvisioning()
+    expect(fixture.calls.slice(0, 4)).toEqual(['fence', 'preserve', 'reap:g0', 'provision:g1'])
+    expect(fixture.calls.indexOf('launch')).toBeGreaterThan(fixture.calls.indexOf('provision:g1'))
+    const types = (await h.store.getEvents(slug)).map((event) => event.type)
+    const order = [
+      'workspace.cleanup-required',
+      'workspace.fenced',
+      'workspace.commits-lost',
+      'infrastructure.cleanup-attempted',
+      'workspace.released',
+      'workspace.provision-started',
+      'workspace.provisioned',
+    ].map((type) => types.indexOf(type as (typeof types)[number]))
+    expect(order.every((index) => index >= 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+    const started = (await h.store.getEvents(slug)).find(
+      (event) => event.type === 'workspace.provision-started',
+    )
+    expect(started?.payload).toMatchObject({ generation: 1 })
+    const lost = (await h.store.getEvents(slug)).find(
+      (event) => event.type === 'workspace.commits-lost',
+    )
+    expect(lost?.payload).toMatchObject({ shas: [] })
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('a failing release of one build is recorded against it while other builds advance', async () => {
+    const fixture = flaggedWorkspaceFixture({
+      preservation: async () => {
+        throw new Error('chdir /vercel/sandbox/workspace: no such file or directory')
+      },
+    })
+    const h = harness({ workspaceProvider: fixture.provider })
+    await seedFlaggedWorkspace(h, 'flagged-a')
+    await seedBuild(h, {
+      slug: 'healthy-b',
+      workspaceProvider: 'flagged-fixture',
+      workspaceRef: 'b',
+    })
+    await h.store.append('healthy-b', {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'flagged-fixture', workspaceRef: 'b', instance: 'old' },
+    })
+    await h.store.append('healthy-b', {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { workspaceRef: 'b', instance: 'old', outcome: 'completed', exitCode: 0 },
+    })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const failed = (await h.store.getEvents('flagged-a')).filter(
+      (event) => event.type === 'infrastructure.failed',
+    )
+    expect(failed).toHaveLength(1)
+    expect(failed[0]!.payload).toMatchObject({ operation: 'reconcile', cleanupPending: true })
+    expect(
+      (await h.store.getEvents('flagged-a')).some((event) => event.type === 'workspace.released'),
+    ).toBe(false)
+    expect(fixture.calls).not.toContain('reap:g0')
+    expect(h.launches).toEqual(['healthy-b'])
+  })
+
+  test('the lease sweep reaps a flagged workspace whose execution ended in place', async () => {
+    const fixture = flaggedWorkspaceFixture()
+    const h = harness({ workspaceProvider: fixture.provider })
+    const slug = 'flagged-ended'
+    await seedFlaggedWorkspace(h, slug, { attached: true, ended: true })
+    h.clock.advance(10 * 60_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.drainProvisioning()
+    expect(fixture.calls.slice(0, 4)).toEqual(['fence', 'preserve', 'reap:g0', 'provision:g1'])
+    const events = await h.store.getEvents(slug)
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+    // The only launch follows the next generation's provision.
+    expect(h.launches).toEqual([slug])
+    expect(events.filter((event) => event.type === 'workspace.provisioned')).toMatchObject([
+      { payload: { ref: 'g1' } },
+    ])
+  })
+
+  test('launch refuses a flagged workspace', async () => {
+    const fixture = flaggedWorkspaceFixture()
+    const h = harness({ workspaceProvider: fixture.provider })
+    const slug = 'flagged-launch'
+    await seedFlaggedWorkspace(h, slug, { attached: true })
+    const launch = (
+      h.dispatcher as unknown as {
+        launch: (slug: string, launched: Set<string>) => Promise<LaunchRunnerResult>
+      }
+    ).launch.bind(h.dispatcher)
+    expect(await launch(slug, new Set())).toBe('already-active')
+    expect(h.launches).toEqual([])
+  })
+})
 
 test('confirmed absent replacement records unknown additional inventory before cleanup', async () => {
   let reaped = false

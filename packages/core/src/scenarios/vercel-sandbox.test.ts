@@ -26,6 +26,7 @@ import {
   VERCEL_BUN_PREFIX,
   VERCEL_BUN_VERSION,
   VERCEL_DISTRIBUTION_VERSION_MARKER,
+  VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
   type VercelCommand,
   type VercelCommandLookup,
@@ -41,6 +42,8 @@ import { BuildRunner } from '../processes/build-runner'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import { settleSummaryRequests } from '../cli/pr-summary-publication'
 import { manualClock } from '../testing/fixed'
+import { controlBuild } from '../cli/build-control'
+import { recordInfrastructureFailure as appendInfrastructureFailure } from '../processes/infrastructure-failure-budget'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -1249,3 +1252,202 @@ test.each(['orphaned', 'normal'] as const)(
     expect(launches).toBe(mode === 'orphaned' ? 1 : 2)
   },
 )
+
+/** AUT-1086 regression: a provision that times out leaves a named VM with no
+ * marker and no checkout. Every git or agent command in it fails exactly as
+ * observed. Release must record the loss, delete the VM by name and reach a
+ * fresh next-generation provision without any tick ending abnormally. */
+test('a half-provisioned sandbox is released and replaced without stopping the dispatcher', async () => {
+  const path = await mkdtemp(join(tmpdir(), 'ab-vercel-half-provisioned-'))
+  const toml =
+    '[tickets]\nsource = "file"\nreadyState = "Ready"\n[roles.default]\nruntime = "scripted"\n[policy]\nmaxInfrastructureAttempts = 2\nmaxDispatchAttempts = 10\n'
+  const config = parseConfig(toml)
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  const slug = 'half-provisioned'
+  const branch = `ab/${slug}`
+  const forge = new FakeForge({ headSha: SHA })
+  forge.seedBranch('main', BASE)
+  const ticket = { source: 'fake', id: 'T-1', title: 'Half provisioned' }
+  await store.createBuild({ slug, repo: path, branch, ticket })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { repo: path, baseBranch: 'main', ticket },
+  })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'spec.imported',
+    payload: { artifact: { kind: 'spec', rev: 0 }, ticket },
+  })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'target.moved',
+    payload: { branch: 'main', sha: BASE },
+  })
+  const tickets = new FakeTicketSource([])
+  await tickets.create({ title: 'Half provisioned', body: '', labels: [] }, { requestedId: 'T-1' })
+
+  const chdir = `chdir ${VERCEL_WORKSPACE_PATH}: no such file or directory`
+  const bun = 'fork/exec /opt/autobuild-runtime/node_modules/.bin/bun: no such file or directory'
+  const detached: string[] = []
+  const deleted: string[] = []
+  const created: string[] = []
+  const sandboxes = new Map<string, VercelSandboxHandle>()
+  /** A VM whose provisioning stopped before the checkout was moved into place. */
+  const halfProvisioned = (name: string): VercelSandboxHandle => ({
+    name,
+    getCommand: async () => {
+      throw new Error('no commands were started')
+    },
+    runCommand: async (params) => {
+      if (params.detached === true) {
+        detached.push(name)
+        throw new Error(bun)
+      }
+      if (params.cwd === VERCEL_WORKSPACE_PATH) throw new Error(chdir)
+      // Neither the provisioned marker nor the checkout exists.
+      if (params.cmd === 'test') return { exitCode: 1 }
+      return { exitCode: 0 }
+    },
+    writeFiles: async () => {},
+    stop: async () => undefined,
+    delete: async () => {
+      sandboxes.delete(name)
+    },
+    update: async () => {},
+  })
+  const facade: VercelSandboxFacade = {
+    get: async (name) => sandboxes.get(name) ?? null,
+    create: async (input) => {
+      created.push(input.name)
+      // The VM is registered, then the provider's provision call times out.
+      sandboxes.set(input.name, halfProvisioned(input.name))
+      throw new Error('provision timed out')
+    },
+    deleteByName: async (name) => {
+      deleted.push(name)
+      return sandboxes.delete(name) ? 'confirmed' : 'absent'
+    },
+    listSnapshots: async () => [],
+    deleteSnapshot: async () => {},
+  }
+  const exec: Exec = async (cmd) => {
+    if (cmd.includes('get-url'))
+      return { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+    if (cmd.includes('ls-remote')) {
+      const ref = cmd.at(-1)
+      return {
+        stdout: ref === 'refs/heads/main' ? `${BASE}\t${ref}\n` : '',
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    return { stdout: '', stderr: '', exitCode: 0 }
+  }
+  const provider = new VercelSandboxProvider({
+    config: {
+      image: 'vercel/sandbox/universal:latest',
+      vcpus: 4,
+      timeoutSeconds: 2700,
+      failoverRegions: [],
+      environmentVariables: [],
+    },
+    env: { GITHUB_TOKEN: 'publication-secret' },
+    storeRef: 'https://store.example.test',
+    storeToken: 'scoped-token',
+    delegateCredential: async () => 'delegated-token',
+    repo: path,
+    facade,
+    exec,
+    observeWaitMs: 25,
+    packageArchive: async () => new Uint8Array([1]),
+  })
+  const launchedInto: Array<string | undefined> = []
+  const dispatcher = new Dispatcher({
+    store,
+    config,
+    clock,
+    repo: path,
+    ids: sequentialIds(),
+    forge,
+    exec,
+    tickets,
+    workspaces: provider,
+    launchRunner: async (launched) => {
+      launchedInto.push((await readBuildFacts(store, launched)).value.workspace?.ref)
+      return 'scheduled'
+    },
+  })
+  const tick = async () => {
+    await dispatcher.tick({ acceptNewWork: false })
+    await dispatcher.drainProvisioning()
+    clock.advance(10 * 60_000)
+  }
+  const types = async () => (await store.getEvents(slug)).map((event) => event.type)
+
+  // 1. Provision times out, leaving g0 without a marker or checkout.
+  await tick()
+  expect(created).toHaveLength(1)
+  const g0 = created[0]!
+  expect(g0).toContain('-g0-')
+  expect(await types()).toContain('dispatch.failed')
+  // 2. The retry finds the marker-less VM and flags it.
+  for (let n = 0; n < 4 && !(await types()).includes('workspace.cleanup-required'); n++) {
+    const state = (await readBuildFacts(store, slug)).value.state
+    if (state.openEscalations.length > 0)
+      await controlBuild({ store, repo: path, slug, user: 'ops', action: { kind: 'answer' } })
+    await tick()
+  }
+  expect(await types()).toContain('workspace.cleanup-required')
+  // 3. The observed start failure exhausts the infrastructure budget; the
+  // operator answers with a bare retry.
+  await appendInfrastructureFailure(
+    { store, ids: sequentialIds() },
+    {
+      slug,
+      events: (await readBuildFacts(store, slug)).value,
+      maxAttempts: config.policy.maxInfrastructureAttempts,
+      provider: provider.name,
+      workspaceRef: g0,
+      instance: 'dispatcher-recovery',
+      operation: 'start',
+      error: new Error(bun),
+      cleanupPending: false,
+    },
+  )
+  // 4. Every tick completes until the next generation is provisioned.
+  for (let n = 0; n < 6 && !created.some((name) => name.includes('-g1-')); n++) {
+    const state = (await readBuildFacts(store, slug)).value.state
+    if (state.openEscalations.length > 0)
+      await controlBuild({ store, repo: path, slug, user: 'ops', action: { kind: 'answer' } })
+    await tick()
+  }
+
+  expect(detached).toEqual([])
+  expect(launchedInto).not.toContain(g0)
+  expect(deleted).toContain(g0)
+  expect(created.some((name) => name.includes('-g1-'))).toBe(true)
+  const events = await store.getEvents(slug)
+  const order = [
+    'workspace.cleanup-required',
+    'workspace.fenced',
+    'workspace.commits-lost',
+    'infrastructure.cleanup-attempted',
+    'workspace.released',
+  ].map((type) => events.findIndex((event) => event.type === type))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect([...order].sort((a, b) => a - b)).toEqual(order)
+  expect(events.find((event) => event.type === 'workspace.commits-lost')?.payload).toMatchObject({
+    shas: [],
+  })
+  expect(
+    events.find((event) => event.type === 'infrastructure.cleanup-attempted')?.payload,
+  ).toMatchObject({ outcome: 'confirmed' })
+  expect(
+    events.find(
+      (event) =>
+        event.type === 'workspace.provision-started' && event.seq > events[order.at(-1)!]!.seq,
+    )?.payload,
+  ).toMatchObject({ generation: 1 })
+})

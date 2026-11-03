@@ -156,7 +156,7 @@ export async function preserveWorkspaceBeforeRelease(deps: {
               (sha) => !prior?.heads.some((head) => head.sha === sha),
             ),
             inventory: 'additional-shas-unavailable' as const,
-            reason: `${deps.reason}: source environment is absent; additional unpublished SHAs could not be inspected`,
+            reason: `${deps.reason}: source environment or checkout is absent; additional unpublished SHAs could not be inspected`,
           },
         }
   if (!(await deps.store.appendIfCurrent(deps.slug, current.cursor, write)))

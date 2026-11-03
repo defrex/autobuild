@@ -7,7 +7,7 @@ import {
   type MissingAccountCredential,
 } from '../accounts/availability'
 
-import { WorkspaceFenceUnknown, preserveWorkspaceBeforeRelease } from './workspace-preservation'
+import { preserveWorkspaceBeforeRelease } from './workspace-preservation'
 import { WorkspaceCleanupRequired } from '../ports/types'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import type { TicketPreparation } from '../kernel/ticket-preparation'
@@ -681,6 +681,12 @@ export interface DispatcherDeps {
  * dispatcher's concern), so the janitor scans the raw log. */
 function openWorkspace(events: CurrentBuildFacts): OpenBuildWorkspace | null {
   return events.workspace
+}
+
+/** The open workspace is the one a provider flagged `cleanup-required`: it
+ * must be reaped and replaced, never launched into. */
+function cleanupRequiredWorkspace(events: CurrentBuildFacts): boolean {
+  return events.workspace !== null && events.latestWorkspace?.type === 'workspace.cleanup-required'
 }
 
 /** The build's base branch, from its own `build.created` fact (§15.3);
@@ -1519,6 +1525,14 @@ export class Dispatcher {
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
     const facts = (await readBuildFacts(this.store, slug)).value
+    // Callers reap and reprovision a flagged workspace; an agent never starts
+    // in an environment a provider flagged `cleanup-required`.
+    if (
+      facts.workspace !== null &&
+      cleanupRequiredWorkspace(facts) &&
+      this.workspaceOwner(facts.workspace)?.recovery !== undefined
+    )
+      return 'already-active'
     if (facts.log.restack.target === undefined && facts.lastCreated !== undefined) {
       const branch = facts.lastCreated.payload.baseBranch
       await this.observeTarget(slug, branch, undefined, report)
@@ -4045,9 +4059,9 @@ export class Dispatcher {
     const recovery = this.workspaceOwner(open)?.recovery
     if (recovery === undefined) return false
     // Last-chance settlement boundary (AUT-328): record the pending
-    // publication's fate BEFORE the destructive reap. The guard's append
-    // failure propagates — a stale workspace with an unrecorded pending
-    // request is never reaped (the next tick retries).
+    // publication's fate BEFORE the destructive reap. A guard failure is
+    // recorded against the build — a stale workspace with an unrecorded
+    // pending request is never reaped (the next tick retries).
     try {
       await preserveWorkspaceBeforeRelease({
         store: this.store,
@@ -4069,7 +4083,12 @@ export class Dispatcher {
       // Keep this generation and its pending work until forge recovery,
       // while allowing the sweep to supervise the remaining builds.
       if (error instanceof ForgeRequestDeferred) return false
-      if (!(error instanceof WorkspaceFenceUnknown)) throw error
+      // A repository-wide forge cooldown or version deferral is not this
+      // build's failure; the tick-level handlers own it.
+      if (error instanceof ForgeCooldown || error instanceof MixedVersionDeferral) throw error
+      // Any other preservation or settlement failure (an unknown fence, a
+      // checkout that could not be inspected) retains the workspace and its
+      // pending work and is attributed to this build, never to the tick.
       await this.recordInfrastructureFailure(slug, events, {
         provider: open.provider,
         workspaceRef: open.ref,
@@ -4353,6 +4372,23 @@ export class Dispatcher {
         return this.completeDispatchBoundaries(record, seed, report, launched)
 
       stage = 'workspace'
+      const flagged = openWorkspace(events)
+      if (
+        flagged !== null &&
+        cleanupRequiredWorkspace(events) &&
+        this.workspaceOwner(flagged)?.recovery !== undefined
+      ) {
+        // A retry never launches into a flagged environment: release it, then
+        // provision the next generation below. A live lease means a foreign
+        // continuation still owns the build.
+        if (this.hasLiveExecutionLease(record)) return 'parked'
+        if (!(await this.reapStaleWorkspace(record.slug, events, 'replacement'))) {
+          // The failure is already durable against this build.
+          launched.add(record.slug)
+          return 'parked'
+        }
+        events = (await readBuildFacts(store, record.slug)).value
+      }
       if (openWorkspace(events) === null) {
         if (this.deps.workspaces.recovery !== undefined) {
           // Recovery-capable provider: durable marker + tracked background
@@ -4704,209 +4740,236 @@ export class Dispatcher {
       if (launched.has(record.slug)) continue
       // Budget gate: the sweep re-attaches runners per expired build.
       if (this.outOfBudget(opts)) break
-      if (record.lease) {
-        if (new Date(record.lease.expiresAt).getTime() > now) continue // healthy
+      try {
+        await this.sweepBuild(record, report, launched, paused, now)
+      } catch (error) {
+        // Per-build containment: one build's failure never stops the sweep
+        // from advancing the others. Workspace failures are already durable
+        // against the build; a repository-wide cooldown still ends the tick.
+        if (error instanceof ForgeRequestDeferred || error instanceof MixedVersionDeferral) continue
+        if (error instanceof ForgeCooldown) throw error
+        const message =
+          error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+        report.janitorFailed += 1
+        report.janitorDiagnostics.push(`build ${record.slug}: lease sweep failed — ${message}`)
       }
-      const facts = await this.store.buildFacts(record.slug)
-      const state = facts.state
-      if (mixedVersionDeferred(state)) {
-        await deferMixedVersion(this.store, record.slug)
-        continue
-      }
-      if (
-        (state.status === 'queued' && state.discardRequest !== undefined) ||
-        heldByRepositoryPause(state, paused)
-      ) {
-        continue
-      }
-      if (
-        state.status === 'queued' &&
-        !state.pendingCommands.some((command) => command.command === 'abort') &&
-        !(await this.dispatchBudget(record.slug))
-      )
-        continue
-      const pendingRewrite = facts.publication.latestUncompletedRequest()?.payload
-      const retryIntent =
-        pendingRewrite?.operation === 'reconcile' && pendingRewrite.rewrite
-          ? { operation: 'reconcile' as const, id: pendingRewrite.rewrite.id }
-          : facts.log.restack.intent
-            ? { operation: 'restack' as const, id: facts.log.restack.intent.id }
-            : undefined
-      // Publication waits must not prevent a replacement runner from
-      // acknowledging controls, including abort on an exhausted episode.
-      if (retryIntent && state.pendingCommands.length === 0) {
-        try {
-          await publicationRetryGate(
-            { store: this.store, slug: record.slug, clock: this.deps.clock, actor: DISPATCHER },
-            retryIntent.operation,
-            retryIntent.id,
-          )
-        } catch (error) {
-          if (error instanceof ForgeRequestDeferred) continue
-          throw error
-        }
-      }
-      const decision = await this.decideBuild(record.slug, state, facts.log, report, true)
-      if (decision === undefined) continue
-      if (state.status === 'done' || state.status === 'aborted') continue
-      const orphanEligible = (state: BuildState) =>
-        !paused &&
-        state.status === 'running' &&
-        (state.kind !== 'node' || integrationCurrent(state)) &&
-        state.sessions.open.some((session) => session.suspensionCause === undefined)
-      const provedEnded =
-        facts.open === null &&
-        (facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch')
-      const cleanup = state.verifyStage.cleanupExecutionSeq
-      if (
-        !record.lease &&
-        now - new Date(record.updatedAt).getTime() < this.leaseTtlMs &&
-        facts.lastExecution !== 'relaunch' &&
-        !(cleanup !== undefined && state.verifyStage.executionSeq <= cleanup) &&
-        !(provedEnded && (decision.kind !== 'wait' || orphanEligible(state)))
-      )
-        continue // preserve first-claim grace, but never postpone proved-ended work
+    }
+  }
 
-      if (
-        state.kind === 'node' &&
-        (!integrationCurrent(state) || facts.workspace === null) &&
-        decision.kind !== 'wait'
-      )
-        continue // cascade owns node runner admission
-      // Raw history, read at most once and only by a branch that acts on it.
-      let loaded: CurrentBuildFacts | undefined
-      const history = async (): Promise<CurrentBuildFacts> => {
-        loaded ??= (await readBuildFacts(this.store, record.slug)).value
-        return loaded
+  /** One build's lease-sweep pass; `leaseSweep` contains its failures. */
+  private async sweepBuild(
+    record: BuildRecord,
+    report: TickReport,
+    launched: Set<string>,
+    paused: boolean,
+    now: number,
+  ): Promise<void> {
+    if (record.lease) {
+      if (new Date(record.lease.expiresAt).getTime() > now) return // healthy
+    }
+    const facts = await this.store.buildFacts(record.slug)
+    const state = facts.state
+    if (mixedVersionDeferred(state)) {
+      await deferMixedVersion(this.store, record.slug)
+      return
+    }
+    if (
+      (state.status === 'queued' && state.discardRequest !== undefined) ||
+      heldByRepositoryPause(state, paused)
+    ) {
+      return
+    }
+    if (
+      state.status === 'queued' &&
+      !state.pendingCommands.some((command) => command.command === 'abort') &&
+      !(await this.dispatchBudget(record.slug))
+    )
+      return
+    const pendingRewrite = facts.publication.latestUncompletedRequest()?.payload
+    const retryIntent =
+      pendingRewrite?.operation === 'reconcile' && pendingRewrite.rewrite
+        ? { operation: 'reconcile' as const, id: pendingRewrite.rewrite.id }
+        : facts.log.restack.intent
+          ? { operation: 'restack' as const, id: facts.log.restack.intent.id }
+          : undefined
+    // Publication waits must not prevent a replacement runner from
+    // acknowledging controls, including abort on an exhausted episode.
+    if (retryIntent && state.pendingCommands.length === 0) {
+      try {
+        await publicationRetryGate(
+          { store: this.store, slug: record.slug, clock: this.deps.clock, actor: DISPATCHER },
+          retryIntent.operation,
+          retryIntent.id,
+        )
+      } catch (error) {
+        if (error instanceof ForgeRequestDeferred) return
+        throw error
       }
-      // Liveness gate (durable supervision): a recorded execution the provider
-      // observes as RUNNING is left completely alone — no settle, no reap, no
-      // replacement, no re-attach. This is the change that stops a supervisor
-      // restart from replacing a healthy environment generation. A provider-
-      // proved end settles first (completion facts, lease release, publication)
-      // and then falls through to the normal decision; a provider-proved loss
-      // falls through to the existing stale path below.
-      let orphanRecoveryDue = orphanEligible(state) && facts.open === null
-      const foreignExecution = facts.open
-      // A provider- or log-proved end in the same generation re-attaches in
-      // place: the guest finished its work, the workspace is still the
-      // build's, and replacing the environment would discard a healthy
-      // generation. Only an unproven stale lease or a proved loss reaps.
-      // A start that later found the open workspace missing is a proved loss
-      // too: the recorded end no longer vouches for an environment that is
-      // gone, and re-attaching would fail against the same ref forever.
-      const failure = state.infrastructureFailure
-      const workspaceMissing =
-        failure?.cause === 'missing' &&
-        failure.operation === 'start' &&
-        failure.workspaceRef === facts.workspace?.ref
-      let endedInPlace =
-        (facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch') &&
-        !workspaceMissing
-      if (
-        foreignExecution !== null &&
-        foreignExecution.commandId !== undefined &&
-        !launched.has(record.slug)
-      ) {
-        const owner = this.executionOwner(foreignExecution.provider)
-        const execution = owner?.buildExecution
-        if (execution?.observe !== undefined) {
-          const settlement = await settleOpenExecution(
-            {
-              store: this.store,
-              execution,
-              ...(this.settlePublication !== undefined
-                ? { settlePublication: this.settlePublication }
-                : {}),
-            },
-            record.slug,
-            foreignExecution,
-          )
-          if (settlement === 'running') continue
-          // Unknown liveness is never proof that an open execution is dead.
-          // Settlement may itself raise provider attention. Revalidate cleanup
-          // eligibility from the advanced canonical state before admission.
-          orphanRecoveryDue = orphanEligible((await this.store.buildFacts(record.slug)).state)
-          if (settlement === 'settled') {
-            report.settled += 1
-            endedInPlace = true
-          }
+    }
+    const decision = await this.decideBuild(record.slug, state, facts.log, report, true)
+    if (decision === undefined) return
+    if (state.status === 'done' || state.status === 'aborted') return
+    const orphanEligible = (state: BuildState) =>
+      !paused &&
+      state.status === 'running' &&
+      (state.kind !== 'node' || integrationCurrent(state)) &&
+      state.sessions.open.some((session) => session.suspensionCause === undefined)
+    const provedEnded =
+      facts.open === null &&
+      (facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch')
+    const cleanup = state.verifyStage.cleanupExecutionSeq
+    if (
+      !record.lease &&
+      now - new Date(record.updatedAt).getTime() < this.leaseTtlMs &&
+      facts.lastExecution !== 'relaunch' &&
+      !(cleanup !== undefined && state.verifyStage.executionSeq <= cleanup) &&
+      !(provedEnded && (decision.kind !== 'wait' || orphanEligible(state)))
+    )
+      return // preserve first-claim grace, but never postpone proved-ended work
+
+    if (
+      state.kind === 'node' &&
+      (!integrationCurrent(state) || facts.workspace === null) &&
+      decision.kind !== 'wait'
+    )
+      return // cascade owns node runner admission
+    // Raw history, read at most once and only by a branch that acts on it.
+    let loaded: CurrentBuildFacts | undefined
+    const history = async (): Promise<CurrentBuildFacts> => {
+      loaded ??= (await readBuildFacts(this.store, record.slug)).value
+      return loaded
+    }
+    // Liveness gate (durable supervision): a recorded execution the provider
+    // observes as RUNNING is left completely alone — no settle, no reap, no
+    // replacement, no re-attach. This is the change that stops a supervisor
+    // restart from replacing a healthy environment generation. A provider-
+    // proved end settles first (completion facts, lease release, publication)
+    // and then falls through to the normal decision; a provider-proved loss
+    // falls through to the existing stale path below.
+    let orphanRecoveryDue = orphanEligible(state) && facts.open === null
+    const foreignExecution = facts.open
+    // A provider- or log-proved end in the same generation re-attaches in
+    // place: the guest finished its work, the workspace is still the
+    // build's, and replacing the environment would discard a healthy
+    // generation. Only an unproven stale lease or a proved loss reaps.
+    // A start that later found the open workspace missing is a proved loss
+    // too: the recorded end no longer vouches for an environment that is
+    // gone, and re-attaching would fail against the same ref forever.
+    const failure = state.infrastructureFailure
+    const workspaceMissing =
+      failure?.cause === 'missing' &&
+      failure.operation === 'start' &&
+      failure.workspaceRef === facts.workspace?.ref
+    let endedInPlace =
+      (facts.lastExecution === 'completed' || facts.lastExecution === 'relaunch') &&
+      !workspaceMissing
+    if (
+      foreignExecution !== null &&
+      foreignExecution.commandId !== undefined &&
+      !launched.has(record.slug)
+    ) {
+      const owner = this.executionOwner(foreignExecution.provider)
+      const execution = owner?.buildExecution
+      if (execution?.observe !== undefined) {
+        const settlement = await settleOpenExecution(
+          {
+            store: this.store,
+            execution,
+            ...(this.settlePublication !== undefined
+              ? { settlePublication: this.settlePublication }
+              : {}),
+          },
+          record.slug,
+          foreignExecution,
+        )
+        if (settlement === 'running') return
+        // Unknown liveness is never proof that an open execution is dead.
+        // Settlement may itself raise provider attention. Revalidate cleanup
+        // eligibility from the advanced canonical state before admission.
+        orphanRecoveryDue = orphanEligible((await this.store.buildFacts(record.slug)).state)
+        if (settlement === 'settled') {
+          report.settled += 1
+          endedInPlace = true
         }
       }
-      const publicationRecoveryDue =
-        state.status !== 'paused' &&
-        state.status !== 'blocked' &&
-        (facts.publication.pending() || facts.publication.abandonedPending())
-      const open = facts.workspace
-      // A provider- or log-proved END in the same generation re-attaches in
-      // place: the guest finished its work, the workspace is still the
-      // build's, and replacing the environment would discard a healthy
-      // generation. Only an unproven stale lease or a proved loss reaps.
-      if (open !== null && this.workspaceOwner(open)?.recovery !== undefined && !endedInPlace) {
-        const parked = decision.kind === 'wait' && !publicationRecoveryDue && !orphanRecoveryDue
-        const reason =
-          state.status === 'paused'
-            ? ('pause' as const)
-            : state.status === 'blocked'
-              ? ('blocked' as const)
-              : ('replacement' as const)
-        const reaped = await this.reapStaleWorkspace(record.slug, await history(), reason)
-        if (!reaped) continue
-        if (!parked) {
-          // Recovery-capable provider: reap inline (bounded), then kick the
-          // same background continuation — it provisions and launches without
-          // blocking this tick. Local providers never enter this branch.
-          const kicked = await this.ensureProvisionContinuation(record, await history(), 'launch')
-          if (kicked === 'kicked') {
-            report.provisioning += 1
-            report.swept += 1
-          }
-          continue
-        }
-      }
-      // Reachable via the reap block above: when the wait decision is parked
-      // (no publication recovery due) the `if (!parked)` arm continues, but the
-      // parked arm falls through here after a successful reap. Without this
-      // guard the tick would reach the unconditional `launch` below and start a
-      // fresh runner for a paused or blocked build whose workspace was just
-      // reaped. Every other path that reaches this line with a wait decision
-      // already continued earlier.
-      if (decision.kind === 'wait' && !publicationRecoveryDue && !orphanRecoveryDue) continue
-      if (
-        facts.workspace === null &&
-        this.deps.workspaces.recovery !== undefined &&
-        (await history()).workspaceGenerations > 0
-      ) {
+    }
+    const publicationRecoveryDue =
+      state.status !== 'paused' &&
+      state.status !== 'blocked' &&
+      (facts.publication.pending() || facts.publication.abandonedPending())
+    const open = facts.workspace
+    // A flagged `cleanup-required` workspace never re-attaches in place: it
+    // is reaped and replaced by the next generation.
+    if (endedInPlace && open !== null && cleanupRequiredWorkspace(await history()))
+      endedInPlace = false
+    // A provider- or log-proved END in the same generation re-attaches in
+    // place: the guest finished its work, the workspace is still the
+    // build's, and replacing the environment would discard a healthy
+    // generation. Only an unproven stale lease or a proved loss reaps.
+    if (open !== null && this.workspaceOwner(open)?.recovery !== undefined && !endedInPlace) {
+      const parked = decision.kind === 'wait' && !publicationRecoveryDue && !orphanRecoveryDue
+      const reason =
+        state.status === 'paused'
+          ? ('pause' as const)
+          : state.status === 'blocked'
+            ? ('blocked' as const)
+            : ('replacement' as const)
+      const reaped = await this.reapStaleWorkspace(record.slug, await history(), reason)
+      if (!reaped) return
+      if (!parked) {
+        // Recovery-capable provider: reap inline (bounded), then kick the
+        // same background continuation — it provisions and launches without
+        // blocking this tick. Local providers never enter this branch.
         const kicked = await this.ensureProvisionContinuation(record, await history(), 'launch')
         if (kicked === 'kicked') {
           report.provisioning += 1
           report.swept += 1
-          continue
         }
-        // In-flight or foreign-live: whoever owns the marker completes the
-        // boundaries and the launch; this tick performs neither.
-        continue
+        return
       }
-      try {
-        const result = await this.launch(record.slug, launched, report)
-        if (result === 'scheduled') report.swept += 1
-      } catch (error) {
-        // Launchers normally record provider failures themselves. Preserve
-        // durable attention if orphan cleanup fails before that boundary,
-        // without counting an already-recorded failure twice.
-        if (orphanRecoveryDue && open !== null) {
-          const current = (await readBuildFacts(this.store, record.slug)).value
-          if (current.infrastructureCount === facts.infrastructureCount)
-            await this.recordInfrastructureFailure(record.slug, current, {
-              provider: open.provider,
-              workspaceRef: open.ref,
-              operation: 'start',
-              error,
-              cleanupPending: false,
-            })
-        }
-        throw error
+    }
+    // Reachable via the reap block above: when the wait decision is parked
+    // (no publication recovery due) the `if (!parked)` arm continues, but the
+    // parked arm falls through here after a successful reap. Without this
+    // guard the tick would reach the unconditional `launch` below and start a
+    // fresh runner for a paused or blocked build whose workspace was just
+    // reaped. Every other path that reaches this line with a wait decision
+    // already continued earlier.
+    if (decision.kind === 'wait' && !publicationRecoveryDue && !orphanRecoveryDue) return
+    if (
+      facts.workspace === null &&
+      this.deps.workspaces.recovery !== undefined &&
+      (await history()).workspaceGenerations > 0
+    ) {
+      const kicked = await this.ensureProvisionContinuation(record, await history(), 'launch')
+      if (kicked === 'kicked') {
+        report.provisioning += 1
+        report.swept += 1
+        return
       }
+      // In-flight or foreign-live: whoever owns the marker completes the
+      // boundaries and the launch; this tick performs neither.
+      return
+    }
+    try {
+      const result = await this.launch(record.slug, launched, report)
+      if (result === 'scheduled') report.swept += 1
+    } catch (error) {
+      // Launchers normally record provider failures themselves. Preserve
+      // durable attention if orphan cleanup fails before that boundary,
+      // without counting an already-recorded failure twice.
+      if (orphanRecoveryDue && open !== null) {
+        const current = (await readBuildFacts(this.store, record.slug)).value
+        if (current.infrastructureCount === facts.infrastructureCount)
+          await this.recordInfrastructureFailure(record.slug, current, {
+            provider: open.provider,
+            workspaceRef: open.ref,
+            operation: 'start',
+            error,
+            cleanupPending: false,
+          })
+      }
+      throw error
     }
   }
 

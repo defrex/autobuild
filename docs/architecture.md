@@ -630,10 +630,15 @@ It preserves unpublished branch commits and distinct detached producer candidate
 under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
 readback, and records `workspace.commits-preserved` before cleanup. Replacement
 provisioning restores those exact refs before starting an agent. Preservation
-never advances the public build branch. A confirmed absent environment records
-`workspace.commits-lost`, naming known candidates and explicitly noting that any
-additional unpublished SHAs could not be inspected. Unknown fencing, inspection,
-transport, or receipt-write outcomes leave the workspace and snapshots intact.
+never advances the public build branch. A confirmed absent environment, or one
+that exists without a provisioned checkout, records `workspace.commits-lost`,
+naming known candidates and explicitly noting that any additional unpublished
+SHAs could not be inspected. Unknown fencing, inspection, transport, or
+receipt-write outcomes leave the workspace and snapshots intact. A workspace
+flagged by `workspace.cleanup-required` is never launched into: the dispatcher
+releases it and provisions the next generation. A preservation or release
+failure is recorded against its build, as an infrastructure failure or janitor
+attention, and never stops the dispatcher from advancing other builds.
 Fencing is revalidated after restart; a saved receipt alone never authorizes
 cleanup of a newer execution. Current recovery notes are linked by the session
 manifest's `workspaceRecovery` field. Recovery notes apply to the next session
