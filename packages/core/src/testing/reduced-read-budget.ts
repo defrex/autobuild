@@ -1160,6 +1160,118 @@ export async function parkedSweepReadBudget(opts: {
   }
 }
 
+/** Append filler facts to one build until its log holds `length` events. */
+async function seedBuildFiller(
+  store: import('../store/memory').MemoryBuildStore,
+  slug: string,
+  length: number,
+): Promise<void> {
+  const events = buildEventRows(store, slug)
+  while (events.length < length)
+    await store.append(slug, {
+      actor: humanActor('budget'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    })
+}
+
+function buildEventRows(
+  store: import('../store/memory').MemoryBuildStore,
+  slug: string,
+): import('../events/catalog').AbEvent[] {
+  return Reflect.get(store, 'builds').get(slug).events
+}
+
+/** Count every event row MemoryBuildStore returns for one build, including
+ * getReducerValue's private snapshot-tail reads, split at `boundary`. */
+function instrumentBuildRows(
+  store: import('../store/memory').MemoryBuildStore,
+  slug: string,
+  boundary: () => number,
+  metrics: { historicalRows: number; tailRows: number },
+): () => void {
+  const events = buildEventRows(store, slug)
+  const slice = Array.prototype.slice
+  events.slice = function (start?: number, end?: number) {
+    const result = slice.call(this, start, end) as typeof events
+    const limit = boundary()
+    for (const event of result) {
+      if (event.seq <= limit) metrics.historicalRows++
+      else metrics.tailRows++
+    }
+    return result
+  }
+  return () => Reflect.deleteProperty(events, 'slice')
+}
+
+/** A stale build whose open workspace is flagged `cleanup-required` and whose
+ * preservation keeps failing re-enters the sweep's reap branch on every pass.
+ * Each pass must read only the tail it appended itself, the same number of
+ * reduced reads at 100 and 100,000 events, and nothing at all once the build
+ * is healthy again. Fresh dispatchers retain no per-process cache. */
+export async function flaggedWorkspaceSweepReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  slug: string
+  dispatcher: () => Dispatcher
+  advance: () => void
+  effects: () => { reaps: number; launches: number }
+}) {
+  const { store, slug } = opts
+  const sweeps = 4
+  const metrics = { historicalRows: 0, tailRows: 0 }
+  let reducerReads = 0
+  const getReducerValue = store.getReducerValue.bind(store)
+  store.getReducerValue = async (...args) => {
+    reducerReads++
+    return getReducerValue(...args)
+  }
+  const infrastructureFailures = async () =>
+    (await readBuildFacts(store, slug)).value.infrastructureCount
+  const perTick: Record<number, number[]> = {}
+  for (const length of [100, 100_000]) {
+    await seedBuildFiller(store, slug, length)
+    opts.advance()
+    // Rows the previous pass appended are the only tail a pass may read.
+    let boundary = buildEventRows(store, slug).at(-1)!.seq
+    await opts.dispatcher().tick({ acceptNewWork: false }) // warm durable projections
+    const restore = instrumentBuildRows(store, slug, () => boundary, metrics)
+    const before = opts.effects()
+    perTick[length] = []
+    for (let tick = 0; tick < sweeps; tick++) {
+      const failures = await infrastructureFailures()
+      const appendedBefore = buildEventRows(store, slug).at(-1)!.seq
+      opts.advance()
+      metrics.historicalRows = metrics.tailRows = reducerReads = 0
+      await opts.dispatcher().tick({ acceptNewWork: false })
+      perTick[length]!.push(reducerReads)
+      expect(metrics.historicalRows).toBe(0)
+      expect(await infrastructureFailures()).toBe(failures + 1)
+      boundary = appendedBefore
+    }
+    expect(new Set(perTick[length]).size).toBe(1)
+    expect(opts.effects()).toEqual(before)
+    restore()
+  }
+  expect(perTick[100]).toEqual(perTick[100_000])
+  // Unchanged path: a live lease makes the build healthy, so the sweep skips
+  // it. After one settling pass, nothing changes and nothing is read.
+  await store.claimLease(slug, 'budget-runner', 3_600_000)
+  await opts.dispatcher().tick({ acceptNewWork: false })
+  const restore = instrumentBuildRows(store, slug, () => Number.POSITIVE_INFINITY, metrics)
+  metrics.historicalRows = metrics.tailRows = 0
+  for (let tick = 0; tick < 2; tick++) await opts.dispatcher().tick({ acceptNewWork: false })
+  expect(metrics).toEqual({ historicalRows: 0, tailRows: 0 })
+  restore()
+  Reflect.deleteProperty(store, 'getReducerValue')
+  console.log('flagged workspace sweep read budget', {
+    histories: [100, 100_000],
+    sweeps,
+    reducedReadsPerSweep: perTick[100_000]![0],
+    historicalRows: 0,
+    idleRows: 0,
+  })
+}
+
 /** In-memory history seeding for preparation budgets; never used as a recurring read. */
 export async function seedPreparationHistory(store: BuildStore, repo: string, facts: number) {
   await store.ensureRepo(repo)

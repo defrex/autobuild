@@ -1365,6 +1365,19 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           const sandbox = await this.facade.get(input.ref, this.operationSignal())
           if (sandbox === null) return { outcome: 'absent' }
           const heads = await this.withTrustedGit(sandbox, input.ref, async (exec) => {
+            // A VM whose provisioning stopped before the checkout was moved
+            // into place has nothing to preserve. The probe runs without the
+            // checkout as cwd, and only a definite "missing" proves absence.
+            const checkout = await sandbox.runCommand({
+              cmd: 'test',
+              args: ['-e', `${VERCEL_WORKSPACE_PATH}/.git`],
+              signal: this.operationSignal(),
+            })
+            if (checkout.exitCode === 1) return null
+            if (checkout.exitCode !== 0)
+              throw new Error(
+                `preservation could not confirm the checkout at ${VERCEL_WORKSPACE_PATH} (exit ${checkout.exitCode})`,
+              )
             const capability = gitRewrite(exec, false)
             const remote = await this.remoteBranchHead(input.branch, 'preservation branch')
             const base =
@@ -1383,6 +1396,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
               archive: capability.archive,
             })
           })
+          if (heads === null) return { outcome: 'absent' }
           return { outcome: 'preserved', heads }
         }),
       rewrite: (input: Parameters<NonNullable<WorkspacePublication['rewrite']>>[0]) =>
