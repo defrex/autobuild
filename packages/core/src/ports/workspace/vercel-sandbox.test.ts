@@ -78,6 +78,9 @@ class FakeSandbox implements VercelSandboxHandle {
   failureStdout = ''
   failureStderr = ''
   provisioned = false
+  /** Whether the guest holds a git checkout; `undefined` follows the
+   * provisioned marker, `false` models a half-provisioned VM. */
+  checkout: boolean | undefined
   /** Simulated content of the guest's `.distribution-version` marker;
    * `undefined` models an unreadable or absent marker (legacy guest). */
   distributionVersion: string | undefined
@@ -187,6 +190,8 @@ class FakeSandbox implements VercelSandboxHandle {
       this.distributionVersion = (params.args as string[])![3] as string
       return { exitCode: 0 }
     }
+    if (params.cmd === 'test' && (params.args as string[])?.[1] === `${VERCEL_WORKSPACE_PATH}/.git`)
+      return { exitCode: (this.checkout ?? this.provisioned) ? 0 : 1 }
     if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
     if (params.cmd === this.failSetupCommand) return { exitCode: 1 }
     if (params.cmd === 'touch') this.provisioned = true
@@ -3818,6 +3823,70 @@ test('preservation inspection failure restores scoped transport policy and retai
     expect.arrayContaining(snapshots),
   )
 })
+
+test('preservation of a VM without a checkout is absent and never runs git in it', async () => {
+  const h = harness()
+  const workspace = await h.provider.provision({
+    repo: '/repo',
+    baseBranch: 'main',
+    branch: 'ab/remote-build',
+  })
+  expect(await h.provider.recovery.fence!(workspace)).toEqual({ outcome: 'confirmed' })
+  h.sandbox.checkout = false
+  const previousCommands = h.sandbox.commands.length
+  const previousPolicies = h.sandbox.policies.length
+  const stops = h.sandbox.stops
+  expect(
+    await h.provider.publication.preserve!({
+      ref: workspace.ref,
+      slug: 'remote-build',
+      branch: workspace.branch,
+      base: SHA,
+      candidates: [],
+    }),
+  ).toEqual({ outcome: 'absent' })
+  const commands = h.sandbox.commands.slice(previousCommands)
+  expect(commands).toEqual([
+    expect.objectContaining({ cmd: 'test', args: ['-e', `${VERCEL_WORKSPACE_PATH}/.git`] }),
+  ])
+  expect(commands.some((command) => command.cwd !== undefined)).toBe(false)
+  expect(JSON.stringify(h.sandbox.policies.slice(previousPolicies).at(-1))).not.toContain('receive')
+  expect(h.sandbox.stops).toBeGreaterThan(stops)
+  expect(h.sandbox.deletes).toBe(0)
+})
+
+for (const probe of ['exit 2', 'no exit code', 'thrown'] as const)
+  test(`preservation rejects when the checkout probe is inconclusive (${probe})`, async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(await h.provider.recovery.fence!(workspace)).toEqual({ outcome: 'confirmed' })
+    const snapshots = h.sandbox.snapshots.map((snapshot) => snapshot.id)
+    const run = h.sandbox.runCommand.bind(h.sandbox)
+    h.sandbox.runCommand = async (input) => {
+      if (input.cmd === 'test' && input.args?.[1] === `${VERCEL_WORKSPACE_PATH}/.git`) {
+        if (probe === 'thrown') throw new Error('probe unavailable')
+        return { exitCode: probe === 'exit 2' ? 2 : (null as unknown as number) }
+      }
+      return run(input)
+    }
+    await expect(
+      h.provider.publication.preserve!({
+        ref: workspace.ref,
+        slug: 'remote-build',
+        branch: workspace.branch,
+        base: SHA,
+        candidates: [],
+      }),
+    ).rejects.toThrow(probe === 'thrown' ? 'probe unavailable' : 'could not confirm the checkout')
+    expect(h.sandbox.deletes).toBe(0)
+    expect(h.sandbox.snapshots.map((snapshot) => snapshot.id)).toEqual(
+      expect.arrayContaining(snapshots),
+    )
+  })
 
 test('fencing rechecks the provider and never purges snapshots on unknown outcome', async () => {
   let unavailable = false
