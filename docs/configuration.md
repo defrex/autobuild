@@ -1372,7 +1372,11 @@ status` and both dashboards, consumes `maxInfrastructureAttempts`, and raises
 one setup-targeted escalation when exhausted. If cleanup also fails, both the
 step output and cleanup uncertainty remain durable instead of hiding the root
 cause. A marked sandbox does not repeat provisioning; every replacement/new
-generation does.
+generation does. A named sandbox left without the completion marker, for example
+after a provision timeout, is flagged `cleanup-required` and never launched into.
+The dispatcher releases it automatically, recording an empty
+`workspace.commits-lost` when no checkout exists, and provisions the next
+generation.
 
 The representative actual-provider check is opt-in and must point at an
 independent consuming repository whose `autobuild.toml` selects the universal

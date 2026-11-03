@@ -1,7 +1,10 @@
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { readBuildFacts } from '../store/reduced-reads'
 import { missingAccountCredentials, MissingAccountCredentialsError } from '../accounts/availability'
-import { parkedSweepReadBudget } from '../testing/reduced-read-budget'
+import {
+  flaggedWorkspaceSweepReadBudget,
+  parkedSweepReadBudget,
+} from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { GitHubForge } from '../ports/forge/github'
@@ -9384,6 +9387,48 @@ command = "run"
       },
     })
   }, 30_000)
+
+  test('flagged workspace sweep read budget stays bounded at 100 and 100,000 events', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    let reaps = 0
+    let launches = 0
+    const fixture = flaggedWorkspaceFixture({
+      preservation: async () => {
+        throw new Error(`chdir /vercel/sandbox/workspace: no such file or directory`)
+      },
+    })
+    const provider: WorkspaceProvider = {
+      ...fixture.provider,
+      recovery: {
+        ...fixture.provider.recovery!,
+        reap: async () => {
+          reaps++
+          throw new Error('a failing preservation must never reach reap')
+        },
+      },
+    }
+    const build = (): Harness =>
+      harness({
+        store,
+        clock,
+        workspaceProvider: provider,
+        toml: '[policy]\nmaxInfrastructureAttempts = 1000\n',
+        onLaunch: () => {
+          launches++
+        },
+      })
+    const slug = 'flagged-budget'
+    await seedFlaggedWorkspace(build(), slug, { attached: true, ended: true })
+    await flaggedWorkspaceSweepReadBudget({
+      store,
+      slug,
+      dispatcher: () => build().dispatcher,
+      advance: () => clock.advance(10 * 60_000),
+      effects: () => ({ reaps, launches }),
+    })
+    expect({ reaps, launches }).toEqual({ reaps: 0, launches: 0 })
+  }, 60_000)
 
   for (const table of ['verify', 'finalize'] as const) {
     for (const change of ['add', 'remove', 'rename'] as const) {

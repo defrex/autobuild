@@ -239,8 +239,15 @@ inferring execution from a process list. Escalate account, quota, Store/ticket, 
 or GitHub permission failures with the exact missing variable or denied permission, never its
 value.
 
-If automatic cleanup fails, use the exact environment identity from durable events when querying
-the Vercel team/project. Do not delete by a title prefix or guess. Confirm the original,
+A half-provisioned environment (a `workspace.cleanup-required` fact, for example after a provision
+timeout) is released and replaced automatically: expect `workspace.fenced`, an empty
+`workspace.commits-lost`, `infrastructure.cleanup-attempted` and `workspace.released`, then a
+next-generation provision. Do not delete it by hand. Manual deletion is only for automatic cleanup
+that keeps recording `infrastructure.failed` or `infrastructure.cleanup-attempted` with
+`outcome: "unknown"` for the same environment.
+
+If automatic cleanup keeps failing, use the exact environment identity from durable events when
+querying the Vercel team/project. Do not delete by a title prefix or guess. Confirm the original,
 replacement, and completed environment identities are absent and retain the matching
 `workspace.released` events. If an exact-name sandbox survives, stop intake and escalate for
 provider cleanup rather than claiming completion.
