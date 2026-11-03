@@ -26,7 +26,7 @@ From the repository you want built, install Autobuild as a development dependenc
 <!-- release-install:start -->
 
 ```sh
-bun add -d --exact @defrex/autobuild@1.4.1
+bun add -d --exact @defrex/autobuild@1.4.2
 ```
 
 <!-- release-install:end -->

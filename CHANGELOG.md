@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v1.4.2 — 2026-11-03
+
+This release contains two reliability fixes. Monorepo-hosted deployments work again now that zod is declared as a dependency. When the dispatcher tries to preserve a Vercel sandbox that was only half provisioned, it now releases the sandbox instead of crashing.
+
+- [#826](https://github.com/defrex/autobuild/pull/826) — Fix monorepo-hosted deployments by declaring zod
+- [#825](https://github.com/defrex/autobuild/pull/825) — Release half-provisioned Vercel sandboxes instead of crashing the dispatcher on preservation
+
 ## v1.4.1 — 2026-11-03
 
 This release makes Autobuild quieter and more dependable to run: idle ticks that only repeat standing ticket diagnostics are now suppressed, and the dashboard journals a single render warning per failure streak instead of one for every failure. Dispatch assets now ship from the published hosted-service build. The operator guidance in `ab-operate` and `ab-guide` now says to run an unbounded `ab watch` only under a per-line monitor, and otherwise to use `--count 1` and re-arm from the trailing cursor, so a blocked build can no longer leave a watch that never exits. Documentation for self-hosting the service, which is unsupported, has also moved out of the public website.

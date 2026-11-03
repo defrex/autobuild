@@ -44,5 +44,16 @@
     "provenance": {
       "tag": "v1.4.1"
     }
+  },
+  {
+    "version": "1.4.2",
+    "publishedAt": "2026-11-03T20:12:21.908Z",
+    "protocol": "7",
+    "contract": "1.4.0.json",
+    "projects": true,
+    "catalogIdentity": "f9289449e0df64c1de972d7456cd4d50f179f06b36a20bed05ba91411573b194",
+    "provenance": {
+      "tag": "v1.4.2"
+    }
   }
 ]
