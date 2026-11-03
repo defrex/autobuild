@@ -80,6 +80,7 @@
         "react": "19.2.4",
         "react-dom": "19.2.4",
         "typescript": "5.9.3",
+        "zod": "^4.4.3",
       },
       "devDependencies": {
         "vercel": "^59.11.2",
