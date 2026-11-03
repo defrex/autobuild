@@ -3867,7 +3867,10 @@ for (const probe of ['exit 2', 'no exit code', 'thrown'] as const)
     const snapshots = h.sandbox.snapshots.map((snapshot) => snapshot.id)
     const run = h.sandbox.runCommand.bind(h.sandbox)
     h.sandbox.runCommand = async (input) => {
-      if (input.cmd === 'test' && input.args?.[1] === `${VERCEL_WORKSPACE_PATH}/.git`) {
+      if (
+        input.cmd === 'test' &&
+        (input.args as string[] | undefined)?.[1] === `${VERCEL_WORKSPACE_PATH}/.git`
+      ) {
         if (probe === 'thrown') throw new Error('probe unavailable')
         return { exitCode: probe === 'exit 2' ? 2 : (null as unknown as number) }
       }
