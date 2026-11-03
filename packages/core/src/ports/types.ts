@@ -338,8 +338,10 @@ export interface WorkspacePublication {
     replayPack?: string
   }): Promise<boolean>
 
-  /** Dispatcher-only, after a durable non-destructive fence. Errors never
-   * constitute proof that an environment or its unpublished work is absent. */
+  /** Dispatcher-only, after a durable non-destructive fence. `absent` means
+   * the environment is gone or exists without a provisioned checkout. Errors
+   * never constitute proof that an environment or its unpublished work is
+   * absent. */
   preserve?(input: {
     ref: string
     slug: string

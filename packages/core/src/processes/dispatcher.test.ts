@@ -5549,8 +5549,11 @@ describe('Dispatcher lease sweep', () => {
           payload: { outcome: 'closed-unmerged' },
         })
       if (guard === 'start-failure') {
-        await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow(
-          'sandbox start failed',
+        // Contained per build: the start failure is durable and the tick
+        // still completes.
+        const report = await h.dispatcher.tick({ acceptNewWork: false })
+        expect(report.janitorDiagnostics).toContainEqual(
+          expect.stringContaining('sandbox start failed'),
         )
         const events = await h.store.getEvents(slug)
         expect(events.filter((e) => e.type === 'infrastructure.failed')).toHaveLength(1)
@@ -7446,13 +7449,21 @@ describe('publication loss before workspace release', () => {
       },
     })
 
-    // The guard's append failure propagates: the sweep (and with it the
-    // release) never proceeds past an unrecorded pending request.
-    await expect(fixture.h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow(
-      /injected store outage on publication\.lost/,
-    )
+    // The guard's append failure is recorded against the build: the release
+    // never proceeds past an unrecorded pending request, and the tick still
+    // completes.
+    await fixture.h.dispatcher.tick({ acceptNewWork: false })
     expect(fixture.reapCalls).toEqual([])
     const events = await fixture.h.store.getEvents(fixture.slug)
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'infrastructure.failed' &&
+          event.payload.operation === 'reconcile' &&
+          event.payload.cleanupPending &&
+          /injected store outage on publication\.lost/.test(event.payload.error),
+      ),
+    ).toHaveLength(1)
     expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
     expect(events.some((event) => event.type === 'infrastructure.cleanup-attempted')).toBe(false)
   })
@@ -12869,10 +12880,17 @@ test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
         throw new Error('receipt store unavailable')
       return append(...args)
     }
-    if (failure === 'preservation' || failure === 'receipt')
-      await expect(h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow('unavailable')
-    else await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.tick({ acceptNewWork: false })
     expect(reaped).toBe(0)
+    if (failure !== 'reap')
+      expect(
+        (await h.store.getEvents(slug)).filter(
+          (event) =>
+            event.type === 'infrastructure.failed' &&
+            event.payload.operation === 'reconcile' &&
+            event.payload.cleanupPending,
+        ),
+      ).toHaveLength(1)
     expect(
       (await h.store.getEvents(slug)).some((event) => event.type === 'workspace.released'),
     ).toBe(false)
