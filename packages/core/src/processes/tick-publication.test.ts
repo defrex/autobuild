@@ -34,14 +34,19 @@ const baseline: RepositoryEvent = {
     dependencyDiagnostics,
   },
 }
-const decide = (value = report, events: RepositoryEvent[] = [baseline]) => {
-  const historical = shouldPublishTick(value, events, 'run', at)
+const decide = (
+  value = report,
+  events: RepositoryEvent[] = [baseline],
+  standing?: { triage?: number },
+) => {
+  const historical = shouldPublishTick(value, events, 'run', at, standing)
   expect(
     shouldPublishTickFromFacts(
       value,
       repositoryReadFactsReducer.reduce(events),
       dispatcherRunFactsReducer('run').reduce(events),
       at,
+      standing,
     ),
   ).toBe(historical)
   return historical
@@ -56,6 +61,16 @@ test('first sample, queue transitions and unchanged nonempty queues', () => {
       { ...baseline, payload: { ...baseline.payload, queued: 2 } },
     ]),
   ).toBe(false)
+})
+test('a sampled triage count is standing state: changes publish, repeats stay idle', () => {
+  const sampled = { ...baseline, payload: { ...baseline.payload, triage: 3 } }
+  expect(decide(report, [baseline], {})).toBe(false)
+  expect(decide(report, [baseline], { triage: undefined })).toBe(false)
+  // A legacy fact without the field publishes the first defined sample once.
+  expect(decide(report, [baseline], { triage: 3 })).toBe(true)
+  expect(decide(report, [sampled], { triage: 3 })).toBe(false)
+  expect(decide(report, [sampled], { triage: 4 })).toBe(true)
+  expect(decide(report, [sampled], { triage: 0 })).toBe(true)
 })
 for (const [key, value] of Object.entries(report)) {
   if (key === 'queued') continue

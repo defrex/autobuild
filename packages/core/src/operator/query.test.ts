@@ -13,7 +13,6 @@ import {
   parseBuildConfigMetadata,
   parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
-import { scanUnclaimedObservations } from '../processes/harvest'
 import { MemoryBuildStore } from '../store/memory'
 import type { Artifact, BuildDigest, BuildStore, Clock } from '../store/types'
 import {
@@ -361,6 +360,7 @@ describe('operator query wiring', () => {
       payload: {
         run: 'new',
         queued: 4,
+        triage: 9,
         counters,
         janitorDiagnostics: [],
         ticketDiagnostics: [],
@@ -417,9 +417,9 @@ describe('operator query wiring', () => {
     expect(snapshot.generatedAt).toBe(now.toISOString())
     expect(snapshot.model).toMatchObject({
       repo: REPO,
+      triage: 9,
       queued: 4,
       active: { current: 2, limit: 7 },
-      observations: { current: 1, limit: 11 },
       drained: true,
       repositoryPaused: true,
       defaultAutoMerge: true,
@@ -535,7 +535,7 @@ command = "postgres"
   // body (and of its module-private `readPinnedConfig`/`decorateWithPinnedMeta`
   // helpers): the legacy algorithm whose output the snapshot rewrite must not
   // change. It reads the same exported seams the real query reads
-  // (`effectiveConfig`, `scanUnclaimedObservations`, `projectBuild`,
+  // (`effectiveConfig`, `projectBuild`,
   // `buildDashboardFromProjected`) so the differential test survives the
   // refactor unchanged.
   // ── AUT-486 counting fixtures ───────────────────────────────────────
@@ -651,7 +651,6 @@ command = "postgres"
       const row = projectBuild(record, state, config, events, undefined, pinned.config)
       if (row !== null) projected.push(legacyDecorate(row, pinned))
     }
-    const scan = await scanUnclaimedObservations(opts.store, opts.repo)
     const warningLines = [
       ...status.roleWarnings,
       ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
@@ -663,8 +662,7 @@ command = "postgres"
         queued: status.queued ?? 0,
         activeCount,
         capacity: config.capacity,
-        observationCount: scan.observations.length,
-        observationLimit: config.policy.harvestThreshold,
+        ...(status.triage !== undefined ? { triage: status.triage } : {}),
         ...(status.availableUpgrade !== undefined
           ? { availableUpgrade: status.availableUpgrade }
           : {}),
@@ -730,6 +728,7 @@ command = "postgres"
       payload: {
         run: 'new',
         queued: 2,
+        triage: 6,
         counters,
         janitorDiagnostics: [],
         ticketDiagnostics: [],
@@ -838,7 +837,7 @@ command = "postgres"
   test('the dashboard snapshot is byte-identical to the legacy algorithm over every lifecycle shape', async () => {
     // Finished builds with observations ride in the fixtures: the legacy
     // algorithm still reads every history, so it remains the oracle for rows
-    // and the observation count even as finished builds accumulate (AC 3).
+    // even as finished builds accumulate (AC 3).
     const store = await seedDashboardStore(3)
     const legacy = await legacySnapshot({ store, repo: REPO, clock })
     const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
@@ -870,7 +869,8 @@ command = "postgres"
     ])
     expect(snapshot.model.queued).toBe(2)
     expect(snapshot.model.active).toEqual({ current: 3, limit: 7 })
-    expect(snapshot.model.observations).toEqual({ current: 4, limit: 11 })
+    expect(snapshot.model.triage).toBe(6)
+    expect(snapshot.model).not.toHaveProperty('observations')
     expect(snapshot.model.warningLines).toEqual(['role warning', 'operator warning'])
     const statuses = new Map(snapshot.model.builds.map((build) => [build.slug, build.status]))
     expect(statuses.get('running')).toBe('running')
@@ -957,11 +957,11 @@ command = "postgres"
     const large = await run(4)
 
     // Same store contents for the visible dashboard: rows and the
-    // observation count are unchanged (AC 3).
+    // triage count are unchanged (AC 3).
     expect(large.snapshot.model.builds.map((build) => build.slug)).toEqual(
       small.snapshot.model.builds.map((build) => build.slug),
     )
-    expect(large.snapshot.model.observations).toEqual(small.snapshot.model.observations)
+    expect(large.snapshot.model.triage).toBe(small.snapshot.model.triage)
 
     // Per-method call counts are identical across the two finished-build
     // counts, including the single digest read.

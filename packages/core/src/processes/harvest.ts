@@ -230,9 +230,7 @@ export function collectUnclaimedObservations(input: {
 }
 
 /** Count unclaimed occurrences from already reduced build digests and harvest
- * facts, without backing reads. The operator query and interactive dispatcher
- * tick consume this directly; the tick reuses its shared refreshed view.
- * The Store-only terminal frontend owns a separate refresh.
+ * facts, without backing reads.
  * Occurrences are keyed by {build, seq}, never by payload id.
  * The harvest runner's scan still supplies full observation payloads. */
 export function unclaimedObservationCount(input: {
@@ -258,10 +256,9 @@ export function unclaimedObservationCount(input: {
  * `scanUnclaimedObservations` keeps its materializing `ensureRepo` for its
  * remaining callers.
  *
- * The journal read is bounded (AUT-489): every consumer — the terminal
- * dashboards' observation-pressure sample, the operator query
- * (operator/query.ts), the dispatcher's repository-wide controls and ready
- * scans, and the operator sandbox service's journal reads — reduces durable
+ * The journal read is bounded (AUT-489): every consumer — the dispatcher's
+ * repository-wide controls and ready scans, and the operator sandbox
+ * service's journal reads — reduces durable
  * event types plus the latest-run tail only, so the subset is
  * replay-equivalent to a full journal replay. */
 export async function readRepoEventsIfRecorded(
@@ -274,7 +271,7 @@ export async function readRepoEventsIfRecorded(
 /** Store-reading count helper: one repository-record probe, one canonical
  * repository-facts request when recorded, and one repository-scoped digest
  * request. No journal replay or writes. An absent record supplies empty harvest
- * facts. Dispatcher ticks use unclaimedObservationCount with their shared view
+ * facts. Callers holding a refreshed view use unclaimedObservationCount
  * instead, avoiding these additional acquisitions. */
 export async function sampleUnclaimedObservationCount(
   store: BuildStore,

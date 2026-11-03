@@ -14,6 +14,9 @@ export interface DispatchStatus {
   queued?: number
   /** Standing count from newer tick facts; absent for historical events. */
   creationWithheld?: number
+  /** Display-only triage-state count from newer interactive tick facts;
+   * absent when the dispatcher published none (unknown). */
+  triage?: number
   yieldedHolder?: string
   availableUpgrade?: string
   forgeReadinessFailures?: RepositoryEventPayload<'dispatcher.forge-readiness-failed'>[]
@@ -111,6 +114,8 @@ export function reduceDispatchStatus(
       case 'dispatcher.tick-completed':
         state.queued = event.payload.queued
         state.creationWithheld = event.payload.counters.creationWithheld
+        if (event.payload.triage !== undefined) state.triage = event.payload.triage
+        else delete state.triage
         state.diagnostics = [
           ...event.payload.janitorDiagnostics,
           ...event.payload.ticketDiagnostics,
@@ -165,7 +170,7 @@ export function reduceDispatchStatus(
 
 /** Bump when `DispatchStatus`'s shape or fold semantics change (it is its own
  * accumulator: `lastSeq` makes the fold skip already-seen events). */
-export const DISPATCH_STATUS_REDUCER_VERSION = 4
+export const DISPATCH_STATUS_REDUCER_VERSION = 5
 
 /** The incremental form of `reduceDispatchStatus` for one run. The run is a
  * parameter, so this is a factory. */

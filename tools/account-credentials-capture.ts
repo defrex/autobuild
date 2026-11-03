@@ -34,8 +34,6 @@ export function accountCredentialsCapture(
       queued: 0,
       activeCount: 0,
       capacity: 4,
-      observationCount: 0,
-      observationLimit: 5,
     },
     events,
   )

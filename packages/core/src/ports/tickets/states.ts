@@ -1,3 +1,5 @@
+import type { TicketStateInfo } from '../types'
+
 /** Shared state rules; configured names are deliberately not create-validated. */
 export const STATE_NAME_RULE =
   'a state name is one to forty characters of lowercase letters, digits, and hyphens, starting with a letter'
@@ -41,6 +43,18 @@ export function resolveState(
   throw new Error(
     `${source}: unknown state "${name}" — this tracker's states are ${directories ? 'the directories: ' : ''}${existing.join(', ')}`,
   )
+}
+
+/** Ticket count of the named state using `resolveState`'s matching (exact,
+ * else one case-insensitive match); zero or ambiguous matches are unknown. */
+export function triageStateCount(
+  states: readonly TicketStateInfo[],
+  name: string,
+): number | undefined {
+  const exact = states.find((state) => state.name === name)
+  if (exact !== undefined) return exact.tickets
+  const matches = states.filter((state) => state.name.toLowerCase() === name.toLowerCase())
+  return matches.length === 1 ? matches[0]?.tickets : undefined
 }
 
 /** Portable directory vocabulary, without guessing lifecycle roles. */

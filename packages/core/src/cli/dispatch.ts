@@ -184,7 +184,6 @@ import {
 } from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
-  unclaimedObservationCount,
   evaluateHarvestPressureFromStore,
   evaluateHarvestPressureFromDigests,
 } from '../processes/harvest'
@@ -196,12 +195,14 @@ import {
   toggleRepositorySetting,
 } from '../operator/control'
 import {
+  defaultTriageState,
   Dispatcher,
   emptyTickReport,
   type LaunchRunnerResult,
   type TickReport,
 } from '../processes/dispatcher'
 import { RepoViewStore } from '../processes/repo-view'
+import { triageStateCount } from '../ports/tickets/states'
 import {
   BuildControlError,
   buildControlUser,
@@ -456,6 +457,10 @@ export interface DispatchOpts {
   /** Private child-kernel correlation. Presence suppresses terminal ownership
    * and enables durable dispatcher status publication. */
   kernelRunId?: string
+  /** Private: this dispatcher feeds an interactive Store-only frontend, so it
+   * samples the display-only triage count for its published status. Only
+   * `bin/ab-dispatch-kernel.ts` sets it; hosted kernels never sample. */
+  frontendStatus?: boolean
   /** Durable journaling identity of this dispatcher invocation. Every
    * dispatcher-initiated journal write and the repository lease carry this id,
    * so "who holds this repository?" and "who is writing this journal?" are the
@@ -751,7 +756,15 @@ class DispatchLoop {
   }
   /** Settlement-only publications carry the latest standing status instead of
    * manufacturing a zero queue measurement or losing diagnostics. */
-  private lastTickStatus = {
+  private lastTickStatus: {
+    queued: number
+    triage?: number
+    blockedDiagnostics: string[]
+    janitorDiagnostics: string[]
+    ticketDiagnostics: string[]
+    creationDiagnostics: string[]
+    dependencyDiagnostics: string[]
+  } = {
     queued: 0,
     blockedDiagnostics: [] as string[],
     janitorDiagnostics: [] as string[],
@@ -810,9 +823,10 @@ class DispatchLoop {
   private configWarnings: readonly string[] = []
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
-  /** Last successfully measured unclaimed observation count. Sampling failures
-   * retain this factual value rather than inventing a zero. */
-  private observationCount = 0
+  /** Last successfully sampled triage-state ticket count. Undefined until a
+   * sample succeeds; failures and unsupported sources retain the last value
+   * rather than inventing a zero. */
+  private triageCount: number | undefined
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -1284,19 +1298,6 @@ class DispatchLoop {
       // the latest repository facts. Shared refresh failures still fail the tick.
       await this.repoView.refresh()
       const digests = await this.repoView.getRepoBuildDigests(this.repoIdentity)
-      if (this.dashboard) {
-        try {
-          // Display-only sampling reuses the refreshed inputs without backing
-          // reads. Publish only a complete measurement; retain it on failure.
-          const count = unclaimedObservationCount({
-            digests,
-            harvestEvents: this.repoView.repositoryFacts().harvest,
-          })
-          this.observationCount = count
-        } catch {
-          // Retry on the next tick without fabricating a zero.
-        }
-      }
       const executionSlugs = new Set(
         [...digests].filter(([, digest]) => digest.executionOpen).map(([slug]) => slug),
       )
@@ -1332,8 +1333,10 @@ class DispatchLoop {
         ticketDiagnostics: readyObservation?.ticketDiagnostics ?? report.ticketDiagnostics,
       }
       this.queuedCount = publishedReport.queued
+      if (this.dashboard || this.opts.frontendStatus === true) await this.sampleTriageCount()
       this.lastTickStatus = {
         queued: publishedReport.queued,
+        ...(this.triageCount !== undefined ? { triage: this.triageCount } : {}),
         blockedDiagnostics: [...publishedReport.blockedDiagnostics],
         janitorDiagnostics: [...publishedReport.janitorDiagnostics],
         ticketDiagnostics: [...publishedReport.ticketDiagnostics],
@@ -1342,6 +1345,23 @@ class DispatchLoop {
       }
       return (await this.publishTickReport(publishedReport))!
     })
+  }
+
+  /** Display-only triage count for interactive dashboards: one bounded
+   * ticket-source state-count read, never an event read. Sources without
+   * state discovery, failed reads and unmatched states retain the last value. */
+  private async sampleTriageCount(): Promise<void> {
+    const tickets = this.wiring.tickets
+    if (!tickets.listStates) return
+    try {
+      const count = triageStateCount(
+        await tickets.listStates(),
+        defaultTriageState(this.currentConfig().config),
+      )
+      if (count !== undefined) this.triageCount = count
+    } catch {
+      // Retry on the next tick without fabricating a zero or failing the tick.
+    }
   }
 
   /** Overlay process-local presentation controls and normalize the exact model
@@ -3053,7 +3073,9 @@ class DispatchLoop {
       const runFacts = recent?.start
         ? recent
         : (await readDispatcherRunFacts(this.repoView, this.repoIdentity, this.runId)).value
-      const publish = shouldPublishTickFromFacts(merged, facts, runFacts, startedAt)
+      const publish = shouldPublishTickFromFacts(merged, facts, runFacts, startedAt, {
+        triage: this.lastTickStatus.triage,
+      })
       const events: RepositoryEventWrite[] = publish
         ? [
             {
@@ -3907,8 +3929,7 @@ class DispatchLoop {
             configSnapshot.config.tickets.source,
           ),
         ),
-        observationCount: this.observationCount,
-        observationLimit: configSnapshot.config.policy.harvestThreshold,
+        ...(this.triageCount !== undefined ? { triage: this.triageCount } : {}),
       },
       repositoryEvents,
     )

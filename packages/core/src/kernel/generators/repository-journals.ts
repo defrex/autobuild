@@ -254,6 +254,8 @@ export function randomStatusJournal(seed: number, length: number): RepositoryEve
         payload: {
           run,
           queued: i,
+          // Deterministic (no rand draw) so the other templates' sequence holds.
+          ...(i % 2 === 0 ? { triage: i } : {}),
           counters: { ...counters, creationWithheld: 1 },
           janitorDiagnostics: ['j'],
           ticketDiagnostics: [],

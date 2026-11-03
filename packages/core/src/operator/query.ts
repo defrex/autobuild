@@ -43,7 +43,6 @@ import {
 import type { BuildState } from '../kernel/reducer'
 import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
-import { unclaimedObservationCount } from '../processes/harvest'
 import type { RepoViewStore } from '../processes/repo-view'
 import { withOperatorView } from './read-view'
 import type { RepositoryEvent } from '../events/repository'
@@ -375,9 +374,8 @@ async function dashboardFromView(
   )
   const records = await view.listBuilds()
   // One digest read covers every build of the repository (AUT-487): the
-  // row gate (a `done` digest means no row) and the observation count need no
-  // per-build histories, so the snapshot's traffic stays flat as finished
-  // builds accumulate. Row-rendering builds derive from the repository view's
+  // row gate (a `done` digest means no row) needs no per-build histories, so
+  // the snapshot's traffic stays flat as finished builds accumulate. Row-rendering builds derive from the repository view's
   // reducer snapshots plus a delta read (AUT-650); every snapshot is a cache
   // the event log regenerates, so the response equals a full replay's.
   const digests = await readBuildDigests(view, opts.repo)
@@ -426,14 +424,8 @@ async function dashboardFromView(
     )
     if (row !== null) projected.push(decorateWithPinnedMeta(row, pinned))
   }
-  // The unclaimed-observation count comes from the digests and the journal
-  // `effectiveConfig` already returned — no per-build history reads (AUT-487).
   // The pure core writes nothing — a snapshot performs no store writes and
   // never creates or locks the repository record.
-  const observationCount = unclaimedObservationCount({
-    digests,
-    harvestEvents: repositoryEvents.harvest,
-  })
   const warningLines = [
     ...status.roleWarnings,
     ...forgeReadinessWarnings(status),
@@ -453,8 +445,7 @@ async function dashboardFromView(
       activeCount: capacityProjection.occupied,
       capacityProjection,
       capacity: config.capacity,
-      observationCount,
-      observationLimit: config.policy.harvestThreshold,
+      ...(status.triage !== undefined ? { triage: status.triage } : {}),
       ...(status.availableUpgrade !== undefined
         ? { availableUpgrade: status.availableUpgrade }
         : {}),
