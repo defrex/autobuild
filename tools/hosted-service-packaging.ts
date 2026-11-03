@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { valid, prerelease, lt } from 'semver'
+import { valid, prerelease, lt, minVersion } from 'semver'
 import { createHash } from 'node:crypto'
 import {
   cp,
@@ -281,16 +281,27 @@ async function checkDispatcherDeployments(
   // Workspace member at apps/autobuild, installed from the workspace root.
   // Bun's isolated linker does not hoist the service's type tooling, so a
   // member also declares what next build itself loads from the folder.
+  //
+  // The host then adds a second member, apps/web, exact-pinning the floor of
+  // core's zod range, with the same pin at the workspace root (#824). Adding
+  // them after the first install keeps core's locked newer zod, while the
+  // copy the isolated linker shares becomes the floor: a service that does
+  // not declare zod falls back to that shared copy, and next build fails its
+  // type check inside the service's own source. A fresh install of the whole
+  // workspace would dedupe core down to the floor and exercise no conflict.
   const service = JSON.parse(
     await readFile(join(repoRoot, 'packages/hosted-store-service/package.json'), 'utf8'),
   ).dependencies as Record<string, string>
+  const zodRange = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).dependencies
+    .zod as string
+  const zodFloor = minVersion(zodRange)?.version
+  assert(zodFloor !== undefined, `@defrex/autobuild's zod range ${zodRange} has no floor`)
   const workspace = join(root, 'workspace-consumer')
   const member = join(workspace, 'apps/autobuild')
   await mkdir(member, { recursive: true })
-  await writeFile(
-    join(workspace, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['apps/*'], overrides: archives }, null, 2),
-  )
+  const workspaceManifest = { private: true, workspaces: ['apps/*'], overrides: archives }
+  await writeFile(join(workspace, 'package.json'), JSON.stringify(workspaceManifest, null, 2))
+  await writeFile(join(workspace, 'bunfig.toml'), '[install]\nlinker = "isolated"\n')
   const tooling = ['typescript', '@types/bun', '@types/node', '@types/react', '@types/react-dom']
   await writeFile(
     join(member, 'package.json'),
@@ -310,9 +321,46 @@ async function checkDispatcherDeployments(
   await writeFile(join(member, 'vercel.json'), vercelJson)
   const memberInstall = await installPackedDistribution([], workspace)
   assert.equal(memberInstall.exitCode, 0, memberInstall.stdout + memberInstall.stderr)
+  await mkdir(join(workspace, 'apps/web'))
+  await writeFile(
+    join(workspace, 'apps/web/package.json'),
+    JSON.stringify({ name: 'web', private: true, dependencies: { zod: zodFloor } }, null, 2),
+  )
+  await writeFile(
+    join(workspace, 'package.json'),
+    JSON.stringify({ ...workspaceManifest, dependencies: { zod: zodFloor } }, null, 2),
+  )
+  const hostInstall = await installPackedDistribution([], workspace)
+  assert.equal(hostInstall.exitCode, 0, hostInstall.stdout + hostInstall.stderr)
   const lock = await readFile(join(workspace, 'bun.lock'))
   const distributionRoot = await realpath(join(member, 'node_modules/@defrex/autobuild'))
   assert(distributionRoot.startsWith(join(workspace, 'node_modules/')), distributionRoot)
+  const serviceZod = await resolvedPackage(
+    'zod',
+    await realpath(join(member, 'node_modules/@defrex/autobuild-hosted-store-service')),
+  )
+  const coreZod = await resolvedPackage('zod', distributionRoot)
+  const webZod = await resolvedPackage('zod', await realpath(join(workspace, 'apps/web')))
+  const sharedZod = await resolvedPackage('zod', join(workspace, 'node_modules/.bun'))
+  assert.equal(webZod.version, zodFloor)
+  assert.equal(
+    sharedZod.version,
+    zodFloor,
+    `the isolated linker shares zod ${sharedZod.version}, not the host's pin; an undeclared ` +
+      'zod import would not fall back to a conflicting copy',
+  )
+  assert.notEqual(
+    coreZod.version,
+    zodFloor,
+    `@defrex/autobuild resolved zod ${coreZod.version}, the host's pin; the workspace ` +
+      'case no longer exercises a conflicting shared copy',
+  )
+  assert.equal(
+    serviceZod.path,
+    coreZod.path,
+    `the hosted store service must resolve the zod copy @defrex/autobuild uses: service ` +
+      `${serviceZod.path} (${serviceZod.version}), core ${coreZod.path} (${coreZod.version})`,
+  )
 
   // Run 1: a local build (no VERCEL) from the folder.
   const local = { ...env, VERCEL: undefined }
@@ -349,7 +397,29 @@ async function checkDispatcherDeployments(
     env,
   )
   assert.equal(archiveSha, firstArchive)
-  console.log('Packed workspace-member dispatcher deployment passed')
+  console.log(
+    `Packed workspace-member dispatcher deployment passed beside a member pinning zod ${zodFloor}`,
+  )
+}
+
+/** Where `name` resolves from `fromDirectory`, as a realpath, with the
+ * version of the package that owns the resolved file. */
+async function resolvedPackage(
+  name: string,
+  fromDirectory: string,
+): Promise<{ path: string; version: string }> {
+  const path = await realpath(Bun.resolveSync(name, fromDirectory))
+  for (let directory = dirname(path); directory !== dirname(directory); ) {
+    const manifest = await readFile(join(directory, 'package.json'), 'utf8').then(
+      (text) => JSON.parse(text) as { name?: unknown; version?: unknown },
+      () => undefined,
+    )
+    if (manifest?.name === name && typeof manifest.version === 'string') {
+      return { path, version: manifest.version }
+    }
+    directory = dirname(directory)
+  }
+  throw new Error(`no ${name} package.json above ${path}`)
 }
 
 /** Real packed consumer, outside workspace resolution. This is intentionally a
