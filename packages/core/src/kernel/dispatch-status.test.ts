@@ -111,6 +111,39 @@ describe('reduceDispatchStatus', () => {
     )
   })
 
+  test('a sampled triage count is set by ticks, cleared when omitted, and kept on failures', () => {
+    const started = event(1, 'dispatcher.run-started', {
+      run: 'run-a',
+      pid: 100,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: [],
+    })
+    const tick = (seq: number, triage?: number) =>
+      event(seq, 'dispatcher.tick-completed', {
+        run: 'run-a',
+        queued: 1,
+        ...(triage !== undefined ? { triage } : {}),
+        counters,
+        janitorDiagnostics: [],
+        ticketDiagnostics: [],
+        dependencyDiagnostics: [],
+      })
+    const sampled = [started, tick(2, 4)]
+    expect(reduceDispatchStatus(sampled, 'run-a').triage).toBe(4)
+    const failed = [...sampled, event(3, 'dispatcher.tick-failed', { run: 'run-a', error: 'x' })]
+    expect(reduceDispatchStatus(failed, 'run-a').triage).toBe(4)
+    const cleared = [...failed, tick(4)]
+    expect(reduceDispatchStatus(cleared, 'run-a')).not.toHaveProperty('triage')
+    expect(reduceDispatchStatus([started, tick(2, 0)], 'run-a').triage).toBe(0)
+    // Incremental continuation agrees with the full fold at every boundary.
+    for (let split = 1; split < cleared.length; split++) {
+      const prefix = reduceDispatchStatus(cleared.slice(0, split), 'run-a')
+      expect(reduceDispatchStatus(cleared.slice(split), 'run-a', prefix)).toEqual(
+        reduceDispatchStatus(cleared, 'run-a'),
+      )
+    }
+  })
+
   test('retains warning severity across later informational notices', () => {
     const started = event(1, 'dispatcher.run-started', {
       run: 'run-a',

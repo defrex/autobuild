@@ -646,14 +646,14 @@ describe('projectBuild: the dashboard-visible build filter', () => {
         { record: { ...RECORD, slug: 'alpha' }, state: active, events: activeLog },
       ],
       CONFIG,
-      { repo: '/repos/app', queued: 2, observationCount: 4 },
+      { repo: '/repos/app', queued: 2, triage: 4 },
     )
     expect(model.builds.map((b) => b.slug)).toEqual(['alpha', 'queued', 'zebra'])
     expect(model).toMatchObject({
       repo: '/repos/app',
       queued: 2,
+      triage: 4,
       active: { current: 3, limit: 1 },
-      observations: { current: 4, limit: 5 },
       drained: false,
       repositoryPaused: false,
       defaultAutoMerge: false,
@@ -674,101 +674,86 @@ describe('projectBuild: the dashboard-visible build filter', () => {
       activeCount: 3,
       capacity: 1,
       capacityProjection: { configured: 1, occupied: 3, effective: 1, borrowingNodes: [] },
-      observationCount: 4,
-      observationLimit: 5,
+      triage: 4,
     })
     expect(preprojected).toEqual(model)
     expect(preprojected).not.toHaveProperty('drift')
-    expect(preprojected.observations).toEqual({ current: 4, limit: 5 })
+    expect(preprojected.triage).toBe(4)
+    expect(preprojected).not.toHaveProperty('observations')
     expect(preprojected.builds[0]).toBe(alpha)
     expect(preprojected.builds[1]).toBe(queuedRow)
     expect(preprojected.builds[2]).toBe(zebra)
 
-    const settings = buildDashboard(
-      [],
-      CONFIG,
-      { repo: '/repos/app', queued: 2, observationCount: 0 },
-      [
-        {
-          repo: '/repos/app',
-          seq: 1,
-          ts: '2026-07-20T00:00:00.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.intake-set',
-          payload: { enabled: false },
-        },
-        {
-          repo: '/repos/app',
-          seq: 2,
-          ts: '2026-07-20T00:00:01.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: true },
-        },
-      ],
-    )
+    const settings = buildDashboard([], CONFIG, { repo: '/repos/app', queued: 2 }, [
+      {
+        repo: '/repos/app',
+        seq: 1,
+        ts: '2026-07-20T00:00:00.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      },
+      {
+        repo: '/repos/app',
+        seq: 2,
+        ts: '2026-07-20T00:00:01.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true },
+      },
+    ])
     expect(settings.drained).toBe(true)
     expect(settings.repositoryPaused).toBe(false)
     expect(settings.defaultAutoMerge).toBe(true)
 
-    const paused = buildDashboard(
-      [],
-      CONFIG,
-      { repo: '/repos/app', queued: 1, observationCount: 0 },
-      [
-        {
-          repo: '/repos/app',
-          seq: 1,
-          ts: '2026-07-20T00:00:00.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.pause-set',
-          payload: { enabled: true },
-        },
-        {
-          repo: '/repos/app',
-          seq: 2,
-          ts: '2026-07-20T00:00:01.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.intake-set',
-          payload: { enabled: true },
-        },
-        {
-          repo: '/repos/app',
-          seq: 3,
-          ts: '2026-07-20T00:00:02.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: true },
-        },
-      ],
-    )
+    const paused = buildDashboard([], CONFIG, { repo: '/repos/app', queued: 1 }, [
+      {
+        repo: '/repos/app',
+        seq: 1,
+        ts: '2026-07-20T00:00:00.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled: true },
+      },
+      {
+        repo: '/repos/app',
+        seq: 2,
+        ts: '2026-07-20T00:00:01.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      },
+      {
+        repo: '/repos/app',
+        seq: 3,
+        ts: '2026-07-20T00:00:02.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true },
+      },
+    ])
     expect(paused.repositoryPaused).toBe(true)
     expect(paused.drained).toBe(false)
     expect(paused.defaultAutoMerge).toBe(true)
 
-    const resumed = buildDashboard(
-      [],
-      CONFIG,
-      { repo: '/repos/app', queued: 1, observationCount: 0 },
-      [
-        {
-          repo: '/repos/app',
-          seq: 1,
-          ts: '2026-07-20T00:00:00.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.pause-set',
-          payload: { enabled: true },
-        },
-        {
-          repo: '/repos/app',
-          seq: 2,
-          ts: '2026-07-20T00:00:01.000Z',
-          actor: humanActor('operator'),
-          type: 'dispatcher.pause-set',
-          payload: { enabled: false },
-        },
-      ],
-    )
+    const resumed = buildDashboard([], CONFIG, { repo: '/repos/app', queued: 1 }, [
+      {
+        repo: '/repos/app',
+        seq: 1,
+        ts: '2026-07-20T00:00:00.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled: true },
+      },
+      {
+        repo: '/repos/app',
+        seq: 2,
+        ts: '2026-07-20T00:00:01.000Z',
+        actor: humanActor('operator'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled: false },
+      },
+    ])
     expect(resumed.repositoryPaused).toBe(false)
   })
 
@@ -776,19 +761,16 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     const clean = buildDashboard([], CONFIG, {
       repo: '/repos/app',
       queued: 0,
-      observationCount: 0,
     })
     const warned = buildDashboard([], CONFIG, {
       repo: '/repos/app',
       queued: 0,
-      observationCount: 0,
       warningLines: ['store unavailable', 'autobuild.toml: [roles.ghost] is declared'],
     })
     // An empty array is the same absence as an omitted field: no chrome.
     const empty = buildDashboard([], CONFIG, {
       repo: '/repos/app',
       queued: 0,
-      observationCount: 0,
       warningLines: [],
     })
     expect(clean.warningLines).toBeUndefined()
@@ -810,7 +792,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     let model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2, observationCount: 0 },
+      { repo: '/repos/app', queued: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(false)
@@ -824,7 +806,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2, observationCount: 0 },
+      { repo: '/repos/app', queued: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(true)
@@ -838,7 +820,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2, observationCount: 0 },
+      { repo: '/repos/app', queued: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(true)
@@ -851,7 +833,7 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     model = buildDashboard(
       [],
       CONFIG,
-      { repo: '/repos/app', queued: 2, observationCount: 0 },
+      { repo: '/repos/app', queued: 2 },
       await store.getRepoEvents('/repos/app'),
     )
     expect(model.harvestPaused).toBe(false)
@@ -1086,7 +1068,6 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
       const dashboard = buildDashboard([{ record: RECORD, state, events: log }], CONFIG, {
         repo: '/repos/app',
         queued: 0,
-        observationCount: 0,
       })
       expect(dashboard.active.current).toBe(0)
 
@@ -1120,7 +1101,7 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
     const dashboard = buildDashboard(
       [{ record: RECORD, state: cleaningState, events: cleaningLog }],
       CONFIG,
-      { repo: '/repos/app', queued: 0, observationCount: 0 },
+      { repo: '/repos/app', queued: 0 },
     )
     expect(dashboard.builds).toHaveLength(1)
     expect(dashboard.builds[0]?.status).toBe('cleaning')
@@ -2417,10 +2398,11 @@ test('invocation standby is forwarded independently and omitted for holders', ()
     queued: 0,
     activeCount: 0,
     capacity: 4,
-    observationCount: 0,
-    observationLimit: 9,
   }
   expect(buildDashboardFromProjected([], header)).not.toHaveProperty('standby')
+  // An omitted triage sample stays unknown rather than becoming zero.
+  expect(buildDashboardFromProjected([], header)).not.toHaveProperty('triage')
+  expect(buildDashboardFromProjected([], { ...header, triage: 0 }).triage).toBe(0)
   expect(buildDashboardFromProjected([], { ...header, standby: 'peer' }).standby).toBe('peer')
 })
 
@@ -2447,8 +2429,6 @@ test('repository account attention uses the same source/remedy and clears on rec
     queued: 0,
     activeCount: 0,
     capacity: 1,
-    observationCount: 0,
-    observationLimit: 5,
   }
   const missing = {
     name: 'billing',

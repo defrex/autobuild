@@ -602,6 +602,9 @@ export const dispatcherStatusEventPayloadSchemas = {
     /** Replay-only compatibility for journals written while the isolated
      * dispatcher child transported a display sample in its tick fact. */
     observations: z.number().int().nonnegative().optional(),
+    /** Display-only standing count of the configured triage state, sampled
+     * only for interactive dashboards; absent means unknown. */
+    triage: z.number().int().nonnegative().optional(),
     counters: tickCountersSchema,
     blockedDiagnostics: boundedDiagnostics.optional(),
     janitorDiagnostics: boundedDiagnostics,

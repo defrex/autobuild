@@ -4187,6 +4187,10 @@
           "type": "49",
           "optional": true
         },
+        "triage": {
+          "type": "49",
+          "optional": true
+        },
         "blockedDiagnostics": {
           "type": "19",
           "optional": true
@@ -9660,6 +9664,10 @@
           "optional": true
         },
         "creationWithheld": {
+          "type": "49",
+          "optional": true
+        },
+        "triage": {
           "type": "49",
           "optional": true
         },

@@ -979,20 +979,21 @@ It follows one dispatch run's repository facts incrementally through
 `packages/core/src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
-intervals. The same polling path samples the header's current count from build
-digests plus the repository journal — one journal read plus one repo-scoped
-digest read, plus a journal-record probe — paired with the effective config's
-`policy.harvestThreshold`. A journal record that does not yet exist reads as an
-empty journal: the sample, the operator query, the dispatcher's
-repository-wide journal reads (controls, settlement stages, and ready
-scans), and the operator sandbox service's journal reads all go through
+intervals. The header's triage count comes from the reduced `DispatchStatus`
+(`status.triage`), exactly like the queue depth, so a frontend refresh reads
+neither the ticket source nor any extra store value for it. The supervised
+kernel child (`frontendStatus`) samples `TicketSource.listStates()` once per
+tick, after the Dispatcher tick and before publication, and carries the last
+successful count on `dispatcher.tick-completed`; a changed count is a
+standing-state change for publication suppression. Hosted, plain and
+non-TTY dispatchers never sample it. An unsupported source, failed read or
+unmatched state keeps the previous value (initially unknown, shown as `–`). A
+journal record that does not yet exist reads as an empty journal: the
+dispatcher's repository-wide journal reads (controls, settlement stages, and
+ready scans) and the operator sandbox service's journal reads go through
 the same shared missing-record journal read (the AUT-524 helper in
 `packages/core/src/processes/harvest.ts`), which writes nothing (no
-`ensureRepo` from a display path). That sample
-is process-local presentation state: a failed refresh preserves the last
-successful value and adds a local diagnostic, while an initial failure delays
-the complete frame rather than inventing zero. No repository fact transports
-it, and the headless child does not scan for presentation. Navigation is
+`ensureRepo` from a display path). Navigation is
 synchronous presentation state; only Store reads and writes enter its UI action
 queue. The supervised kernel child owns every slow
 adapter operation, so slug naming, provisioning, runners, and Harvest cannot

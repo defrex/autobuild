@@ -40,6 +40,7 @@ import type { TerminalInput, TerminalOut } from '../packages/core/src/cli/termin
 import { createTerminalModeController } from '../packages/core/src/cli/terminal-restore'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../packages/core/src/events/envelope'
 import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
+import { defaultTriageState } from '../packages/core/src/processes/dispatcher'
 import {
   CONFIG_TOML,
   happyHandlers,
@@ -50,6 +51,8 @@ import {
 } from '../packages/core/src/scenarios/harness'
 
 export const RENDER_NOW = Date.parse('2026-07-15T12:10:00.000Z')
+/** Tickets waiting in triage in every capture's header. */
+export const CAPTURE_TRIAGE_COUNT = 2
 
 type CaptureScenario = 'mixed' | 'happy' | 'integration' | 'capacity'
 
@@ -1841,6 +1844,14 @@ async function capturePaint(
       check.detail = `${check.check} merging is disabled.`
     }
   }
+  // The fake source cannot enumerate states; give this capture's instance a
+  // fixed state count so the header shows the dispatcher's real triage sample.
+  Object.assign(harness.wiring.tickets, {
+    listStates: async () => [
+      { name: defaultTriageState(harness.config), tickets: CAPTURE_TRIAGE_COUNT },
+      { name: harness.config.tickets.readyState, tickets: 0 },
+    ],
+  })
   await abDispatch({
     targetRepo: harness.origin,
     // The capture harness keys its store by the checkout path; pin the same

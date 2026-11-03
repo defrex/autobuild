@@ -1910,13 +1910,19 @@ and after a resize; unused rows remain below. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
-`queue <depth> | active <current>/<limit> | observations <current>/<limit>`.
-`queue` is the ready-ticket queue depth; `active` is the current
-nonterminal-build count against root `capacity`; and `observations` is the count
-of recorded observation occurrences not yet claimed by a Harvest snapshot
-against `policy.harvestThreshold`. The Store-only interactive frontend refreshes
-that display value directly from the BuildStore; a failed refresh retains the
-last successful count, shows a diagnostic, and appends no transport event.
+`triage <count> | queue <depth> | active <current>/<limit>`, the same three
+main counts the web operator app shows. `triage` is the number of tickets in
+the configured triage state (`[tickets].triageState`, or the source's default).
+The dispatcher samples it once per tick, only for an interactive dashboard,
+through the ticket source's state counts; it reads no events. It shows `–`
+when the source cannot enumerate states (Linear) or no sample has succeeded
+yet; a failed read keeps the last value, appends nothing, and never fails the
+tick. The Store-only interactive frontend takes it from the dispatcher's
+published status and never reads the ticket source. `queue` is the
+ready-ticket queue depth, and `active` is the current nonterminal-build count
+against root `capacity`. Observation pressure is not a header counter: the
+Harvest row shows a run's observations, and `ab harvest status` reports
+Harvest state.
 The execution-mode frontend checkpoints dashboard facts, the latest run start and the sampled
 lease holder's start; identity history stays partial and missing holders use a
 bounded per-run lookup. Unchanged written/refused checkpoints are not uploaded

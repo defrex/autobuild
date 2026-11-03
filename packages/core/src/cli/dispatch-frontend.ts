@@ -26,7 +26,6 @@ import { humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import type { BuildState } from '../kernel/reducer'
-import { unclaimedObservationCount } from '../processes/harvest'
 import {
   controlHarvestRun,
   OperatorControlError,
@@ -148,9 +147,6 @@ export class DispatchFrontend {
   private config: Config | undefined
   private configRef: string | undefined
   private configRevision = 0
-  /** Display-only pressure is sampled by the Store-only frontend. Undefined
-   * means no factual sample has succeeded yet; failures retain the last value. */
-  private observationCount: number | undefined
   private model: DashboardModel | undefined
   private selection: DashboardSelection | undefined = { kind: 'global' }
   private view: DashboardView | undefined
@@ -362,7 +358,6 @@ export class DispatchFrontend {
     repositoryFacts: RepositoryReadFacts
     status: DispatchStatus
     config: Config
-    observationCount: number
     snapshot: DashboardPollSnapshot
   }>()
 
@@ -413,18 +408,6 @@ export class DispatchFrontend {
           return undefined
         }
         const config = await this.loadConfig(ref.kind, ref.rev)
-        let observationCount: number
-        try {
-          observationCount = unclaimedObservationCount({
-            digests: await this.reader.getRepoBuildDigests(this.opts.repo),
-            harvestEvents: this.opts.viewer ? repositoryFacts.harvest : repositoryEvents,
-          })
-        } catch {
-          // Incomplete snapshots never acknowledge the sampled position.
-          this.syncControls()
-          this.paint()
-          return undefined
-        }
         this.cache ??= new DashboardBuildPollCache(this.reader, this.opts.repo, config)
         const snapshot = await this.cache.refresh(config, this.configRevision, fullEnrichment)
         if (!this.opts.once && !this.opts.viewer)
@@ -437,7 +420,6 @@ export class DispatchFrontend {
           upgrades,
           status,
           config,
-          observationCount,
           snapshot,
         }
       },
@@ -449,7 +431,6 @@ export class DispatchFrontend {
       this.opts.once || this.opts.viewer
         ? undefined
         : this.standbyResolver.current(this.runId, status.yieldedHolder, this.clock())
-    this.observationCount = frame.observationCount
     this.refresh?.activity(snapshot.states.size > 0)
 
     if (this.resumePrompt !== undefined) {
@@ -503,8 +484,7 @@ export class DispatchFrontend {
             config.tickets.source,
           ),
         ),
-        observationCount: this.observationCount,
-        observationLimit: config.policy.harvestThreshold,
+        ...(status.triage !== undefined ? { triage: status.triage } : {}),
         ...(status.availableUpgrade !== undefined
           ? { availableUpgrade: status.availableUpgrade }
           : {}),

@@ -74,8 +74,6 @@ export function handoffCapture(
       queued: model.queued,
       activeCount: model.active.current,
       capacity: model.active.limit,
-      observationCount: model.observations.current,
-      observationLimit: model.observations.limit,
     },
     handoffEvents(model.builds[0]?.slug ?? 'old-build', stage),
   )

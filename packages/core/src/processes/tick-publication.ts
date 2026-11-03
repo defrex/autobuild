@@ -10,13 +10,21 @@ const diagnostics = [
   'dependencyDiagnostics',
 ] as const
 
+/** Display-only standing values sampled beside a report rather than by the
+ * Dispatcher; absent values are unknown and compare equal to absent. */
+export interface TickStanding {
+  triage?: number
+}
+
 /** Standing state changes publish; activity publishes on every occurrence. */
 function reportRequiresPublication(
   report: TickReport,
   previous: RepositoryEvent | undefined,
+  standing: TickStanding,
 ): boolean {
   if (previous?.type !== 'dispatcher.tick-completed' || previous.payload.queued !== report.queued)
     return true
+  if (previous.payload.triage !== standing.triage) return true
   for (const key of standingCounters)
     if (report[key] !== (previous.payload.counters[key] ?? 0)) return true
   for (const key of diagnostics) {
@@ -39,11 +47,12 @@ export function shouldPublishTick(
   events: readonly RepositoryEvent[],
   run: string,
   startedAt: string,
+  standing: TickStanding = {},
 ): boolean {
   const previous = events.findLast(
     (e) => e.type === 'dispatcher.tick-completed' && e.payload.run === run,
   )
-  if (reportRequiresPublication(report, previous)) return true
+  if (reportRequiresPublication(report, previous, standing)) return true
   const boundary = events.findLast(
     (e) =>
       (e.type === 'dispatcher.tick-completed' || e.type === 'dispatcher.tick-failed') &&
@@ -92,8 +101,9 @@ export function shouldPublishTickFromFacts(
   facts: import('../store/reduced-reads').RepositoryReadFacts,
   run: import('../kernel/read-facts').DispatcherRunFacts,
   startedAt: string,
+  standing: TickStanding = {},
 ): boolean {
-  if (reportRequiresPublication(report, run.completed)) return true
+  if (reportRequiresPublication(report, run.completed, standing)) return true
   if (run.tick?.type === 'dispatcher.tick-failed') return true
   return facts.attention.sources.some(
     ([, source]) =>
