@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v1.4.1 — 2026-11-03
+
+This release makes Autobuild quieter and more dependable to run: idle ticks that only repeat standing ticket diagnostics are now suppressed, and the dashboard journals a single render warning per failure streak instead of one for every failure. Dispatch assets now ship from the published hosted-service build. The operator guidance in `ab-operate` and `ab-guide` now says to run an unbounded `ab watch` only under a per-line monitor, and otherwise to use `--count 1` and re-arm from the trailing cursor, so a blocked build can no longer leave a watch that never exits. Documentation for self-hosting the service, which is unsupported, has also moved out of the public website.
+
+- [#823](https://github.com/defrex/autobuild/pull/823) — Document unsupported service self-hosting outside the public website
+- [#822](https://github.com/defrex/autobuild/pull/822) — Ship dispatch assets from the published hosted-service build
+- [#821](https://github.com/defrex/autobuild/pull/821) — Run producers on Claude and reviewers on GPT for this repository
+- [#819](https://github.com/defrex/autobuild/pull/819) — Suppress idle ticks that repeat standing ticket diagnostics
+- [#818](https://github.com/defrex/autobuild/pull/818) — Journal one dashboard render warning per failure streak
 - Tell operators to bound `ab watch` under exit-only harnesses: `ab-operate` and `ab-guide` now run the standing watch unbounded only under a per-line monitor, and otherwise use `--count 1` and re-arm from the trailing cursor, because an unbounded watch never exits on a blocked build.
 
 ## v1.4.0 — 2026-11-02
