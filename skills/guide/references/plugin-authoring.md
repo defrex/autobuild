@@ -470,6 +470,17 @@ An adapter opts in with `integrationTree: true` and must:
 
 Don't opt in unless the source preserves these semantics. Legacy sources get ordinary CRUD; the compatibility facade refuses metadata writes before legacy methods run, and unsupported sources should also refuse metadata at their own write boundary.
 
+## Optional issue links capability
+
+An adapter opts in with `issueLinks: true` and must persist
+`issueLinks?: IssueLink[]` (`{ issue: number, intent: 'closes' | 'refs' }`) on
+create, update and revision-checked update, return them on every read sorted by
+issue number (absent means none), treat an update's set as a complete replacement
+where `[]` clears, and include nonempty links in revisions. `normalizeIssueLinks`
+validates, defaults intent to `closes` and sorts. Without the flag, the
+compatibility facade refuses any write naming links with
+`TicketIssueLinksUnsupported` before your methods run, and strips links from reads.
+
 ## Optional ticket paging capability
 
 Native paging is an optional API 1.9 ticket-source capability:

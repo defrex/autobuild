@@ -111,6 +111,13 @@ from the ticket. If grooming named no destination, omit `--state`; the create
 then uses `[tickets].createState`, or the ticket source's own default when that
 setting is absent.
 
+When the work originates from a forge issue, attach it at creation and still
+cite it in Evidence: `--issues 824` when the ticket fully resolves the issue
+(intent `closes`, the default), or `--issues 824:refs` when it only partly
+addresses it. Separate several with commas. A source that cannot store issue
+links refuses the create and names itself; file again without `--issues` and
+keep the Evidence citation.
+
 When the explicitly named destination equals `[tickets].readyState`, tell the
 human in the completion response that the ticket may be claimed by the next
 dispatch once the repository's label, dependency, intake, capacity, and other
