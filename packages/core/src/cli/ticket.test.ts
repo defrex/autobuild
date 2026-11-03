@@ -1268,6 +1268,52 @@ describe('runCli — ticket routing', () => {
     expect(err.join('\n')).toContain('--blocked-by: no ticket "file-404"')
   })
 
+  test('--issues records links on create, shows them, and update replaces or clears them', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, out } = sessionlessDeps()
+    expect(
+      await runCli(
+        ['ticket', 'create', 'Linked', '--body', bodyFile, '--issues', '824,820:refs'],
+        deps,
+      ),
+    ).toBe(0)
+    expect(out.at(-1)).toBe('ticket created: file:file-1 (triage) — refs #820, closes #824')
+
+    expect(await runCli(['ticket', 'show', 'file-1'], deps)).toBe(0)
+    expect(out.join('\n')).toContain('  issues:  refs #820, closes #824')
+    expect(await runCli(['ticket', 'show', 'file-1', '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).issueLinks).toEqual([
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'closes' },
+    ])
+
+    expect(
+      await runCli(['ticket', 'update', 'file-1', '--issues', '#9:refs', '--json'], deps),
+    ).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).issueLinks).toEqual([{ issue: 9, intent: 'refs' }])
+
+    expect(await runCli(['ticket', 'update', 'file-1', '--issues', '', '--json'], deps)).toBe(0)
+    const cleared = JSON.parse(out.at(-1)!) as Ticket
+    expect('issueLinks' in cleared).toBe(false)
+    expect(await readFile(join(tmp, 'tickets', 'triage', 'file-1.md'), 'utf8')).not.toContain(
+      'issueLinks',
+    )
+  })
+
+  test('an invalid --issues item exits nonzero naming the flag', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, err } = sessionlessDeps()
+    expect(
+      await runCli(['ticket', 'create', 'Linked', '--body', bodyFile, '--issues', '1:fixes'], deps),
+    ).toBe(1)
+    expect(err.join('\n')).toContain('--issues: invalid issue link "1:fixes"')
+    expect(existsSync(join(tmp, 'tickets', 'triage', 'file-1.md'))).toBe(false)
+  })
+
   test('routes list, show, and move with human and JSON output', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const bodyFile = join(tmp, 'spec.md')
@@ -1785,5 +1831,38 @@ describe('ticket metadata CLI', () => {
     ])
       await expect(abTicket(['update', ticket.ref.id, ...flags], opts)).rejects.toThrow()
     expect(source.updates).toHaveLength(0)
+  })
+})
+
+describe('ticket issue links on a source without support', () => {
+  test('create and update refuse, name the source, and write nothing', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const created: Parameters<typeof fakeFactory>[0] = {}
+    await expect(
+      abTicketCreate({
+        targetRepo: tmp,
+        title: 'Linked',
+        bodyFile,
+        issueLinks: [{ issue: 824, intent: 'closes' }],
+        env: {},
+        stdout: () => {},
+        sourceFactory: fakeFactory(created),
+      }),
+    ).rejects.toThrow('fake ticket source cannot store issue links; nothing was written')
+    expect(created.draft).toBeUndefined()
+
+    await expect(
+      abTicketUpdate({
+        targetRepo: tmp,
+        id: 'fake-1',
+        issueLinks: [],
+        env: {},
+        stdout: () => {},
+        sourceFactory: fakeFactory(created),
+      }),
+    ).rejects.toThrow('fake ticket source cannot store issue links')
+    expect(created.update).toBeUndefined()
   })
 })
