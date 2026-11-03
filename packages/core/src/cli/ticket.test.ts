@@ -1302,6 +1302,43 @@ describe('runCli — ticket routing', () => {
     )
   })
 
+  test('an explicitly empty --issues on create is refused by a source without links', async () => {
+    await writeFile(
+      join(tmp, 'tickets-plugin.ts'),
+      `
+        const source = {
+          name: 'journal',
+          listReady: async () => ({ tickets: [], diagnostics: [] }),
+          get: async () => null,
+          claim: async () => true,
+          comment: async () => {},
+          transition: async () => {},
+          create: async () => { throw new Error('create reached the source') },
+          update: async () => {},
+          addBlocker: async () => {},
+          removeBlocker: async () => {},
+          dependencyStates: async (ids) => ids.map((id) => ({ id, exists: false, resolved: false, blockedBy: [] })),
+        }
+        export default {
+          name: 'journal-plugin',
+          apiVersion: '^1.1.0',
+          ticketSources: { journal: { factory: async () => source } },
+        }
+      `,
+    )
+    await writeRepo(
+      'plugins = ["./tickets-plugin.ts"]\n\n[tickets]\nsource = "journal"\nreadyState = "Ready"\n',
+    )
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, err } = sessionlessDeps()
+    expect(
+      await runCli(['ticket', 'create', 'Linked', '--body', bodyFile, '--issues', ''], deps),
+    ).toBe(1)
+    expect(err.join('\n')).toContain('journal ticket source cannot store issue links')
+    expect(err.join('\n')).not.toContain('create reached the source')
+  })
+
   test('an invalid --issues item exits nonzero naming the flag', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const bodyFile = join(tmp, 'spec.md')

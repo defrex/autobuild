@@ -901,7 +901,6 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       const labels = stringFlag(parsed, 'labels')
       const blockedBy = stringFlag(parsed, 'blocked-by')
       const issues = stringFlag(parsed, 'issues')
-      const issueLinks = issues === undefined ? [] : parseIssueLinkList(issues)
       await abTicketCreate({
         ...opts,
         ...metadataFlags(parsed),
@@ -910,7 +909,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(state !== undefined ? { state } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
         ...(blockedBy !== undefined ? { blockedBy: commaList(blockedBy) } : {}),
-        ...(issueLinks.length > 0 ? { issueLinks } : {}),
+        ...(issues !== undefined ? { issueLinks: parseIssueLinkList(issues) } : {}),
         json: parsed.flags.has('json'),
       })
       return
