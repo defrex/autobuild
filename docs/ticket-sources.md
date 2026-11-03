@@ -101,6 +101,10 @@ doneState = "done"
 - **URL.** `tickets.url` defaults to the remote BuildStore service (`AB_STORE` or `[store].url`); it's required with a local Store, as here.
 - **Authority.** A separate ticket service needs its own project credential; a Store connection grants nothing there. Delegated child sessions are read-only and can't redefine policy.
 
+### Optional issue links
+
+The `file` source stores [forge issue links](tickets.md#groom-a-buildable-spec) as `issueLinks` frontmatter. `hosted` and `linear` don't store them; a create or update that names issue links is refused with an error naming the source, and nothing is written.
+
 ### Optional ticket tree
 
 All three sources declare `integrationTree: true`, storing kind and target as frontmatter (`file`), transactional project data (`hosted`), or the exact `node` label plus the parent relationship (`linear`).

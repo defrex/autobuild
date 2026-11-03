@@ -1,12 +1,20 @@
 import type { Ticket, TicketDraft, TicketSource, TicketUpdate } from '../types'
+import { refuseUnsupportedIssueLinks } from './issue-links'
 
-export function normalizeTicket(ticket: Ticket, supported = true): Ticket {
-  const { target, ...rest } = ticket
+/** Sources without a capability cannot present that capability's fields. */
+export function normalizeTicket(ticket: Ticket, supported = true, issueLinks = true): Ticket {
+  const { target, issueLinks: links, ...rest } = ticket
   return {
     ...rest,
     kind: supported ? (ticket.kind ?? 'work') : 'work',
     ...(supported && target !== undefined ? { target } : {}),
+    ...(issueLinks && links !== undefined ? { issueLinks: links } : {}),
   }
+}
+
+/** Apply the source's own capabilities to a ticket it returned. */
+export function normalizeSourceTicket(source: TicketSource, ticket: Ticket): Ticket {
+  return normalizeTicket(ticket, !!source.integrationTree, !!source.issueLinks)
 }
 
 export function refuseUnsupportedMetadata(
@@ -17,6 +25,7 @@ export function refuseUnsupportedMetadata(
     throw new Error(
       `${source.name} ticket source does not support kind/target writes; use a source with integrationTree support (file, Linear or hosted)`,
     )
+  refuseUnsupportedIssueLinks(source, patch)
 }
 
 /** Validate before any part of a mixed patch is written. Canonical refs close alias cycles. */
@@ -77,22 +86,20 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
       if (property === 'get')
         return async (id: string) => {
           const ticket = await target.get(id)
-          return ticket ? normalizeTicket(ticket, !!target.integrationTree) : null
+          return ticket ? normalizeSourceTicket(target, ticket) : null
         }
       if (property === 'listReady' || property === 'listAll' || property === 'listPage')
         return async (...args: unknown[]) => {
           const listing = await value.apply(target, args)
           return {
             ...listing,
-            tickets: listing.tickets.map((ticket: Ticket) =>
-              normalizeTicket(ticket, !!target.integrationTree),
-            ),
+            tickets: listing.tickets.map((ticket: Ticket) => normalizeSourceTicket(target, ticket)),
           }
         }
       if (property === 'create')
         return async (draft: TicketDraft, ...args: unknown[]) => {
           refuseUnsupportedMetadata(target, draft)
-          return normalizeTicket(await value.call(target, draft, ...args), !!target.integrationTree)
+          return normalizeSourceTicket(target, await value.call(target, draft, ...args))
         }
       if (property === 'update')
         return async (id: string, patch: TicketUpdate) => {

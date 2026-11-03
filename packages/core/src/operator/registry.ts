@@ -4,6 +4,7 @@ import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
 import { openOperatorTickets } from './tickets'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
+import { TicketIssueLinksUnsupported } from '../ports/tickets/issue-links'
 /**
  * The agent tool registry — one typed table that is the single source of
  * truth for the agent-facing operator surface (AUT-338).
@@ -337,6 +338,7 @@ const ticketsUpdateInput = ticketUpdateRequestSchema
       value.title !== undefined ||
       value.body !== undefined ||
       value.labels !== undefined ||
+      value.issueLinks !== undefined ||
       value.kind !== undefined ||
       value.target !== undefined,
     'update must name at least one field',
@@ -845,12 +847,12 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'tickets.create',
-    'Create a ticket in the configured source, optionally labelled, pre-blocked, or filed in a nondefault state.',
+    'Create a ticket in the configured source, optionally labelled, pre-blocked, linked to the forge issues it addresses, or filed in a nondefault state.',
     ticketsCreateInput,
     '{ticket, blockers, build}: the created ticket and its (usually empty) dependency states.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketsCreateInput>
-      const { repo, title, body, labels, state, blockedBy, kind, target } = input
+      const { repo, title, body, labels, state, blockedBy, issueLinks, kind, target } = input
       return mutateOperatorTicket({
         store: ctx.store,
         repo,
@@ -864,13 +866,14 @@ export const TOOLS: readonly ToolEntry[] = [
           ...(labels !== undefined ? { labels } : {}),
           ...(state !== undefined ? { state } : {}),
           ...(blockedBy !== undefined ? { blockedBy } : {}),
+          ...(issueLinks !== undefined ? { issueLinks } : {}),
         },
       })
     },
   ),
   defineTool(
     'tickets.update',
-    'Partially replace a ticket’s editable fields (title, body, labels, kind, target); state is never changed here.',
+    'Partially replace a ticket’s editable fields (title, body, labels, issue links, kind, target); state is never changed here.',
     ticketsUpdateInput,
     '{ticket, blockers, build}: the updated ticket.',
     async (raw, ctx) => {
@@ -1106,6 +1109,12 @@ function mapDomainError(error: unknown): RegistryError {
     return new RegistryError('domain', error.message, { kind: 'conflict', error: error.message })
   if (error instanceof TicketRevisionUnsupported)
     return new RegistryError('domain', error.message, { kind: 'refusal', error: error.message })
+  if (error instanceof TicketIssueLinksUnsupported)
+    return new RegistryError('domain', error.message, {
+      kind: 'refusal',
+      error: error.message,
+      code: 'issue-links-unsupported',
+    })
   if (error instanceof TicketOperationError) {
     return new RegistryError('domain', error.message, {
       kind: error.code === 'not-found' ? 'not-found' : 'refusal',

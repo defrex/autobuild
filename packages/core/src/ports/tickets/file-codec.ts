@@ -1,6 +1,7 @@
 import { portableAssetSchema } from './portable-assets'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { z } from 'zod'
+import { refineUniqueIssues } from './issue-links'
 
 const frontmatterSchema = z.strictObject({
   kind: z.enum(['work', 'node']).optional(),
@@ -31,6 +32,17 @@ const frontmatterSchema = z.strictObject({
   /** Source-local blocker ids (§13). Absent ≡ no dependencies, which keeps
    * every pre-existing ticket file valid. */
   blockedBy: z.array(z.string()).optional(),
+  /** Forge issues the ticket addresses, always with an explicit intent.
+   * Absent ≡ none, which keeps every pre-existing ticket file valid. */
+  issueLinks: z
+    .array(
+      z.strictObject({
+        issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        intent: z.enum(['closes', 'refs']),
+      }),
+    )
+    .superRefine(refineUniqueIssues)
+    .optional(),
   /** Stable external-create adoption key. It travels with the ticket across
    * state-directory moves, so retries find it in any lifecycle state. */
   idempotencyKey: z.string().min(1).optional(),
@@ -86,6 +98,9 @@ export function serializeTicketFile(front: Frontmatter, body: string): string {
   // byte-identically rather than sprouting `blockedBy = []` on every write.
   if (front.blockedBy !== undefined && front.blockedBy.length > 0) {
     data.blockedBy = front.blockedBy
+  }
+  if (front.issueLinks !== undefined && front.issueLinks.length > 0) {
+    data.issueLinks = front.issueLinks
   }
   if (front.idempotencyKey !== undefined) {
     data.idempotencyKey = front.idempotencyKey
