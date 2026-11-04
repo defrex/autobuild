@@ -40,6 +40,12 @@ The spec standard asks for:
 
 Your operator agent grooms the ticket with you using `ab-spec`, then moves it to the ready state with any required labels. Dispatch's spec gate returns ready tickets that can't become conforming specs to Triage with an explanation.
 
+When the work comes from a forge issue, record it on the ticket: `--issues 824` when the ticket fully resolves issue #824 (`closes`, the default), or `--issues 820:refs` when it only partly addresses it. `ab ticket update --issues` replaces the set and `--issues ''` clears it. Sources that can't store issue links refuse the write and name the source.
+
+```sh
+bun ab ticket create "Close stale sandboxes" --body spec.md --issues 824,820:refs
+```
+
 
 ## Ready is a gate, not a guarantee
 

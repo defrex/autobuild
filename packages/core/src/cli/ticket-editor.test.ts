@@ -154,3 +154,43 @@ test.each(['kind', 'remove-kind', 'target', 'remove-target'])(
     }
   },
 )
+
+test.each(['add', 'change'])(
+  'editor shows issue links read-only and refuses to %s them',
+  async (mode) => {
+    const source = new FakeTicketSource()
+    const ticket = await source.create({
+      title: 'Linked',
+      body: 'spec',
+      ...(mode === 'change' ? { issueLinks: [{ issue: 824, intent: 'closes' as const }] } : {}),
+    })
+    let kept = ''
+    try {
+      await expect(
+        editTicket(
+          source,
+          ticket.ref.id,
+          { EDITOR: 'editor' },
+          () => {},
+          async (_, path) => {
+            kept = path
+            let raw = await readFile(path, 'utf8')
+            if (mode === 'change') {
+              expect(raw).toContain('[[issueLinks]]')
+              raw = raw.replace('intent = "closes"', 'intent = "refs"')
+            } else
+              raw = raw.replace(
+                /\n\+\+\+\n/,
+                '\n\n[[issueLinks]]\nissue = 1\nintent = "closes"\n+++\n',
+              )
+            await writeFile(path, raw)
+            return 0
+          },
+        ),
+      ).rejects.toThrow('issueLinks are read-only')
+      expect(source.updates).toHaveLength(0)
+    } finally {
+      if (kept) await rm(dirname(kept), { recursive: true })
+    }
+  },
+)

@@ -18,6 +18,7 @@ import type {
   TicketMutation,
 } from '../types'
 import { validateTicketUpdate } from './update'
+import { normalizeIssueLinks } from './issue-links'
 
 function cloneTicket(ticket: Ticket, doneState: string): Ticket {
   return {
@@ -32,6 +33,9 @@ function cloneTicket(ticket: Ticket, doneState: string): Ticket {
     resolved: ticket.state === doneState,
     labels: [...ticket.labels],
     ...(ticket.blockedBy !== undefined ? { blockedBy: [...ticket.blockedBy] } : {}),
+    ...(ticket.issueLinks?.length
+      ? { issueLinks: ticket.issueLinks.map((link) => ({ ...link })) }
+      : {}),
   }
 }
 
@@ -39,6 +43,7 @@ export class FakeTicketSource implements TicketSource {
   readonly requestedIds = fileRequestedIds
   readonly name = 'fake'
   readonly integrationTree = true
+  readonly issueLinks = true
 
   async listAll(): Promise<TicketListing> {
     return {
@@ -173,6 +178,7 @@ export class FakeTicketSource implements TicketSource {
       ...(draft.blockedBy !== undefined && draft.blockedBy.length > 0
         ? { blockedBy: [...draft.blockedBy] }
         : {}),
+      ...(draft.issueLinks?.length ? { issueLinks: normalizeIssueLinks(draft.issueLinks) } : {}),
     }
     this.tickets.set(id, ticket)
     if (opts.idempotencyKey !== undefined) {
@@ -221,6 +227,8 @@ export class FakeTicketSource implements TicketSource {
     }
     if (validated.body !== undefined) ticket.body = validated.body
     if (validated.labels !== undefined) ticket.labels = [...validated.labels]
+    if (validated.issueLinks?.length) ticket.issueLinks = validated.issueLinks
+    else if (validated.issueLinks !== undefined) delete ticket.issueLinks
 
     this.updates.push({ id, patch: cloneUpdate(validated) })
   }
@@ -277,5 +285,8 @@ function cloneUpdate(patch: TicketUpdate): TicketUpdate {
     ...(patch.title !== undefined ? { title: patch.title } : {}),
     ...(patch.body !== undefined ? { body: patch.body } : {}),
     ...(patch.labels !== undefined ? { labels: [...patch.labels] } : {}),
+    ...(patch.issueLinks !== undefined
+      ? { issueLinks: patch.issueLinks.map((link) => ({ ...link })) }
+      : {}),
   }
 }
