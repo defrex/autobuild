@@ -4,6 +4,7 @@ import {
   type NodeVerificationIndex,
 } from '../kernel/node-verification-context'
 import { compatibilityDiagnostic } from '../kernel/mixed-version'
+import { describeIssueLinks } from '../kernel/issue-keywords'
 import { readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 /**
  * The `ab context` materializer (SPEC §8.3): a phase-scoped hydration of the
@@ -102,6 +103,9 @@ export interface ContextManifest {
     size: number
     path: string
   }[]
+  /** The forge issue links this build froze at claim, with effective intent
+   * (SPEC "Forge issue links"). Omitted when the build has none. */
+  issueLinks?: { issue: number; intent: 'closes' | 'refs'; downgradeReason?: string }[]
   /** From the latest `implement.completed` (§8.3 code-review/verify inputs). */
   commitRange?: CommitRange
   /** Reconcile: `{baseSha}` freshly recorded by this attempt's phase start (§15.7). */
@@ -374,11 +378,21 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
         `- id: ${ticket.id}`,
         ...(ticket.url !== undefined ? [`- url: ${ticket.url}`] : []),
         ...(ticket.title !== undefined ? [`- title: ${ticket.title}`] : []),
+        ...(state.issueLinks.length > 0
+          ? [`- issues: ${describeIssueLinks(state.issueLinks)}`]
+          : []),
         '',
       ]
       await writeDerived('ticket.md', lines.join('\n'))
     }
   }
+
+  if (state.issueLinks.length > 0)
+    manifest.issueLinks = state.issueLinks.map((link) => ({
+      issue: link.issue,
+      intent: link.intent,
+      ...(link.downgrade !== undefined ? { downgradeReason: link.downgrade.reason } : {}),
+    }))
 
   if (inputs.assets === true && state.pinnedAssets.length > 0) {
     // The pin, not the ticket's current state: the revisions `build.created`

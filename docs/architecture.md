@@ -822,6 +822,11 @@ request costs one GraphQL freshness query and no extra consent or pipeline read;
 full gate inspection and refreshed durable consent/engine eligibility precede
 any repair. Body comparison tolerates provider trimming of trailing whitespace
 while preserving the complete headline, body content, and squash method.
+`packages/core/src/kernel/issue-keywords.ts` composes a build's sealed issue
+links into `Closes #N` / `Refs #N` lines, neutralizes closing keywords aimed at
+`refs` issues, and places the keyword paragraph before the trailer block; a
+`closesIssues` adapter uses it for the PR title and body, the landing writes and
+the freshness comparison alike.
 
 Destination observations retain versioned, head-bound Git witnesses (reachable
 commit SHAs and direct build trailers) and a fixed-length evidence digest. Current

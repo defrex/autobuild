@@ -162,6 +162,12 @@ export {
   checkTicketRevision,
 } from '../ports/tickets/revision'
 export { TicketIssueLinksUnsupported, normalizeIssueLinks } from '../ports/tickets/issue-links'
+export {
+  issueKeywordLines,
+  landingMessage,
+  neutralizeClosingReferences,
+  withIssueKeywords,
+} from '../kernel/issue-keywords'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
 export { ForgeFailure, isForgeFailure } from '../ports/forge-failure'
 export type {

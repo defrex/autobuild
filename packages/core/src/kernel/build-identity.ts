@@ -53,6 +53,18 @@ function splitTrailers(
   return { prefix: content.slice(0, start), trailers }
 }
 
+/** The message split at its terminal trailer block, by the same rule that
+ * reads identity: `body` keeps every byte before the block (including its
+ * separator) and `trailers` holds the block's raw lines, or '' when none. */
+export function splitTrailerBlock(
+  message: string,
+  options: { includesSubject?: boolean } = {},
+): { body: string; trailers: string } {
+  const { prefix, trailers } = splitTrailers(message, options.includesSubject !== true)
+  if (trailers.length === 0) return { body: message, trailers: '' }
+  return { body: prefix, trailers: trailers.map((entry) => entry.raw).join('\n') }
+}
+
 export function buildTrailers(message: string): string[] {
   return splitTrailers(message, false)
     .trailers.filter((entry) => entry.key.toLowerCase() === KEY.toLowerCase())
