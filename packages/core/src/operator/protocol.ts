@@ -1,4 +1,11 @@
 import { z } from 'zod'
+import { issueLinksInputSchema } from '../ports/tickets/issue-links'
+
+const issueLinksField = issueLinksInputSchema
+  .optional()
+  .describe(
+    'Forge issues this ticket addresses: {issue, intent?}; intent "closes" (default) or "refs" for partial work. On update, a complete replacement; [] clears.',
+  )
 
 export const buildListScopeSchema = z.enum(['active', 'queued', 'all'])
 
@@ -56,6 +63,7 @@ export const ticketCreateRequestSchema = z.strictObject({
   labels: z.array(z.string()).optional(),
   state: z.string().min(1).optional(),
   blockedBy: z.array(z.string().min(1)).optional(),
+  issueLinks: issueLinksField,
 })
 const expectedRevisionSchema = z
   .string()
@@ -69,12 +77,14 @@ export const ticketUpdateRequestSchema = z
     title: z.string().optional(),
     body: z.string().optional(),
     labels: z.array(z.string()).optional(),
+    issueLinks: issueLinksField,
   })
   .refine(
     (value) =>
       value.title !== undefined ||
       value.body !== undefined ||
       value.labels !== undefined ||
+      value.issueLinks !== undefined ||
       value.kind !== undefined ||
       value.target !== undefined,
     'update must name at least one field',

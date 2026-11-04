@@ -10,6 +10,7 @@ import {
   checkTicketRevision,
 } from '../ports/tickets/revision'
 import { validateTicketTree } from '../ports/tickets/tree'
+import { refuseUnsupportedIssueLinks } from '../ports/tickets/issue-links'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildRecord, BuildStore } from '../store/types'
 import type { BuildState } from './reducer'
@@ -125,6 +126,9 @@ export async function updateTicketTarget(
   patch: TicketUpdate,
   expectedRevision?: string,
 ): Promise<Ticket | null> {
+  // Refuse before node.parent-requested is appended: the catch below only
+  // cancels that request on revision errors.
+  refuseUnsupportedIssueLinks(ctx.source, patch)
   if (patch.target === undefined) return updateTicket(ctx.source, id, patch, true, expectedRevision)
   const ticket = await requireTicket(ctx.source, id)
   if (expectedRevision !== undefined) {

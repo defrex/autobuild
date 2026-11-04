@@ -5,6 +5,8 @@ import { DISPATCHER } from '../events/envelope'
 import { newestTicketBuild, updateTicketTarget, type ParentContext } from './node-parent'
 import { mutateOperatorTicket } from '../operator/tickets'
 import { parseConfig } from '../config/load'
+import { TicketIssueLinksUnsupported } from '../ports/tickets/issue-links'
+import { readBuildFacts } from '../store/reduced-reads'
 
 async function setup() {
   let time = Date.parse('2026-10-18T00:00:00Z')
@@ -126,4 +128,15 @@ test('hosted readable aliases still find historical claims across the database a
     }),
   ).rejects.toThrow('abort and re-dispatch')
   expect((await source.get('WORK'))!.title).toBe('WORK')
+})
+
+test('a retarget naming issue links on a source without support refuses before any event', async () => {
+  const { ctx, source, store } = await setup()
+  Object.assign(source, { issueLinks: false })
+  const before = (await source.get('A'))!.revision
+  await expect(
+    updateTicketTarget(ctx, 'A', { target: 'Q', issueLinks: [{ issue: 1, intent: 'closes' }] }),
+  ).rejects.toBeInstanceOf(TicketIssueLinksUnsupported)
+  expect((await readBuildFacts(store, 'a')).value.state.nodeRestack?.parentRequest).toBeUndefined()
+  expect((await source.get('A'))!.revision).toBe(before)
 })

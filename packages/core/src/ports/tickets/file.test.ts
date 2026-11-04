@@ -719,6 +719,51 @@ describe('FileTicketSource', () => {
     expect(written).toContain('preserve this comment')
   })
 
+  test('issue links round-trip through TOML and clearing restores the original bytes', async () => {
+    const tickets = source()
+    const created = await tickets.create(
+      { title: 'Unlinked', body: SPEC_BODY, labels: ['a'] },
+      { state: 'Ready', idempotencyKey: 'links-key' },
+    )
+    const original = await readFile(path('ready', created.ref.id), 'utf8')
+    expect(original).not.toContain('issueLinks')
+
+    await tickets.update(created.ref.id, { issueLinks: [] })
+    expect(await readFile(path('ready', created.ref.id), 'utf8')).toBe(original)
+
+    await tickets.update(created.ref.id, {
+      issueLinks: [
+        { issue: 824, intent: 'closes' },
+        { issue: 820, intent: 'refs' },
+      ],
+    })
+    const linked = await readFile(path('ready', created.ref.id), 'utf8')
+    expect(linked).toContain('[[issueLinks]]')
+    expect((await source().get(created.ref.id))?.issueLinks).toEqual([
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'closes' },
+    ])
+
+    await tickets.update(created.ref.id, { issueLinks: [] })
+    expect(await readFile(path('ready', created.ref.id), 'utf8')).toBe(original)
+  })
+
+  test('invalid on-disk issue links are a listing diagnostic, not a crash', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    await writeFile(
+      path('ready', 'dup'),
+      '+++\nid = "dup"\ntitle = "Dup"\n\n[[issueLinks]]\nissue = 1\nintent = "closes"\n\n[[issueLinks]]\nissue = 1\nintent = "refs"\n+++\nbody\n',
+    )
+    await writeFile(
+      path('ready', 'str'),
+      '+++\nid = "str"\ntitle = "Str"\n\n[[issueLinks]]\nissue = "1"\nintent = "closes"\n+++\nbody\n',
+    )
+    const listing = await source().listReady({ state: 'Ready' })
+    expect(listing.tickets.map((ticket) => ticket.ref.id)).toEqual(['file-1'])
+    expect(listing.diagnostics).toHaveLength(2)
+    expect(listing.diagnostics.join('\n')).toContain('duplicate issue #1')
+  })
+
   test('a body-only update preserves frontmatter and does not move the ticket', async () => {
     const tickets = source()
     const created = await tickets.create(

@@ -1,7 +1,9 @@
-import { updateTicket, moveTicket, changeBlockers } from './operations'
+import { createTicket, updateTicket, moveTicket, changeBlockers } from './operations'
+import { TicketIssueLinksUnsupported } from './issue-links'
 import { describe, expect, test } from 'bun:test'
 import type {
   DependencyState,
+  IssueLink,
   Ticket,
   TicketCreateOptions,
   TicketDraft,
@@ -213,6 +215,89 @@ export function describeTicketSourceContract(
         await source.update(nested.ref.id, { target: null, kind: 'work' })
         await source.update(node.ref.id, { kind: 'work' })
         expect((await source.get(node.ref.id))?.kind).toBe('work')
+      })
+    })
+
+    test('issue links persist when declared and are refused otherwise', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        const ready = harness.states.ready
+        if (!source.issueLinks) {
+          const title = contractTicketTitle('refused issue links')
+          const refusedCreate = await createTicket(source, {
+            title,
+            body: CONTRACT_TICKET_BODY,
+            state: ready,
+            issueLinks: [{ issue: 1, intent: 'closes' }],
+          }).catch((error: unknown) => error)
+          expect(refusedCreate).toBeInstanceOf(TicketIssueLinksUnsupported)
+          expect((refusedCreate as TicketIssueLinksUnsupported).source).toBe(source.name)
+          expect(
+            (await source.listReady({ state: ready })).tickets.some((t) => t.title === title),
+          ).toBe(false)
+          const created = await createTracked(
+            harness,
+            { title: contractTicketTitle('unlinked'), body: CONTRACT_TICKET_BODY },
+            { state: ready },
+          )
+          const refusedUpdate = await updateTicket(source, created.ref.id, {
+            issueLinks: [],
+          }).catch((error: unknown) => error)
+          expect(refusedUpdate).toBeInstanceOf(TicketIssueLinksUnsupported)
+          expect((refusedUpdate as TicketIssueLinksUnsupported).source).toBe(source.name)
+          expect((await source.get(created.ref.id))?.revision).toBe(created.revision)
+          return
+        }
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('issue links'),
+            body: CONTRACT_TICKET_BODY,
+            issueLinks: [
+              { issue: 2, intent: 'refs' },
+              { issue: 1, intent: 'closes' },
+            ],
+          },
+          { state: ready },
+        )
+        const id = created.ref.id
+        const sorted: IssueLink[] = [
+          { issue: 1, intent: 'closes' },
+          { issue: 2, intent: 'refs' },
+        ]
+        expect(created.issueLinks).toEqual(sorted)
+        expect((await source.get(id))?.issueLinks).toEqual(sorted)
+        expect(
+          (await source.listReady({ state: ready })).tickets.find((t) => t.ref.id === id)
+            ?.issueLinks,
+        ).toEqual(sorted)
+        if (source.listAll)
+          expect((await source.listAll()).tickets.find((t) => t.ref.id === id)?.issueLinks).toEqual(
+            sorted,
+          )
+
+        await source.update(id, { issueLinks: [{ issue: 7, intent: 'refs' }] })
+        const replaced = await source.get(id)
+        expect(replaced?.issueLinks).toEqual([{ issue: 7, intent: 'refs' }])
+        expect(replaced?.revision).not.toBe(created.revision)
+
+        await source.update(id, { title: `${created.title} renamed` })
+        expect((await source.get(id))?.issueLinks).toEqual([{ issue: 7, intent: 'refs' }])
+        await source.update(id, { title: created.title, issueLinks: sorted })
+        expect((await source.get(id))?.revision).toBe(created.revision)
+
+        await source.update(id, { issueLinks: [] })
+        const cleared = await source.get(id)
+        expect(cleared?.issueLinks).toBeUndefined()
+        expect(cleared && 'issueLinks' in cleared).toBe(false)
+
+        if (source.mutateIfRevision) {
+          await source.mutateIfRevision(id, cleared!.revision, {
+            kind: 'update',
+            patch: { issueLinks: [{ issue: 3, intent: 'closes' }] },
+          })
+          expect((await source.get(id))?.issueLinks).toEqual([{ issue: 3, intent: 'closes' }])
+        }
       })
     })
 

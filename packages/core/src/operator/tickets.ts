@@ -4,6 +4,8 @@ import {
   resolveTicketRef,
 } from '../kernel/ticket-migrations'
 import { updateTicketTarget } from '../kernel/node-parent'
+import { normalizeIssueLinks, type IssueLinkInput } from '../ports/tickets/issue-links'
+import type { IssueLink } from '../ports/types'
 import { projectTicketTree, compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
 import { samplePinnedAssets, preparePinnedAssets } from '../store/ticket-assets'
@@ -221,6 +223,16 @@ export async function getOperatorTicket(opts: {
   }
 }
 
+type OperatorTicketPatch = Omit<TicketUpdate, 'issueLinks'> & { issueLinks?: IssueLinkInput[] }
+
+/** Operator inputs may omit intent; the port carries an explicit `closes` default. */
+function issueLinkDefaults<T extends { issueLinks?: IssueLinkInput[] }>(
+  input: T,
+): Omit<T, 'issueLinks'> & { issueLinks?: IssueLink[] } {
+  const { issueLinks, ...rest } = input
+  return issueLinks === undefined ? rest : { ...rest, issueLinks: normalizeIssueLinks(issueLinks) }
+}
+
 export async function mutateOperatorTicket(opts: {
   store: BuildStore
   repo: string
@@ -235,8 +247,14 @@ export async function mutateOperatorTicket(opts: {
         labels?: string[]
         state?: string
         blockedBy?: string[]
+        issueLinks?: IssueLinkInput[]
       }
-    | { kind: 'update'; id: string; patch: TicketUpdate; expectedRevision?: string }
+    | {
+        kind: 'update'
+        id: string
+        patch: OperatorTicketPatch
+        expectedRevision?: string
+      }
     | { kind: 'move'; id: string; state: string; expectedRevision?: string }
     | { kind: 'block' | 'unblock'; id: string; blockerIds: string[]; expectedRevision?: string }
 }): Promise<OperatorTicketDetail> {
@@ -245,10 +263,16 @@ export async function mutateOperatorTicket(opts: {
   if (operation.kind === 'update') await requireTicket(source, operation.id)
   const ticket =
     operation.kind === 'create'
-      ? await createTicket(source, { ...operation, kind: operation.ticketKind })
+      ? await createTicket(source, issueLinkDefaults({ ...operation, kind: operation.ticketKind }))
       : operation.kind === 'update'
         ? (await (operation.patch.target === undefined
-            ? updateTicket(source, operation.id, operation.patch, true, operation.expectedRevision)
+            ? updateTicket(
+                source,
+                operation.id,
+                issueLinkDefaults(operation.patch),
+                true,
+                operation.expectedRevision,
+              )
             : updateTicketTarget(
                 {
                   store: opts.store,
@@ -268,7 +292,7 @@ export async function mutateOperatorTicket(opts: {
                   },
                 },
                 operation.id,
-                operation.patch,
+                issueLinkDefaults(operation.patch),
                 operation.expectedRevision,
               )))!
         : operation.kind === 'move'
