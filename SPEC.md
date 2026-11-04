@@ -2479,7 +2479,34 @@ A source that cannot store links refuses any create or update that names
 them, including an empty set, with a typed error naming the source, before
 anything is written; it never drops them. Writes that name no links are
 unaffected. `ab ticket create` and `update` take `--issues N[:refs],...`;
-operator and MCP ticket requests take `issueLinks`. Links are ticket metadata.
+operator and MCP ticket requests take `issueLinks`.
+
+A build freezes its ticket's links into `build.created` when it claims the
+ticket, from the same sample as the body. Later ticket edits and spec revisions
+never change them. An agent in the build may downgrade one linked `closes`
+issue to `refs` with `ab issue downgrade <N> --reason <text>`, recorded as the
+agent fact `issue-link.downgraded {issue, reason}`. No fact expresses an
+upgrade, and downgrading a `refs` or unlinked issue is refused. Before the
+first PR side effect, local finalize appends the kernel fact
+`issue-links.sealed`; remote finalize is sealed by its
+`publication.requested {operation: finalize}`. The reducer applies a downgrade
+only when it precedes the seal, so retries and an adopted PR always compose the
+same links. `ab context` and `ab build status` show the effective links and
+any downgrade reason.
+
+A forge declares the `closesIssues` capability when closing keywords that
+reach the default branch close issues; GitHub does, `local-git` does not. Only
+for a leaf whose target is the configured base branch, through such a forge,
+the kernel passes the sealed links to the adapter, which composes them with
+`kernel/issue-keywords.ts`. The PR body ends with one `Closes #N` or `Refs #N`
+line per link, ascending by number, whatever the description says. The landed
+squash message, including forge auto-merge and the janitor's freshness
+comparison, carries the same paragraph immediately before its terminal
+trailer block. Every closing keyword aimed at a `refs` issue in the PR title,
+body or landing message, including `owner/name#N` and issue URLs for the
+adapter's own repository, is rewritten to `refs`. A leaf targeting a node
+emits nothing, because only the default branch closes issues, and a forge
+without the capability records links without emitting them.
 
 In repositories with integration nodes, a blocker that has a build resolves only
 when its change identity is present in the dependent's sampled target head
@@ -3617,7 +3644,9 @@ in Forge failure recovery; publication intent and frozen target remain unchanged
 
 **Stable merged identity.** A root-target leaf kernel merge remains one squash commit and
 preserves the forge's existing message except for normalizing terminal build
-identity trailers to exactly one final `Autobuild-Build: <immutable slug>`.
+identity trailers to exactly one final `Autobuild-Build: <immutable slug>` and,
+for a build with issue links on a `closesIssues` forge, the issue keyword
+composition described under Forge issue links.
 Implementation commits and deposited PR descriptions are unchanged. The janitor
 records `pr.merged { sha, buildTrailerPresent? }` from the actual merged message,
 including human merges. True and false are successful observations; historical
