@@ -145,6 +145,11 @@ export class FakeForge implements Forge {
   readonly name = 'fake'
   /** Absent by default, matching a forge without issue-closing support. */
   readonly closesIssues?: boolean
+  /** Present only with `closesIssues`, like GitHub's PR body rewrite. */
+  readonly updatePrIssueLinks?: Forge['updatePrIssueLinks']
+  readonly issueLinkUpdates: { number: number; issueLinks: IssueLink[] }[] = []
+  /** Test knob: the next readbacks disagree with the composed body. */
+  failIssueLinkReadback = false
   readonly archives = new Map<string, string>()
   readonly rewrites: { branch: string; expected: string; sha: string }[] = []
   rewrite: import('../types').ForgeRewrite = {
@@ -244,7 +249,18 @@ export class FakeForge implements Forge {
       closesIssues?: boolean
     } = {},
   ) {
-    if (opts.closesIssues === true) this.closesIssues = true
+    if (opts.closesIssues === true) {
+      this.closesIssues = true
+      this.updatePrIssueLinks = async (_workspacePath, number, issueLinks) => {
+        const pr = this.opened[number - 1]
+        if (!pr || this.prs.get(number)?.state !== 'open')
+          throw new Error(`PR #${number} is not open; issue keywords not updated`)
+        this.issueLinkUpdates.push({ number, issueLinks: issueLinks.map((link) => ({ ...link })) })
+        pr.body = withIssueKeywords(pr.body, issueLinks, { trailers: false })
+        if (this.failIssueLinkReadback)
+          throw new Error(`PR #${number} body readback disagrees with issue keywords`)
+      }
+    }
     this.headSha = opts.headSha ?? ((n) => `sha-${n}`)
     this.mergeSha = opts.mergeSha ?? ((n) => `squash-${n}`)
     // Existing tests model the historical, gated native path unless they opt

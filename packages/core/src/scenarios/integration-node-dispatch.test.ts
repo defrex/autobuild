@@ -6,6 +6,7 @@ import { expect, test } from 'bun:test'
 import { makeHarness, happyHandlers, readyTicket, CONFIG_TOML, ofType } from './harness'
 import { reduceBuild } from '../kernel/reducer'
 import { controlBuild } from '../cli/build-control'
+import { KERNEL } from '../events/envelope'
 
 test('real git node claims, child landing, lazy PR and human node landing', async () => {
   const h = await makeHarness({
@@ -1065,6 +1066,200 @@ test('complete nodes verify and land a linear stack only after explicit consent'
     expect(await git(['show', '-s', '--format=%B', 'main'], h.origin)).not.toContain(
       `Autobuild-Build: ${node.slug}`,
     )
+  } finally {
+    await h.cleanup()
+  }
+})
+
+/** A capability-bearing local-git double: issue-closing support with a
+ * recording PR body rewrite, and a fast-forward that logs its order. */
+function linkCapableForge(forge: import('../ports/types').Forge) {
+  const options = { fail: false }
+  const calls: string[] = []
+  const updates: { number: number; issueLinks: unknown }[] = []
+  const rewrite = forge.rewrite!
+  Object.defineProperty(forge, 'rewrite', {
+    configurable: true,
+    value: {
+      ...rewrite,
+      fastForward: async (...args: Parameters<NonNullable<typeof rewrite.fastForward>>) => {
+        calls.push('fastForward')
+        return rewrite.fastForward!(...args)
+      },
+    },
+  })
+  Object.assign(forge, {
+    closesIssues: true,
+    updatePrIssueLinks: async (_workspacePath: string, number: number, issueLinks: unknown) => {
+      calls.push('updatePrIssueLinks')
+      updates.push({ number, issueLinks })
+      if (options.fail) throw new Error('PR body readback disagrees with issue keywords')
+    },
+  })
+  return { calls, updates, options }
+}
+
+for (const fail of [false, true])
+  test(`a root node refreshes its children's issue links before landing (refresh fails: ${fail})`, async () => {
+    const h = await makeHarness({
+      localGitForge: true,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Release node' }), kind: 'node' },
+        {
+          ...readyTicket('CHILD', {
+            title: 'Release child',
+            issueLinks: [
+              { issue: 820, intent: 'closes' },
+              { issue: 824, intent: 'refs' },
+            ],
+          }),
+          target: 'NODE',
+        },
+      ],
+    })
+    try {
+      const { calls, updates, options } = linkCapableForge(h.forgeAdapter)
+      await h.dispatcher.tick()
+      const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'NODE')!
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      await h.runLatest()
+      const child = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'CHILD')!
+      const childState = reduceBuild(await h.events(child.slug))
+      await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+        buildSlug: child.slug,
+      })
+      for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+      const union = [
+        { issue: 820, intent: 'closes' },
+        { issue: 824, intent: 'refs' },
+      ]
+      expect(ofType(await h.events(node.slug), 'node.issue-links-recorded')).toMatchObject([
+        { payload: { build: child.slug, issueLinks: union } },
+      ])
+      await h.runLatest()
+      await h.dispatcher.tick()
+      await controlBuild({
+        store: h.store,
+        repo: h.origin,
+        slug: node.slug,
+        action: { kind: 'land' },
+        ticketSource: async () => h.tickets,
+      })
+      // The open PR already carries the union; the landing refresh rewrites
+      // it again regardless and must succeed before any merge request.
+      expect(updates).toHaveLength(1)
+      options.fail = fail
+      h.clock.advance(180_000)
+      calls.length = 0
+      for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+      const nodePr = reduceBuild(await h.events(node.slug)).pr!.number
+      expect(updates.at(-1)).toEqual({ number: nodePr, issueLinks: union })
+      const landed = reduceBuild(await h.events(node.slug))
+      if (fail) {
+        expect(calls).not.toContain('fastForward')
+        expect(ofType(await h.events(node.slug), 'integration.landing-intended')).toHaveLength(0)
+        expect(landed.status).not.toBe('done')
+        return
+      }
+      expect(calls.indexOf('updatePrIssueLinks')).toBeGreaterThanOrEqual(0)
+      expect(calls.indexOf('updatePrIssueLinks')).toBeLessThan(calls.indexOf('fastForward'))
+      expect(landed.status).toBe('done')
+      expect(landed.nodeIssueLinks?.published).toMatchObject({ pr: nodePr, issueLinks: union })
+      const { git } = await import('./harness')
+      const message = await git(['show', '-s', '--format=%B', 'main'], h.origin)
+      expect(message).toContain(`Autobuild-Build: ${child.slug}`)
+      expect(message).not.toMatch(/^(Closes|Refs) #/m)
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+test('an aborted child merged before its links reach the node holds the node until they do', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Release node' }), kind: 'node' },
+      {
+        ...readyTicket('CHILD', {
+          title: 'Release child',
+          issueLinks: [{ issue: 820, intent: 'closes' }],
+        }),
+        target: 'NODE',
+      },
+    ],
+  })
+  try {
+    const { updates } = linkCapableForge(h.forgeAdapter)
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'NODE')!
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    const child = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'CHILD')!
+    const childState = reduceBuild(await h.events(child.slug))
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: child.slug,
+      action: { kind: 'abort' },
+      ticketSource: async () => h.tickets,
+    })
+    await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+      buildSlug: child.slug,
+    })
+    // The runner acknowledged the abort before the dispatcher saw the merge.
+    await h.store.append(child.slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    // Abort cleanup records pr.merged, then crashes before the node append.
+    const append = h.store.append.bind(h.store)
+    let crash = true
+    h.store.append = (async (slug: string, write: Parameters<typeof append>[1]) => {
+      if (crash && slug === node.slug && write.type === 'node.issue-links-recorded')
+        throw new Error('crash before the node records the links')
+      return append(slug, write)
+    }) as typeof h.store.append
+    await h.dispatcher.tick()
+    const aborted = reduceBuild(await h.events(child.slug))
+    expect(aborted.prState).toBe('merged')
+    expect(aborted.outcome).toBeUndefined()
+    // Its ticket no longer names the node: only the frozen merge holds it open.
+    await h.tickets.update('CHILD', { target: null })
+    for (let i = 0; i < 3; i++) {
+      h.clock.advance(120_000)
+      await h.dispatcher.tick()
+    }
+    const held = reduceBuild(await h.events(node.slug))
+    expect(held.integration?.observation?.openChildren).toEqual(['CHILD'])
+    expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(0)
+
+    crash = false
+    for (let i = 0; i < 3; i++) {
+      h.clock.advance(120_000)
+      await h.dispatcher.tick()
+    }
+    expect(reduceBuild(await h.events(child.slug)).outcome).toBe('abandoned')
+    expect(ofType(await h.events(node.slug), 'node.issue-links-recorded')).toMatchObject([
+      { payload: { build: child.slug, issueLinks: [{ issue: 820, intent: 'closes' }] } },
+    ])
+    await h.runLatest()
+    await h.dispatcher.tick()
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: node.slug,
+      action: { kind: 'land' },
+      ticketSource: async () => h.tickets,
+    })
+    h.clock.advance(180_000)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const landed = reduceBuild(await h.events(node.slug))
+    expect(landed.status).toBe('done')
+    expect(updates.at(-1)).toEqual({
+      number: landed.pr!.number,
+      issueLinks: [{ issue: 820, intent: 'closes' }],
+    })
   } finally {
     await h.cleanup()
   }

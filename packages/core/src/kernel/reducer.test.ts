@@ -2417,3 +2417,63 @@ describe('issueLinks (SPEC "Forge issue links")', () => {
     ])
   })
 })
+
+describe('nodeIssueLinks (SPEC "Forge issue links")', () => {
+  const node = ev('build.created', {
+    ticket: { source: 'file', id: 'node-1' },
+    repo: 'defrex/app',
+    baseBranch: 'main',
+    kind: 'node',
+  })
+  const recorded = (
+    build: string,
+    issueLinks: { issue: number; intent: 'closes' | 'refs'; downgraded?: true }[],
+  ) => ev('node.issue-links-recorded', { build, issueLinks })
+
+  test('a historical log has no field', () => {
+    expect('nodeIssueLinks' in reduceBuild(toLog([node]))).toBe(false)
+  })
+
+  test('folds child contributions into the union and records each child once', () => {
+    const state = reduceBuild(
+      toLog([
+        node,
+        recorded('child-b', [
+          { issue: 820, intent: 'closes' },
+          { issue: 824, intent: 'closes' },
+        ]),
+        recorded('child-a', [
+          { issue: 824, intent: 'refs', downgraded: true },
+          { issue: 830, intent: 'refs' },
+        ]),
+        recorded('child-a', [
+          { issue: 824, intent: 'refs', downgraded: true },
+          { issue: 830, intent: 'refs' },
+        ]),
+        ev('node.issue-links-published', {
+          pr: 7,
+          issueLinks: [
+            { issue: 820, intent: 'closes' },
+            { issue: 824, intent: 'refs' },
+          ],
+        }),
+      ]),
+    )
+    expect(state.nodeIssueLinks).toEqual({
+      builds: ['child-a', 'child-b'],
+      links: [
+        { issue: 820, intent: 'closes' },
+        { issue: 824, intent: 'refs', downgraded: true },
+        { issue: 830, intent: 'refs' },
+      ],
+      published: {
+        pr: 7,
+        issueLinks: [
+          { issue: 820, intent: 'closes' },
+          { issue: 824, intent: 'refs' },
+        ],
+        seq: 5,
+      },
+    })
+  })
+})

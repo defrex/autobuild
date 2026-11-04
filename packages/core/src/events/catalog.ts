@@ -92,6 +92,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'node.rewritten': ['kernel', 'dispatcher'],
   'node.writer-settled': ['kernel', 'dispatcher'],
   'node.contribution-recorded': ['kernel', 'dispatcher'],
+  'node.issue-links-recorded': ['kernel', 'dispatcher'],
+  'node.issue-links-published': ['kernel', 'dispatcher'],
   'node.inventory': ['kernel', 'dispatcher'],
   'node.opened': ['dispatcher'],
   'node.poll-checked': ['dispatcher'],

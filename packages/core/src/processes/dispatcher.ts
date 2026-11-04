@@ -171,6 +171,11 @@ import type {
 } from '../ports/types'
 import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
 import { issueLinksForForge } from '../kernel/issue-keywords'
+import {
+  contributedIssueLinks,
+  nodeIssueLinksForForge,
+  nodeIssueLinksSyncPending,
+} from '../kernel/node-issue-links'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
 import { preparePinnedAssets } from '../store/ticket-assets'
@@ -2929,6 +2934,25 @@ export class Dispatcher {
   /** Complete abort cleanup as an ordered checkpointed saga. External effects
    * are idempotent; a fact after each one prevents already-settled work from
    * repeating on later ticks. `build.completed` is deliberately last. */
+  /** Record a landed child's effective issue links on its target node, once
+   * per child (SPEC "Forge issue links"). Reduced reads only: the child's
+   * refreshed state and the node's union, never any child history. */
+  private async recordNodeIssueLinks(slug: string): Promise<void> {
+    const state = (await this.store.buildFacts(slug)).state
+    if (state.target === undefined) return
+    const issueLinks = contributedIssueLinks(state)
+    if (issueLinks.length === 0) return
+    const node = (await this.store.buildFacts(state.target.build)).state
+    // Every contributing child gets its own fact, even when the union does
+    // not change; the recorded set is the durable retry evidence.
+    if (node.nodeIssueLinks?.builds.includes(slug)) return
+    await this.store.append(state.target.build, {
+      actor: DISPATCHER,
+      type: 'node.issue-links-recorded',
+      payload: { build: slug, issueLinks },
+    } satisfies EventWrite<'node.issue-links-recorded'>)
+  }
+
   private async cleanupAborted(
     record: BuildRecord,
     events: CurrentBuildFacts,
@@ -3048,6 +3072,9 @@ export class Dispatcher {
         fail('PR close', `${forge.name} PR #${reduced.pr.number}`, error)
       }
     }
+
+    // A child the forge reports merged still carries its links up to its node.
+    if (events.state.prState === 'merged') await this.recordNodeIssueLinks(record.slug)
 
     try {
       const released = await this.releaseWorkspace(record.slug, events, 'abort')
@@ -3266,6 +3293,20 @@ export class Dispatcher {
       if (cancelled.kind !== 'applied')
         throw new Error('node-target native auto-merge cancellation unconfirmed')
       nativeCancelled = true
+    }
+    // Keep a root node's PR body on its children's union. A pure comparison
+    // with the last confirmed readback: no forge call while nothing changed.
+    const issueLinksPending =
+      integration && !nodeTarget && prState.state === 'open' && !executionLeaseLive
+        ? nodeIssueLinksSyncPending(state, forge)
+        : undefined
+    if (issueLinksPending) {
+      await forge.updatePrIssueLinks!(workspacePath, pr.number, issueLinksPending)
+      await store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'node.issue-links-published',
+        payload: { pr: pr.number, issueLinks: issueLinksPending },
+      } satisfies EventWrite<'node.issue-links-published'>)
     }
     // Converge native state on every poll, including paused and unready builds.
     // A replacement publication invalidates readiness, even if a stale enable
@@ -3869,6 +3910,9 @@ export class Dispatcher {
             payload: await this.mergeEvidence(record, workspacePath, prState.sha, state.kind),
           } satisfies EventWrite<'pr.merged'>)
         }
+        // Before the child can become terminal, so a complete node already
+        // folds every landed child's links; the node log dedupes a retry.
+        await this.recordNodeIssueLinks(record.slug)
         await this.releaseWorkspace(record.slug, events)
         if (record.ticket) {
           await tickets.transition(await this.currentTicketId(record), this.doneState)
@@ -6279,6 +6323,9 @@ export class Dispatcher {
     )
       return
     let pr: Awaited<ReturnType<typeof forge.openPr>>
+    // A root node's PR carries its landed children's union from the start;
+    // checkPr keeps it current as later children land.
+    const issueLinks = nodeIssueLinksForForge(state, forge)
     try {
       pr = await forge.openPr({
         workspacePath: this.deps.checkout ?? this.deps.repo,
@@ -6286,6 +6333,7 @@ export class Dispatcher {
         base: state.baseBranch,
         title: `Integration: ${record.ticket?.id ?? record.slug}`,
         body: `Integration build ${record.slug}. Target: ${state.target?.ticket.id ?? state.baseBranch}. Human merge required.`,
+        ...(issueLinks ? { issueLinks } : {}),
       })
     } catch (error) {
       if (

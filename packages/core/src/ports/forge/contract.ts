@@ -178,6 +178,20 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
         }
       })
     })
+    test('optional issue-link update rewrites an open PR body idempotently', async () => {
+      await withForge(factory, undefined, async (h) => {
+        const forge = h.forge
+        if (!forge.closesIssues || !forge.updatePrIssueLinks) return
+        const { pr } = await pushAndOpen(h)
+        try {
+          const links = [{ issue: 1, intent: 'refs' as const }]
+          await forge.updatePrIssueLinks(h.workspacePath, pr.number, links)
+          await forge.updatePrIssueLinks(h.workspacePath, pr.number, links)
+        } finally {
+          await h.controls.closePr(pr.number)
+        }
+      })
+    })
     test('optional rewrite snapshots the authoritative head and refuses a stale lease', async () => {
       await withForge(factory, undefined, async (harness) => {
         const capability = harness.forge.rewrite

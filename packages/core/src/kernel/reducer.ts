@@ -14,10 +14,11 @@ import {
   projectEvents,
   type CompatibilityState,
 } from '../events/compatibility'
-import type { NativeSessionHandle } from '../ports/types'
+import type { IssueLink, NativeSessionHandle } from '../ports/types'
 import { advanceLanding, type LandingState } from './landing-state'
 import { advanceIntegration, type IntegrationState } from './integration-state'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
+import { mergeNodeIssueLinks, type NodeIssueLink } from './node-issue-links'
 import { reconcileRewriteHead } from './reconcile-head'
 /**
  * The state reducer (SPEC §15.5, §3.4): state is a reduction of events — any
@@ -56,6 +57,12 @@ export interface BuildIssueLink {
   issue: number
   intent: 'closes' | 'refs'
   downgrade?: { reason: string; seq: number }
+}
+
+export interface NodeIssueLinksState {
+  builds: string[]
+  links: NodeIssueLink[]
+  published?: { pr: number; issueLinks: IssueLink[]; seq: number }
 }
 
 export interface OpenEscalation {
@@ -224,6 +231,12 @@ export interface BuildState {
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
   nodeComparison?: EventPayload<'node.compared'>
+  /** A node's issue-link union (SPEC "Forge issue links"). `builds` is the
+   * sorted set of child slugs whose `node.issue-links-recorded` folded in,
+   * the durable evidence that keeps a crash retry from recording twice;
+   * `links` is the running union; `published` is the last confirmed PR body
+   * readback. Absent until the first fact. */
+  nodeIssueLinks?: NodeIssueLinksState
 
   /**
    * §15.5: 'queued' until `runner.attached`, 'running' after;
@@ -426,6 +439,12 @@ export interface BuildAcc {
   pollingActivity?: Record<string, string>
   nodePolling?: EventPayload<'node.poll-checked'> & { checkedAt: string }
   nodeComparison?: EventPayload<'node.compared'>
+  /** A node's issue-link union (SPEC "Forge issue links"). `builds` is the
+   * sorted set of child slugs whose `node.issue-links-recorded` folded in,
+   * the durable evidence that keeps a crash retry from recording twice;
+   * `links` is the running union; `published` is the last confirmed PR body
+   * readback. Absent until the first fact. */
+  nodeIssueLinks?: NodeIssueLinksState
 
   attached: boolean
   pausedFlag: boolean
@@ -484,7 +503,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 28
+export const BUILD_REDUCER_VERSION = 29
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -713,6 +732,29 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'node.compared':
         acc.nodeComparison = event.payload
+        break
+      case 'node.issue-links-recorded': {
+        // Idempotent by construction: a repeated fact for a recorded build
+        // re-merges the same links and leaves `builds` unchanged.
+        const current = acc.nodeIssueLinks ?? { builds: [], links: [] }
+        acc.nodeIssueLinks = {
+          ...current,
+          builds: current.builds.includes(event.payload.build)
+            ? current.builds
+            : [...current.builds, event.payload.build].sort(),
+          links: mergeNodeIssueLinks(current.links, event.payload.issueLinks),
+        }
+        break
+      }
+      case 'node.issue-links-published':
+        acc.nodeIssueLinks = {
+          ...(acc.nodeIssueLinks ?? { builds: [], links: [] }),
+          published: {
+            pr: event.payload.pr,
+            issueLinks: event.payload.issueLinks.map(({ issue, intent }) => ({ issue, intent })),
+            seq: event.seq,
+          },
+        }
         break
       case 'node.rewritten':
         if (acc.nodeComparison)
@@ -1364,6 +1406,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     pollingActivity: acc.pollingActivity,
     nodePolling: acc.nodePolling,
     nodeComparison: acc.nodeComparison,
+    ...(acc.nodeIssueLinks !== undefined ? { nodeIssueLinks: acc.nodeIssueLinks } : {}),
     nodeRestack: acc.nodeRestack,
     status,
     outcome: acc.outcome,

@@ -674,6 +674,17 @@ export interface Forge {
    * declaring it composes `issueLinks` into the PR title and body and into
    * landing messages; without it links are recorded but never emitted. */
   readonly closesIssues?: boolean
+  /** Rewrite an open PR's keyword paragraph so the body ends with one line
+   * per link (composed with `kernel/issue-keywords`, `trailers: false`),
+   * writing only on change, then confirm by readback. Called only with
+   * `closesIssues`, for a root node's PR. Throws when the PR is not open or
+   * the readback disagrees. Without it a node's union is recorded but never
+   * written. */
+  updatePrIssueLinks?(
+    workspacePath: string,
+    number: number,
+    issueLinks: readonly IssueLink[],
+  ): Promise<void>
   /** Optional because another forge may support PRs but not public image assets. */
   readonly prAttachments?: PrAttachmentHosting
   /** Publish this exact SHA (HEAD for legacy callers); success requires authoritative readback. */
@@ -691,7 +702,8 @@ export interface Forge {
      * landing message; title/body remain the portable review projection. */
     mergeMessage?: string
     /** Sealed issue links, passed only to a `closesIssues` forge for a leaf
-     * aimed at the default branch. */
+     * aimed at the default branch, or a root node's union of its landed
+     * children's links. */
     issueLinks?: readonly IssueLink[]
   }): Promise<PrRef>
   /** Optional authoritative base resolver. Capability-less adapters retain

@@ -128,6 +128,8 @@ const autoMergeDefaultObserved = z.strictObject({
   defaultSeq: z.number().int().positive(),
 })
 const round = z.number().int().positive()
+/** A forge issue number, shared by every issue-link fact. */
+const issueNumber = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
 const attempt = z.number().int().positive()
 const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'branch', 'launch'])
 const infrastructureOperation = z.enum([
@@ -339,7 +341,7 @@ export const eventPayloadSchemas = {
     issueLinks: z
       .array(
         z.strictObject({
-          issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+          issue: issueNumber,
           intent: z.enum(['closes', 'refs']),
         }),
       )
@@ -468,6 +470,30 @@ export const eventPayloadSchemas = {
     identities: z.array(
       z.string().regex(/^(?:build:[a-z0-9][a-z0-9-]*|foreign:[0-9a-f]{40}(?:[0-9a-f]{24})?)$/),
     ),
+  }),
+  /** A landed child's effective issue links, recorded once per child on its
+   * target node: a leaf's links with downgrade provenance, or a nested
+   * node's own union. The node's reducer folds them into its union. */
+  'node.issue-links-recorded': z.strictObject({
+    build: z.string().min(1),
+    issueLinks: z
+      .array(
+        z.strictObject({
+          issue: issueNumber,
+          intent: z.enum(['closes', 'refs']),
+          downgraded: z.literal(true).optional(),
+        }),
+      )
+      .min(1)
+      .superRefine(refineUniqueIssues),
+  }),
+  /** The root node's PR body was confirmed by readback to carry exactly
+   * these keyword lines. */
+  'node.issue-links-published': z.strictObject({
+    pr: z.number().int().positive(),
+    issueLinks: z
+      .array(z.strictObject({ issue: issueNumber, intent: z.enum(['closes', 'refs']) }))
+      .superRefine(refineUniqueIssues),
   }),
   'node.inventory': z.strictObject({
     head: z.string().min(1),
@@ -1249,7 +1275,7 @@ export const eventPayloadSchemas = {
   /** An agent found the build only partly resolves a linked `closes` issue.
    * One-way: no fact can express an upgrade. Inert once links are sealed. */
   'issue-link.downgraded': z.strictObject({
-    issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    issue: issueNumber,
     reason: z.string().trim().min(1),
   }),
   /** The kernel fixed the build's issue links before its first PR side
