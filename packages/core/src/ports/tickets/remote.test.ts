@@ -172,6 +172,7 @@ describe('HostedTicketSource (client half)', () => {
         'content-type': 'application/json',
         'x-autobuild-ticket-tree': '1',
         'x-autobuild-ticket-comments': '1',
+        'x-autobuild-ticket-issue-links': '1',
         authorization: 'Bearer t0k',
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,

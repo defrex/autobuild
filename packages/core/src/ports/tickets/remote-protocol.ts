@@ -2,6 +2,7 @@ export const TICKET_TREE_HEADER = 'x-autobuild-ticket-tree'
 export const TICKET_TREE_CAPABILITY = '1'
 import { z } from 'zod'
 import { ticketRefSchema } from '../../ontology'
+import { refineUniqueIssues } from './issue-links'
 
 /** Explicit opt-in: released clients through 0.12 use strict decoders without revisions.
  * Source checkouts can share their release version, so version alone is insufficient. */
@@ -19,6 +20,18 @@ export type HostedTicketContext = z.infer<typeof hostedTicketContextSchema>
 
 export const TICKET_COMMENTS_HEADER = 'x-autobuild-ticket-comments'
 export const TICKET_COMMENTS_CAPABILITY = '1'
+
+/** Explicit opt-in: published 1.2–1.4 clients decode tickets strictly without
+ * issue links. Servers echo it on every ticket response so a client can tell an
+ * older server's strict-schema refusal from an ordinary validation failure. */
+export const TICKET_ISSUE_LINKS_HEADER = 'x-autobuild-ticket-issue-links'
+export const TICKET_ISSUE_LINKS_CAPABILITY = '1'
+
+export const issueLinkWireSchema = z.strictObject({
+  issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  intent: z.enum(['closes', 'refs']),
+})
+export const issueLinksWireSchema = z.array(issueLinkWireSchema).superRefine(refineUniqueIssues)
 
 export const ticketCommentWireSchema = z.strictObject({
   body: z.string(),
@@ -43,6 +56,7 @@ export const ticketWireSchema = z.strictObject({
   labels: z.array(z.string()),
   blockersResolved: z.boolean().optional(),
   blockedBy: z.array(z.string()).optional(),
+  issueLinks: issueLinksWireSchema.optional(),
 })
 export const ticketListingWireSchema = z.strictObject({
   tickets: z.array(ticketWireSchema),
@@ -74,6 +88,7 @@ const draftSchema = z.strictObject({
   body: z.string(),
   labels: z.array(z.string()).optional(),
   blockedBy: z.array(z.string()).optional(),
+  issueLinks: issueLinksWireSchema.optional(),
 })
 const createOptionsSchema = z.strictObject({
   requestedId: z.string().min(1).optional(),
@@ -91,6 +106,7 @@ const updateSchema = z
     title: z.string().optional(),
     body: z.string().optional(),
     labels: z.array(z.string()).optional(),
+    issueLinks: issueLinksWireSchema.optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'update must name at least one field')
 

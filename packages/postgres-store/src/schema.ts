@@ -917,7 +917,7 @@ export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL)
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
  * remain valid while the hosted ticket tables are added. */
-export const TICKET_SCHEMA_VERSION = 6
+export const TICKET_SCHEMA_VERSION = 7
 export const TICKET_SCHEMA_V1_DDL = `
 CREATE TABLE IF NOT EXISTS ab_ticket_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -987,7 +987,17 @@ ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_target_fk FOREIGN KEY (repo, ta
 ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_target_self_check CHECK (target_id <> id);
 CREATE INDEX ab_tickets_target_idx ON ab_tickets (repo, target_id);
 `
-export const TICKET_SCHEMA_DDL = TICKET_SCHEMA_V5_DDL + TICKET_TREE_DELTA
+export const TICKET_SCHEMA_V6_DDL = TICKET_SCHEMA_V5_DDL + TICKET_TREE_DELTA
+export const TICKET_SCHEMA_V6_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(TICKET_SCHEMA_V6_DDL)
+  .digest('hex')
+
+/** Forge issue links: one normalized, sorted jsonb set replaced whole on write.
+ * Additive, so existing rows read back with no links. */
+const TICKET_ISSUE_LINKS_DELTA = `
+ALTER TABLE ab_tickets ADD COLUMN issue_links jsonb NOT NULL DEFAULT '[]'::jsonb;
+`
+export const TICKET_SCHEMA_DDL = TICKET_SCHEMA_V6_DDL + TICKET_ISSUE_LINKS_DELTA
 export const TICKET_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_DDL)
   .digest('hex')
@@ -1545,6 +1555,7 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       ['ticket_number', 'bigint', true],
       ['kind', 'text', true],
       ['target_id', 'text', false],
+      ['issue_links', 'jsonb', true],
     ],
     ab_ticket_counters: [
       ['repo', 'text', true],
@@ -1941,6 +1952,7 @@ export async function migratePostgres(
         await tx`ALTER TABLE ab_tickets ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1`
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
+        await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION},
           checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
@@ -1951,6 +1963,7 @@ export async function migratePostgres(
         await tx`ALTER TABLE ab_tickets ADD COLUMN revision bigint NOT NULL DEFAULT 1`
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
+        await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1959,6 +1972,7 @@ export async function migratePostgres(
       ) {
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
+        await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1967,6 +1981,7 @@ export async function migratePostgres(
       ) {
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
+        await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1974,6 +1989,14 @@ export async function migratePostgres(
         ticketMarker.checksum === TICKET_SCHEMA_V5_CHECKSUM
       ) {
         await tx.unsafe(TICKET_TREE_DELTA)
+        await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
+      } else if (
+        ticketMarker &&
+        Number(ticketMarker.version) === 6 &&
+        ticketMarker.checksum === TICKET_SCHEMA_V6_CHECKSUM
+      ) {
+        await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (ticketMarker) {
         if (Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION) {
@@ -1991,6 +2014,7 @@ export async function migratePostgres(
         await tx`ALTER TABLE ab_tickets ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1`
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
+        await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
         await tx`INSERT INTO ab_ticket_schema_migrations
           (singleton, version, checksum, applied_at)
           VALUES (true, ${TICKET_SCHEMA_VERSION}, ${TICKET_SCHEMA_CHECKSUM}, ${new Date().toISOString()})`

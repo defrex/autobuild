@@ -8,8 +8,10 @@ import {
 import { seedTicketStates, lockTicketStates } from './ticket-states'
 import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
 import { SQL } from 'bun'
+import { normalizeIssueLinks } from '@defrex/autobuild/plugin-sdk'
 import type {
   DependencyState,
+  IssueLink,
   Ticket,
   TicketCreateOptions,
   TicketDraft,
@@ -53,6 +55,12 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : []
 }
 
+/** The row's jsonb issue-link set; drivers may return it parsed or as text. */
+function issueLinksOf(row: Row): IssueLink[] {
+  const value = typeof row.issue_links === 'string' ? JSON.parse(row.issue_links) : row.issue_links
+  return normalizeIssueLinks(value ?? [])
+}
+
 /** Shared database handle; request-specific source views never retain another
  * repository's identity or lifecycle policy. */
 export class PostgresTicketDatabase {
@@ -83,6 +91,7 @@ export async function openPostgresTicketDatabase(url: string): Promise<PostgresT
 export class PostgresTicketSource implements TicketSource {
   readonly name = 'database'
   readonly integrationTree = true
+  readonly issueLinks = true
   private readonly teamKey: string
   private readonly repo: string
   private readonly claimedState: string
@@ -177,6 +186,7 @@ export class PostgresTicketSource implements TicketSource {
     const title = String(row.title)
     const blockedBy =
       row.blockers === undefined ? await this.blockers(executor, id) : strings(row.blockers)
+    const issueLinks = issueLinksOf(row)
     return {
       ref: { source: this.name, id: String(row.readable_id), title },
       revision: String(row.revision),
@@ -198,6 +208,7 @@ export class PostgresTicketSource implements TicketSource {
       resolved: String(row.state) === this.lifecycle.done,
       labels: strings(row.labels),
       ...(blockedBy.length > 0 ? { blockedBy } : {}),
+      ...(issueLinks.length > 0 ? { issueLinks } : {}),
     }
   }
 
@@ -402,9 +413,10 @@ export class PostgresTicketSource implements TicketSource {
       const id = `ticket-${crypto.randomUUID()}`
       const now = new Date().toISOString()
       const inserted: Row[] = await q`INSERT INTO ab_tickets
-        (repo, id, readable_id, ticket_number, creation_key, title, body, state, labels, created_at, updated_at, kind, target_id)
+        (repo, id, readable_id, ticket_number, creation_key, title, body, state, labels, created_at, updated_at, kind, target_id, issue_links)
         VALUES (${this.repo}, ${id}, ${readable}, ${number}::bigint, ${options.idempotencyKey ?? null}, ${draft.title}, ${draft.body},
-          ${state}, ${q.array(draft.labels ?? [], 'text')}, ${now}, ${now}, ${draft.kind ?? 'work'}, ${target})
+          ${state}, ${q.array(draft.labels ?? [], 'text')}, ${now}, ${now}, ${draft.kind ?? 'work'}, ${target},
+          ${JSON.stringify(normalizeIssueLinks(draft.issueLinks ?? []))}::jsonb)
         ON CONFLICT (repo, creation_key) DO NOTHING RETURNING *, revision::text AS revision`
       let row = inserted[0]
       if (!row && options.idempotencyKey !== undefined) {
@@ -459,15 +471,18 @@ export class PostgresTicketSource implements TicketSource {
         const title = patch.title ?? String(row.title)
         const body = patch.body ?? String(row.body)
         const labels = patch.labels ?? strings(row.labels)
+        const stored = issueLinksOf(row)
+        const links = patch.issueLinks ?? stored
         changed =
           kind !== row.kind ||
           target !== row.target_id ||
           title !== row.title ||
           body !== row.body ||
           JSON.stringify([...new Set(labels)].sort()) !==
-            JSON.stringify([...new Set(strings(row.labels))].sort())
+            JSON.stringify([...new Set(strings(row.labels))].sort()) ||
+          JSON.stringify(links) !== JSON.stringify(stored)
         if (changed)
-          await q`UPDATE ab_tickets SET kind = ${kind}, target_id = ${target}, title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')} WHERE repo = ${this.repo} AND id = ${storageId}`
+          await q`UPDATE ab_tickets SET kind = ${kind}, target_id = ${target}, title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')}, issue_links = ${JSON.stringify(links)}::jsonb WHERE repo = ${this.repo} AND id = ${storageId}`
       } else if (mutation.kind === 'transition') {
         changed = row.state !== state
         if (changed)
