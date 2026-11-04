@@ -50,6 +50,14 @@ import { defineReducer, type IncrementalReducer } from './incremental'
 /** An `escalation.raised` without a matching `escalation.answered` — the
  * definition of `blocked` (§15.5). Matched by id, so answers may arrive in
  * any order. */
+/** A frozen issue link with its effective intent. `downgrade` records the
+ * agent fact that turned `closes` into `refs`. */
+export interface BuildIssueLink {
+  issue: number
+  intent: 'closes' | 'refs'
+  downgrade?: { reason: string; seq: number }
+}
+
 export interface OpenEscalation {
   id: string
   phase: EscalationTarget
@@ -286,6 +294,13 @@ export interface BuildState {
   /** Ticket assets the build froze: set by `build.created`, replaced by a
    * `spec.revised` that carries `assets` (§6.3). Empty for historical logs. */
   pinnedAssets: PinnedAsset[]
+  /** Forge issue links frozen by `build.created`, with any downgrade applied
+   * before the seal. Spec revisions never resample them. Empty for
+   * historical logs. */
+  issueLinks: BuildIssueLink[]
+  /** seq of the fact that closed the downgrade window: `issue-links.sealed`,
+   * `publication.requested {operation: 'finalize'}` or `finalize.completed`. */
+  issueLinksSealedSeq?: number
   /** Latest spec artifact rev — `spec.imported`/`spec.authored` set it,
    * `spec.revised` bumps it (§6.3: rev N+1 restarts leaves from plan and nodes from collection). */
   specRev?: number
@@ -437,6 +452,8 @@ export interface BuildAcc {
   specRev?: number
   restartSince: number
   pinnedAssets: PinnedAsset[]
+  issueLinks: BuildIssueLink[]
+  issueLinksSealedSeq?: number
   finalizeCompletedSeq: number
   finalizeSteps: BuildState['finalizeSteps']
   plan: BuildState['plan']
@@ -467,7 +484,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 27
+export const BUILD_REDUCER_VERSION = 28
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -486,6 +503,7 @@ function initialBuildAcc(): BuildAcc {
     autoMerge: { requested: false },
     restartSince: 0,
     pinnedAssets: [],
+    issueLinks: [],
     finalizeCompletedSeq: 0,
     finalizeSteps: [],
     plan: { round: 0, approved: false },
@@ -710,6 +728,22 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         acc.target = event.payload.target
         acc.baseBranch = event.payload.baseBranch
         pinnedAssets = event.payload.assets ?? []
+        acc.issueLinks = (event.payload.issueLinks ?? []).map((link) => ({ ...link }))
+        break
+      case 'issue-link.downgraded': {
+        // One-way and only before the seal: a later, a repeated or an
+        // unknown downgrade is inert, so PR composition never changes.
+        const { issue, reason } = event.payload
+        if (acc.issueLinksSealedSeq !== undefined) break
+        acc.issueLinks = acc.issueLinks.map((link) =>
+          link.issue === issue && link.intent === 'closes'
+            ? { issue, intent: 'refs', downgrade: { reason, seq: event.seq } }
+            : link,
+        )
+        break
+      }
+      case 'issue-links.sealed':
+        acc.issueLinksSealedSeq ??= event.seq
         break
       case 'workspace.provisioned':
       case 'workspace.cleanup-required':
@@ -722,7 +756,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'pr-summary.result':
       case 'pr-summary.settled':
       case 'finalize.step-started':
+        break
       case 'publication.requested':
+        if (event.payload.operation === 'finalize') acc.issueLinksSealedSeq ??= event.seq
+        break
       // Inert loss fact (AUT-328): the dispatcher released a workspace with a
       // pending publication. Recovery runs through the existing
       // abandoned-publication flow (abandonedPublicationPending), which re-runs
@@ -1089,6 +1126,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         start({ phase: 'finalize', seq: event.seq })
         break
       case 'finalize.completed':
+        acc.issueLinksSealedSeq ??= event.seq
         pr = event.payload.pr
         prState = 'open'
         finalizeCompletedSeq = event.seq
@@ -1352,6 +1390,10 @@ function finishBuild(acc: BuildAcc): BuildState {
       ? { drainingExecutions: structuredClone(acc.drainingExecutions) }
       : {}),
     pinnedAssets: acc.pinnedAssets,
+    issueLinks: acc.issueLinks,
+    ...(acc.issueLinksSealedSeq !== undefined
+      ? { issueLinksSealedSeq: acc.issueLinksSealedSeq }
+      : {}),
     specRev: acc.specRev,
     restartSince: acc.restartSince,
     plan: acc.plan,

@@ -152,6 +152,8 @@ export const buildEventPolicy = {
   'reconcile.publish-intended': 'decisive',
   'reconcile.rewritten': 'decisive',
   'reconcile.completed': 'decisive',
+  'issue-link.downgraded': 'decisive',
+  'issue-links.sealed': 'decisive',
   'observation.recorded': 'advisory',
   'escalation.raised': 'decisive',
   'escalation.answered': 'decisive',

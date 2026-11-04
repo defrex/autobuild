@@ -1321,3 +1321,75 @@ test('publication retry scheduling is a decisive, trusted, bounded protocol', as
     }).type,
   ).toBe('escalation.raised')
 })
+
+describe('forge issue link facts', () => {
+  const base = { ticket: { source: 'file', id: 'file-1' }, repo: 'acme/app', baseBranch: 'main' }
+  const created = (issueLinks: unknown) =>
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ...base, issueLinks },
+    })
+
+  test('build.created may freeze unique, fully specified links', () => {
+    const issueLinks = [
+      { issue: 820, intent: 'closes' as const },
+      { issue: 824, intent: 'refs' as const },
+    ]
+    expect(created(issueLinks).payload).toEqual({ ...base, issueLinks })
+    expect(() =>
+      created([
+        { issue: 820, intent: 'closes' },
+        { issue: 820, intent: 'refs' },
+      ]),
+    ).toThrow(/duplicate issue #820/)
+    expect(() => created([{ issue: 820 }])).toThrow(/invalid payload for "build\.created"/)
+    expect(() => created([{ issue: 0, intent: 'closes' }])).toThrow(/invalid payload/)
+  })
+
+  test('a downgrade is agent-authored and needs a non-blank reason', () => {
+    const actor = agentActor('implement', 's_1')
+    expect(
+      validateEventWrite({
+        actor,
+        type: 'issue-link.downgraded',
+        payload: { issue: 824, reason: 'only the API half' },
+      }).payload,
+    ).toEqual({ issue: 824, reason: 'only the API half' })
+    expect(() =>
+      validateEventWrite({
+        actor,
+        type: 'issue-link.downgraded',
+        payload: { issue: 824, reason: '  ' },
+      }),
+    ).toThrow(/invalid payload/)
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'issue-link.downgraded',
+        payload: { issue: 824, reason: 'r' },
+      }),
+    ).toThrow(/may not emit/)
+    // There is no intent field, so no fact can express an upgrade.
+    expect(() =>
+      validateEventWrite({
+        actor,
+        type: 'issue-link.downgraded',
+        payload: { issue: 824, reason: 'r', intent: 'closes' },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('the seal is a kernel fact with no payload', () => {
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'issue-links.sealed', payload: {} }).payload,
+    ).toEqual({})
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('finalize', 's_1'),
+        type: 'issue-links.sealed',
+        payload: {},
+      }),
+    ).toThrow(/may not emit/)
+  })
+})

@@ -194,6 +194,8 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'reconcile.rewritten': ['kernel', 'dispatcher'],
   'reconcile.completed': ['agent', 'dispatcher', 'kernel'],
 
+  'issue-link.downgraded': ['agent'],
+  'issue-links.sealed': ['kernel'],
   'observation.recorded': ['kernel', 'agent'],
   'escalation.raised': ['agent', 'kernel', 'dispatcher'],
   // Answering an escalation is always a deliberate human act. Historical

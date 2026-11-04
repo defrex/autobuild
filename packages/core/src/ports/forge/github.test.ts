@@ -149,6 +149,26 @@ describe('GitHubForge.openPr', () => {
     })
   })
 
+  test('composes issue keywords into the created title and body with the repository identity', async () => {
+    const { forge, calls } = makeForge([{ json: [] }, { json: PR_REF }])
+    expect(forge.closesIssues).toBe(true)
+    await forge.openPr({
+      ...opts,
+      title: 'Fixes acme/app#824: login',
+      body: 'This fixes #824 and closes other/repo#824.\n\nFixes: #820\n',
+      issueLinks: [
+        { issue: 820, intent: 'closes' },
+        { issue: 824, intent: 'refs' },
+      ],
+    })
+    expect(calls[1]?.opts?.body).toEqual({
+      title: 'Refs acme/app#824: login',
+      head: 'ab/fix-login',
+      base: 'main',
+      body: 'This refs #824 and closes other/repo#824.\n\nCloses #820\nRefs #824\n',
+    })
+  })
+
   test('adopts an existing open PR for the head branch instead of creating (§8.7 crash path)', async () => {
     const { forge, calls } = makeForge([{ json: [PR_REF] }])
     expect(await forge.openPr(opts)).toEqual({
@@ -1540,6 +1560,65 @@ describe('GitHub stable build identity', () => {
       })
     },
   )
+  describe('with issue links', () => {
+    const issueLinks = [
+      { issue: 820, intent: 'closes' as const },
+      { issue: 824, intent: 'refs' as const },
+    ]
+    const options = { buildSlug: 'stable-build', issueLinks }
+    const linkedHeadline = 'Fixes #824 (#42)'
+    const linkedBody =
+      '* fixes acme/app#824 in a commit subject\n\nCo-authored-by: A <a@example.test>\n'
+    const composedHeadline = 'Refs #824 (#42)'
+    const composedBody =
+      '* refs acme/app#824 in a commit subject\n\nCloses #820\nRefs #824\n\nCo-authored-by: A <a@example.test>\nAutobuild-Build: stable-build\n'
+    const linked = (overrides: Record<string, unknown> = {}) =>
+      message({
+        viewerMergeHeadlineText: linkedHeadline,
+        viewerMergeBodyText: linkedBody,
+        ...overrides,
+      })
+    const linkedNative = {
+      commitHeadline: composedHeadline,
+      commitBody: composedBody,
+      mergeMethod: 'SQUASH',
+    }
+
+    test('direct squash lands neutralized text and the keyword paragraph before trailers', async () => {
+      const { forge, calls } = makeForge([linked(), {}])
+      await forge.squashMerge('/absent', 42, 'head-42', options)
+      expect(calls[1]?.opts?.body).toEqual({
+        merge_method: 'squash',
+        sha: 'head-42',
+        commit_title: composedHeadline,
+        commit_message: composedBody,
+      })
+    })
+
+    test('native enable writes the same composition and an applied request makes no mutation', async () => {
+      const { forge, calls } = makeForge([
+        linked(),
+        inspect(false),
+        ...gates,
+        applied('enablePullRequestAutoMerge'),
+        linked({ autoMergeRequest: linkedNative }),
+      ])
+      expect(await forge.setAutoMerge('/absent', 42, true, options)).toEqual({ kind: 'applied' })
+      expect((mutations(calls)[0]!.opts!.body as { variables: unknown }).variables).toEqual({
+        pullRequestId: 'PR_42',
+        mergeMethod: 'SQUASH',
+        expectedHeadOid: 'head-42',
+        commitHeadline: composedHeadline,
+        commitBody: composedBody,
+      })
+      const again = makeForge([linked({ autoMergeRequest: linkedNative })])
+      expect(await again.forge.setAutoMerge('/absent', 42, true, options)).toEqual({
+        kind: 'applied',
+      })
+      expect(mutations(again.calls)).toEqual([])
+    })
+  })
+
   test('direct head mismatch or invalid defaults never attempts a merge', async () => {
     for (const response of [
       message({ headRefOid: 'new-head' }),

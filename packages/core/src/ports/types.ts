@@ -566,6 +566,10 @@ export interface BuildLandingOptions {
   baseBranch?: string
   /** Refresh durable consent and pipeline eligibility before native mutation. */
   canApply?: () => Promise<boolean>
+  /** The build's sealed issue links, passed only to a `closesIssues` forge
+   * for a leaf aimed at the default branch. The adapter composes them into
+   * the landed headline and message with `kernel/issue-keywords`. */
+  issueLinks?: readonly IssueLink[]
 }
 
 export class NoCommitsBetweenBranchesError extends Error {
@@ -666,6 +670,10 @@ export interface Forge {
   }>
 
   readonly name: string
+  /** Closing keywords that reach the default branch close issues. A forge
+   * declaring it composes `issueLinks` into the PR title and body and into
+   * landing messages; without it links are recorded but never emitted. */
+  readonly closesIssues?: boolean
   /** Optional because another forge may support PRs but not public image assets. */
   readonly prAttachments?: PrAttachmentHosting
   /** Publish this exact SHA (HEAD for legacy callers); success requires authoritative readback. */
@@ -682,6 +690,9 @@ export interface Forge {
     /** Untouched deposited pr-description. Providers may use it as the
      * landing message; title/body remain the portable review projection. */
     mergeMessage?: string
+    /** Sealed issue links, passed only to a `closesIssues` forge for a leaf
+     * aimed at the default branch. */
+    issueLinks?: readonly IssueLink[]
   }): Promise<PrRef>
   /** Optional authoritative base resolver. Capability-less adapters retain
    * the legacy origin fetch performed by the caller. The destination is a

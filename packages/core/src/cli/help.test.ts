@@ -31,6 +31,7 @@ const COMMANDS = [
   'context',
   'artifact',
   'observe',
+  'issue',
   'done',
   'verdict',
   'escalate',
@@ -351,6 +352,7 @@ describe('layered CLI help catalog', () => {
         'fails closed',
       ],
       observe: ['followup|refactor|latent-bug', '--files', '--refs', 'not a terminal'],
+      issue: ['downgrade <N> --reason <text>', 'one-way', 'not a terminal'],
       done: ['done [--notes <file>]', 'terminal command', 'exactly one terminal'],
       verdict: [
         'approve|revise|escalate|pass|fail|skip',
@@ -433,6 +435,7 @@ describe('layered CLI help catalog', () => {
       'context',
       'artifact',
       'observe',
+      'issue',
       'server',
       'done',
       'verdict',
