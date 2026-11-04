@@ -613,4 +613,5 @@ test('ancestry uses the served repository, distinguishes rewinds, and refuses mi
 test('local-git does not declare issue-closing support, so builds emit no keywords', () => {
   const forge: Forge = new LocalGitForge()
   expect(forge.closesIssues).toBeUndefined()
+  expect(forge.updatePrIssueLinks).toBeUndefined()
 })

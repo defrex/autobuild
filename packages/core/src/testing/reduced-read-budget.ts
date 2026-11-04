@@ -1399,6 +1399,9 @@ export async function nodePollingReadBudget(opts: {
   slug: string
   tick: () => Promise<unknown>
   advance: (ms: number) => void
+  /** Seed every 10th event as a recorded child's issue links: 10 children at
+   * 100 events and 10,000 at 100,000, over a bounded issue set. */
+  issueLinkChildren?: boolean
 }) {
   const { store, slug } = opts
   const checkpoint = (await readBuildFacts(store, slug)).value.state.nodePolling!
@@ -1406,16 +1409,32 @@ export async function nodePollingReadBudget(opts: {
   let baseline: number[] | undefined
   for (const length of [100, 100_000]) {
     for (; seeded < length; seeded++)
-      await store.append(slug, {
-        actor: DISPATCHER,
-        type: 'node.poll-checked',
-        payload: {
-          activityKey: checkpoint.activityKey,
-          unchangedSince: checkpoint.unchangedSince,
-          nodeIdleAfterSeconds: checkpoint.nodeIdleAfterSeconds,
-          nodeIdlePollSeconds: checkpoint.nodeIdlePollSeconds,
-        },
-      })
+      if (opts.issueLinkChildren && seeded % 10 === 0)
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'node.issue-links-recorded',
+          payload: {
+            build: `child-${seeded}`,
+            issueLinks: [
+              {
+                issue: (seeded % 50) + 1,
+                intent: seeded % 7 ? 'closes' : 'refs',
+                ...(seeded % 11 === 0 ? { downgraded: true as const } : {}),
+              },
+            ],
+          },
+        })
+      else
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'node.poll-checked',
+          payload: {
+            activityKey: checkpoint.activityKey,
+            unchangedSince: checkpoint.unchangedSince,
+            nodeIdleAfterSeconds: checkpoint.nodeIdleAfterSeconds,
+            nodeIdlePollSeconds: checkpoint.nodeIdlePollSeconds,
+          },
+        })
     await store.append(slug, {
       actor: humanActor('budget'),
       type: 'build.hold-requested',
@@ -1455,6 +1474,20 @@ export async function nodePollingReadBudget(opts: {
     } finally {
       Reflect.deleteProperty(events, 'slice')
       store.getReducerValue = getReduced
+    }
+    // A status-style read serves the saved reduced value without history.
+    history = 0
+    events.slice = (start, end) => {
+      const selected = slice(start, end)
+      history += selected.filter((event) => event.seq <= boundary).length
+      return selected
+    }
+    try {
+      const status = (await readBuildFacts(store, slug)).value.state
+      if (opts.issueLinkChildren) expect(status.nodeIssueLinks?.builds).toHaveLength(length / 10)
+      expect(history).toBe(0)
+    } finally {
+      Reflect.deleteProperty(events, 'slice')
     }
     if (baseline) expect(costs).toEqual(baseline)
     baseline = costs

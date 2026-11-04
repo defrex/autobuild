@@ -1253,6 +1253,41 @@ export class GitHubForge implements Forge {
     this.invalidateReads()
   }
 
+  /** Rewrite the PR body's keyword paragraph for a root node's union and
+   * confirm it by readback. Prose is preserved; stale lines for linked
+   * issues are replaced, so a later downgrade flips `Closes` to `Refs`. */
+  async updatePrIssueLinks(
+    _workspacePath: string,
+    number: number,
+    issueLinks: readonly IssueLink[],
+  ): Promise<void> {
+    const { owner, name } = await this.requireCoordinates()
+    const path = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`
+    const view = z.object({
+      state: z.string(),
+      merged: z.boolean().optional(),
+      body: z.string().nullable(),
+    })
+    const read = async (operation: string) =>
+      this.parse(view, await this.request('GET', path), operation)
+    const normalize = (body: string | null): string => (body ?? '').replace(/\r\n/g, '\n')
+    const before = await read(`PR #${number} body`)
+    if (before.state !== 'open' || before.merged === true)
+      throw new Error(`PR #${number} is not open; issue keywords not updated`)
+    const current = normalize(before.body)
+    const desired = withIssueKeywords(current, issueLinks, {
+      repository: `${owner}/${name}`,
+      trailers: false,
+    })
+    if (current.trimEnd() !== desired.trimEnd()) {
+      await this.request('PATCH', path, { body: { body: desired } })
+      this.invalidateReads()
+    }
+    const after = await read(`PR #${number} body readback`)
+    if (normalize(after.body).trimEnd() !== desired.trimEnd())
+      throw new Error(`PR #${number} body readback disagrees with issue keywords`)
+  }
+
   async inspectLandingPr(_workspacePath: string, number: number) {
     const { owner, name } = await this.requireCoordinates()
     const response = await this.request(

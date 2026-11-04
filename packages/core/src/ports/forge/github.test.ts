@@ -2412,6 +2412,62 @@ describe('node PR retargeting', () => {
     })
 })
 
+describe('GitHubForge.updatePrIssueLinks', () => {
+  const view = (body: string | null, over: Record<string, unknown> = {}) => ({
+    json: { number: 7, state: 'open', merged: false, body, ...over },
+  })
+  const links = [
+    { issue: 5, intent: 'refs' as const },
+    { issue: 820, intent: 'closes' as const },
+  ]
+  const composed = 'Integration build n.\n\nRefs #5\nCloses #820'
+
+  test('an ordinary open, unmerged PR gets the keyword block and a confirmed readback', async () => {
+    const { forge, calls } = makeForge([view('Integration build n.'), { json: {} }, view(composed)])
+    await forge.updatePrIssueLinks('.', 7, links)
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/pulls/7',
+      'PATCH repos/acme/app/pulls/7',
+      'GET repos/acme/app/pulls/7',
+    ])
+    expect(calls[1]?.opts?.body).toEqual({ body: composed })
+  })
+
+  test('a null body receives only the keyword block', async () => {
+    const { forge, calls } = makeForge([view(null), { json: {} }, view('Refs #5\nCloses #820')])
+    await forge.updatePrIssueLinks('.', 7, links)
+    expect(calls[1]?.opts?.body).toEqual({ body: 'Refs #5\nCloses #820' })
+  })
+
+  test('prose survives, a stale Closes flips to Refs and a qualified closing reference is neutralized', async () => {
+    const before = 'Fixes acme/app#5 eventually.\r\n\r\nCloses #5\r\nCloses #820\r\n'
+    const after = 'Refs acme/app#5 eventually.\n\nRefs #5\nCloses #820\n'
+    const { forge, calls } = makeForge([view(before), { json: {} }, view(after)])
+    await forge.updatePrIssueLinks('.', 7, links)
+    expect(calls[1]?.opts?.body).toEqual({ body: after })
+  })
+
+  test('an already composed body, CRLF or trailing whitespace makes no PATCH', async () => {
+    const crlf = `${composed.replace(/\n/g, '\r\n')}\r\n  `
+    const { forge, calls } = makeForge([view(crlf), view(crlf)])
+    await forge.updatePrIssueLinks('.', 7, links)
+    expect(paths(calls)).toEqual(['GET repos/acme/app/pulls/7', 'GET repos/acme/app/pulls/7'])
+  })
+
+  test('closed and merged PRs refuse before any PATCH', async () => {
+    for (const over of [{ state: 'closed' }, { state: 'closed', merged: true }, { merged: true }]) {
+      const { forge, calls } = makeForge([view('x', over)])
+      await expect(forge.updatePrIssueLinks('.', 7, links)).rejects.toThrow('is not open')
+      expect(paths(calls)).toEqual(['GET repos/acme/app/pulls/7'])
+    }
+  })
+
+  test('a readback that disagrees throws', async () => {
+    const { forge } = makeForge([view('x'), { json: {} }, view('x')])
+    await expect(forge.updatePrIssueLinks('.', 7, links)).rejects.toThrow('readback disagrees')
+  })
+})
+
 test('GraphQL HTTP-200 rate errors survive native landing convenience catches', async () => {
   const now = Date.parse('2026-10-20T00:00:00Z')
   const forge = new GitHubForge({

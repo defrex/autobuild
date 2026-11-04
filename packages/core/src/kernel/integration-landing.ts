@@ -8,6 +8,7 @@ import type { BuildStore } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
 import { inspectIntegrationStack } from './integration-stack'
 import { acknowledgeNodeLanding } from './node-landing'
+import { nodeIssueLinksForForge, nodeIssueLinksPublished } from './node-issue-links'
 
 export interface IntegrationLandingDeps {
   store: BuildStore
@@ -100,6 +101,21 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
         return
       }
       await inspectIntegrationStack(exec, workspacePath, parent, head)
+      // Refresh the PR body to the final union and confirm the readback
+      // before any merge request, even when the published fact matches, so
+      // landing closes every fully resolved issue. A failure throws first.
+      state = (await readBuildFacts(store, slug)).value.state
+      const issueLinks = nodeIssueLinksForForge(state, forge)
+      if (issueLinks) {
+        await authority()
+        await forge.updatePrIssueLinks!(workspacePath, deps.pr, issueLinks)
+        if (!nodeIssueLinksPublished(state, deps.pr, issueLinks))
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'node.issue-links-published',
+            payload: { pr: deps.pr, issueLinks },
+          })
+      }
       const local = forge.name === 'local-git'
       if (!local && !forge.mergeLinearStack) return // Never substitute squash.
       const gate = local ? await forge.inspectLandingGate?.(deps.destination) : undefined

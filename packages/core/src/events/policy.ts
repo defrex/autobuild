@@ -60,6 +60,8 @@ export const buildEventPolicy = {
   'node.rewritten': 'decisive',
   'node.writer-settled': 'decisive',
   'node.contribution-recorded': 'decisive',
+  'node.issue-links-recorded': 'decisive',
+  'node.issue-links-published': 'advisory',
   'node.inventory': 'decisive',
   'node.opened': 'decisive',
   'node.compared': 'decisive',
