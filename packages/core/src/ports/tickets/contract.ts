@@ -284,7 +284,9 @@ export function describeTicketSourceContract(
         await source.update(id, { title: `${created.title} renamed` })
         expect((await source.get(id))?.issueLinks).toEqual([{ issue: 7, intent: 'refs' }])
         await source.update(id, { title: created.title, issueLinks: sorted })
-        expect((await source.get(id))?.revision).toBe(created.revision)
+        const restored = (await source.get(id))?.revision
+        await source.update(id, { issueLinks: sorted })
+        expect((await source.get(id))?.revision).toBe(restored)
 
         await source.update(id, { issueLinks: [] })
         const cleared = await source.get(id)

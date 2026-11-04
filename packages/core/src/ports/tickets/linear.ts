@@ -23,6 +23,7 @@ import type {
 } from '../types'
 import { TicketSourceRateLimitError } from '../types'
 import { validateTicketUpdate } from './update'
+import { refuseUnsupportedIssueLinks } from './issue-links'
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql'
 
@@ -667,6 +668,8 @@ export class LinearTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
+    // Linear links GitHub issues natively through its own integration.
+    refuseUnsupportedIssueLinks(this, draft)
     if (opts.requestedId !== undefined) throw new Error('linear does not support requested ids')
     const reservedId = opts.idempotencyKey
     if (reservedId !== undefined && !linearReservedIssueIdSchema.safeParse(reservedId).success) {
@@ -733,6 +736,7 @@ export class LinearTicketSource implements TicketSource {
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
+    refuseUnsupportedIssueLinks(this, patch)
     const validated = validateTicketUpdate(patch)
     if (
       validated.kind !== undefined ||

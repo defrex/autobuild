@@ -33,6 +33,10 @@ import {
   TICKET_TREE_CAPABILITY,
   TICKET_COMMENTS_HEADER,
   TICKET_COMMENTS_CAPABILITY,
+  TICKET_ISSUE_LINKS_HEADER,
+  TICKET_ISSUE_LINKS_CAPABILITY,
+  TicketIssueLinksUnsupported,
+  refuseUnsupportedIssueLinks,
   type HostedTicketContext,
   type HostedTicketOperation,
 } from '@defrex/autobuild/hosted-tickets'
@@ -193,6 +197,7 @@ export function createTicketServer(options: TicketServerOptions): {
         target: _target,
         revision: _revision,
         comments: _comments,
+        issueLinks: _issueLinks,
         ...base
       } = ticket
       // Capabilities are independent: released strict decoders receive neither field.
@@ -210,6 +215,10 @@ export function createTicketServer(options: TicketServerOptions): {
         ...(req.headers.get(TICKET_COMMENTS_HEADER) === TICKET_COMMENTS_CAPABILITY &&
         ticket.comments !== undefined
           ? { comments: ticket.comments }
+          : {}),
+        ...(req.headers.get(TICKET_ISSUE_LINKS_HEADER) === TICKET_ISSUE_LINKS_CAPABILITY &&
+        ticket.issueLinks?.length
+          ? { issueLinks: ticket.issueLinks }
           : {}),
       }
       if (client.major !== 0 || client.minor > 10) return projected
@@ -238,6 +247,8 @@ export function createTicketServer(options: TicketServerOptions): {
       }
       case 'mutate-if-revision': {
         const { input } = hostedTicketRequestSchemas['mutate-if-revision'].parse(raw)
+        if (input.mutation.kind === 'update')
+          refuseUnsupportedIssueLinks(source, input.mutation.patch)
         await mutateTicketIfRevision(source, input.id, input.expectedRevision, input.mutation)
         return json(200, { ok: true })
       }
@@ -278,6 +289,7 @@ export function createTicketServer(options: TicketServerOptions): {
       }
       case 'create': {
         const request = hostedTicketRequestSchemas.create.parse(raw)
+        refuseUnsupportedIssueLinks(source, request.input.draft)
         return json(
           201,
           ticketResponse(await source.create(request.input.draft, request.input.options)),
@@ -285,6 +297,7 @@ export function createTicketServer(options: TicketServerOptions): {
       }
       case 'update': {
         const request = hostedTicketRequestSchemas.update.parse(raw)
+        refuseUnsupportedIssueLinks(source, request.input.patch)
         await source.update(request.input.id, request.input.patch)
         return json(200, { ok: true })
       }
@@ -305,7 +318,7 @@ export function createTicketServer(options: TicketServerOptions): {
     }
   }
 
-  return {
+  const server = {
     async fetch(req: Request): Promise<Response> {
       try {
         const url = new URL(req.url)
@@ -430,6 +443,12 @@ export function createTicketServer(options: TicketServerOptions): {
           })
         if (error instanceof TicketRevisionUnsupported)
           return failure(409, 'conflict', error.message)
+        if (error instanceof TicketIssueLinksUnsupported)
+          return json(409, {
+            kind: 'conflict',
+            error: error.message,
+            code: 'issue-links-unsupported',
+          })
         if (error instanceof OperatorQueryError) return failure(409, 'conflict', error.message)
         if (error instanceof MachineAuthError || error instanceof AccessError)
           return failure(error.status, 'auth', error.message)
@@ -470,6 +489,16 @@ export function createTicketServer(options: TicketServerOptions): {
         }
         return failure(notFound ? 404 : 500, notFound ? 'not-found' : 'internal', message)
       }
+    },
+  }
+  return {
+    // Every ticket response, failures included, advertises issue-link support so
+    // a current client can recognize an older server's strict-schema refusal.
+    async fetch(req: Request): Promise<Response> {
+      const response = await server.fetch(req)
+      const headers = new Headers(response.headers)
+      headers.set(TICKET_ISSUE_LINKS_HEADER, TICKET_ISSUE_LINKS_CAPABILITY)
+      return new Response(response.body, { status: response.status, headers })
     },
   }
 }
