@@ -51,6 +51,8 @@ export const executionProgress = {
   'node.rewritten': 'progress',
   'node.writer-settled': 'progress',
   'node.contribution-recorded': 'bookkeeping',
+  'node.issue-links-recorded': 'bookkeeping',
+  'node.issue-links-published': 'bookkeeping',
   'node.inventory': 'bookkeeping',
   'node.restack-requested': 'bookkeeping',
   'node.restack-satisfied': 'progress',

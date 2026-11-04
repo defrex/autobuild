@@ -133,8 +133,10 @@ export function landingMessage(
   )
 }
 
-/** Keywords reach the default branch only from a leaf aimed at the configured
- * base, through a forge whose merges close issues. */
+/** A leaf's own keywords reach the default branch only when it is aimed at
+ * the configured base, through a forge whose merges close issues. Nodes and
+ * node-target leaves carry links upward instead (`kernel/node-issue-links`),
+ * and only a root node's PR body emits their union. */
 export function emitsIssueKeywords(
   state: {
     kind?: 'work' | 'node'

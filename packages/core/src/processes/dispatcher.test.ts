@@ -12648,6 +12648,28 @@ test('fresh node polling has bounded reads at 100 and 100000 events', async () =
   })
 }, 30_000)
 
+test('fresh node polling with many recorded child issue links has bounded reads', async () => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const node = (await h.store.listBuilds())[0]!
+  const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
+  await nodePollingReadBudget({
+    store: h.store as MemoryBuildStore,
+    slug: node.slug,
+    advance: (ms) => h.clock.advance(ms),
+    issueLinkChildren: true,
+    tick: () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+}, 60_000)
+
 for (const failure of ['throw', 'contend'] as const)
   for (const boundary of [false, true])
     test(`node checkpoint ${failure} retries durably at ${boundary ? 'idle boundary' : 'initial anchor'}`, async () => {
@@ -13267,4 +13289,255 @@ test('workspace preservation refuses a live execution lease before any provider 
   expect((await h.store.getEvents(slug)).some((event) => event.type === 'workspace.fenced')).toBe(
     false,
   )
+})
+
+describe('node issue links (SPEC "Forge issue links")', () => {
+  type Link = { issue: number; intent: 'closes' | 'refs' }
+  async function seedNode(h: Harness, slug: string, target?: string) {
+    await h.store.createBuild({ slug, repo: REPO, branch: `ab-node/${slug}` })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: slug.toUpperCase() },
+        repo: REPO,
+        baseBranch: target === undefined ? 'main' : `ab-node/${target}`,
+        kind: 'node',
+        ...(target !== undefined
+          ? { target: { build: target, ticket: { source: 'fake', id: target.toUpperCase() } } }
+          : {}),
+      },
+    })
+  }
+  /** A leaf aimed at `node` whose PR the forge reports merged. */
+  async function seedMergedChild(
+    h: Harness,
+    slug: string,
+    node: string,
+    number: number,
+    issueLinks: Link[],
+    downgrade?: number,
+  ) {
+    await h.store.createBuild({ slug, repo: REPO, branch: `ab/${slug}` })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: slug.toUpperCase() },
+        repo: REPO,
+        baseBranch: `ab-node/${node}`,
+        target: { build: node, ticket: { source: 'fake', id: node.toUpperCase() } },
+        issueLinks,
+      },
+    })
+    if (downgrade !== undefined)
+      await h.store.append(slug, {
+        actor: agentActor('implement', 's_1'),
+        type: 'issue-link.downgraded',
+        payload: { issue: downgrade, reason: 'only half' },
+      })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number, url: `https://fake.forge/pr/${number}`, headSha: `head-${number}` },
+      },
+    })
+    h.forge.setPrState(number, { state: 'merged', sha: `squash-${number}` })
+  }
+  const recorded = async (h: Harness, node: string) =>
+    (await h.store.getEvents(node)).filter((event) => event.type === 'node.issue-links-recorded')
+
+  test('a merged child records its effective links, with downgrades, once on its node', async () => {
+    const h = harness()
+    await seedNode(h, 'node-a')
+    await seedMergedChild(
+      h,
+      'child-a',
+      'node-a',
+      11,
+      [
+        { issue: 820, intent: 'closes' },
+        { issue: 824, intent: 'closes' },
+      ],
+      824,
+    )
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(reduceBuild(await h.store.getEvents('child-a')).status).toBe('done')
+    expect((await recorded(h, 'node-a')).map((event) => event.payload)).toEqual([
+      {
+        build: 'child-a',
+        issueLinks: [
+          { issue: 820, intent: 'closes' },
+          { issue: 824, intent: 'refs', downgraded: true },
+        ],
+      },
+    ])
+  })
+
+  test('identical contributions each get a fact, and a crash retry never duplicates', async () => {
+    const h = harness()
+    await seedNode(h, 'node-a')
+    const same: Link[] = [{ issue: 820, intent: 'closes' }]
+    await seedMergedChild(h, 'child-a', 'node-a', 11, same)
+    await seedMergedChild(h, 'child-b', 'node-a', 12, same)
+    const append = h.store.append.bind(h.store)
+    let crashed = false
+    h.store.append = (async (slug: string, write: EventWrite) => {
+      if (!crashed && slug === 'child-b' && write.type === 'build.completed') {
+        crashed = true
+        throw new Error('crash before completion')
+      }
+      return append(slug, write)
+    }) as typeof h.store.append
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(crashed).toBe(true)
+    expect(reduceBuild(await h.store.getEvents('child-b')).status).not.toBe('done')
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(reduceBuild(await h.store.getEvents('child-b')).status).toBe('done')
+    expect((await recorded(h, 'node-a')).map((event) => event.payload)).toEqual([
+      { build: 'child-a', issueLinks: same },
+      { build: 'child-b', issueLinks: same },
+    ])
+    expect(reduceBuild(await h.store.getEvents('node-a')).nodeIssueLinks).toEqual({
+      builds: ['child-a', 'child-b'],
+      links: same,
+    })
+  })
+
+  /** A root node whose PR is already open on the forge. */
+  async function seedOpenNodePr(h: Harness, slug: string) {
+    await seedNode(h, slug)
+    const pr = await h.forge.openPr({
+      workspacePath: '/repo',
+      head: `ab-node/${slug}`,
+      base: 'main',
+      title: `Integration: ${slug}`,
+      body: `Integration build ${slug}.`,
+    })
+    h.forge.setPrState(pr.number, { state: 'open', mergeable: null })
+    await h.store.append(slug, { actor: DISPATCHER, type: 'pr.opened', payload: { pr } })
+    return pr.number
+  }
+  const linkForge = () => {
+    const forge = new FakeForge({ closesIssues: true })
+    forge.seedBranch('main', BASE_SHA)
+    return forge
+  }
+
+  test('a child landing after the node PR opened rewrites its keyword lines once', async () => {
+    const h = harness({ forge: linkForge() })
+    const number = await seedOpenNodePr(h, 'node-a')
+    await seedMergedChild(h, 'child-a', 'node-a', 11, [{ issue: 820, intent: 'closes' }])
+    await seedMergedChild(
+      h,
+      'child-b',
+      'node-a',
+      12,
+      [
+        { issue: 824, intent: 'closes' },
+        { issue: 830, intent: 'closes' },
+      ],
+      824,
+    )
+    await h.dispatcher.tick({ acceptNewWork: false })
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const union: Link[] = [
+      { issue: 820, intent: 'closes' },
+      { issue: 824, intent: 'refs' },
+      { issue: 830, intent: 'closes' },
+    ]
+    expect(h.forge.issueLinkUpdates.at(-1)).toEqual({ number, issueLinks: union })
+    expect(h.forge.opened[number - 1]!.body).toBe(
+      'Integration build node-a.\n\nCloses #820\nRefs #824\nCloses #830',
+    )
+    expect(reduceBuild(await h.store.getEvents('node-a')).nodeIssueLinks?.published).toMatchObject({
+      pr: number,
+      issueLinks: union,
+    })
+    const calls = h.forge.issueLinkUpdates.length
+    for (const elapsed of [10_000, 600_000, 120_000]) {
+      h.clock.advance(elapsed)
+      await h.dispatcher.tick({ acceptNewWork: false })
+    }
+    expect(h.forge.issueLinkUpdates).toHaveLength(calls)
+  })
+
+  test('a forge without the capability records the union and emits nothing', async () => {
+    const h = harness()
+    const number = await seedOpenNodePr(h, 'node-a')
+    await seedMergedChild(h, 'child-a', 'node-a', 11, [{ issue: 820, intent: 'closes' }])
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.janitorFailed).toBe(0)
+    expect(h.forge.updatePrIssueLinks).toBeUndefined()
+    expect(h.forge.opened[number - 1]!.body).toBe('Integration build node-a.')
+    const state = reduceBuild(await h.store.getEvents('node-a'))
+    expect(state.nodeIssueLinks).toEqual({
+      builds: ['child-a'],
+      links: [{ issue: 820, intent: 'closes' }],
+    })
+  })
+
+  test('a nested node passes its union up and its own PR never gets keywords', async () => {
+    const h = harness({ forge: linkForge() })
+    const root = await seedOpenNodePr(h, 'node-a')
+    await seedNode(h, 'node-b', 'node-a')
+    const nested = await h.forge.openPr({
+      workspacePath: '/repo',
+      head: 'ab-node/node-b',
+      base: 'ab-node/node-a',
+      title: 'Integration: node-b',
+      body: 'Integration build node-b.',
+    })
+    h.forge.setPrState(nested.number, { state: 'open', mergeable: null })
+    await h.store.append('node-b', {
+      actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr: nested },
+    })
+    await seedMergedChild(
+      h,
+      'child-b',
+      'node-b',
+      21,
+      [
+        { issue: 820, intent: 'closes' },
+        { issue: 824, intent: 'closes' },
+      ],
+      824,
+    )
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(reduceBuild(await h.store.getEvents('node-b')).nodeIssueLinks?.links).toEqual([
+      { issue: 820, intent: 'closes' },
+      { issue: 824, intent: 'refs', downgraded: true },
+    ])
+    expect(h.forge.issueLinkUpdates.filter((update) => update.number === nested.number)).toEqual([])
+    h.forge.setPrState(nested.number, { state: 'merged', sha: 'squash-nested' })
+    for (const elapsed of [120_000, 120_000]) {
+      h.clock.advance(elapsed)
+      await h.dispatcher.tick({ acceptNewWork: false })
+    }
+    expect((await recorded(h, 'node-a')).map((event) => event.payload)).toEqual([
+      {
+        build: 'node-b',
+        issueLinks: [
+          { issue: 820, intent: 'closes' },
+          { issue: 824, intent: 'refs', downgraded: true },
+        ],
+      },
+    ])
+    expect(h.forge.opened[nested.number - 1]!.body).toBe('Integration build node-b.')
+    expect(h.forge.issueLinkUpdates.filter((update) => update.number === nested.number)).toEqual([])
+    expect(h.forge.issueLinkUpdates.at(-1)).toEqual({
+      number: root,
+      issueLinks: [
+        { issue: 820, intent: 'closes' },
+        { issue: 824, intent: 'refs' },
+      ],
+    })
+  })
 })

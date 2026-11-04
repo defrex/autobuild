@@ -1393,3 +1393,51 @@ describe('forge issue link facts', () => {
     ).toThrow(/may not emit/)
   })
 })
+
+describe('node issue link facts', () => {
+  const recorded = (payload: unknown) =>
+    validateEventWrite({ actor: DISPATCHER, type: 'node.issue-links-recorded', payload })
+  const published = (payload: unknown) =>
+    validateEventWrite({ actor: KERNEL, type: 'node.issue-links-published', payload })
+
+  test('a recorded contribution names its child and nonempty unique links', () => {
+    const payload = {
+      build: 'child-a',
+      issueLinks: [
+        { issue: 820, intent: 'closes' as const },
+        { issue: 824, intent: 'refs' as const, downgraded: true as const },
+      ],
+    }
+    expect(recorded(payload).payload).toEqual(payload)
+    expect(() => recorded({ build: 'child-a', issueLinks: [] })).toThrow(/invalid payload/)
+    expect(() =>
+      recorded({
+        build: 'child-a',
+        issueLinks: [
+          { issue: 820, intent: 'closes' },
+          { issue: 820, intent: 'refs' },
+        ],
+      }),
+    ).toThrow(/duplicate issue #820/)
+    expect(() =>
+      recorded({ build: 'child-a', issueLinks: [{ issue: 1, intent: 'refs', downgraded: false }] }),
+    ).toThrow(/invalid payload/)
+    expect(() => recorded({ ...payload, extra: true })).toThrow(/invalid payload/)
+    expect(() =>
+      validateEventWrite({
+        actor: agentActor('implement', 's_1'),
+        type: 'node.issue-links-recorded',
+        payload,
+      }),
+    ).toThrow(/may not emit/)
+  })
+
+  test('a publication names a positive PR and its confirmed lines', () => {
+    const payload = { pr: 7, issueLinks: [{ issue: 820, intent: 'closes' as const }] }
+    expect(published(payload).payload).toEqual(payload)
+    expect(() => published({ ...payload, pr: 0 })).toThrow(/invalid payload/)
+    expect(() =>
+      published({ pr: 7, issueLinks: [{ issue: 820, intent: 'refs', downgraded: true }] }),
+    ).toThrow(/invalid payload/)
+  })
+})
