@@ -54,6 +54,7 @@ import type { SetupAgentLauncher } from './init-agent'
 import { abModels } from './models'
 import { recognizeHelpRequest, renderCommandHelp, renderTopLevelHelp } from './help'
 import { observe } from './observe'
+import { downgradeIssueLink } from './issue-links'
 import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
 import { abBuildAssetGet, abBuilds, abBuildStatus } from './status'
@@ -1570,6 +1571,21 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(refs !== undefined ? { refs } : {}),
       })
       stdout(`observation recorded: ${event.payload.id}`)
+      return 0
+    }
+
+    case 'issue': {
+      const usage = 'usage: ab issue downgrade <N> --reason <text>'
+      const [sub, ...more] = rest
+      if (sub !== 'downgrade') throw new Error(usage)
+      const parsed = parseArgs(more, { reason: 'value' }, usage)
+      const [issue] = parsed.positionals
+      if (issue === undefined || parsed.positionals.length !== 1) throw new Error(usage)
+      const reason = stringFlag(parsed, 'reason')
+      if (reason === undefined) throw new Error("'ab issue downgrade' requires --reason <text>")
+      const session = requireSession(command, deps)
+      const event = await downgradeIssueLink(session, { issue, reason })
+      stdout(`issue #${event.payload.issue} downgraded to refs (seq ${event.seq})`)
       return 0
     }
 

@@ -43,6 +43,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `context` — Materialize the current phase's inputs.
 - `artifact` — Deposit, fetch, or download versioned artifacts.
 - `observe` — Record an observation outside the build's scope.
+- `issue` — Downgrade a linked issue from closes to refs, with a reason.
 - `done` — Complete a producer phase.
 - `verdict` — Complete a review or verification phase.
 - `escalate` — Park the build with a question for you.

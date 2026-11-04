@@ -163,12 +163,14 @@ import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution
 import type {
   DependencyState,
   Forge,
+  IssueLink,
   Ticket,
   TicketSource,
   WorkspaceProvider,
   WorkspaceProvisionResult,
 } from '../ports/types'
 import { NoCommitsBetweenBranchesError, TicketSourceRateLimitError } from '../ports/types'
+import { issueLinksForForge } from '../kernel/issue-keywords'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
 import { preparePinnedAssets } from '../store/ticket-assets'
@@ -3661,6 +3663,7 @@ export class Dispatcher {
               .setAutoMerge(workspacePath, pr.number, true, {
                 buildSlug: record.slug,
                 baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+                ...issueLinksForForge(state, forge),
                 canApply: async () => {
                   if (!(await canApply())) return false
                   if (enableSeq === undefined)
@@ -3750,6 +3753,7 @@ export class Dispatcher {
         await forge.squashMerge(workspacePath, pr.number, result.headSha, {
           buildSlug: record.slug,
           baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+          ...issueLinksForForge(state, forge),
         })
       }
     }
@@ -4267,8 +4271,9 @@ export class Dispatcher {
 
   // ── b. Interrupted dispatch recovery ───────────────────────────────────────
 
-  /** The claim-time `build.created` payload. Assets are omitted when the ticket
-   * had none, so a no-asset build's log is exactly what it was before. */
+  /** The claim-time `build.created` payload. Assets and issue links are
+   * omitted when the ticket had none, so such a build's log is exactly what it
+   * was before. */
   private buildCreatedPayload(
     ticket: TicketRef,
     repo: string,
@@ -4277,6 +4282,7 @@ export class Dispatcher {
           autoMergeUser?: string
           autoMergeDefaultSeq?: number
           assets?: PinnedAsset[]
+          issueLinks?: IssueLink[]
           kind?: 'work' | 'node'
           target?: EventPayload<'build.created'>['target']
           baseBranch?: string
@@ -4296,6 +4302,9 @@ export class Dispatcher {
         : {}),
       ...(config.pr !== undefined ? { pr: config.pr } : {}),
       ...(seed?.assets !== undefined && seed.assets.length > 0 ? { assets: seed.assets } : {}),
+      ...(seed?.issueLinks !== undefined && seed.issueLinks.length > 0
+        ? { issueLinks: seed.issueLinks.map(({ issue, intent }) => ({ issue, intent })) }
+        : {}),
     }
   }
 
@@ -4359,7 +4368,13 @@ export class Dispatcher {
         await store.appendIfCurrent(record.slug, 0, {
           actor: DISPATCHER,
           type: 'build.created',
-          payload: this.buildCreatedPayload(record.ticket, record.repo, { ...seed, assets }),
+          payload: this.buildCreatedPayload(record.ticket, record.repo, {
+            ...seed,
+            assets,
+            ...(seed?.ticket.issueLinks !== undefined
+              ? { issueLinks: seed.ticket.issueLinks }
+              : {}),
+          }),
         })
         events = (await readBuildFacts(store, record.slug)).value
         if (events.created === undefined) {
@@ -5495,6 +5510,9 @@ export class Dispatcher {
             ? { autoMergeDefaultSeq: autoMergeSeedFact.seq }
             : {}),
           assets,
+          // Frozen from the same claimed ticket sample as the body (SPEC
+          // "Forge issue links"); later ticket edits never reach this build.
+          ...(ticket.issueLinks !== undefined ? { issueLinks: ticket.issueLinks } : {}),
         }
         // `build.created` rides with the record so the pinned assets and the
         // record exist together or not at all.

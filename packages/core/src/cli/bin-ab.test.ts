@@ -194,6 +194,7 @@ const BUILD_SESSION_COMMANDS = [
   ['artifact put', ['artifact', 'put', 'notes', 'notes.md']],
   ['artifact get', ['artifact', 'get', 'notes']],
   ['observe', ['observe', '--kind', 'followup', 'record this']],
+  ['issue downgrade', ['issue', 'downgrade', '824', '--reason', 'partial']],
   ['done', ['done']],
   ['verdict', ['verdict', 'approve']],
   ['escalate', ['escalate', 'Which behavior is intended?']],
