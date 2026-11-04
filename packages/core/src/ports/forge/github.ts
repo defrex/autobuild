@@ -14,7 +14,12 @@ import {
 import { inspectGitHubReadiness } from './github-readiness'
 import type { ForgeReadinessInput } from './readiness'
 import { gitRewrite, publishBranch, remoteBranchHead, refreshBranchCache } from './git-rewrite'
-import { historyContainsBuild, withBuildTrailer } from '../../kernel/build-identity'
+import { historyContainsBuild } from '../../kernel/build-identity'
+import {
+  landingMessage,
+  neutralizeClosingReferences,
+  withIssueKeywords,
+} from '../../kernel/issue-keywords'
 import { NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
 /**
@@ -69,6 +74,7 @@ import type {
   ClosePrResult,
   PrAttachmentHosting,
   Forge,
+  IssueLink,
   PrRef,
   PrState,
 } from '../types'
@@ -652,6 +658,7 @@ export class GitHubForge implements Forge {
     }
   }
   readonly name = 'github'
+  readonly closesIssues = true
   readonly prAttachments: PrAttachmentHosting
 
   private readonly transport: GitHubRequest
@@ -938,6 +945,7 @@ export class GitHubForge implements Forge {
     title: string
     body: string
     mergeMessage?: string
+    issueLinks?: readonly IssueLink[]
   }): Promise<PrRef> {
     // Idempotent by head branch (SPEC §8.7 crash paths): finalize's `ab done`
     // opens the PR BEFORE appending finalize.completed, so a crash or store
@@ -964,11 +972,18 @@ export class GitHubForge implements Forge {
     }
     const existing = await probe()
     if (existing) return existing
+    const links = opts.issueLinks ?? []
+    const repository = `${owner}/${name}`
     try {
       const created = this.parse(
         restPrRef,
         await this.request('POST', `${repoPath}/pulls`, {
-          body: { title: opts.title, head: opts.head, base: opts.base, body: opts.body },
+          body: {
+            title: neutralizeClosingReferences(opts.title, links, { repository }),
+            head: opts.head,
+            base: opts.base,
+            body: withIssueKeywords(opts.body, links, { repository, trailers: false }),
+          },
         }),
         'PR create',
       )
@@ -1560,7 +1575,7 @@ export class GitHubForge implements Forge {
         options === undefined ? undefined : await this.squashMessage(number, options.baseBranch)
       if (message !== undefined && options !== undefined) {
         if (message.state !== 'OPEN') return { kind: 'deferred' }
-        if (this.identityMessageMatches(message, options.buildSlug)) return { kind: 'applied' }
+        if (await this.identityMessageMatches(message, options)) return { kind: 'applied' }
       }
       const { view, mergeState, requeries, waitedMs } = await this.inspectAutoMergeView(
         repoPath,
@@ -1705,17 +1720,40 @@ export class GitHubForge implements Forge {
     )
   }
 
-  private identityMessageMatches(
+  /** The landed squash headline and body. Writers and the identity
+   * comparison share this one composition, so they cannot diverge. */
+  private async landingSquashMessage(
     view: z.infer<typeof squashMessageData>['repository']['pullRequest'],
-    buildSlug: string,
-  ): boolean {
+    options: BuildLandingOptions,
+  ): Promise<{ headline: string; body: string }> {
+    const links = options.issueLinks ?? []
+    if (links.length === 0)
+      return {
+        headline: view.viewerMergeHeadlineText,
+        body: landingMessage(view.viewerMergeBodyText, options.buildSlug, links),
+      }
+    const { owner, name } = await this.requireCoordinates()
+    const repository = `${owner}/${name}`
+    return {
+      headline: neutralizeClosingReferences(view.viewerMergeHeadlineText, links, { repository }),
+      body: landingMessage(view.viewerMergeBodyText, options.buildSlug, links, { repository }),
+    }
+  }
+
+  private async identityMessageMatches(
+    view: z.infer<typeof squashMessageData>['repository']['pullRequest'],
+    options: BuildLandingOptions,
+  ): Promise<boolean> {
+    if (
+      view.autoMergeRequest === null ||
+      view.autoMergeRequest.mergeMethod !== 'SQUASH' ||
+      view.autoMergeRequest.commitBody === null
+    )
+      return false
+    const expected = await this.landingSquashMessage(view, options)
     return (
-      view.autoMergeRequest !== null &&
-      view.autoMergeRequest.mergeMethod === 'SQUASH' &&
-      view.autoMergeRequest.commitBody !== null &&
-      view.autoMergeRequest.commitHeadline === view.viewerMergeHeadlineText &&
-      view.autoMergeRequest.commitBody.trimEnd() ===
-        withBuildTrailer(view.viewerMergeBodyText, buildSlug).trimEnd()
+      view.autoMergeRequest.commitHeadline === expected.headline &&
+      view.autoMergeRequest.commitBody.trimEnd() === expected.body.trimEnd()
     )
   }
 
@@ -1726,10 +1764,10 @@ export class GitHubForge implements Forge {
     message: z.infer<typeof squashMessageData>['repository']['pullRequest'],
   ): Promise<AutoMergeResult> {
     const expectedBase = message.baseRefName
-    const matches = (view: typeof message): boolean =>
-      this.identityMessageMatches(view, options.buildSlug)
+    const matches = (view: typeof message): Promise<boolean> =>
+      this.identityMessageMatches(view, options)
     if (message.state !== 'OPEN' || message.headRefOid !== expectedHead) return { kind: 'deferred' }
-    if (matches(message)) return { kind: 'applied' }
+    if (await matches(message)) return { kind: 'applied' }
     if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
     if (message.autoMergeRequest !== null) {
       await this.graphql(
@@ -1748,6 +1786,7 @@ export class GitHubForge implements Forge {
         return { kind: 'deferred' }
     }
     if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
+    const landing = await this.landingSquashMessage(message, options)
     await this.graphql(
       'enablePullRequestAutoMerge',
       enableAutoMergeData,
@@ -1756,15 +1795,15 @@ export class GitHubForge implements Forge {
         pullRequestId: message.id,
         mergeMethod: 'SQUASH',
         expectedHeadOid: message.headRefOid,
-        commitHeadline: message.viewerMergeHeadlineText,
-        commitBody: withBuildTrailer(message.viewerMergeBodyText, options.buildSlug),
+        commitHeadline: landing.headline,
+        commitBody: landing.body,
       },
     )
     const after = await this.squashMessage(number, message.baseRefName)
     return after.state === 'OPEN' &&
       after.headRefOid === message.headRefOid &&
       after.baseRefName === expectedBase &&
-      matches(after)
+      (await matches(after))
       ? { kind: 'applied' }
       : {
           kind: 'deferred',
@@ -1826,6 +1865,10 @@ export class GitHubForge implements Forge {
     ) {
       throw new Error('GitHub squash message head changed; retry inspection')
     }
+    const landing =
+      message !== undefined && options !== undefined
+        ? await this.landingSquashMessage(message, options)
+        : undefined
     await this.request(
       'PUT',
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
@@ -1833,11 +1876,8 @@ export class GitHubForge implements Forge {
         body: {
           merge_method: 'squash',
           sha: expectedHeadSha,
-          ...(message !== undefined && options !== undefined
-            ? {
-                commit_title: message.viewerMergeHeadlineText,
-                commit_message: withBuildTrailer(message.viewerMergeBodyText, options.buildSlug),
-              }
+          ...(landing !== undefined
+            ? { commit_title: landing.headline, commit_message: landing.body }
             : {}),
         },
       },
