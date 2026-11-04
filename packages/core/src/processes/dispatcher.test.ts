@@ -99,6 +99,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
     resolved: over.resolved ?? over.state === 'Done',
     labels: over.labels ?? ['autobuild'],
     ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
+    ...(over.issueLinks !== undefined ? { issueLinks: over.issueLinks } : {}),
   }
 }
 
@@ -856,6 +857,45 @@ describe('Dispatcher dispatch', () => {
     expect(h.workspaces.provisions).toEqual([
       { repo: REPO, baseBranch: 'trunk', branch: 'ab/add-rate-limiting' },
     ])
+  })
+
+  test('freezes the claimed ticket issue links into build.created', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('T-linked', {
+          issueLinks: [
+            { issue: 820, intent: 'refs' },
+            { issue: 824, intent: 'closes' },
+          ],
+        }),
+      ],
+    })
+
+    await h.dispatcher.tick()
+
+    const created = (await h.store.getEvents('add-rate-limiting')).find(
+      (event) => event.type === 'build.created',
+    )
+    expect(created?.payload.issueLinks).toEqual([
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'closes' },
+    ])
+    // A later ticket edit never reaches the claimed build.
+    await h.tickets.update('T-linked', { issueLinks: [{ issue: 1, intent: 'closes' }] })
+    await h.dispatcher.tick()
+    expect(reduceBuild(await h.store.getEvents('add-rate-limiting')).issueLinks).toEqual([
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'closes' },
+    ])
+  })
+
+  test('a ticket without issue links writes no issueLinks key', async () => {
+    const h = harness({ tickets: [readyTicket('T-plain')] })
+    await h.dispatcher.tick()
+    const created = (await h.store.getEvents('add-rate-limiting')).find(
+      (event) => event.type === 'build.created',
+    )
+    expect(created !== undefined && 'issueLinks' in created.payload).toBe(false)
   })
 
   test('freezes an enabled PR image host into build.created', async () => {

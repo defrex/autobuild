@@ -2338,3 +2338,82 @@ test('cancellation fences the verifier terminal before and after session end', (
     ).diagnostic,
   ).toContain('cancelled')
 })
+
+describe('issueLinks (SPEC "Forge issue links")', () => {
+  const created = (issueLinks?: { issue: number; intent: 'closes' | 'refs' }[]) =>
+    ev('build.created', {
+      ticket: { source: 'file', id: 'file-1' },
+      repo: 'defrex/app',
+      baseBranch: 'main',
+      ...(issueLinks !== undefined ? { issueLinks } : {}),
+    })
+  const linked = created([
+    { issue: 820, intent: 'closes' },
+    { issue: 824, intent: 'closes' },
+    { issue: 900, intent: 'refs' },
+  ])
+  const downgrade = (issue: number, reason = 'only the API half') =>
+    ev('issue-link.downgraded', { issue, reason })
+  const sealed = ev('issue-links.sealed', {})
+
+  test('is empty for historical logs and frozen from build.created', () => {
+    expect(reduceBuild(toLog([created()])).issueLinks).toEqual([])
+    const state = reduceBuild(toLog([linked]))
+    expect(state.issueLinks.map(({ issue, intent }) => `${intent} #${issue}`)).toEqual([
+      'closes #820',
+      'closes #824',
+      'refs #900',
+    ])
+    expect(state.issueLinksSealedSeq).toBeUndefined()
+  })
+
+  test('a downgrade before the seal turns closes into refs with provenance', () => {
+    const state = reduceBuild(toLog([linked, downgrade(824), sealed]))
+    expect(state.issueLinks[1]).toEqual({
+      issue: 824,
+      intent: 'refs',
+      downgrade: { reason: 'only the API half', seq: 2 },
+    })
+    expect(state.issueLinksSealedSeq).toBe(3)
+  })
+
+  test('a downgrade after any seal fact is inert', () => {
+    const request = ev('publication.requested', {
+      operation: 'finalize',
+      branch: 'ab/x',
+      sha: 'a'.repeat(40),
+      description: { kind: 'pr-description', rev: 1 },
+    })
+    const completed = ev('finalize.completed', {
+      pr: { number: 7, url: 'https://github.com/defrex/app/pull/7', headSha: 'sha-1' },
+    })
+    for (const seal of [sealed, request, completed]) {
+      const state = reduceBuild(toLog([linked, seal, downgrade(824)]))
+      expect(state.issueLinks[1]).toEqual({ issue: 824, intent: 'closes' })
+      expect(state.issueLinksSealedSeq).toBe(2)
+    }
+    // A later seal fact never moves the window.
+    expect(reduceBuild(toLog([linked, sealed, request])).issueLinksSealedSeq).toBe(2)
+    // Non-finalize publications do not seal.
+    const implement = ev('publication.requested', {
+      operation: 'implement',
+      branch: 'ab/x',
+      sha: 'a'.repeat(40),
+      round: 1,
+      base: 'b'.repeat(40),
+      artifact: { kind: 'implement-notes', rev: 1 },
+    })
+    expect(reduceBuild(toLog([linked, implement])).issueLinksSealedSeq).toBeUndefined()
+  })
+
+  test('downgrading a refs, an unknown or an already downgraded link is inert', () => {
+    const state = reduceBuild(
+      toLog([linked, downgrade(900), downgrade(1), downgrade(820), downgrade(820, 'again')]),
+    )
+    expect(state.issueLinks).toEqual([
+      { issue: 820, intent: 'refs', downgrade: { reason: 'only the API half', seq: 4 } },
+      { issue: 824, intent: 'closes' },
+      { issue: 900, intent: 'refs' },
+    ])
+  })
+})

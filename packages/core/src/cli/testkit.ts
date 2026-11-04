@@ -37,7 +37,13 @@ export function makeEnv(overrides: Partial<CliEnv> = {}): CliEnv {
 
 /** Build + `build.created` + spec@0 (`spec.imported`) — every phase's floor. */
 export async function seedStore(
-  opts: { imageHost?: PrImageHostTarget; assets?: PinnedAsset[] } = {},
+  opts: {
+    imageHost?: PrImageHostTarget
+    assets?: PinnedAsset[]
+    issueLinks?: { issue: number; intent: 'closes' | 'refs' }[]
+    target?: { ticket: { source: string; id: string }; build: string }
+    baseBranch?: string
+  } = {},
 ): Promise<MemoryBuildStore> {
   const store = new MemoryBuildStore({ clock: steppingClock() })
   await store.createBuild({
@@ -57,9 +63,11 @@ export async function seedStore(
         title: 'Auth rate limiting',
       },
       repo: 'acme/app',
-      baseBranch: 'main',
+      baseBranch: opts.baseBranch ?? 'main',
+      ...(opts.target !== undefined ? { target: opts.target } : {}),
       ...(opts.imageHost !== undefined ? { pr: { imageHost: opts.imageHost } } : {}),
       ...(opts.assets !== undefined ? { assets: opts.assets } : {}),
+      ...(opts.issueLinks !== undefined ? { issueLinks: opts.issueLinks } : {}),
     },
   })
   await store.putArtifact(BUILD, {

@@ -257,6 +257,40 @@ describe('FakeForge', () => {
     })
   })
 
+  test('issue keywords are composed only when the fake declares closesIssues', async () => {
+    const issueLinks = [
+      { issue: 820, intent: 'closes' as const },
+      { issue: 824, intent: 'refs' as const },
+    ]
+    const plain = new FakeForge()
+    expect(plain.closesIssues).toBeUndefined()
+    await plain.openPr(prOpts({ title: 'Fixes #824', body: 'fixes #824\n', issueLinks }))
+    expect(plain.opened[0]).toMatchObject({ title: 'Fixes #824', body: 'fixes #824\n' })
+
+    const forge = new FakeForge({
+      gatePresence: 'absent',
+      mergeSha: 'squash-1',
+      closesIssues: true,
+    })
+    const pr = await forge.openPr(
+      prOpts({
+        title: 'Fixes #824',
+        body: 'This fixes #824\n',
+        mergeMessage: '# Fixes #824\n\nThis fixes #824\n',
+        issueLinks,
+      }),
+    )
+    expect(forge.opened[0]).toMatchObject({
+      title: 'Refs #824',
+      body: 'This refs #824\n\nCloses #820\nRefs #824\n',
+    })
+    forge.setPrState(pr.number, { state: 'open', mergeable: true })
+    await forge.squashMerge('/ws/a', pr.number, 'sha-1', { buildSlug: 'linked-build', issueLinks })
+    expect(await forge.readCommitMessage('/ws/a', 'squash-1')).toBe(
+      '# Refs #824\n\nThis refs #824\n\nCloses #820\nRefs #824\n\nAutobuild-Build: linked-build\n',
+    )
+  })
+
   test('guarded squash rejects a moved head and never journals or lands it', async () => {
     const forge = new FakeForge({ gatePresence: 'absent', headSha: 'old-head' })
     const pr = await forge.openPr(prOpts())
