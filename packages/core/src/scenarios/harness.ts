@@ -135,6 +135,7 @@ export function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {})
     state: over.state ?? 'Ready',
     resolved: false,
     labels: over.labels ?? ['autobuild'],
+    ...(over.issueLinks !== undefined ? { issueLinks: over.issueLinks } : {}),
   }
 }
 
@@ -413,6 +414,8 @@ export async function makeHarness(opts: {
   getConfig?: () => Config
   /** Forge gate existence is independent from current PR mergeability. */
   gatePresence?: 'present' | 'absent'
+  /** Let the fake forge compose issue keywords like GitHub. */
+  closesIssues?: boolean
   /** Optional adapter-level runtime composition for focused integration tests.
    * The scripted agent remains available as the fake provider behind it. */
   createRuntimeRegistry?: (agents: ScriptedAgentRunner) => RuntimeRegistry
@@ -475,6 +478,7 @@ export async function makeHarness(opts: {
     const forge = new FakeForge({
       gatePresence: opts.gatePresence ?? 'present',
       ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
+      ...(opts.closesIssues === true ? { closesIssues: true } : {}),
     })
     // This fixture's served bare repository is the authoritative forge, even
     // when FakeForge supplies the scripted PR surface.

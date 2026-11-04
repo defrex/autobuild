@@ -116,7 +116,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   A failed stage sends every failed report to `implement` after its siblings
   settle; an optional `failFast` failure cancels unfinished siblings.
 - **`finalize`** — the agent writes the PR description; the kernel opens the
-  PR. `[finalize].steps` run afterward and are failure-tolerant. A
+  PR, sealing the build's [issue links](#issue-links-in-builds) first and
+  writing their `Closes #N` / `Refs #N` lines when the forge supports them.
+  `[finalize].steps` run afterward and are failure-tolerant. A
   content-producing step commits selected files locally and finishes clean;
   the runner pushes the exact descendant SHA and confirms forge readback before recording success.
 - **Restacking and epilogue.** The kernel replays one net leaf change at verify
@@ -383,7 +385,8 @@ The distinctions that change an administrator's answer:
   operation: durable PR records live under private Git refs, the review locator
   is `refs/heads/ab/<slug>`, and consent merges a local guarded, unsigned squash
   whose message is the deposited PR description and whose author and committer
-  come from the repository's ordinary Git identity. If Git cannot resolve that
+  come from the repository's ordinary Git identity. `local-git` writes no issue
+  keyword lines; a build's issue links stay in build state. If Git cannot resolve that
   identity, the PR remains open with actionable `user.name` / `user.email`
   guidance and later dispatcher ticks retry. Without consent it remains open for
   ordinary `git diff` inspection; it has no review UI or image host.
@@ -1753,7 +1756,9 @@ and provider metadata. `--labels` is a complete replacement and an explicitly
 empty value (`--labels ''`) clears the list. `--issues` records the forge issues
 a ticket addresses: `N` (intent `closes`, the default) when the ticket fully
 resolves the issue, `N:refs` when it only partly addresses it. Attach the
-originating issue whenever a ticket comes from one. On update `--issues` is a
+originating issue whenever a ticket comes from one. A build freezes the links
+when it claims the ticket and turns them into PR and commit keywords; see
+[issue links in builds](#issue-links-in-builds). On update `--issues` is a
 complete replacement and `--issues ''` clears it. A source that cannot store
 issue links refuses any write naming them, names itself, and writes nothing.
 Supplied title/body values must be
@@ -1809,6 +1814,39 @@ By convention the `design` kind is a visual or reference contract, exported to
 static files when the ticket is groomed, so no build converts a link. The spec
 cites it by kind and name. See [the lifecycle](#the-lifecycle) for how phases
 judge against it.
+
+### Issue links in builds
+
+A ticket's [issue links](#source-agnostic-ticket-operations) reach the forge
+through the build that claims it:
+
+- **Frozen at claim.** `build.created` records the links. Later ticket edits
+  and spec revisions leave a running build's links alone.
+- **Where phases find them.** `ab context` lists them under `issueLinks` in
+  `$AB_CONTEXT_DIR/context.json` with each effective `intent` and any
+  `downgradeReason`, and the derived `ticket.md` gains an `- issues:` line. The
+  key is absent when the build has none. `ab build status` shows an `issues:`
+  line, and `--json` carries `issueLinks` and `issueLinksSealed`.
+- **Downgrade.** An agent that finds the build only partly resolves a
+  `closes` issue runs `ab issue downgrade <N> --reason <text>`. The issue
+  becomes `refs` and the reason is recorded. Downgrading a `refs` or unlinked
+  issue is refused, and nothing can upgrade a link.
+- **Sealed at finalize.** Before the kernel opens the PR it seals the links
+  (remote finalize is sealed by its publication request). A downgrade after
+  the seal is refused and changes nothing; use `ab escalate` instead.
+- **What is written.** On a leaf aimed at the configured base branch, a forge
+  that declares issue-closing support (GitHub) ends the PR body with one
+  `Closes #N` or `Refs #N` line per link, ascending by issue number, whatever
+  the description says. The landed squash commit, including forge auto-merge,
+  carries the same paragraph before its trailer block (`Co-authored-by`,
+  `Autobuild-Build`). Any closing keyword aimed at a `refs` issue in the PR
+  title, body or landing message, including `owner/name#N` and issue URLs for
+  the same repository, is rewritten to `refs`, so prose can't close it. Merging
+  closes each `closes` issue and leaves each `refs` issue open with a back-link.
+- **What is not.** A leaf aimed at an integration node writes nothing, since
+  GitHub closes issues only from the default branch. `local-git`, the fake
+  forge and other forges without the capability record links and downgrades
+  but write no lines; the build still succeeds.
 
 ## Retrieving build artifacts
 

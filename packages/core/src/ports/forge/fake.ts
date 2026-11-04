@@ -1,5 +1,10 @@
 import { readinessChecks, type ForgeReadinessCheck } from './readiness'
-import { hasBuildTrailer, withBuildTrailer } from '../../kernel/build-identity'
+import { hasBuildTrailer } from '../../kernel/build-identity'
+import {
+  landingMessage,
+  neutralizeClosingReferences,
+  withIssueKeywords,
+} from '../../kernel/issue-keywords'
 import type { BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
 /**
@@ -20,6 +25,7 @@ import type {
   PrAttachmentReclaimRequest,
   PrAttachmentUploadRequest,
   Forge,
+  IssueLink,
   PrRef,
   PrState,
 } from '../types'
@@ -137,6 +143,8 @@ export class FakeForge implements Forge {
       : { kind: 'gated', reason: 'Fake destination requires merge gates' }
   }
   readonly name = 'fake'
+  /** Absent by default, matching a forge without issue-closing support. */
+  readonly closesIssues?: boolean
   readonly archives = new Map<string, string>()
   readonly rewrites: { branch: string; expected: string; sha: string }[] = []
   rewrite: import('../types').ForgeRewrite = {
@@ -232,8 +240,11 @@ export class FakeForge implements Forge {
       /** Hosting is unsupported by default, matching a forge without this
        * optional capability. Tests opt in explicitly. */
       prAttachments?: boolean
+      /** Compose issue keywords like GitHub; absent by default. */
+      closesIssues?: boolean
     } = {},
   ) {
+    if (opts.closesIssues === true) this.closesIssues = true
     this.headSha = opts.headSha ?? ((n) => `sha-${n}`)
     this.mergeSha = opts.mergeSha ?? ((n) => `squash-${n}`)
     // Existing tests model the historical, gated native path unless they opt
@@ -525,6 +536,7 @@ export class FakeForge implements Forge {
     title: string
     body: string
     mergeMessage?: string
+    issueLinks?: readonly IssueLink[]
   }): Promise<PrRef> {
     // Idempotent by head branch, mirroring GitHubForge (SPEC §8.7).
     for (let i = this.opened.length - 1; i >= 0; i -= 1) {
@@ -538,7 +550,16 @@ export class FakeForge implements Forge {
       }
     }
     const number = this.nextNumber++
-    this.opened.push({ ...opts })
+    const { issueLinks, ...record } = opts
+    const links = this.closesIssues === true ? (issueLinks ?? []) : []
+    this.opened.push({
+      ...record,
+      title: neutralizeClosingReferences(record.title, links),
+      body: withIssueKeywords(record.body, links, { trailers: false }),
+      ...(record.mergeMessage !== undefined
+        ? { mergeMessage: withIssueKeywords(record.mergeMessage, links) }
+        : {}),
+    })
     this.registerPr(number, { state: 'open', mergeable: null })
     return {
       number,
@@ -662,7 +683,13 @@ export class FakeForge implements Forge {
     const message = this.opened[number - 1]?.mergeMessage ?? this.opened[number - 1]?.body ?? ''
     this.commitMessages.set(
       this.resolveMergeSha(number),
-      options === undefined ? message : withBuildTrailer(message, options.buildSlug),
+      options === undefined
+        ? message
+        : landingMessage(
+            message,
+            options.buildSlug,
+            this.closesIssues === true ? (options.issueLinks ?? []) : [],
+          ),
     )
     this.prs.set(number, { state: 'merged', sha: this.resolveMergeSha(number) })
   }

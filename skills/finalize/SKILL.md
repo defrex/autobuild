@@ -31,6 +31,16 @@ Guidance is an external operator answer, from the operator agent or a human.
    - Follow the PR template if the context includes one.
    Do not paste the audit trail — the kernel's summary comment appends verdict
    history and links into the store.
+
+   **Linked issues.** When the manifest lists `issueLinks`, don't write
+   closing or reference keywords for those issues yourself. On a leaf aimed at
+   the default branch through a forge that closes issues (GitHub), the kernel
+   ends the PR body with one `Closes #N` or `Refs #N` line per linked issue
+   and puts the same lines in the landed commit. It also rewrites any closing
+   keyword aimed at a `refs` issue (`fixes #N`, `closes #N`, …) in the title
+   and body to `refs`. If this PR only partly resolves a `closes` issue, run
+   `ab issue downgrade N --reason "<what remains>"` **before** `ab done`.
+   `ab done` seals the links, and a later downgrade is refused.
 3. Finish:
 
    ```
