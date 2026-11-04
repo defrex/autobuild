@@ -1265,7 +1265,9 @@ if (testUrl) {
           before[key].map(({ team: _team, ...row }: Row) => ({
             repo,
             ...row,
-            ...(key === 'tickets' ? { revision: 1, kind: 'work', target_id: null } : {}),
+            ...(key === 'tickets'
+              ? { revision: 1, kind: 'work', target_id: null, issue_links: [] }
+              : {}),
           })),
         )
       expect(world.requests.length).toBeGreaterThan(0)
@@ -1732,7 +1734,7 @@ if (testUrl)
       try {
         await migratePostgres(world.url)
         await sql`DROP TABLE ab_ticket_states, ab_ticket_counters`
-        await sql`ALTER TABLE ab_tickets DROP COLUMN readable_id, DROP COLUMN ticket_number, DROP COLUMN kind, DROP COLUMN target_id`
+        await sql`ALTER TABLE ab_tickets DROP COLUMN readable_id, DROP COLUMN ticket_number, DROP COLUMN kind, DROP COLUMN target_id, DROP COLUMN issue_links`
         await sql`ALTER TABLE ab_tickets DROP COLUMN revision`
         await sql.unsafe(version === 2 ? TICKET_SCHEMA_V2_DDL : TICKET_SCHEMA_V3_DDL)
         if (version === 3)
@@ -1779,7 +1781,7 @@ if (testUrl)
       await migratePostgres(world.url)
       const sql = new SQL(world.url)
       try {
-        await sql`ALTER TABLE ab_tickets DROP COLUMN kind, DROP COLUMN target_id`
+        await sql`ALTER TABLE ab_tickets DROP COLUMN kind, DROP COLUMN target_id, DROP COLUMN issue_links`
         await sql`UPDATE ab_ticket_schema_migrations SET version = 5, checksum = ${FROZEN.ticket.get(5)!.checksum}`
         await sql`INSERT INTO ab_tickets (repo,id,readable_id,ticket_number,title,body,state,labels,created_at,updated_at,revision) VALUES ('repo','internal','ENG-1',1,'Existing','Body','done',ARRAY[]::text[],now(),now(),42)`
         await sql`INSERT INTO ab_ticket_comments VALUES ('repo','internal',1,'Comment',now())`
@@ -1788,6 +1790,7 @@ if (testUrl)
         expect(before[0]).toMatchObject({
           kind: 'work',
           target_id: null,
+          issue_links: [],
           readable_id: 'ENG-1',
           revision: '42',
         })
@@ -1803,7 +1806,49 @@ if (testUrl)
   })
 
 if (testUrl)
+  test('populated frozen ticket v6 gains empty issue links idempotently without changing revisions', async () => {
+    const world = await schemaHarness()
+    try {
+      await migratePostgres(world.url)
+      const sql = new SQL(world.url)
+      try {
+        await sql`ALTER TABLE ab_tickets DROP COLUMN issue_links`
+        await sql`UPDATE ab_ticket_schema_migrations SET version = 6, checksum = ${FROZEN.ticket.get(6)!.checksum}`
+        await sql`INSERT INTO ab_tickets (repo,id,readable_id,ticket_number,title,body,state,labels,created_at,updated_at,revision) VALUES ('repo','internal','ENG-1',1,'Existing','Body','done',ARRAY[]::text[],now(),now(),42)`
+        await migratePostgres(world.url)
+        await assertTicketSchema(sql)
+        const before = await sql`SELECT * FROM ab_tickets`
+        expect(before[0]).toMatchObject({ issue_links: [], readable_id: 'ENG-1', revision: '42' })
+        await migratePostgres(world.url)
+        expect(await sql`SELECT * FROM ab_tickets`).toEqual(before)
+        const [marker] = await sql`SELECT version, checksum FROM ab_ticket_schema_migrations`
+        expect(Number(marker.version)).toBe(TICKET_SCHEMA_VERSION)
+        expect(marker.checksum).toBe(TICKET_SCHEMA_CHECKSUM)
+        const database = await openPostgresTicketDatabase(world.url)
+        try {
+          const ticket = await database
+            .source({
+              teamKey: 'ENG',
+              repo: 'repo',
+              lifecycle: { triage: 'triage', ready: 'ready', doing: 'doing', done: 'done' },
+            })
+            .get('ENG-1')
+          expect(ticket?.revision).toBe('42')
+          expect(ticket && 'issueLinks' in ticket).toBe(false)
+        } finally {
+          await database.close()
+        }
+      } finally {
+        await sql.close()
+      }
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+if (testUrl)
   test.each([
+    'ALTER TABLE ab_tickets DROP COLUMN issue_links',
     'ALTER TABLE ab_tickets DROP COLUMN kind',
     'ALTER TABLE ab_tickets DROP CONSTRAINT ab_tickets_kind_check',
     'ALTER TABLE ab_tickets DROP CONSTRAINT ab_tickets_target_fk',

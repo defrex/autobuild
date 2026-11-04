@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { projectTicketTree } from './tree'
 import { TicketSourceRateLimitError } from '../types'
 import { LINEAR_API_URL, LinearTicketSource, type LinearFetch } from './linear'
+import { TicketIssueLinksUnsupported } from './issue-links'
 
 interface RecordedCall {
   url: string
@@ -694,6 +695,23 @@ describe('LinearTicketSource', () => {
       await expect(
         makeSource(fetchFn).create({ title: 'X', body: 'y' }, { idempotencyKey }),
       ).rejects.toThrow('linear create: idempotency key must be a UUID v4')
+    }
+    expect(calls).toHaveLength(0)
+  })
+
+  test('writes naming issue links are refused before any Linear request', async () => {
+    const { fetchFn, calls } = fakeLinear([])
+    const source = makeSource(fetchFn)
+    const links = [{ issue: 824, intent: 'closes' as const }]
+    for (const write of [
+      () => source.create({ title: 'X', body: 'y', issueLinks: links }),
+      () => source.create({ title: 'X', body: 'y', issueLinks: [] }),
+      () => source.update('ENG-42', { issueLinks: links }),
+      () => source.update('ENG-42', { title: 'Renamed', issueLinks: [] }),
+    ]) {
+      const error = await rejectionOf(write())
+      expect(error).toBeInstanceOf(TicketIssueLinksUnsupported)
+      expect((error as TicketIssueLinksUnsupported).source).toBe('linear')
     }
     expect(calls).toHaveLength(0)
   })

@@ -337,6 +337,8 @@ test('ticket listings have a fixed statement budget regardless of target cardina
           state: 'Ready',
           labels: [],
           blockers: [],
+          // Text form exercises the driver's unparsed jsonb path.
+          issue_links: i % 2 === 0 ? '[{"issue":1,"intent":"closes"}]' : '[]',
           target_id: targets === 'none' ? null : `target-${targets === 'shared' ? 0 : i}`,
           ...(query.includes('AS target_readable_id')
             ? {

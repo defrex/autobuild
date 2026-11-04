@@ -14,8 +14,11 @@ import { describeTicketSourceContract } from '@defrex/autobuild/plugin-sdk'
 import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
   HostedTicketSource,
+  TICKET_ISSUE_LINKS_HEADER,
+  TICKET_ISSUE_LINKS_CAPABILITY,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
+  TicketIssueLinksUnsupported,
 } from '@defrex/autobuild/hosted-tickets'
 import { createTicketServer } from './ticket-server'
 
@@ -539,4 +542,90 @@ test('tree, revision and comment response capabilities are independent', async (
     expect('revision' in value).toBe(!!(mask & 2))
     if (mask & 1) expect(value).toMatchObject({ kind: 'node', target: parent.ref.id })
   }
+})
+
+test('issue links project only behind their capability and every response advertises it', async () => {
+  const { server, source } = harness()
+  const linked = await source.create({
+    title: 'Linked',
+    body: 'Body',
+    issueLinks: [
+      { issue: 824, intent: 'closes' },
+      { issue: 820, intent: 'refs' },
+    ],
+  })
+  expect(linked.issueLinks).toEqual([
+    { issue: 820, intent: 'refs' },
+    { issue: 824, intent: 'closes' },
+  ])
+  const post = (operation: string, input: unknown, links: boolean) =>
+    server.fetch(
+      new Request(`https://tickets.example/tickets/${operation}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          'content-type': 'application/json',
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          ...(links ? { [TICKET_ISSUE_LINKS_HEADER]: TICKET_ISSUE_LINKS_CAPABILITY } : {}),
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+      }),
+    )
+  for (const links of [true, false]) {
+    const response = await post('get', { id: linked.ref.id }, links)
+    expect(response.headers.get(TICKET_ISSUE_LINKS_HEADER)).toBe(TICKET_ISSUE_LINKS_CAPABILITY)
+    const value = (await response.json()) as Record<string, unknown>
+    expect('issueLinks' in value).toBe(links)
+    const listing = (await (await post('list-ready', {}, links)).json()) as {
+      tickets: Record<string, unknown>[]
+    }
+    expect(listing.tickets.some((ticket) => 'issueLinks' in ticket)).toBe(links)
+  }
+  const invalid = await post('get', { id: '' }, true)
+  expect(invalid.status).toBe(400)
+  expect(invalid.headers.get(TICKET_ISSUE_LINKS_HEADER)).toBe(TICKET_ISSUE_LINKS_CAPABILITY)
+  const unknown = await post('nope', {}, false)
+  expect(unknown.status).toBe(404)
+  expect(unknown.headers.get(TICKET_ISSUE_LINKS_HEADER)).toBe(TICKET_ISSUE_LINKS_CAPABILITY)
+})
+
+test('a backend without issue-link support refuses link-setting writes with a typed conflict', async () => {
+  const fake = new FakeTicketSource([], { doneState: 'Done' })
+  const backend = Object.assign(Object.create(fake), { issueLinks: false }) as FakeTicketSource
+  const { server, source } = harness(backend)
+  const before = (await fake.listAll()).tickets.length
+  const raw = await server.fetch(
+    new Request('https://tickets.example/tickets/create', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${operator}`,
+        'content-type': 'application/json',
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      },
+      body: JSON.stringify({
+        context: { teamKey: 'ENG' },
+        input: { draft: { title: 'X', body: 'Y', issueLinks: [{ issue: 1, intent: 'closes' }] } },
+      }),
+    }),
+  )
+  expect(raw.status).toBe(409)
+  expect(await raw.json()).toMatchObject({ kind: 'conflict', code: 'issue-links-unsupported' })
+  const refused = await source
+    .create({ title: 'X', body: 'Y', issueLinks: [{ issue: 1, intent: 'closes' }] })
+    .catch((error: unknown) => error)
+  expect(refused).toBeInstanceOf(TicketIssueLinksUnsupported)
+  expect((refused as TicketIssueLinksUnsupported).source).toBe('hosted')
+  const plain = await source.create({ title: 'Plain', body: 'Y' })
+  const update = await source
+    .update(plain.ref.id, { issueLinks: [] })
+    .catch((error: unknown) => error)
+  expect(update).toBeInstanceOf(TicketIssueLinksUnsupported)
+  const guarded = await source
+    .mutateIfRevision(plain.ref.id, plain.revision, { kind: 'update', patch: { issueLinks: [] } })
+    .catch((error: unknown) => error)
+  expect(guarded).toBeInstanceOf(TicketIssueLinksUnsupported)
+  expect((await fake.listAll()).tickets.length).toBe(before + 1)
+  expect((await fake.get(plain.ref.id))?.revision).toBe(plain.revision)
 })
