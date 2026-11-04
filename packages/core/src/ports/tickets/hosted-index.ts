@@ -21,6 +21,7 @@ export {
   TicketRevisionUnsupported,
   mutateTicketIfRevision,
 } from './revision'
+export { TicketIssueLinksUnsupported } from './issue-links'
 
 export { hostedTicketPolicySchema, type HostedTicketPolicy } from './remote-protocol'
 export { ticketLifecycle } from './lifecycle'

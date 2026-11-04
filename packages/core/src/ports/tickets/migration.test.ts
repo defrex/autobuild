@@ -540,3 +540,35 @@ for (const boundary of ['already', 'snapshot', 'assets', 'staging'] as const) {
     expect(lines.some((line) => line.startsWith('exported'))).toBe(false)
   })
 }
+
+test('issue links survive export and import, and a target without them refuses first', async () => {
+  const source = new FileTicketSource({ dir: join(root, 'links-source') })
+  await source.create(
+    {
+      title: 'Linked',
+      body: 'Body',
+      issueLinks: [
+        { issue: 824, intent: 'closes' },
+        { issue: 820, intent: 'refs' },
+      ],
+    },
+    { requestedId: 'linked' },
+  )
+  const dir = join(root, 'links-export')
+  await exportTickets({ source, dir, repo: 'repo' })
+  const target = new FileTicketSource({ dir: join(root, 'links-target') })
+  await importTickets({ source: target, dir, repo: 'repo' })
+  expect((await target.get('linked'))?.issueLinks).toEqual([
+    { issue: 820, intent: 'refs' },
+    { issue: 824, intent: 'closes' },
+  ])
+
+  const plain = new FileTicketSource({ dir: join(root, 'links-unsupported') })
+  const unsupported = Object.assign(Object.create(plain) as FileTicketSource, {
+    issueLinks: false,
+  })
+  await expect(importTickets({ source: unsupported, dir, repo: 'repo' })).rejects.toThrow(
+    'cannot store issue links',
+  )
+  expect((await plain.listAll()).tickets).toHaveLength(0)
+})

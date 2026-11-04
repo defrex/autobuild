@@ -55,6 +55,7 @@ import type {
   TicketMutation,
 } from '../types'
 import { validateTicketUpdate } from './update'
+import { normalizeIssueLinks } from './issue-links'
 
 /** Repo-relative fallback when no selected local-state root is supplied. */
 export const DEFAULT_TICKETS_DIR = '.autobuild/tickets'
@@ -95,6 +96,7 @@ interface Located {
 export class FileTicketSource implements TicketSource {
   readonly name = 'file'
   readonly integrationTree = true
+  readonly issueLinks = true
   readonly requestedIds = fileRequestedIds
   readonly assets: FileTicketAssets
 
@@ -291,6 +293,7 @@ export class FileTicketSource implements TicketSource {
       ...(draft.blockedBy !== undefined && draft.blockedBy.length > 0
         ? { blockedBy: [...draft.blockedBy] }
         : {}),
+      ...(draft.issueLinks?.length ? { issueLinks: normalizeIssueLinks(draft.issueLinks) } : {}),
       ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
     }
     if (taken.has(front.id)) throw new Error(`requested ticket id already occupied: ${front.id}`)
@@ -329,6 +332,7 @@ export class FileTicketSource implements TicketSource {
       else if (canonicalTarget !== undefined) front.target = canonicalTarget
       if (patch.title !== undefined) front.title = patch.title
       if (patch.labels !== undefined) front.labels = patch.labels
+      setIssueLinks(front, patch.issueLinks)
       if (patch.body !== undefined) body = patch.body
     } else if (mutation.kind === 'blockers') {
       const blockers = new Set(front.blockedBy ?? [])
@@ -354,6 +358,7 @@ export class FileTicketSource implements TicketSource {
       ...(validated.labels !== undefined ? { labels: [...validated.labels] } : {}),
     }
     if (canonicalTarget === null) delete front.target
+    setIssueLinks(front, validated.issueLinks)
     await this.rewriteAt(loaded.found, front, validated.body ?? loaded.body)
   }
 
@@ -665,6 +670,7 @@ export class FileTicketSource implements TicketSource {
         labels: front.labels,
         state,
         blockedBy: front.blockedBy,
+        issueLinks: front.issueLinks,
         ...(front.comments !== undefined ? { comments: front.comments } : {}),
         ...(front.attachments !== undefined ? { attachments: front.attachments } : {}),
       }),
@@ -679,8 +685,16 @@ export class FileTicketSource implements TicketSource {
       ...(front.blockedBy !== undefined && front.blockedBy.length > 0
         ? { blockedBy: [...front.blockedBy] }
         : {}),
+      ...(front.issueLinks?.length ? { issueLinks: normalizeIssueLinks(front.issueLinks) } : {}),
     }
   }
+}
+
+/** A named set replaces the stored one; an empty set removes the key. */
+function setIssueLinks(front: Frontmatter, links: TicketUpdate['issueLinks']): void {
+  if (links === undefined) return
+  if (links.length > 0) front.issueLinks = normalizeIssueLinks(links)
+  else delete front.issueLinks
 }
 
 function duplicateError(id: string, paths: string[]): Error {

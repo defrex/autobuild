@@ -1,4 +1,9 @@
-import { compatibleTicketSource, normalizeTicket } from './tree'
+import { compatibleTicketSource, normalizeSourceTicket } from './tree'
+import {
+  normalizeIssueLinks,
+  refuseUnsupportedIssueLinks,
+  TicketIssueLinksUnsupported,
+} from './issue-links'
 import {
   mutateTicketIfRevision,
   TicketRevisionConflict,
@@ -29,7 +34,7 @@ export function missingTicket(source: TicketSource, id: string): TicketOperation
 export async function requireTicket(source: TicketSource, id: string): Promise<Ticket> {
   const ticket = await source.get(id)
   if (ticket === null) throw missingTicket(source, id)
-  return normalizeTicket(ticket, !!source.integrationTree)
+  return normalizeSourceTicket(source, ticket)
 }
 
 export async function requirePostMutationTicket(
@@ -44,7 +49,7 @@ export async function requirePostMutationTicket(
       `ticket "${id}" disappeared from the configured ${source.name} ticket source after ${operation}`,
     )
   }
-  return normalizeTicket(ticket, !!source.integrationTree)
+  return normalizeSourceTicket(source, ticket)
 }
 
 export function ticketListCriteria(
@@ -54,6 +59,15 @@ export function ticketListCriteria(
   return filters.state === undefined && filters.labels === undefined
     ? readyCriteria(config)
     : filters
+}
+
+/** Typed failures operator transports map themselves rather than as a generic refusal. */
+function passthrough(error: unknown): boolean {
+  return (
+    error instanceof TicketRevisionConflict ||
+    error instanceof TicketRevisionUnsupported ||
+    error instanceof TicketIssueLinksUnsupported
+  )
 }
 
 async function knownBlockers(
@@ -80,6 +94,7 @@ export async function createTicket(
   input: TicketDraft & { state?: string },
   options: { blockerErrorPrefix?: string; blockerErrorSuffix?: string } = {},
 ): Promise<Ticket> {
+  refuseUnsupportedIssueLinks(source, input)
   source = compatibleTicketSource(source)
   const blockedBy = await knownBlockers(
     source,
@@ -94,14 +109,16 @@ export async function createTicket(
     body: input.body,
     ...(input.labels !== undefined ? { labels: [...input.labels] } : {}),
     ...(blockedBy.length > 0 ? { blockedBy } : {}),
+    ...(input.issueLinks !== undefined
+      ? { issueLinks: normalizeIssueLinks(input.issueLinks) }
+      : {}),
   }
   try {
     return input.state === undefined
       ? await source.create(draft)
       : await source.create(draft, { state: input.state })
   } catch (error) {
-    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
-      throw error
+    if (passthrough(error)) throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),
@@ -116,14 +133,14 @@ export async function updateTicket(
   readAfter = true,
   expectedRevision?: string,
 ): Promise<Ticket | null> {
+  refuseUnsupportedIssueLinks(source, patch)
   source = compatibleTicketSource(source)
   try {
     if (expectedRevision !== undefined)
       await mutateTicketIfRevision(source, id, expectedRevision, { kind: 'update', patch })
     else await source.update(id, patch)
   } catch (error) {
-    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
-      throw error
+    if (passthrough(error)) throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),
@@ -144,8 +161,7 @@ export async function moveTicket(
       await mutateTicketIfRevision(source, id, expectedRevision, { kind: 'transition', state })
     else await source.transition(id, state)
   } catch (error) {
-    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
-      throw error
+    if (passthrough(error)) throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),
@@ -182,8 +198,7 @@ export async function changeBlockers(
         else await source.removeBlocker(id, blockerId)
       }
   } catch (error) {
-    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
-      throw error
+    if (passthrough(error)) throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),

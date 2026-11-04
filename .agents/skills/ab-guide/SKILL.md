@@ -1694,12 +1694,12 @@ The sessionless `ab ticket` namespace constructs whichever TicketSource the
 repository's `[tickets]` table selects. These forms therefore work unchanged
 with Linear and the file tracker, without provider-specific API/MCP calls:
 
-- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]`
+- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--json]`
   files a ticket. Without `--state`, the source uses `[tickets].createState` or
   its own default. A named state is passed through unchanged and the selected
   source validates it before creating anything. Blocker ids belong to the same
   source and are also checked before the single create call.
-- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]`
+- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--json]`
   partially replaces editable fields. At least one editable flag is required;
   `--json` alone is not an update.
 - `ab ticket block <id> <blocker-id[,blocker-id...]> [--json]` adds one or more
@@ -1750,7 +1750,13 @@ prevent an active dispatcher from claiming a partially created ready ticket.
 
 Update is partial: omitted fields remain untouched, including labels, assignee,
 and provider metadata. `--labels` is a complete replacement and an explicitly
-empty value (`--labels ''`) clears the list. Supplied title/body values must be
+empty value (`--labels ''`) clears the list. `--issues` records the forge issues
+a ticket addresses: `N` (intent `closes`, the default) when the ticket fully
+resolves the issue, `N:refs` when it only partly addresses it. Attach the
+originating issue whenever a ticket comes from one. On update `--issues` is a
+complete replacement and `--issues ''` clears it. A source that cannot store
+issue links refuses any write naming them, names itself, and writes nothing.
+Supplied title/body values must be
 nonblank. State is intentionally not an update field — `transition()` remains its sole owner —
 and every validation or unknown-ticket error occurs before
 mutation and names the offending field or id. `--body` always names a file; a
@@ -2791,14 +2797,15 @@ revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
-kind, target, id, blockers, creation key and reference comments are read-only. It saves only
+kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
 changed fields with the opening revision. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; reverting identical content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links. Reverting identical
+content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
 cover structured comments and portable attachments. Legacy file comments change

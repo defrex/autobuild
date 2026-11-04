@@ -161,6 +161,7 @@ export {
   ticketRevision,
   checkTicketRevision,
 } from '../ports/tickets/revision'
+export { TicketIssueLinksUnsupported, normalizeIssueLinks } from '../ports/tickets/issue-links'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
 export { ForgeFailure, isForgeFailure } from '../ports/forge-failure'
 export type {
