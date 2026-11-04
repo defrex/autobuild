@@ -84,6 +84,17 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
   ab observe --kind followup "…"
   ```
 
+- **Downgrade a linked issue you only partly resolve.** When the manifest
+  lists `issueLinks` and the spec leaves part of a `closes` issue undone, record
+  it so the PR and landed commit write `Refs #N` instead of `Closes #N`:
+
+  ```
+  ab issue downgrade 824 --reason "<what remains>"
+  ```
+
+  The reason shows in `ab build status`. Downgrades are one-way, and they are
+  refused once finalize seals the links.
+
 - **Handle feedback before anything else.** A round with feedback carries
   exactly one kind, named by `$AB_CONTEXT_DIR/context.json`'s `feedback` field:
   `findings` → resolve every finding in `$AB_CONTEXT_DIR/findings.json`; findings you

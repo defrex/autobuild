@@ -4,6 +4,7 @@ import { suspendNativeLanding } from '../kernel/landing-publication'
 import { validateNodeChange } from '../kernel/node-restack'
 import { validateRestack, retainReplay } from '../kernel/reconcile-restack'
 import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
+import { issueLinksForForge } from '../kernel/issue-keywords'
 /**
  * The three terminal commands — `ab done`, `ab verdict`, `ab escalate`
  * (SPEC §8.4 D5, §8.5 D6, §8.6 D7).
@@ -270,9 +271,17 @@ export async function completeFinalizePr(
   input: FinalizePrInput,
 ): Promise<EventEnvelope> {
   const { env, store } = deps
-  const boundary = (await readBuildFacts(store, env.build)).value.state
+  let boundary = (await readBuildFacts(store, env.build)).value.state
   const diagnostic = compatibilityDiagnostic(boundary.compatibility)
   if (diagnostic) throw new MixedVersionDeferral(diagnostic)
+  // Seal the issue links before the first PR side effect: every downgrade
+  // ordered before the seal is composed, every later one is inert, so retries
+  // and an adopted PR always carry the same keywords. Remote finalize was
+  // already sealed by its publication request.
+  if (boundary.issueLinks.length > 0 && boundary.issueLinksSealedSeq === undefined) {
+    await store.append(env.build, { actor: KERNEL, type: 'issue-links.sealed', payload: {} })
+    boundary = (await readBuildFacts(store, env.build)).value.state
+  }
   const pr = await deps.forge.openPr({
     workspacePath: deps.workspacePath,
     head: input.branch,
@@ -280,6 +289,7 @@ export async function completeFinalizePr(
     title: input.title,
     body: input.body,
     mergeMessage: input.mergeMessage,
+    ...issueLinksForForge(boundary, deps.forge),
   })
   if (input.expectedHeadSha !== undefined && pr.headSha !== input.expectedHeadSha) {
     throw new Error(

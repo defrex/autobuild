@@ -80,6 +80,7 @@ import { buildProgress, isDiverged, type BuildProgress } from './build-progress'
 import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { buildInRepository, resolveMainRepo } from './repo-state'
 import { writeAssetTo } from './ticket-assets'
+import { describeIssueLinks } from '../kernel/issue-keywords'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
 /** Backward-compatible name for callers/tests; repository resolution is shared. */
@@ -176,6 +177,10 @@ export interface BuildDetail extends BuildSummary {
   openEscalations: OpenEscalation[]
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
+  /** Frozen forge issue links with effective intent; omitted when none. */
+  issueLinks?: BuildState['issueLinks']
+  /** Present with `issueLinks`: whether finalize sealed them for the PR. */
+  issueLinksSealed?: boolean
   suspendedSessions: OpenSession[]
   sessionTotals: BuildState['sessions']['totals']
   openSessions: StatusOpenSession[]
@@ -391,6 +396,12 @@ export function detailFromFacts(
       ? { supersededEscalations: state.verifyStage.superseded }
       : {}),
     openEscalations: state.openEscalations,
+    ...(state.issueLinks.length > 0
+      ? {
+          issueLinks: state.issueLinks,
+          issueLinksSealed: state.issueLinksSealedSeq !== undefined,
+        }
+      : {}),
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
@@ -611,6 +622,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     const title = d.ticket.title !== undefined ? ` — ${d.ticket.title}` : ''
     lines.push(`  ticket:   ${d.ticket.id}${title}`)
     if (d.ticket.url !== undefined) lines.push(`  ticket url: ${d.ticket.url}`)
+  }
+  if (d.issueLinks !== undefined) {
+    const sealed = d.issueLinksSealed === true ? ' (sealed)' : ''
+    lines.push(`  issues:   ${safeStatusText(describeIssueLinks(d.issueLinks))}${sealed}`)
   }
   if (d.target)
     lines.push(
