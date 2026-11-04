@@ -27,6 +27,12 @@ import * as storeWire from './compatibility-fixtures/store-v0.9'
 import * as ticketWire from './compatibility-fixtures/tickets-v0.9'
 import * as ticket12 from './compatibility-fixtures/tickets-v0.12'
 import * as ticket13 from './compatibility-fixtures/tickets-v0.13'
+import * as ticket120 from './compatibility-fixtures/tickets-v1.2'
+import {
+  HostedTicketSource,
+  TICKET_ISSUE_LINKS_HEADER,
+  TicketIssueLinksUnsupported,
+} from '@defrex/autobuild/hosted-tickets'
 import * as operatorWire from './compatibility-fixtures/operator-v0.9'
 
 const secret = 'historical-contract'
@@ -537,6 +543,107 @@ for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.v
     }
   })
 }
+
+// Issue links need an explicit capability, so published 1.2–1.4 clients keep
+// their strict historical ticket shape (frozen in tickets-v1.2.ts).
+for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
+  const version = publication.version
+  test(`published ${version} ticket decoders survive stored issue links`, async () => {
+    const source = new FakeTicketSource()
+    const links = [
+      { issue: 820, intent: 'refs' as const },
+      { issue: 824, intent: 'closes' as const },
+    ]
+    const linked = await source.create(
+      { title: 'Linked', body: 'Body', issueLinks: links },
+      { idempotencyKey: 'adopt-linked' },
+    )
+    const server = createTicketServer({ secret, sourceFor: () => source })
+    const call = async (operation: 'create' | 'get' | 'update' | 'list-ready', input: unknown) => {
+      const body = ticket120.hostedTicketRequestSchemas[operation].parse({
+        context: { teamKey: 'ENG' },
+        input,
+      })
+      const req = request(`/tickets/${operation}`, version, body, token, publication.protocol!)
+      req.headers.set(ticket120.TICKET_TREE_HEADER, ticket120.TICKET_TREE_CAPABILITY)
+      req.headers.set(ticket120.TICKET_REVISIONS_HEADER, ticket120.TICKET_REVISIONS_CAPABILITY)
+      req.headers.set(ticket120.TICKET_COMMENTS_HEADER, ticket120.TICKET_COMMENTS_CAPABILITY)
+      const response = await server.fetch(req)
+      expect(response.ok).toBe(true)
+      return response.json()
+    }
+    const fetched = ticket120.ticketWireSchema.parse(await call('get', { id: linked.ref.id }))
+    ticket120.ticketListingWireSchema.parse(await call('list-ready', {}))
+    ticket120.ticketWireSchema.parse(
+      await call('create', {
+        draft: { title: 'Adopt', body: 'Body' },
+        options: { idempotencyKey: 'adopt-linked' },
+      }),
+    )
+    ticket120.successWireSchema.parse(
+      await call('update', { id: linked.ref.id, patch: { title: 'Updated' } }),
+    )
+    expect(await source.get(linked.ref.id)).toMatchObject({ title: 'Updated', issueLinks: links })
+    // Prove that projection, rather than permissive fixture decoding, enables compatibility.
+    expect(ticket120.ticketWireSchema.safeParse({ ...fetched, issueLinks: links }).success).toBe(
+      false,
+    )
+  })
+}
+
+test('a current client reports a published server refusing issue links with a typed error', async () => {
+  const backend = new FakeTicketSource()
+  const current = createTicketServer({ secret, sourceFor: () => backend })
+  // Emulates the published 1.2–1.4 server: its strict request schemas refuse the
+  // unknown key, and it never advertises the issue-link capability.
+  const published = async (req: Request): Promise<Response> => {
+    const operation = new URL(req.url).pathname.slice('/tickets/'.length)
+    const raw = await req.clone().json()
+    const schema =
+      ticket120.hostedTicketRequestSchemas[
+        operation as keyof typeof ticket120.hostedTicketRequestSchemas
+      ]
+    const parsed = schema.safeParse(raw)
+    if (!parsed.success)
+      return Response.json(
+        { kind: 'validation', error: `invalid request body: ${parsed.error.message}` },
+        { status: 400 },
+      )
+    const response = await current.fetch(req)
+    const headers = new Headers(response.headers)
+    headers.delete(TICKET_ISSUE_LINKS_HEADER)
+    return new Response(response.body, { status: response.status, headers })
+  }
+  const client = new HostedTicketSource({
+    url: 'https://tickets.example',
+    token,
+    teamKey: 'ENG',
+    fetchFn: (input, init) => published(new Request(input.toString(), init)),
+  })
+  const links = [{ issue: 1, intent: 'closes' as const }]
+  const plain = await client.create({ title: 'Plain', body: 'Body' })
+  for (const write of [
+    () => client.create({ title: 'Linked', body: 'Body', issueLinks: links }),
+    () => client.update(plain.ref.id, { issueLinks: links }),
+    () => client.update(plain.ref.id, { issueLinks: [] }),
+    () =>
+      client.mutateIfRevision(plain.ref.id, plain.revision, {
+        kind: 'update',
+        patch: { issueLinks: links },
+      }),
+  ]) {
+    const refused = await write().catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(TicketIssueLinksUnsupported)
+    expect((refused as TicketIssueLinksUnsupported).source).toBe('hosted')
+  }
+  expect((await backend.listAll()).tickets.map((ticket) => ticket.title)).toEqual(['Plain'])
+  expect((await backend.get(plain.ref.id))?.revision).toBe(plain.revision)
+  await client.update(plain.ref.id, { title: 'Renamed' })
+  expect((await client.get(plain.ref.id))?.title).toBe('Renamed')
+  // Ordinary validation failures stay generic rather than claiming missing support.
+  const invalid = await client.update(plain.ref.id, {}).catch((error: unknown) => error)
+  expect(invalid).not.toBeInstanceOf(TicketIssueLinksUnsupported)
+})
 
 // Published protocol-6 clients receive the bounded legacy shapes; the current
 // line's own clients speak protocol 7.

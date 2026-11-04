@@ -9,6 +9,8 @@ export {
   TICKET_TREE_CAPABILITY,
   TICKET_COMMENTS_HEADER,
   TICKET_COMMENTS_CAPABILITY,
+  TICKET_ISSUE_LINKS_HEADER,
+  TICKET_ISSUE_LINKS_CAPABILITY,
   hostedTicketContextSchema,
   hostedTicketRequestSchemas,
   TICKET_REVISIONS_HEADER,
@@ -21,7 +23,7 @@ export {
   TicketRevisionUnsupported,
   mutateTicketIfRevision,
 } from './revision'
-export { TicketIssueLinksUnsupported } from './issue-links'
+export { TicketIssueLinksUnsupported, refuseUnsupportedIssueLinks } from './issue-links'
 
 export { hostedTicketPolicySchema, type HostedTicketPolicy } from './remote-protocol'
 export { ticketLifecycle } from './lifecycle'

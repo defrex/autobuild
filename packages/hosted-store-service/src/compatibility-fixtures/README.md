@@ -99,3 +99,12 @@ finished shapes. The service answers them from the frozen catalog in
 `packages/core/src/store/remote/released-reducer-values/1.2.0.json`, taken from
 v1.2.0 (ec484bec559dd64813c9790e2b7d08e55f2384d6). Retain it while 1.2 is in the
 supported window.
+
+The published 1.2.0 through 1.4.2 ticket protocol is frozen in `tickets-v1.2.ts`
+from the remote protocol unchanged since 97cebd30 (#638); its ticket-reference
+decoder is the frozen v0.12 dependency. Issue links require the explicit
+`x-autobuild-ticket-issue-links: 1` capability, so the service projects them
+away for these clients and their strict request schemas never carry them.
+Current services echo that header on every ticket response, so a current client
+recognizes a published service's strict-schema refusal of `issueLinks` as
+`TicketIssueLinksUnsupported`. Contracts exercise both directions.

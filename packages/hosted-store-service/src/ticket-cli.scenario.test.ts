@@ -118,7 +118,17 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       )
     }
 
-    await invoke(['create', 'Parity ticket', '--body', bodyPath, '--state', 'Ready', '--json'])
+    await invoke([
+      'create',
+      'Parity ticket',
+      '--body',
+      bodyPath,
+      '--state',
+      'Ready',
+      '--issues',
+      '824,820:refs',
+      '--json',
+    ])
     await invoke([
       'update',
       'fake-1',
@@ -139,6 +149,10 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
     await invoke(['show', 'fake-1', '--json'])
     expect((output.at(-1) as { comments: unknown }).comments).toEqual([
       { body: commentBody, createdAt: '2026-01-01T00:00:00.000Z' },
+    ])
+    expect((output.at(-1) as { issueLinks: unknown }).issueLinks).toEqual([
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'closes' },
     ])
     await invoke(['unblock', 'fake-1', 'B', '--json'])
     await invoke(['move', 'fake-1', 'Done', '--json'])
@@ -416,7 +430,7 @@ test('file export imports Linear-style ids and states through hosted HTTP with c
     await mkdir(join(root, 'tickets', 'Done'), { recursive: true })
     await writeFile(
       join(root, 'tickets', 'In Progress', 'AUT-706.md'),
-      '+++\nid = "AUT-706"\ntitle = "Preserved"\ntarget = "foreign"\nblockedBy = ["foreign"]\ncomments = [{ body = "exact ☃", createdAt = "2026-01-01T00:00:00Z" }]\nattachments = [{ kind = "design", name = "image", layout = "file", entries = [{ type = "file", path = "image.png", base64 = "AP8=" }] }]\n+++\nexact body\n',
+      '+++\nid = "AUT-706"\ntitle = "Preserved"\ntarget = "foreign"\nblockedBy = ["foreign"]\ncomments = [{ body = "exact ☃", createdAt = "2026-01-01T00:00:00Z" }]\nattachments = [{ kind = "design", name = "image", layout = "file", entries = [{ type = "file", path = "image.png", base64 = "AP8=" }] }]\nissueLinks = [{ issue = 824, intent = "closes" }, { issue = 820, intent = "refs" }]\n+++\nexact body\n',
     )
     await writeFile(
       join(root, 'tickets', 'Done', 'foreign.md'),
@@ -439,6 +453,10 @@ test('file export imports Linear-style ids and states through hosted HTTP with c
     expect((await target.get('AUT-707'))?.state).toBe('done')
     expect((await target.get('AUT-707'))?.kind).toBe('node')
     expect((await target.get('AUT-706'))?.target).toBe('AUT-707')
+    expect((await target.get('AUT-706'))?.issueLinks).toEqual([
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'closes' },
+    ])
     expect(target.comments.filter((c) => c.id === 'AUT-706')).toEqual([
       { id: 'AUT-706', body: 'exact ☃' },
     ])
@@ -450,9 +468,12 @@ test('file export imports Linear-style ids and states through hosted HTTP with c
     // Export the hosted tracker again: the restored bytes travel through its asset seam.
     const roundTrip = join(root, 'hosted-export')
     await run(['export', roundTrip])
-    expect(await readFile(join(roundTrip, 'in-progress', 'AUT-706.md'), 'utf8')).toContain(
-      'base64 = "AP8="',
-    )
+    const exported = await readFile(join(roundTrip, 'in-progress', 'AUT-706.md'), 'utf8')
+    expect(exported).toContain('base64 = "AP8="')
+    // Issue links travel through the hosted client and server in both directions.
+    expect(exported).toContain('[[issueLinks]]')
+    expect(exported).toMatch(/issue = 820\s+intent = "refs"/)
+    expect(exported).toMatch(/issue = 824\s+intent = "closes"/)
   } finally {
     await server.stop(true)
     await rm(root, { recursive: true, force: true })

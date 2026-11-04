@@ -666,7 +666,9 @@ export async function upgradeReadBudget(store: BuildStore): Promise<void> {
 }
 
 /** Measure real ticket-source operations through an injected statement boundary.
- * Each fixture is fresh, so a source-local cache cannot conceal target reads. */
+ * Each fixture is fresh, so a source-local cache cannot conceal target reads.
+ * Listed rows carry one `closes #1` issue link on even-titled tickets and none
+ * on odd ones; statement counts must not change with links. */
 export async function ticketListReadBudget(
   fixture: (
     size: number,
@@ -702,6 +704,10 @@ export async function ticketListReadBudget(
               expect(ticket.target).toBe(
                 targets === 'shared' ? 'AUT-1000' : `AUT-${1000 + Number(ticket.title)}`,
               )
+            // Issue links arrive on the listed row itself, never via a per-ticket read.
+            if (Number(ticket.title) % 2 === 0)
+              expect(ticket.issueLinks).toEqual([{ issue: 1, intent: 'closes' }])
+            else expect(ticket).not.toHaveProperty('issueLinks')
           }
         }
       }

@@ -1,6 +1,7 @@
 import { normalizeTicket } from './tree'
 import { hostedRequestedIds } from './requested-id'
 import { TicketRevisionConflict } from './revision'
+import { TicketIssueLinksUnsupported } from './issue-links'
 import type {
   DependencyState,
   Ticket,
@@ -23,6 +24,8 @@ import {
   type HostedTicketPolicy,
   TICKET_COMMENTS_HEADER,
   TICKET_COMMENTS_CAPABILITY,
+  TICKET_ISSUE_LINKS_HEADER,
+  TICKET_ISSUE_LINKS_CAPABILITY,
   dependencyStatesWireSchema,
   type HostedTicketContext,
   successWireSchema,
@@ -53,6 +56,7 @@ export interface HostedTicketSourceOptions extends HostedTicketContext {
 export class HostedTicketSource implements TicketSource {
   readonly name = 'hosted'
   readonly integrationTree = true
+  readonly issueLinks = true
   readonly requestedIds: ReturnType<typeof hostedRequestedIds>
   readonly assets: import('../types').TicketAssetStore
   private readonly base: string
@@ -97,6 +101,7 @@ export class HostedTicketSource implements TicketSource {
     operation: string,
     input: unknown,
     schema: { parse(value: unknown): T },
+    namesIssueLinks = false,
   ): Promise<T> {
     const response = await this.fetchFn(`${this.base}/tickets/${operation}`, {
       method: 'POST',
@@ -106,6 +111,7 @@ export class HostedTicketSource implements TicketSource {
         [TICKET_COMMENTS_HEADER]: TICKET_COMMENTS_CAPABILITY,
         authorization: `Bearer ${this.token}`,
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
+        [TICKET_ISSUE_LINKS_HEADER]: TICKET_ISSUE_LINKS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
       },
@@ -122,9 +128,21 @@ export class HostedTicketSource implements TicketSource {
           typeof body.id === 'string'
         )
           throw new TicketRevisionConflict(body.id, body.expectedRevision, body.currentRevision)
+        if (body.code === 'issue-links-unsupported')
+          throw new TicketIssueLinksUnsupported(this.name)
         message = errorBodySchema.parse(body).error
+        // A server predating issue links refuses the unknown key with its strict
+        // request schema and never echoes the capability header.
+        if (
+          namesIssueLinks &&
+          response.status === 400 &&
+          response.headers.get(TICKET_ISSUE_LINKS_HEADER) !== TICKET_ISSUE_LINKS_CAPABILITY &&
+          message.includes('issueLinks')
+        )
+          throw new TicketIssueLinksUnsupported(this.name)
       } catch (error) {
-        if (error instanceof TicketRevisionConflict) throw error
+        if (error instanceof TicketRevisionConflict || error instanceof TicketIssueLinksUnsupported)
+          throw error
         // Keep the status-only safe fallback for non-protocol responses.
       }
       if (response.status === 401 || response.status === 403) throw new AuthError(message)
@@ -175,7 +193,14 @@ export class HostedTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
-    return this.project(await this.request('create', { draft, options }, ticketWireSchema))
+    return this.project(
+      await this.request(
+        'create',
+        { draft, options },
+        ticketWireSchema,
+        draft.issueLinks !== undefined,
+      ),
+    )
   }
 
   async mutateIfRevision(
@@ -183,11 +208,16 @@ export class HostedTicketSource implements TicketSource {
     expectedRevision: string,
     mutation: TicketMutation,
   ): Promise<void> {
-    await this.request('mutate-if-revision', { id, expectedRevision, mutation }, successWireSchema)
+    await this.request(
+      'mutate-if-revision',
+      { id, expectedRevision, mutation },
+      successWireSchema,
+      mutation.kind === 'update' && mutation.patch.issueLinks !== undefined,
+    )
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
-    await this.request('update', { id, patch }, successWireSchema)
+    await this.request('update', { id, patch }, successWireSchema, patch.issueLinks !== undefined)
   }
 
   async addBlocker(id: string, blockerId: string): Promise<void> {

@@ -2475,6 +2475,8 @@ as `{issue, intent}`: `issue` is a positive issue number and `intent` is
 only partly addresses it). Issue numbers are unique within a ticket and reads
 return links sorted by number; absent means none. Create sets links; update
 replaces the whole set, and an empty set clears it. Sources declare support.
+The file and hosted sources store links; the Linear source refuses them,
+because Linear links GitHub issues natively through its own integration.
 A source that cannot store links refuses any create or update that names
 them, including an empty set, with a typed error naming the source, before
 anything is written; it never drops them. Writes that name no links are
