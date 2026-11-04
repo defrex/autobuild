@@ -5,6 +5,7 @@ import type { BuildStore, BuildRecord } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
+import { contributedIssueLinks } from './node-issue-links'
 
 /** One exhaustive source sample shared by every node in a dispatcher pass.
  * Scheduling may be cached; publication always requests a sample from this pass. */
@@ -66,6 +67,16 @@ export async function observeIntegration(
     // Frozen claims survive edits to the source ticket's target.
     for (const { record: build, state: child } of builds) {
       if (child.target?.build === slug && child.status !== 'done' && child.status !== 'aborted')
+        children.add(current(build)?.id ?? build.slug)
+      // A merged contribution whose links the node has not recorded stays open
+      // until its merge or abort cleanup appends them, however its ticket moved.
+      if (
+        child.target?.build === slug &&
+        child.prState === 'merged' &&
+        child.outcome === undefined &&
+        !state.nodeIssueLinks?.builds.includes(build.slug) &&
+        contributedIssueLinks(child).length > 0
+      )
         children.add(current(build)?.id ?? build.slug)
       if (
         [child.nodeRestack?.parentRequest, child.nodeRestack?.parentChange].some(

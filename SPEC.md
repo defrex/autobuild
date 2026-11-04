@@ -2514,7 +2514,9 @@ because only the default branch closes issues. Its links travel to the node
 instead. When a child of node N, a leaf or a nested node, reaches `pr.merged`
 by kernel landing, human merge or abort cleanup, the dispatcher appends
 `node.issue-links-recorded {build, issueLinks}` to N before the child completes.
-The payload is the child's contribution: a leaf's effective links, with
+Until that fact exists, a merged child with links that has not completed stays
+one of N's open children, even when it is aborted or its ticket no longer
+targets N, so N cannot verify or land without its contribution. The payload is the child's contribution: a leaf's effective links, with
 `downgraded: true` where a downgrade applied before its seal, or a nested node's
 own union. Every contributing child gets its own fact, even when the union does
 not change, and N's reducer keeps the recorded child slugs so a retry never
