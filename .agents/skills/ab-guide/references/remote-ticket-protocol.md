@@ -312,9 +312,30 @@ Effective metadata changes increment the revision; equivalent aliases are no-ops
 Ticket responses include these fields only with `x-autobuild-ticket-tree: 1`.
 This capability is independent of revision and comment capabilities and of the
 client version. Without it, both fields are projected away, preserving historical
-strict decoders. Current hosted clients send all three capability headers and
+strict decoders. Current hosted clients send every capability header and
 default absent kind to `work`. Unfiltered listing includes all ticket states and
 empty nodes for `ab ticket tree`; dispatch and merge behavior are unchanged.
+
+## Issue links
+
+Hosted tickets store forge issue links as `issueLinks`, an array of
+`{ "issue": N, "intent": "closes" | "refs" }` with unique positive issue numbers.
+Create, update and guarded update accept the field; intent is required on the
+wire. Update replaces the whole set and `[]` clears it. The service stores links
+sorted by issue number. Effective changes increment the revision, and rewriting
+an identical set is a no-op.
+
+Ticket responses include nonempty `issueLinks` only with
+`x-autobuild-ticket-issue-links: 1`, independently of the other capabilities and
+of the client version. Without it, links are projected away for historical strict
+decoders, and stored links survive their writes. Every `/tickets/*` response,
+including errors, carries `x-autobuild-ticket-issue-links: 1`.
+
+A service whose backing source cannot store links refuses a write naming them,
+including `[]`, with `409 { "kind": "conflict", "code": "issue-links-unsupported" }`
+before anything is written. A service predating issue links refuses the unknown
+field with a `400` validation error and no capability header. Clients report both
+as `TicketIssueLinksUnsupported`.
 
 Completed ticket imports record `tickets.migration-recorded` in the selected
 BuildStore repository journal, with export identity, origin/destination adapter

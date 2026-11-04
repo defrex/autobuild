@@ -103,7 +103,7 @@ doneState = "done"
 
 ### Optional issue links
 
-The `file` source stores [forge issue links](tickets.md#groom-a-buildable-spec) as `issueLinks` frontmatter. `hosted` and `linear` don't store them; a create or update that names issue links is refused with an error naming the source, and nothing is written.
+The `file` and `hosted` sources store [forge issue links](tickets.md#groom-a-buildable-spec): as `issueLinks` frontmatter (`file`) or transactional project data (`hosted`). `linear` doesn't, because Linear links GitHub issues natively through its own integration; a create or update that names issue links is refused with an error naming the source, and nothing is written.
 
 ### Optional ticket tree
 

@@ -1470,7 +1470,9 @@ Hosted ticket detail reads expose complete, oldest-first structured comments in
 `ticket.comments`, preserving exact bodies. Scans do not fetch comments. Hosted
 HTTP clients opt in with `x-autobuild-ticket-comments: 1` so historical strict
 decoders retain compatible responses. File comments remain embedded in the body;
-Linear comment reads are unchanged.
+Linear comment reads are unchanged. Issue links follow the same pattern with
+`x-autobuild-ticket-issue-links: 1`, stored in the `ab_tickets.issue_links` jsonb
+column that every listing already selects.
 
 Ticket integration metadata lives in `ports/tickets/tree.ts`: source compatibility
 normalization, capability refusal, graph validation and the pure tree projection.
