@@ -323,9 +323,9 @@ export interface DashboardModel {
   /** Shared occupied/effective slot counter; idle integration nodes are free. */
   active: DashboardCounter
   capacity?: DispatchCapacity
-  /** Recorded observation occurrences not claimed by a Harvest snapshot,
-   * against the configured count-pressure trigger. */
-  observations: DashboardCounter
+  /** Tickets in the configured triage state from the dispatcher's last
+   * successful sample; absent is unknown (`–`). */
+  triage?: number
   /** Durable repository intake state (`true` means claims are disabled). */
   drained: boolean
   /** Durable repository-wide hold (`true` means queued builds cannot launch). */
@@ -1315,7 +1315,7 @@ interface DashboardFrameHeader {
   capacityProjection?: DispatchCapacity
   repo: string
   queued: number
-  observationCount: number
+  triage?: number
   selection?: DashboardSelection
   standby?: string
   availableUpgrade?: string
@@ -1327,7 +1327,6 @@ interface DashboardFrameHeader {
 export interface DashboardHeader extends DashboardFrameHeader {
   activeCount: number
   capacity: number
-  observationLimit: number
 }
 
 /**
@@ -1369,13 +1368,13 @@ export function buildDashboardFromProjected(
     repo: header.repo,
     ...(rollback ? { rollback } : {}),
     ...(upgrade.handoffs.length ? { handoffs: upgrade.handoffs } : {}),
+    ...(header.triage !== undefined ? { triage: header.triage } : {}),
     queued: header.queued,
     active: {
       current: header.capacityProjection?.occupied ?? header.activeCount,
       limit: header.capacityProjection?.effective ?? header.capacity,
     },
     ...(header.capacityProjection ? { capacity: header.capacityProjection } : {}),
-    observations: { current: header.observationCount, limit: header.observationLimit },
     drained: !settings.intake,
     repositoryPaused: settings.paused,
     defaultAutoMerge: settings.defaultAutoMerge,
@@ -1427,7 +1426,6 @@ export function buildDashboard(
       capacityProjection,
       activeCount,
       capacity: config.capacity,
-      observationLimit: config.policy.harvestThreshold,
     },
     repositoryEvents,
   )

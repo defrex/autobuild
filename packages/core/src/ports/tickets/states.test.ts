@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test'
-import { orderStates, resolveState, validateStateName, validateStatePurpose } from './states'
+import {
+  orderStates,
+  resolveState,
+  triageStateCount,
+  validateStateName,
+  validateStatePurpose,
+} from './states'
 
 test('custom state names and purposes share file rules', () => {
   for (const name of ['a', 'a'.repeat(40), 'icebox-2'])
@@ -22,4 +28,33 @@ test('ordering follows supplied lifecycle and folded lookup requires a unique ma
   expect(resolveState('Todo', ['Todo', 'TODO'])).toBe('Todo')
   expect(() => resolveState('todo', ['Todo', 'TODO'])).toThrow('ambiguous')
   expect(() => resolveState('missing', ['Todo'])).toThrow('Todo')
+})
+
+test('triage count matches like resolveState and reports unknown without a unique match', () => {
+  const states = [
+    { name: 'triage', tickets: 3 },
+    { name: 'ready', tickets: 0 },
+  ]
+  expect(triageStateCount(states, 'triage')).toBe(3)
+  expect(triageStateCount(states, 'Triage')).toBe(3)
+  expect(triageStateCount(states, 'ready')).toBe(0)
+  expect(triageStateCount(states, 'inbox')).toBeUndefined()
+  expect(
+    triageStateCount(
+      [
+        { name: 'Triage', tickets: 1 },
+        { name: 'TRIAGE', tickets: 2 },
+      ],
+      'triage',
+    ),
+  ).toBeUndefined()
+  expect(
+    triageStateCount(
+      [
+        { name: 'Triage', tickets: 1 },
+        { name: 'triage', tickets: 2 },
+      ],
+      'triage',
+    ),
+  ).toBe(2)
 })

@@ -214,28 +214,12 @@ test('scripted harvest, settings and live status retain full replay and rendered
   )
   const { reduceDispatchStatus } = await import('../kernel/dispatch-status')
   const { reduceHarvest } = await import('../kernel/harvest')
-  const { unclaimedObservationCount } = await import('../processes/harvest')
   const { buildDashboardFromProjected } = await import('./dashboard/model')
   const { renderDashboard } = await import('./dashboard/render')
-  const { reduceBuildDigest } = await import('../store/digest')
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
-  const digests = new Map(
-    Array.from({ length: 30 }, (_, i) => {
-      const slug = `b${i + 1}`
-      return [
-        slug,
-        {
-          slug,
-          ...reduceBuildDigest([
-            { type: 'observation.recorded', seq: 1, ts: clock().toISOString() },
-          ]),
-        },
-      ] as const
-    }),
-  )
   let status = reduceDispatchStatus([], 'run-a')
   const log = [
     ...randomHarvestJournal(2, 100),
@@ -259,15 +243,12 @@ test('scripted harvest, settings and live status retain full replay and rendered
     const { lastSeq: _fullSeq, ...fullHarvest } = reduceHarvest(full)
     expect(projectedHarvest).toEqual(fullHarvest)
     expect(reduceDispatchSettings(feed.events)).toEqual(reduceDispatchSettings(full))
-    const count = unclaimedObservationCount({ digests, harvestEvents: feed.events })
-    expect(count).toBe(unclaimedObservationCount({ digests, harvestEvents: full }))
     const input = {
       repo,
       queued: status.queued ?? 0,
+      ...(status.triage !== undefined ? { triage: status.triage } : {}),
       activeCount: 0,
       capacity: 4,
-      observationCount: count,
-      observationLimit: 10,
     }
     const options = { color: true, width: 100, height: 24, now: clock().getTime() }
     expect(renderDashboard(buildDashboardFromProjected([], input, feed.events), options)).toEqual(

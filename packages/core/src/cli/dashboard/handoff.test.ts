@@ -13,8 +13,6 @@ const header = {
   queued: 0,
   activeCount: 2,
   capacity: 4,
-  observationCount: 0,
-  observationLimit: 5,
 }
 const row: DashboardBuild = {
   slug: 'old-build',

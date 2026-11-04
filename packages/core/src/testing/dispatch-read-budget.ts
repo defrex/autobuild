@@ -9,6 +9,10 @@ import { createTerminalModeController } from '../cli/terminal-restore'
 import { DISPATCHER, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import type { RepositoryEvent } from '../events/repository'
+import type { DashboardModel } from '../cli/dashboard/model'
+import { FileTicketSource } from '../ports/tickets/file'
+import { HostedTicketSource } from '../ports/tickets/remote'
+import { FakeTicketSource } from '../ports/tickets/fake'
 
 const tickCounters = {
   merged: 0,
@@ -188,6 +192,21 @@ export async function dispatchReadBudget(
     )?.state,
   ).length
   let recordReads: number | undefined
+  // The frontend renders the kernel's published triage count; it never reads
+  // the ticket source itself, on any refresh.
+  const sourceStateReads = { calls: 0 }
+  const stateSources = [FileTicketSource, HostedTicketSource, FakeTicketSource].map(
+    (source) => source.prototype as { listStates?: (...args: unknown[]) => Promise<unknown> },
+  )
+  const originalStateReads = stateSources.map((prototype) => prototype.listStates)
+  for (const [index, prototype] of stateSources.entries()) {
+    const original = originalStateReads[index]
+    if (original === undefined) continue
+    prototype.listStates = function (this: unknown, ...args: unknown[]) {
+      sourceStateReads.calls++
+      return original.apply(this, args)
+    }
+  }
   try {
     for (let batch = 0; batch < 24; batch++) {
       for (let i = 0; i < 128; i++) {
@@ -197,6 +216,7 @@ export async function dispatchReadBudget(
           payload: {
             run: childRun,
             queued: 0,
+            triage: 5,
             counters: tickCounters,
             janitorDiagnostics: [],
             ticketDiagnostics: [],
@@ -213,7 +233,10 @@ export async function dispatchReadBudget(
       expect(metrics.events - before.events).toBe(1)
       expect(metrics.state - before.state).toBe(0)
       expect(metrics.snapshots - before.snapshots).toBe(0)
-      expect(metrics.digests - before.digests).toBe(1)
+      // Observation pressure is no longer sampled, so a refresh reads no digests.
+      expect(metrics.digests - before.digests).toBe(0)
+      expect(sourceStateReads.calls).toBe(0)
+      expect((frontend as unknown as { model?: DashboardModel }).model?.triage).toBe(5)
       expect(metrics.high - before.high).toBe(store === backing ? 0 : 1)
       recordReads ??= metrics.records - before.records
       expect(metrics.records - before.records).toBe(
@@ -252,7 +275,10 @@ export async function dispatchReadBudget(
     expect(metrics.puts).toBe(settled.puts)
     expect(metrics.bytes).toBe(settled.bytes)
     expect(metrics.rows).toBe(settled.rows)
+    expect(sourceStateReads.calls).toBe(0)
   } finally {
+    for (const [index, prototype] of stateSources.entries())
+      if (originalStateReads[index] !== undefined) prototype.listStates = originalStateReads[index]
     finish({ outcome: 'normal', exitCode: 0 })
     await running
   }

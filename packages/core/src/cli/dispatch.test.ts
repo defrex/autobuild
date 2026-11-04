@@ -74,7 +74,11 @@ import {
   parseEffectiveBuildConfig,
   selectOpenWorkspace,
 } from '../processes/build-execution-state'
-import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
+import {
+  makeHarvestScanPacket,
+  sampleUnclaimedObservationCount,
+  scanUnclaimedObservations,
+} from '../processes/harvest'
 import {
   promptPart,
   reasoningDeltaPart,
@@ -5200,7 +5204,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }, 30_000)
   }
 
-  test('shows configured capacity and unclaimed observations for queued/non-row work and a paused gate', async () => {
+  test('shows configured capacity and an unknown triage count for queued/non-row work and a paused gate', async () => {
     const config = DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 5').replace(
       'stallRounds = 3',
       'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 1',
@@ -5251,7 +5255,11 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       const firstFrame = latestDashboardFrame(firstTerminal)
-      expect(firstFrame).toContain('queue 0 | active 1/5 | observations 5/7')
+      // The fake ticket source cannot enumerate states: unknown, never zero.
+      expect(firstFrame).toContain('triage – | queue 0 | active 1/5')
+      expect(firstFrame).not.toContain('observations')
+      // Pending observations still feed Harvest; the header no longer shows them.
+      expect(await sampleUnclaimedObservationCount(fx.store, fx.origin)).toBe(5)
       expect(firstFrame).not.toMatch(/\bdrift\b/i)
       expect(firstFrame).toContain('harvest OFF')
       expect(firstFrame).toContain('pressure-source')
@@ -5294,7 +5302,10 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: claimedTerminal,
       })
       const claimedFrame = latestDashboardFrame(claimedTerminal)
-      expect(claimedFrame).toContain('queue 0 | active 1/5 | observations 0/7')
+      expect(claimedFrame).toContain('triage – | queue 0 | active 1/5')
+      expect(await sampleUnclaimedObservationCount(fx.store, fx.origin)).toBe(0)
+      // The claiming run's Harvest row keeps its own observation identity.
+      expect(claimedFrame).toContain('5 observations')
       expect(claimedFrame).not.toMatch(/\bdrift\b/i)
       expect(claimedFrame).toContain('harvest OFF')
       expect(fx.err).toEqual([])
@@ -5810,7 +5821,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  test('watch refreshes observation counts across recording, claiming and settlement', async () => {
+  test('watch tracks unclaimed observations across recording, claiming and settlement', async () => {
     const config = DISPATCH_CONFIG_TOML.replace(
       'stallRounds = 3',
       'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 0',
@@ -5847,7 +5858,10 @@ describe('abDispatch --once with an interactive terminal', () => {
         sleep: async () => {
           await new Promise((resolve) => setTimeout(resolve, 0))
           const expected = [0, 1, 0, 0, 1][ticks]!
-          await waitFor(() => latestDashboardFrame(term).includes(`observations ${expected}/7`))
+          // Harvest facts carry the pressure; the header no longer shows it.
+          expect(await sampleUnclaimedObservationCount(fx.store, fx.origin)).toBe(expected)
+          await waitFor(() => latestDashboardFrame(term).includes('triage – | queue 0'))
+          expect(latestDashboardFrame(term)).not.toMatch(/observations \d+\/\d+/)
           ticks++
           if (ticks === 1) await record()
           if (ticks === 2)
@@ -5888,156 +5902,35 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  for (const failingRead of ['getRepoBuildDigests', 'repositoryReadFacts'] as const) {
-    test(`watch retains the last complete observation measurement when a later tick cannot scan (${failingRead})`, async () => {
-      const config = DISPATCH_CONFIG_TOML.replace(
-        'stallRounds = 3',
-        'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
-      )
-      const fx = await makeFixture([], happyHandlers(), config, steppingClock())
-      const term = fakeTerminal()
-      const stop = new AbortController()
-      const source = 'pressure-carry-over'
-      const originalGetDigests = fx.store.getRepoBuildDigests.bind(fx.store)
-      let failReads = false
-      let sleeps = 0
-      const originalReduced = fx.store.getReducerValue.bind(fx.store)
-      fx.store.getReducerValue = async (...args) => {
-        if (
-          failReads &&
-          failingRead === 'repositoryReadFacts' &&
-          args[1].reducer === 'repositoryReadFacts'
-        )
-          throw new Error('pressure scan unavailable')
-        return originalReduced(...args)
-      }
-      fx.store.getRepoBuildDigests = async (repo: string) => {
-        if (failReads && failingRead === 'getRepoBuildDigests')
-          throw new Error('pressure scan unavailable')
-        return originalGetDigests(repo)
-      }
-      try {
-        await fx.store.createBuild({ slug: source, repo: fx.origin })
-        for (let index = 1; index <= 2; index += 1) {
-          await fx.store.append(source, {
-            actor: agentActor('implement', `s_carry_${index}`),
-            type: 'observation.recorded',
-            payload: {
-              id: `obs-carry-${index}`,
-              kind: 'followup',
-              summary: `carry observation ${index}`,
-            },
-          })
-        }
-        await fx.store.createBuild({ slug: 'carry-merged', repo: fx.origin })
-        await fx.store.append('carry-merged', {
-          actor: DISPATCHER,
-          type: 'pr.merged',
-          payload: { sha: 'carry-merged-sha' },
-        })
-        await fx.store.append('carry-merged', {
-          actor: DISPATCHER,
-          type: 'build.completed',
-          payload: { outcome: 'merged' },
-        })
-
-        await abDispatch({
-          targetRepo: fx.checkout,
-          env: {},
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: (line) => fx.err.push(line),
-          intervalMs: 1,
-          signal: stop.signal,
-          sleep: async () => {
-            sleeps += 1
-            if (sleeps === 1) {
-              await waitFor(() => {
-                return latestDashboardFrame(term).includes('observations 2')
-              })
-              failReads = true
-              return
-            }
-            failReads = false
-            stop.abort()
-          },
-          wire: fx.wire,
-          terminal: term,
-        })
-
-        const frame = latestDashboardFrame(term)
-        expect(frame).toContain('observations 2/7')
-        expect(frame).not.toContain('observations 0/7')
-        expect(frame).not.toMatch(/\bdrift\b/i)
-        expect(frame).toContain('pressure scan unavailable')
-        expect(fx.err).toEqual([])
-      } finally {
-        stop.abort()
-        await fx.cleanup()
-      }
-    }, 30_000)
+  /** Install a counting state-count read on the fixture's fake source, which
+   * otherwise cannot enumerate states. The file default triage name `Triage`
+   * resolves against the lowercase state case-insensitively. */
+  function countingTriageStates(
+    tickets: object,
+    fail: (call: number) => boolean = () => false,
+  ): { calls: number } {
+    const probe = { calls: 0 }
+    Object.assign(tickets, {
+      listStates: async () => {
+        probe.calls += 1
+        if (fail(probe.calls)) throw new Error('ticket states unavailable')
+        return [
+          { name: 'triage', tickets: 3 },
+          { name: 'ready', tickets: 0 },
+        ]
+      },
+    })
+    return probe
   }
 
-  test('watch samples a missing journal record as an empty journal, not a stale scan (AUT-524)', async () => {
-    const config = DISPATCH_CONFIG_TOML.replace(
-      'stallRounds = 3',
-      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
-    )
-    const fx = await makeFixture([], happyHandlers(), config, steppingClock())
+  test('watch samples the triage count once per tick and retains it when a later read fails', async () => {
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
     const term = fakeTerminal()
     const stop = new AbortController()
-    const source = 'missing-record-carry'
+    const probe = countingTriageStates(fx.tickets, (call) => call === 2)
+    let sleeps = 0
+    let eventsAfterFirstTick = 0
     try {
-      // One build carrying one unclaimed observation…
-      await fx.store.createBuild({ slug: source, repo: fx.origin })
-      await fx.store.append(source, {
-        actor: agentActor('implement', `s_missing_record_1`),
-        type: 'observation.recorded',
-        payload: {
-          id: 'obs-missing-record-1',
-          kind: 'followup',
-          summary: 'missing-record observation',
-        },
-      })
-      // …and one harvest claim over it, completed as suppressed. The claim
-      // persists in `reduceHarvest`'s claimed set after completion, and the
-      // closed run keeps the launch gate's resume precedence quiet.
-      await fx.store.ensureRepo(fx.origin)
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.started',
-        payload: {
-          run: 'h_missing_record',
-          observations: [{ build: source, seq: 1 }],
-          scan: { kind: 'harvest-scan', rev: 0 },
-        },
-      })
-      await fx.store.appendRepo(fx.origin, {
-        actor: KERNEL,
-        type: 'harvest.completed',
-        payload: {
-          run: 'h_missing_record',
-          dispositions: [
-            {
-              occurrence: { build: source, seq: 1 },
-              action: 'suppressed',
-              proposalKey: 'missing-record-1',
-            },
-          ],
-          report: { kind: 'harvest-report', rev: 1 },
-        },
-      })
-
-      // The missing-record stand-in: the journal record exists (the harness
-      // and the dispatcher's own startup both ensure it), but `getRepo`
-      // answers null — the state a hosted store presents before any record
-      // exists. Every other `getRepo` call site in the loop already handles
-      // null, so only the sample's treatment of the missing record is under
-      // test. Pre-fix the sample read the real journal and saw the claim
-      // (0/7); post-fix it reads the missing record as empty (1/7).
-      fx.store.getRepo = async () => null
-
-      let sleeps = 0
       await abDispatch({
         targetRepo: fx.checkout,
         env: {},
@@ -6049,7 +5942,11 @@ describe('abDispatch --once with an interactive terminal', () => {
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
-            await waitFor(() => latestDashboardFrame(term).includes('observations 1/7'), 30_000)
+            expect(probe.calls).toBe(1)
+            await waitFor(() =>
+              latestDashboardFrame(term).includes('triage 3 | queue 0 | active 0/1'),
+            )
+            eventsAfterFirstTick = (await fx.store.getRepoEvents(fx.origin)).length
             return
           }
           stop.abort()
@@ -6058,14 +5955,60 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: term,
       })
 
+      // The second tick's read failed: the header keeps the last value, the
+      // tick does not fail, and the failure appends nothing.
+      expect(probe.calls).toBe(2)
       const frame = latestDashboardFrame(term)
-      expect(frame).toContain('observations 1/7')
-      expect(frame).not.toContain('observations 0/7')
+      expect(frame).toContain('triage 3 | queue 0 | active 0/1')
+      expect(frame).not.toContain('triage 0')
+      expect(frame).not.toContain('ticket states unavailable')
+      const events = await fx.store.getRepoEvents(fx.origin)
+      expect(events.some((event) => event.type === 'dispatcher.tick-failed')).toBe(false)
+      const later = events.slice(eventsAfterFirstTick)
+      expect(later.some((event) => event.type === 'dispatcher.tick-completed')).toBe(false)
       expect(fx.err).toEqual([])
     } finally {
       stop.abort()
       await fx.cleanup()
     }
+  }, 30_000)
+
+  test('only interactive dispatchers sample the triage count or publish it', async () => {
+    const run = async (opts: { kernelRunId?: string; frontendStatus?: boolean }) => {
+      const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
+      const probe = countingTriageStates(fx.tickets)
+      try {
+        await abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => fx.err.push(line),
+          once: true,
+          wire: fx.wire,
+          ...opts,
+        })
+        const completed = (await fx.store.getRepoEvents(fx.origin)).filter(
+          (event) => event.type === 'dispatcher.tick-completed',
+        )
+        return { calls: probe.calls, payloads: completed.map((event) => event.payload) }
+      } finally {
+        await fx.cleanup()
+      }
+    }
+
+    // Plain and hosted-style kernels (kernelRunId alone) never read states.
+    const plain = await run({})
+    expect(plain.calls).toBe(0)
+    const hosted = await run({ kernelRunId: 'triage-hosted-kernel' })
+    expect(hosted.calls).toBe(0)
+    expect(hosted.payloads.length).toBeGreaterThan(0)
+    for (const payload of hosted.payloads) expect(payload).not.toHaveProperty('triage')
+
+    // The interactive frontend's kernel child publishes its sample.
+    const frontend = await run({ kernelRunId: 'triage-frontend-kernel', frontendStatus: true })
+    expect(frontend.calls).toBe(1)
+    expect(frontend.payloads.at(-1)).toMatchObject({ triage: 3 })
   }, 30_000)
 
   test('--once ticks exactly ONCE — a ticket that turns Ready mid-drain is not claimed', async () => {

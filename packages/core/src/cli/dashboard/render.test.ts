@@ -95,9 +95,9 @@ function unclosedLinks(line: string): number {
 function model(builds: DashboardBuild[]): DashboardModel {
   return {
     repo: '/repos/app',
+    triage: 3,
     queued: 2,
     active: { current: builds.length, limit: 5 },
-    observations: { current: 5, limit: 8 },
     drained: false,
     repositoryPaused: false,
     defaultAutoMerge: false,
@@ -116,7 +116,8 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(summary).toContain('Autobuild')
     expect(summary).toContain('app') // the repo basename
     expect(summary).not.toContain('/repos/app')
-    expect(summary).toContain('queue 2 | active 1/5 | observations 5/8')
+    expect(summary).toContain('triage 3 | queue 2 | active 1/5')
+    expect(summary).not.toContain('observations')
     expect(lines.join('\n')).not.toMatch(/\bdrift\b/i)
     expect(summary).not.toMatch(/\b(?:watch|once)\b/)
     expect(summary).not.toContain('intake ON')
@@ -313,27 +314,21 @@ describe('renderDashboard: two-line header and conditional warning', () => {
     expect(lines.at(-1)).toContain('Keys:')
   })
 
-  test('the summary renders current/limit pressure for active builds and observations', () => {
-    const [empty] = rd(
-      {
-        ...model([]),
-        active: { current: 0, limit: 5 },
-        observations: { current: 0, limit: 8 },
-      },
-      WIDE,
-    )
-    expect(empty).toContain('queue 2 | active 0/5 | observations 0/8')
+  test('the summary renders the triage count and current/limit pressure for active builds', () => {
+    const [empty] = rd({ ...model([]), triage: 0, active: { current: 0, limit: 5 } }, WIDE)
+    expect(empty).toContain('triage 0 | queue 2 | active 0/5')
 
-    const [saturated] = rd(
-      {
-        ...model([]),
-        active: { current: 5, limit: 5 },
-        observations: { current: 7, limit: 8 },
-      },
-      WIDE,
-    )
-    expect(saturated).toContain('queue 2 | active 5/5 | observations 7/8')
+    const [saturated] = rd({ ...model([]), active: { current: 5, limit: 5 } }, WIDE)
+    expect(saturated).toContain('triage 3 | queue 2 | active 5/5')
+    expect(saturated).not.toContain('observations')
     expect(saturated).not.toMatch(/\b(?:watch|once)\b/)
+  })
+
+  test('an unknown triage count renders a placeholder, never a fabricated zero', () => {
+    const { triage: _triage, ...unknown } = model([])
+    const [summary] = rd(unknown, WIDE)
+    expect(summary).toContain('triage – | queue 2 | active 0/5')
+    expect(summary).not.toContain('triage 0')
   })
 
   test('process defaults and the acknowledged durable gate render explicit ON/OFF state', () => {

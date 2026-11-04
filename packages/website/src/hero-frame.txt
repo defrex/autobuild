@@ -1,4 +1,4 @@
- [36m> [0m[1mAutobuild[0m  origin  [2mqueue 0 | active 5/6 | observations 0/5[0m
+ [36m> [0m[1mAutobuild[0m  origin  [2mtriage 2 | queue 0 | active 5/6[0m
    [32mintake ON[0m  [32mharvest ON[0m
 
    [1mHarvest[0m  [2m3 observations[0m                                                                                                   [32mRUNNING[0m

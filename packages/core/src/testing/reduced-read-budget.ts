@@ -775,6 +775,15 @@ steps = []
     let ticketScanWrites = 0
     let deferredAttempts = 0
     let tickAcquisitions = { facts: 0, digests: 0 }
+    // The display-only triage sample is one bounded source call per tick, and
+    // only for a dispatcher that feeds an interactive frontend.
+    let stateReads = 0
+    const tickets = Object.assign(new FakeTicketSource([]), {
+      listStates: async () => {
+        stateReads++
+        return [{ name: 'triage', tickets: 2 }]
+      },
+    })
     const checked = new Proxy(cold, {
       get(target, key) {
         if (interactive && key === 'beginRepoTick')
@@ -861,6 +870,7 @@ steps = []
         // Drain the asynchronous launch gate before closing each tick window.
         await new Promise((resolve) => setTimeout(resolve, 0))
         expect(tickAcquisitions).toEqual({ facts: 1, digests: 1 })
+        expect(stateReads).toBe(interactive ? ticks + 1 : 0)
         expect(costs.historicalEvents).toBe(0)
         expect(costs.events).toBeLessThanOrEqual(32)
         // Prepare the newly written tick-completed tail, then prove an
@@ -874,11 +884,12 @@ steps = []
         if (++ticks === (outage ? 3 : 2)) stop.abort()
       },
       kernelRunId: run,
+      ...(interactive ? { frontendStatus: true } : {}),
       storeRef: '/budget',
       wire: () => ({
         store: checked,
         storeRef: '/budget',
-        tickets: new FakeTicketSource([]),
+        tickets,
         forge: new FakeForge(),
         workspaces: new FakeWorkspaceProvider({ root: '/once-workspaces', mode: 'logical' }),
         buildExecution: {
@@ -903,6 +914,8 @@ steps = []
       ([id]) => id === run,
     )?.[1]
     expect(finished?.completed?.type).toBe('dispatcher.tick-completed')
+    if (interactive) expect(finished?.completed?.payload).toMatchObject({ triage: 2 })
+    else expect(finished?.completed?.payload).not.toHaveProperty('triage')
     expect(finished?.stop?.type).toBe('dispatcher.run-stopped')
     // The same fresh invocation may fail before writing its start fact.
     expect(

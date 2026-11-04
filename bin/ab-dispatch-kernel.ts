@@ -46,6 +46,7 @@ try {
     plain: true,
     silent: true,
     kernelRunId: options.run,
+    frontendStatus: true,
   })
 } catch (error) {
   exitCode = 1
