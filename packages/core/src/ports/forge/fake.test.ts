@@ -291,6 +291,26 @@ describe('FakeForge', () => {
     )
   })
 
+  test('PR issue-link updates exist only with closesIssues and rewrite the body', async () => {
+    expect(new FakeForge().updatePrIssueLinks).toBeUndefined()
+    const forge = new FakeForge({ closesIssues: true })
+    const pr = await forge.openPr(prOpts({ body: 'Integration.\n\nCloses #5\n' }))
+    const links = [
+      { issue: 5, intent: 'refs' as const },
+      { issue: 7, intent: 'closes' as const },
+    ]
+    await forge.updatePrIssueLinks!('/ws/a', pr.number, links)
+    expect(forge.opened[0]!.body).toBe('Integration.\n\nRefs #5\nCloses #7\n')
+    expect(forge.issueLinkUpdates).toEqual([{ number: pr.number, issueLinks: links }])
+    forge.failIssueLinkReadback = true
+    await expect(forge.updatePrIssueLinks!('/ws/a', pr.number, links)).rejects.toThrow(
+      'readback disagrees',
+    )
+    forge.setPrState(pr.number, { state: 'closed' })
+    forge.failIssueLinkReadback = false
+    await expect(forge.updatePrIssueLinks!('/ws/a', pr.number, links)).rejects.toThrow('not open')
+  })
+
   test('guarded squash rejects a moved head and never journals or lands it', async () => {
     const forge = new FakeForge({ gatePresence: 'absent', headSha: 'old-head' })
     const pr = await forge.openPr(prOpts())

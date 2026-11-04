@@ -117,7 +117,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   settle; an optional `failFast` failure cancels unfinished siblings.
 - **`finalize`** — the agent writes the PR description; the kernel opens the
   PR, sealing the build's [issue links](#issue-links-in-builds) first and
-  writing their `Closes #N` / `Refs #N` lines when the forge supports them.
+  writing their `Closes #N` / `Refs #N` lines when the forge supports them
+  (a node child's lines go into the root node's PR instead).
   `[finalize].steps` run afterward and are failure-tolerant. A
   content-producing step commits selected files locally and finishes clean;
   the runner pushes the exact descendant SHA and confirms forge readback before recording success.
@@ -1843,10 +1844,18 @@ through the build that claims it:
   title, body or landing message, including `owner/name#N` and issue URLs for
   the same repository, is rewritten to `refs`, so prose can't close it. Merging
   closes each `closes` issue and leaves each `refs` issue open with a back-link.
-- **What is not.** A leaf aimed at an integration node writes nothing, since
-  GitHub closes issues only from the default branch. `local-git`, the fake
-  forge and other forges without the capability record links and downgrades
-  but write no lines; the build still succeeds.
+- **Through a node.** GitHub closes issues only from the default branch, so a
+  leaf aimed at an integration node writes no lines into its own PR or landed
+  commit. When it lands, its effective links, downgrades included, are recorded
+  on the node; a nested node passes its whole set up to its parent the same
+  way. Only the root node's PR into the default branch gets the lines, kept
+  current as children land and refreshed before the kernel lands it. Merging
+  the node, by the kernel or a human, closes them. A downgrade by any child
+  makes that issue `Refs`; otherwise any child's `closes` makes it `Closes`.
+  Child commits keep their own messages and carry no lines.
+- **What is not.** `local-git`, the fake forge and other forges without the
+  capability record links and downgrades but write no lines; the build still
+  succeeds.
 
 ## Retrieving build artifacts
 

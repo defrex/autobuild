@@ -87,7 +87,8 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
 
 - **Downgrade a linked issue you only partly resolve.** When the manifest
   lists `issueLinks` and the spec leaves part of a `closes` issue undone, record
-  it so the PR and landed commit write `Refs #N` instead of `Closes #N`:
+  it so the PR (or, for a child of a node, the node's PR) writes `Refs #N`
+  instead of `Closes #N`:
 
   ```
   ab issue downgrade 824 --reason "<what remains>"
