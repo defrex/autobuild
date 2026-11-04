@@ -16,6 +16,7 @@ import { nativeSessionHandleSchema } from './native-session'
  */
 import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
+import { refineUniqueIssues } from '../ports/tickets/issue-links'
 import {
   artifactRefSchema,
   buildOutcomeSchema,
@@ -332,6 +333,18 @@ export const eventPayloadSchemas = {
     /** Ticket assets frozen at claim time. Omitted when the ticket had none
      * and in historical logs. */
     assets: z.array(pinnedAssetSchema).optional(),
+    /** The ticket's forge issue links frozen at claim time; later ticket
+     * edits never change them. Omitted when the ticket had none and in
+     * historical logs. */
+    issueLinks: z
+      .array(
+        z.strictObject({
+          issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+          intent: z.enum(['closes', 'refs']),
+        }),
+      )
+      .superRefine(refineUniqueIssues)
+      .optional(),
   }),
   'node.opening': z.strictObject({
     branch: z.string().min(1),
@@ -1233,6 +1246,15 @@ export const eventPayloadSchemas = {
   ]),
 
   // ── Cross-cutting ──────────────────────────────────────────────────────────
+  /** An agent found the build only partly resolves a linked `closes` issue.
+   * One-way: no fact can express an upgrade. Inert once links are sealed. */
+  'issue-link.downgraded': z.strictObject({
+    issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    reason: z.string().trim().min(1),
+  }),
+  /** The kernel fixed the build's issue links before its first PR side
+   * effect; later downgrades are inert. */
+  'issue-links.sealed': z.strictObject({}),
   'observation.recorded': z.strictObject({
     id: z.string().min(1),
     kind: observationKindSchema,

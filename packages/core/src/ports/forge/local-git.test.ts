@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { describeForgeContract, type ForgeContractFactory } from './contract'
 import { bunExec } from './github'
 import { LocalGitForge } from './local-git'
+import type { Forge } from '../types'
 
 const roots: string[] = []
 
@@ -607,4 +608,9 @@ test('ancestry uses the served repository, distinguishes rewinds, and refuses mi
   await expect(new LocalGitForge().isCommitAncestor(base, head)).rejects.toThrow(
     'requires repoRoot',
   )
+})
+
+test('local-git does not declare issue-closing support, so builds emit no keywords', () => {
+  const forge: Forge = new LocalGitForge()
+  expect(forge.closesIssues).toBeUndefined()
 })

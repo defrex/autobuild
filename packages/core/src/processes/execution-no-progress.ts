@@ -151,6 +151,8 @@ export const executionProgress = {
   'reconcile.rewritten': 'progress',
   'reconcile.started': 'progress',
   'reconcile.completed': 'progress',
+  'issue-link.downgraded': 'progress',
+  'issue-links.sealed': 'bookkeeping',
   'observation.recorded': 'progress',
   'escalation.raised': 'progress',
   'escalation.answered': 'progress',
