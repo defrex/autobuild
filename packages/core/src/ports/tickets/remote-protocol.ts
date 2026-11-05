@@ -27,6 +27,12 @@ export const TICKET_COMMENTS_CAPABILITY = '1'
 export const TICKET_ISSUE_LINKS_HEADER = 'x-autobuild-ticket-issue-links'
 export const TICKET_ISSUE_LINKS_CAPABILITY = '1'
 
+/** Explicit opt-in: released clients decode dependency states strictly without
+ * `state`. Servers include each blocker's native state name only for clients
+ * that send this header; an older server ignores it and omits the field. */
+export const TICKET_DEPENDENCY_STATE_HEADER = 'x-autobuild-ticket-dependency-state'
+export const TICKET_DEPENDENCY_STATE_CAPABILITY = '1'
+
 export const issueLinkWireSchema = z.strictObject({
   issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   intent: z.enum(['closes', 'refs']),
@@ -66,6 +72,7 @@ export const dependencyStateWireSchema = z.strictObject({
   id: z.string(),
   exists: z.boolean(),
   resolved: z.boolean(),
+  state: z.string().min(1).optional(),
   blockedBy: z.array(z.string()),
 })
 export const dependencyStatesWireSchema = z.array(dependencyStateWireSchema)

@@ -100,7 +100,7 @@ import { readBuildDigests, readForgeHealth } from '../store/reduced-reads'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
-import { ticketLifecycle } from '../ports/tickets/lifecycle'
+import { holdsState, ticketLifecycle } from '../ports/tickets/lifecycle'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
 /**
@@ -268,6 +268,22 @@ export function defaultProposalState(config: Config): string {
 // decision here means one tested implementation instead of one per adapter,
 // and no adapter's state taxonomy leaks upward.
 
+/** A cached dependency fact with the configured rejected role applied. */
+export type DependencyNode = DependencyState & { rejected?: boolean }
+
+/**
+ * Apply the configured rejected role over the source's native completion
+ * fact: a blocker in the rejected state never resolves, even where the
+ * source natively counts it complete (Linear's canceled). An unset role
+ * changes nothing. Moving the ticket out of the state restores ordinary
+ * gating, because every scan reads the current state afresh.
+ */
+export function markRejected(node: DependencyState, rejectedState?: string): DependencyNode {
+  return node.exists && holdsState(node.state, rejectedState)
+    ? { ...node, resolved: false, rejected: true }
+    : node
+}
+
 export interface DependencyVerdict {
   /** Unresolved blocker ids — nonempty means DO NOT dispatch. */
   unresolved: string[]
@@ -286,7 +302,7 @@ export interface DependencyVerdict {
 function findCycle(
   from: string,
   path: string[],
-  nodes: Map<string, DependencyState>,
+  nodes: Map<string, DependencyNode>,
   explored: Set<string>,
 ): string[] | null {
   const node = nodes.get(from)
@@ -321,7 +337,7 @@ function findCycle(
 export function analyzeDependencies(
   ticketId: string,
   blockedBy: string[],
-  nodes: Map<string, DependencyState>,
+  nodes: Map<string, DependencyNode>,
 ): DependencyVerdict {
   const unresolved: string[] = []
   const diagnostics: string[] = []
@@ -339,6 +355,11 @@ export function analyzeDependencies(
         `ticket ${ticketId} blocked by ${blockerId}, which does not exist in ` +
           'this ticket source',
       )
+      continue
+    }
+    if (node.rejected) {
+      unresolved.push(blockerId)
+      diagnostics.push(`ticket ${ticketId} blocked by ${blockerId}, which was rejected`)
       continue
     }
     // A resolved blocker imposes nothing, and its own history is irrelevant —
@@ -806,22 +827,29 @@ export class Dispatcher {
   }
 
   private observeIntegration(slug: string, publication = false) {
-    return observeIntegration(this.store, this.deps.tickets, slug, () => {
-      if (publication) {
-        this.integrationPublicationInputs ??= integrationObservationInputs(
+    const rejectedState = this.rejectedState()
+    return observeIntegration(
+      this.store,
+      this.deps.tickets,
+      slug,
+      () => {
+        if (publication) {
+          this.integrationPublicationInputs ??= integrationObservationInputs(
+            this.store,
+            this.deps.tickets,
+            this.deps.repo,
+          )
+          return this.integrationPublicationInputs
+        }
+        this.integrationInputs ??= integrationObservationInputs(
           this.store,
           this.deps.tickets,
           this.deps.repo,
         )
-        return this.integrationPublicationInputs
-      }
-      this.integrationInputs ??= integrationObservationInputs(
-        this.store,
-        this.deps.tickets,
-        this.deps.repo,
-      )
-      return this.integrationInputs
-    })
+        return this.integrationInputs
+      },
+      rejectedState === undefined ? {} : { rejectedState },
+    )
   }
 
   // Disposable parsed pins only. Current facts, live policy and cycle captures
@@ -1122,6 +1150,11 @@ export class Dispatcher {
    * has never recorded a setting. */
   private triageState(): string {
     return this.deps.opts?.triageState ?? defaultTriageState(this.deps.config)
+  }
+
+  /** The configured rejected role's state, read from live config each time. */
+  private rejectedState(): string | undefined {
+    return ticketLifecycle(this.deps.config.tickets).rejected
   }
 
   /** This repository's builds paired with their digests, from one record
@@ -5280,15 +5313,20 @@ export class Dispatcher {
     }
     // One dependency-node cache per scan: blockers are commonly shared across
     // the ready set. Never reuse ticket or dependency objects between scans.
-    const nodes = new Map<string, DependencyState>(
+    const rejectedState = this.rejectedState()
+    const nodes = new Map<string, DependencyNode>(
       listing.tickets.map((ticket) => [
         ticket.ref.id,
-        {
-          id: ticket.ref.id,
-          exists: true,
-          resolved: ticket.resolved,
-          blockedBy: [...(ticket.blockedBy ?? [])],
-        },
+        markRejected(
+          {
+            id: ticket.ref.id,
+            exists: true,
+            resolved: ticket.resolved,
+            ...(ticket.state !== undefined ? { state: ticket.state } : {}),
+            blockedBy: [...(ticket.blockedBy ?? [])],
+          },
+          rejectedState,
+        ),
       ]),
     )
 
@@ -5342,7 +5380,12 @@ export class Dispatcher {
       }
       preflightTargets.set(ticket.ref.id, JSON.stringify(target))
       if (this.outOfBudget(opts)) return
-      if ((!hasNodes && ticket.blockersResolved === true) || (ticket.blockedBy ?? []).length === 0)
+      // The listing fact cannot see role names, so a configured rejected role
+      // takes the batched dependency read instead of trusting it.
+      if (
+        (!hasNodes && rejectedState === undefined && ticket.blockersResolved === true) ||
+        (ticket.blockedBy ?? []).length === 0
+      )
         continue
       let verdict: DependencyVerdict
       try {
@@ -6605,7 +6648,7 @@ export class Dispatcher {
     target:
       | { target: NonNullable<EventPayload<'build.created'>['target']>; branch: string }
       | undefined,
-    nodes: Map<string, DependencyState>,
+    nodes: Map<string, DependencyNode>,
     inputs: PresenceInputs,
     demands: { slug: string; request: EventPayload<'node.restack-requested'> }[],
     observations: Map<
@@ -6629,7 +6672,13 @@ export class Dispatcher {
           this.deps.tickets.name,
         ),
       )
-      if (id === ticket.ref.id || !nodes.get(id)?.exists || build === undefined) {
+      // A rejected blocker's diagnostic wins over any build it once had.
+      if (
+        id === ticket.ref.id ||
+        !nodes.get(id)?.exists ||
+        nodes.get(id)?.rejected ||
+        build === undefined
+      ) {
         fallback.push(id)
         continue
       }
@@ -6745,7 +6794,7 @@ export class Dispatcher {
 
   private async loadDependencyGraph(
     ticket: Ticket,
-    nodes: Map<string, DependencyState>,
+    nodes: Map<string, DependencyNode>,
     opts: TickOpts = {},
     builtTickets?: ReadonlySet<string>,
   ): Promise<boolean> {
@@ -6756,7 +6805,8 @@ export class Dispatcher {
       const uncached = frontier.filter((id) => !nodes.has(id))
       if (uncached.length > 0) {
         const states = await this.deps.tickets.dependencyStates(uncached)
-        for (const state of states) nodes.set(state.id, state)
+        const rejectedState = this.rejectedState()
+        for (const state of states) nodes.set(state.id, markRejected(state, rejectedState))
       }
       const next: string[] = []
       for (const id of frontier) {

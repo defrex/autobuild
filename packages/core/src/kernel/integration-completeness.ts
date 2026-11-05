@@ -6,6 +6,7 @@ import { readBuildFacts } from '../store/reduced-reads'
 import { DISPATCHER } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
 import { contributedIssueLinks } from './node-issue-links'
+import { holdsState } from '../ports/tickets/lifecycle'
 
 /** One exhaustive source sample shared by every node in a dispatcher pass.
  * Scheduling may be cached; publication always requests a sample from this pass. */
@@ -34,6 +35,9 @@ export async function observeIntegration(
   tickets: TicketSource,
   slug: string,
   inputs?: () => Promise<IntegrationObservationInputs>,
+  /** The configured rejected role: a child ticket in it no longer keeps the
+   * node incomplete. Unset means no such role. */
+  options: { rejectedState?: string } = {},
 ): Promise<EventPayload<'integration.observed'>> {
   const record = await store.getBuild(slug)
   const state = (await readBuildFacts(store, slug)).value.state
@@ -63,7 +67,12 @@ export async function observeIntegration(
         : undefined
     observation.diagnostics.push(...listing.diagnostics)
     for (const ticket of listing.tickets)
-      if (ticket.target === nodeRef.id && !ticket.resolved) children.add(ticket.ref.id)
+      if (
+        ticket.target === nodeRef.id &&
+        !ticket.resolved &&
+        !holdsState(ticket.state, options.rejectedState)
+      )
+        children.add(ticket.ref.id)
     // Frozen claims survive edits to the source ticket's target.
     for (const { record: build, state: child } of builds) {
       if (child.target?.build === slug && child.status !== 'done' && child.status !== 'aborted')

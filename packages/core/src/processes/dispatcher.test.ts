@@ -53,6 +53,7 @@ import {
   Dispatcher,
   SWEEP_PIN_CACHE_CAPACITY,
   analyzeDependencies,
+  markRejected,
   defaultProposalState,
   defaultTriageState,
   emptyTickReport,
@@ -577,6 +578,22 @@ describe('analyzeDependencies', () => {
   ): DependencyVerdict {
     return analyzeDependencies(id, graph[id] ?? [], nodes(graph, { ...opts, ticket: id }))
   }
+
+  test('a rejected blocker is unresolved and named, without a cycle walk', () => {
+    const graph = nodes({ A: ['B'], B: ['A'] })
+    const blocker = graph.get('B')!
+    graph.set('B', markRejected({ ...blocker, resolved: true, state: 'Rejected' }, 'rejected'))
+    expect(analyzeDependencies('A', ['B'], graph)).toEqual({
+      unresolved: ['B'],
+      diagnostics: ['ticket A blocked by B, which was rejected'],
+    })
+    // An unset role, a different state, or a missing ticket is left alone.
+    const plain = { id: 'B', exists: true, resolved: true, state: 'Rejected', blockedBy: [] }
+    expect(markRejected(plain)).toBe(plain)
+    expect(markRejected(plain, 'icebox')).toBe(plain)
+    const missing = { id: 'B', exists: false, resolved: false, blockedBy: [] }
+    expect(markRejected(missing, 'rejected')).toBe(missing)
+  })
 
   test('no blockers: eligible, nothing to say', () => {
     expect(analyze('A', { A: [] })).toEqual({ unresolved: [], diagnostics: [] })
@@ -2702,6 +2719,75 @@ describe('Dispatcher dependency gate', () => {
       expect(h.tickets.dependencyQueries).toEqual(hint === true ? [] : [['T-9']])
     },
   )
+
+  describe('the rejected role', () => {
+    const WITH_REJECTED = `${CAPACITY_2}\nrejectedState = "Canceled"`
+    /** A source whose native lifecycle counts Canceled as complete, like Linear. */
+    const cancelResolves = (source: FakeTicketSource) => {
+      const original = source.dependencyStates.bind(source)
+      source.dependencyStates = async (ids) =>
+        (await original(ids)).map((state) =>
+          state.state === 'Canceled' ? { ...state, resolved: true } : state,
+        )
+      return source
+    }
+    const tickets = () => [
+      readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-9'] }),
+      readyTicket('T-9', { title: 'The blocker', state: 'Canceled', resolved: true }),
+    ]
+
+    test('a rejected blocker never resolves and the diagnostic names it', async () => {
+      const h = harness({ tickets: tickets(), toml: WITH_REJECTED, wrapTickets: cancelResolves })
+      const report = await h.dispatcher.tick()
+      expect(report.dependencyBlocked).toBe(1)
+      expect(report.dependencyDiagnostics).toEqual([
+        'ticket T-1 blocked by T-9, which was rejected',
+      ])
+      expect(h.tickets.claims).not.toContain('T-1')
+
+      // Moving it out of the rejected state restores ordinary gating.
+      await h.tickets.transition('T-9', 'Triage')
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).dependencyDiagnostics).toEqual([
+        'ticket T-1 blocked by T-9 (not complete)',
+      ])
+      await h.tickets.transition('T-9', 'Done')
+      h.clock.advance(60_000)
+      const released = await h.dispatcher.tick()
+      expect(released.dependencyDiagnostics).toEqual([])
+      expect(h.tickets.claims).toContain('T-1')
+    })
+
+    test('with the key unset a natively complete blocker resolves as before', async () => {
+      const h = harness({ tickets: tickets(), toml: CAPACITY_2, wrapTickets: cancelResolves })
+      const report = await h.dispatcher.tick()
+      expect(report.dependencyDiagnostics).toEqual([])
+      expect(h.tickets.claims).toContain('T-1')
+    })
+
+    test('a configured role bypasses the listing blockersResolved fast path', async () => {
+      const h = harness({
+        tickets: tickets(),
+        toml: WITH_REJECTED,
+        wrapTickets: (source) => {
+          const list = source.listReady.bind(source)
+          source.listReady = async (criteria) => {
+            const result = await list(criteria)
+            return {
+              ...result,
+              tickets: result.tickets.map((ticket) => ({ ...ticket, blockersResolved: true })),
+            }
+          }
+          return cancelResolves(source)
+        },
+      })
+      const report = await h.dispatcher.tick()
+      expect(report.dependencyDiagnostics).toEqual([
+        'ticket T-1 blocked by T-9, which was rejected',
+      ])
+      expect(h.tickets.claims).not.toContain('T-1')
+    })
+  })
 
   test('a dependency-free ticket dispatches with ZERO dependencyStates calls', async () => {
     const h = harness({ tickets: [readyTicket('T-1')], toml: CAPACITY_2 })

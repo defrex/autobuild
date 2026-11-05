@@ -20,10 +20,10 @@ steps = []
 steps = []
 `)
 
-async function configuredStore() {
+async function configuredStore(effective = config) {
   const store = new MemoryBuildStore({ clock })
   await store.ensureRepo(repo)
-  const { verify, finalize, ...root } = config
+  const { verify, finalize, ...root } = effective
   const artifact = await store.putRepoArtifact(repo, {
     kind: 'dispatcher-effective-config',
     content: JSON.stringify({
@@ -110,7 +110,7 @@ describe('operator ticket projections', () => {
       id: 'AUT-1',
     })
     expect(detail.blockers).toEqual([
-      { id: 'AUT-2', exists: true, resolved: true, blockedBy: [] },
+      { id: 'AUT-2', exists: true, resolved: true, state: 'Done', blockedBy: [] },
       { id: 'AUT-404', exists: false, resolved: false, blockedBy: [] },
     ])
     expect(detail.build?.slug).toBe('active')
@@ -455,4 +455,44 @@ test('optional alias failure retains prior matches after an update', async () =>
   expect(detail.build?.slug).toBe('alias')
   expect((await get('AUT-1'))?.title).toBe('Persisted')
   expect(reads.slice(-2)).toEqual([alias, unavailable])
+})
+
+test('a move by role resolves through the repository configuration', async () => {
+  const source = new FakeTicketSource([seed, blocker], { doneState: 'Done' })
+  const plain = await configuredStore()
+  const ready = await mutateOperatorTicket({
+    store: plain,
+    repo,
+    backend: backend(source),
+    operation: { kind: 'move', id: 'AUT-1', role: 'ready' },
+  })
+  expect(ready.ticket.state).toBe('Todo')
+  await expect(
+    mutateOperatorTicket({
+      store: plain,
+      repo,
+      backend: backend(source),
+      operation: { kind: 'move', id: 'AUT-1', role: 'backlog' },
+    }),
+  ).rejects.toThrow('set [tickets].backlogState')
+  expect((await source.get('AUT-1'))?.state).toBe('Todo')
+
+  const roles = await configuredStore({
+    ...config,
+    tickets: { ...config.tickets, backlogState: 'Icebox', rejectedState: 'Canceled' },
+  })
+  const iced = await mutateOperatorTicket({
+    store: roles,
+    repo,
+    backend: backend(source),
+    operation: { kind: 'move', id: 'AUT-1', role: 'backlog' },
+  })
+  expect(iced.ticket.state).toBe('Icebox')
+  const rejected = await mutateOperatorTicket({
+    store: roles,
+    repo,
+    backend: backend(source),
+    operation: { kind: 'move', id: 'AUT-1', role: 'rejected' },
+  })
+  expect(rejected.ticket.state).toBe('Canceled')
 })
