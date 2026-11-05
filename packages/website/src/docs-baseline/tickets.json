@@ -4,7 +4,7 @@
   "title": "Tickets and specs",
   "group": "concepts",
   "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-  "textHash": "aede8be0cd8c008b9faefb36b2bb2fef3b6711022ef49f7a7edb2d22bbbcf447",
+  "textHash": "5e46effec4a6d45a38ecade9719adb3ebc03430b48617ac6965f8b428f4f2729",
   "headings": [
     "Choose a source",
     "Groom a buildable spec",
