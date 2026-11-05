@@ -10,6 +10,7 @@ import { DISPATCHER, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import type { RepositoryEvent } from '../events/repository'
 import type { DashboardModel } from '../cli/dashboard/model'
+import type { TicketSource } from '../ports/types'
 import { FileTicketSource } from '../ports/tickets/file'
 import { HostedTicketSource } from '../ports/tickets/remote'
 import { FakeTicketSource } from '../ports/tickets/fake'
@@ -192,19 +193,26 @@ export async function dispatchReadBudget(
     )?.state,
   ).length
   let recordReads: number | undefined
-  // The frontend renders the kernel's published triage count; it never reads
-  // the ticket source itself, on any refresh.
+  // The execution-mode frontend renders the kernel's published triage count;
+  // it never reads the ticket source itself, on any refresh.
   const sourceStateReads = { calls: 0 }
+  type StateReads = Record<'listStates' | 'countStates', StateRead | undefined>
+  type StateRead = (...args: unknown[]) => Promise<unknown>
   const stateSources = [FileTicketSource, HostedTicketSource, FakeTicketSource].map(
-    (source) => source.prototype as { listStates?: (...args: unknown[]) => Promise<unknown> },
+    (source) => source.prototype as unknown as StateReads,
   )
-  const originalStateReads = stateSources.map((prototype) => prototype.listStates)
+  const stateMethods = ['listStates', 'countStates'] as const
+  const originalStateReads = stateSources.map((prototype) =>
+    stateMethods.map((method) => prototype[method]),
+  )
   for (const [index, prototype] of stateSources.entries()) {
-    const original = originalStateReads[index]
-    if (original === undefined) continue
-    prototype.listStates = function (this: unknown, ...args: unknown[]) {
-      sourceStateReads.calls++
-      return original.apply(this, args)
+    for (const [slot, method] of stateMethods.entries()) {
+      const original = originalStateReads[index]![slot]
+      if (original === undefined) continue
+      prototype[method] = function (this: unknown, ...args: unknown[]) {
+        sourceStateReads.calls++
+        return original.apply(this, args)
+      }
     }
   }
   try {
@@ -278,7 +286,10 @@ export async function dispatchReadBudget(
     expect(sourceStateReads.calls).toBe(0)
   } finally {
     for (const [index, prototype] of stateSources.entries())
-      if (originalStateReads[index] !== undefined) prototype.listStates = originalStateReads[index]
+      for (const [slot, method] of stateMethods.entries()) {
+        const original = originalStateReads[index]![slot]
+        if (original !== undefined) prototype[method] = original
+      }
     finish({ outcome: 'normal', exitCode: 0 })
     await running
   }
@@ -470,10 +481,22 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
           const firstFrame = new Promise<void>((resolve) => {
             painted = resolve
           })
+          // The viewer's own triage read: one bounded count per due refresh.
+          const counts = { calls: 0, names: [] as string[], fail: false }
+          const tickets = {
+            name: 'budget',
+            countStates: async (names: readonly string[]) => {
+              counts.calls++
+              counts.names.push(...names)
+              if (counts.fail) throw new Error('ticket service unavailable')
+              return [{ name: names[0]!, tickets: 7 }]
+            },
+          } as unknown as TicketSource
           const frontend = new DispatchFrontend({
             viewer: {},
             repo,
             store,
+            ticketSource: async () => tickets,
             storeRef: 'memory',
             env: {},
             once: false,
@@ -504,10 +527,29 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
           })
           const running = frontend.run()
           await firstFrame
-          const refresh = () => (frontend as unknown as { readFrame(): Promise<void> }).readFrame()
+          const internals = frontend as unknown as {
+            readFrame(): Promise<void>
+            viewerTriageRead?: Promise<void>
+            model?: DashboardModel
+          }
+          const refresh = async () => {
+            await internals.readFrame()
+            await internals.viewerTriageRead
+          }
+          await internals.viewerTriageRead
+          let expected = configured ? 1 : 0
+          expect(counts.calls).toBe(expected)
           for (let poll = 0; poll < 4; poll++) {
             now += 15_000
             await refresh()
+            if (configured) expected++
+            expect(counts.calls).toBe(expected)
+            if (configured) expect(internals.model?.triage).toBe(7)
+            for (let quick = 0; quick < 3; quick++) {
+              now += 500
+              await refresh()
+            }
+            expect(counts.calls).toBe(expected)
           }
           expect(rows).toBe(0)
           expect(rawCalls).toBe(0)
@@ -522,7 +564,38 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
           rows = 0
           now += 15_000
           await refresh()
+          if (configured) expected++
           expect(rows).toBe(0)
+          expect(counts.calls).toBe(expected)
+          if (configured) {
+            expect(new Set(counts.names)).toEqual(new Set(['Triage']))
+            // A failed read keeps the last good count and reads no events.
+            counts.fail = true
+            now += 15_000
+            await refresh()
+            expect(counts.calls).toBe(++expected)
+            expect(internals.model?.triage).toBe(7)
+            expect(rows).toBe(0)
+            expect(rawCalls).toBe(0)
+            // A headless tick publishes no count; the viewer keeps its own.
+            await backing.appendRepo(repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.tick-completed',
+              payload: {
+                run: 'elsewhere',
+                queued: 0,
+                counters: tickCounters,
+                janitorDiagnostics: [],
+                ticketDiagnostics: [],
+                creationDiagnostics: [],
+                dependencyDiagnostics: [],
+              },
+            })
+            await refresh()
+            expect(internals.model?.triage).toBe(7)
+            expect(rawCalls).toBe(0)
+            rows = 0
+          }
           controller.abort()
           await running
         }

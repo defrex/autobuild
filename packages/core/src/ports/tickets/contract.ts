@@ -45,6 +45,9 @@ export interface TicketSourceContractHarness {
   states: TicketSourceContractStates
   /** A fixture label known to be writable in this source/team. */
   editableLabel: string
+  /** Set false when a forwarding source declares `countStates` but its
+   * backend cannot answer it (the hosted client over a backend without counts). */
+  stateCounts?: boolean
   /** Allocate a label name that does not yet exist in the source. Live
    * providers may use this seam to track provider-side labels for cleanup. */
   freshLabel?: (purpose: string) => Promise<string> | string
@@ -180,7 +183,7 @@ export function describeTicketSourceContract(
     test('bounded state counts agree with listed states when declared', async () => {
       await withTicketSource(factory, async (harness) => {
         const source = harness.source
-        if (!source.countStates || !source.listStates) return
+        if (!source.countStates || !source.listStates || harness.stateCounts === false) return
         await createTracked(
           harness,
           { title: contractTicketTitle('state-counts'), body: CONTRACT_TICKET_BODY },
