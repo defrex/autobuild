@@ -1059,3 +1059,131 @@ if (testUrl)
       await isolated.cleanup()
     }
   }, 15000)
+
+async function countsTable(sql: SQL): Promise<string[]> {
+  const rows: { repo: string; state: string; tickets: number }[] =
+    await sql`SELECT repo, state, tickets::integer AS tickets FROM ab_ticket_state_counts
+      WHERE tickets > 0 ORDER BY repo, state`
+  return rows.map((row) => `${row.repo} ${row.state} ${row.tickets}`)
+}
+
+async function countsTruth(sql: SQL): Promise<string[]> {
+  const rows: { repo: string; state: string; tickets: number }[] =
+    await sql`SELECT repo, state, count(*)::integer AS tickets FROM ab_tickets
+      GROUP BY repo, state ORDER BY repo, state`
+  return rows.map((row) => `${row.repo} ${row.state} ${row.tickets}`)
+}
+
+if (testUrl)
+  test('maintained state counts match ticket rows across every mutation path', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const lifecycle = { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' }
+    const one = db.source({ teamKey: 'ONE', repo: 'https://github.com/acme/one', lifecycle })
+    const two = db.source({ teamKey: 'TWO', repo: 'https://github.com/acme/two', lifecycle })
+    try {
+      expect(await one.countStates(['triage', 'Missing'])).toEqual([{ name: 'Triage', tickets: 0 }])
+      const a = await one.create({ title: 'A', body: 'Body' })
+      const b = await one.create({ title: 'B', body: 'Body' }, { state: 'Ready' })
+      const c = await one.create({ title: 'C', body: 'Body' })
+      await two.create({ title: 'D', body: 'Body' })
+      expect(await one.claim(b.ref.id)).toBe(true)
+      await one.transition(a.ref.id, 'Ready')
+      await one.transition(a.ref.id, 'Triage')
+      await one.update(c.ref.id, { title: 'C renamed' })
+      const current = await one.get(c.ref.id)
+      await one.mutateIfRevision(c.ref.id, current!.revision!, {
+        kind: 'transition',
+        state: 'Done',
+      })
+      expect(await countsTable(db.sql)).toEqual(await countsTruth(db.sql))
+      const listed = await one.listStates()
+      expect(await one.countStates(listed.map((state) => state.name))).toEqual(
+        listed.map(({ name, tickets }) => ({ name, tickets })),
+      )
+      expect(await one.countStates(['TRIAGE'])).toEqual([{ name: 'Triage', tickets: 1 }])
+      expect(await two.countStates(['Triage'])).toEqual([{ name: 'Triage', tickets: 1 }])
+      // Project deletion removes tickets with one statement; the trigger follows.
+      await db.sql`DELETE FROM ab_tickets WHERE repo = ${'https://github.com/acme/one'}`
+      expect(await countsTable(db.sql)).toEqual(await countsTruth(db.sql))
+      expect(await one.countStates(['Triage'])).toEqual([{ name: 'Triage', tickets: 0 }])
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
+
+if (testUrl)
+  test('opposite concurrent state moves commit without deadlock and keep counts exact', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const repo = 'https://github.com/acme/moves'
+    const source = db.source({
+      teamKey: 'MOV',
+      repo,
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    })
+    const first = new SQL(isolated.url)
+    const second = new SQL(isolated.url)
+    try {
+      const a = await source.create({ title: 'A', body: 'Body' })
+      const b = await source.create({ title: 'B', body: 'Body' }, { state: 'Ready' })
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const move = (sql: SQL, id: string, state: string) =>
+        sql.begin(async (tx) => {
+          await tx`UPDATE ab_tickets SET state = ${state} WHERE repo = ${repo} AND id = ${id}`
+          await gate
+        })
+      const moves = Promise.all([move(first, a.ref.id, 'Ready'), move(second, b.ref.id, 'Triage')])
+      await Bun.sleep(50)
+      release()
+      await moves
+      expect(await countsTable(db.sql)).toEqual(await countsTruth(db.sql))
+      expect(await source.countStates(['Triage', 'Ready'])).toEqual([
+        { name: 'Triage', tickets: 1 },
+        { name: 'Ready', tickets: 1 },
+      ])
+    } finally {
+      await first.close()
+      await second.close()
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
+
+if (testUrl)
+  test('migration backfills maintained counts once for a pre-count database', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const source = db.source({
+      teamKey: 'OLD',
+      repo: 'https://github.com/acme/old',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    })
+    try {
+      await db.sql.unsafe(`DROP TABLE ab_ticket_state_counts CASCADE;
+        DROP TRIGGER ab_tickets_state_count ON ab_tickets;
+        DROP FUNCTION ab_ticket_state_count()`)
+      await source.create({ title: 'A', body: 'Body' })
+      await source.create({ title: 'B', body: 'Body' })
+      await source.create({ title: 'C', body: 'Body' }, { state: 'Ready' })
+      await migratePostgres(isolated.url)
+      expect(await countsTable(db.sql)).toEqual(await countsTruth(db.sql))
+      await migratePostgres(isolated.url)
+      expect(await countsTable(db.sql)).toEqual(await countsTruth(db.sql))
+      const triggers =
+        await db.sql`SELECT count(*)::integer AS n FROM pg_trigger WHERE tgname = 'ab_tickets_state_count' AND tgrelid = 'ab_tickets'::regclass`
+      expect(triggers[0].n).toBe(1)
+      await source.create({ title: 'D', body: 'Body' })
+      expect(await source.countStates(['Triage', 'Ready'])).toEqual([
+        { name: 'Triage', tickets: 3 },
+        { name: 'Ready', tickets: 1 },
+      ])
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })

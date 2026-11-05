@@ -2026,6 +2026,7 @@ export async function migratePostgres(
           LATERAL jsonb_each_text(p.policy->'tickets') AS field(key, value)
         WHERE key IN ('triageState', 'readyState', 'claimedState', 'doneState', 'createState', 'proposalState')
         ON CONFLICT DO NOTHING`
+      await ensureTicketStateCounts(tx as SQL)
       const authRows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_auth_schema_migrations WHERE singleton = true FOR UPDATE`
       const authMarker = authRows[0]
@@ -2086,6 +2087,61 @@ export async function migratePostgres(
   } finally {
     await sql.close()
   }
+}
+
+/** Additive per-state ticket totals for bounded `countStates` reads;
+ * independent of the ticket marker. The database-side trigger keeps the
+ * totals exact in the ticket write's own transaction on every mutation path,
+ * including project deletion, migrations and older server binaries. An update
+ * that moves a ticket touches its two count rows in `(repo, state)` order, so
+ * opposite concurrent moves cannot deadlock. */
+export const TICKET_STATE_COUNTS_DDL = `
+CREATE TABLE IF NOT EXISTS ab_ticket_state_counts (
+  repo text NOT NULL,
+  state text NOT NULL,
+  tickets bigint NOT NULL CHECK (tickets >= 0),
+  PRIMARY KEY (repo, state)
+);
+CREATE OR REPLACE FUNCTION ab_ticket_state_count() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP = 'INSERT' THEN
+  INSERT INTO ab_ticket_state_counts(repo, state, tickets) VALUES (NEW.repo, NEW.state, 1)
+  ON CONFLICT(repo, state) DO UPDATE SET tickets = ab_ticket_state_counts.tickets + 1;
+ ELSIF TG_OP = 'DELETE' THEN
+  UPDATE ab_ticket_state_counts SET tickets = tickets - 1
+  WHERE repo = OLD.repo AND state = OLD.state;
+ ELSIF OLD.repo IS DISTINCT FROM NEW.repo OR OLD.state IS DISTINCT FROM NEW.state THEN
+  IF (OLD.repo, OLD.state) < (NEW.repo, NEW.state) THEN
+   UPDATE ab_ticket_state_counts SET tickets = tickets - 1
+   WHERE repo = OLD.repo AND state = OLD.state;
+   INSERT INTO ab_ticket_state_counts(repo, state, tickets) VALUES (NEW.repo, NEW.state, 1)
+   ON CONFLICT(repo, state) DO UPDATE SET tickets = ab_ticket_state_counts.tickets + 1;
+  ELSE
+   INSERT INTO ab_ticket_state_counts(repo, state, tickets) VALUES (NEW.repo, NEW.state, 1)
+   ON CONFLICT(repo, state) DO UPDATE SET tickets = ab_ticket_state_counts.tickets + 1;
+   UPDATE ab_ticket_state_counts SET tickets = tickets - 1
+   WHERE repo = OLD.repo AND state = OLD.state;
+  END IF;
+ END IF;
+ RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS ab_tickets_state_count ON ab_tickets;
+CREATE TRIGGER ab_tickets_state_count AFTER INSERT OR DELETE OR UPDATE OF repo, state ON ab_tickets
+FOR EACH ROW EXECUTE FUNCTION ab_ticket_state_count();
+`
+
+/** Creates the maintained per-state totals, backfilling them only when the
+ * table is new. The migration transaction holds the advisory lock, and
+ * `CREATE TRIGGER` blocks ticket writes until commit, so no write lands between
+ * the backfill and the trigger. */
+async function ensureTicketStateCounts(tx: SQL): Promise<void> {
+  const [row] = (await tx`SELECT to_regclass('ab_ticket_state_counts') IS NULL AS fresh`) as {
+    fresh: boolean
+  }[]
+  await tx.unsafe(TICKET_STATE_COUNTS_DDL)
+  if (row?.fresh)
+    await tx`INSERT INTO ab_ticket_state_counts (repo, state, tickets)
+      SELECT repo, state, count(*) FROM ab_tickets GROUP BY repo, state`
 }
 
 /** Additive invalidation plumbing; independent of the core lockstep marker. */

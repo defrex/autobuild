@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { seedTicketStates } from './ticket-states'
+import { readTicketStateCounts, seedTicketStates } from './ticket-states'
 import type { Exec } from './retry'
 
 function executor(run: (text: string, values: unknown[]) => Promise<Record<string, unknown>[]>) {
@@ -68,4 +68,25 @@ test('initialization propagates lookup, lock, recheck and insert failures', asyn
     await expect(seedTicketStates(q, 'repo', ['Ready'])).rejects.toBe(error)
     expect(calls).toBe(failAt)
   }
+})
+
+test('state counts read names and maintained totals only, never ticket rows', async () => {
+  const calls: string[] = []
+  const q = executor(async (text, values) => {
+    calls.push(text)
+    if (text.includes('name = ANY(')) return [{ name: 'Triage' }, { name: 'Ready' }]
+    if (text.includes('FROM ab_ticket_state_counts')) {
+      expect(values).toEqual(['repo', { names: ['Triage', 'icebox'], type: 'text' }])
+      return [{ state: 'Triage', tickets: 4 }]
+    }
+    return [{ name: 'Triage' }, { name: 'Ready' }, { name: 'icebox' }]
+  })
+  expect(
+    await readTicketStateCounts(q, 'repo', ['Triage', 'Ready'], ['triage', 'Missing', 'icebox']),
+  ).toEqual([
+    { name: 'Triage', tickets: 4 },
+    { name: 'icebox', tickets: 0 },
+  ])
+  expect(calls).toHaveLength(3)
+  for (const text of calls) expect(text).not.toMatch(/\bab_tickets\b/)
 })

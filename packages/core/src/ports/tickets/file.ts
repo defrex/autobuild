@@ -30,6 +30,7 @@ import {
   validateStatePurpose,
   orderStates,
   resolveState,
+  matchStateNames,
 } from './states'
 import { readdirSync, statSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
@@ -50,6 +51,7 @@ import type {
   TicketDraft,
   TicketListing,
   TicketSource,
+  TicketStateCount,
   TicketStateInfo,
   TicketUpdate,
   TicketMutation,
@@ -447,6 +449,18 @@ export class FileTicketSource implements TicketSource {
     const infos: TicketStateInfo[] = []
     for (const name of await this.states()) infos.push(await this.stateInfo(name))
     return infos
+  }
+
+  /**
+   * Per-state counts from each matched state's directory listing, never a
+   * ticket parse. The listing still grows with that state's ticket files.
+   */
+  async countStates(names: readonly string[]): Promise<TicketStateCount[]> {
+    const counts: TicketStateCount[] = []
+    for (const name of matchStateNames(names, await this.states())) {
+      counts.push({ name, tickets: (await this.readMarkdown(join(this.dir, name))).length })
+    }
+    return counts
   }
 
   async addState(

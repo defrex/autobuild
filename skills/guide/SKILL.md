@@ -1914,9 +1914,11 @@ in-session `put|get` still require ambient phase auth.
 ## Dispatch dashboard
 
 A plain `ab dispatch` reads dispatch placement once before starting local execution.
-For a hosted project it opens the Store-only viewer automatically, displaying
+For a hosted project it opens the viewer automatically, displaying
 `viewer · dispatched by <host>` from the placement origin (including a nondefault
 port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+The viewer reads its dashboard from the Store; its one ticket-source read is
+the header's triage count, through the source's optional `countStates`.
 `--takeover` explicitly dispatches locally, with a warning that it can displace
 the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
 flags require `--takeover` when placement selects viewer.
@@ -1937,10 +1939,11 @@ and emits state changes. `--once` reads one snapshot; `--interval <s>` sets the
 viewer polling cadence. Startup intake flags and explicit `--repository` are
 rejected. Without a durable effective configuration the viewer waits.
 
-Viewer uses the Store-only frontend with canonical repository facts for status,
+Viewer uses the dispatch frontend with canonical repository facts for status,
 settings, harvest and migrations, bypassing the dispatch presentation event feed
 and its checkpoints. Fresh viewers reuse server reductions; idle refreshes read
-zero event rows. It has no child, lease, execution wiring or upgrade-release timer.
+zero event rows. Its one ticket-source read is the header's triage count, at
+most once per 10 s. It has no child, lease, execution wiring or upgrade-release timer.
 All existing shared-store controls remain: merge/hold, build/global pause/resume,
 blocked feedback/retry, intake/harvest gates, harvest resume/acknowledgement,
 queued discard and confirmed abort. Navigation/session inspection also remain.
@@ -1998,8 +2001,13 @@ The dispatcher samples it once per tick, only for an interactive dashboard,
 through the ticket source's state counts; it reads no events. It shows `–`
 when the source cannot enumerate states (Linear) or no sample has succeeded
 yet; a failed read keeps the last value, appends nothing, and never fails the
-tick. The Store-only interactive frontend takes it from the dispatcher's
-published status and never reads the ticket source. `queue` is the
+tick. The interactive frontend of a local dispatch takes it from the
+dispatcher's published status and never reads the ticket source. A viewer
+(`ab dispatch --viewer`, or the default placement for hosted dispatch) reads
+the configured source's bounded state count itself, at most once per 10 s
+while it runs. It keeps its last good value through failed reads and through
+headless ticks that publish no count, and shows `–` until its first read
+succeeds or when the source has no state counts (Linear). `queue` is the
 ready-ticket queue depth, and `active` is the current nonterminal-build count
 against root `capacity`. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports

@@ -219,7 +219,7 @@ surface remains the remote HTTP protocol rather than in-process registration.
 
 Small, independently runnable, crash-safe:
 
-Explicit human `ab dispatch --viewer` is a Store-only dashboard lifecycle,
+Explicit human `ab dispatch --viewer` is a Store-backed dashboard lifecycle,
 available from a local checkout in TTY and plain/non-TTY modes. It bypasses the
 resident launcher, execution configuration/plugins, account admission and kernel
 wiring. It never takes or renews a repository lease, starts a child, writes
@@ -228,7 +228,8 @@ Canonical repository facts supply the observed dispatcher's status and effective
 configuration, independent of the viewer's operator correlation identity. With no
 configuration the display waits, polling bounded canonical state. Fresh viewers
 reuse saved server reductions; missing presentation caches never trigger event
-history reconstruction. Idle polls read zero event rows.
+history reconstruction. Idle polls read zero event rows. Its one ticket-source
+read is the header's triage count, sampled at most once per 10 s.
 
 Every frame reserves a row for `viewer`, optionally `viewer · dispatched by
 <label>` from explicit `--dispatched-by` input. Plain output states the mode at
@@ -240,9 +241,11 @@ and session inspection. No current control requires a local dispatcher. Viewer
 rejects startup intake flags and explicit `--repository`.
 
 A plain `ab dispatch` reads dispatch placement once before starting local execution.
-For a hosted project it opens the Store-only viewer automatically, displaying
+For a hosted project it opens the viewer automatically, displaying
 `viewer · dispatched by <host>` from the placement origin (including a nondefault
 port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+The viewer reads its dashboard from the Store; its one ticket-source read is
+the header's triage count, through the source's optional `countStates`.
 `--takeover` explicitly dispatches locally, with a warning that it can displace
 the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
 flags require `--takeover` when placement selects viewer.
@@ -2929,7 +2932,13 @@ facts.
 Successful dispatcher ticks with no effects, counters, diagnostics, queue change,
 sampled triage-count change, or attention transition append no tick boundary
 events. Only a dispatcher feeding an interactive dashboard samples the triage
-count, once per tick from the ticket source's state counts. The first queue baseline,
+count, once per tick from the ticket source's state counts. A viewer
+(`ab dispatch --viewer`, or the default viewer placement for hosted dispatch)
+reads the configured triage state's count itself, at most once per 10 s while
+its dashboard runs, through the ticket source's bounded state-count answer
+(`countStates`, the hosted `state-counts` operation). It never lists tickets
+or reads events for it, and its header shows only its own last successful
+count, never published status; a headless tick still makes no triage read. The first queue baseline,
 failed ticks, meaningful ticks, diagnostic clearing, failure recovery, and the
 first retry after a source cooldown remain recorded. Recorded starts may arrive
 with completion; optional `startedAt` preserves the actual start time, falling

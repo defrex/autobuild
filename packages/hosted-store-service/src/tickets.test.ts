@@ -40,6 +40,8 @@ describeTicketSourceContract('hosted service composition', async () => {
     }),
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
     editableLabel: 'autobuild',
+    // The fake backend has no state counts; the server answers 409.
+    stateCounts: false,
   }
 })
 
