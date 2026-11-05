@@ -310,7 +310,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   // The website hero is the headline scenario at the narrowest width that
   // keeps every pipeline row whole: the same words, only the pinning differs.
   const hero = first.result.frames.find((frame) => frame.id === 'website-hero')!
-  expect(hero.terminal).toEqual({ columns: WEBSITE_HERO_COLUMNS, rows: 40 })
+  expect(hero.terminal).toEqual({ columns: WEBSITE_HERO_COLUMNS, rows: 23 })
   expect(hero.text.replace(/ +/g, ' ')).toBe(headline.replace(/ +/g, ' '))
   expect(hero.text.split('\n').some((line) => line.endsWith('~'))).toBe(false)
   for (const line of hero.lines) {
