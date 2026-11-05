@@ -9,6 +9,7 @@ import {
   issueLinksForForge,
   landingMessage,
   neutralizeClosingReferences,
+  prIssueLinksForForge,
   withIssueKeywords,
 } from './issue-keywords'
 
@@ -161,6 +162,38 @@ describe('emitsIssueKeywords', () => {
       issueLinks: [{ issue: 1, intent: 'refs' }],
     })
     expect(issueLinksForForge(leaf, {})).toEqual({})
+  })
+
+  test('landing into a node carries no links', () => {
+    expect(issueLinksForForge({ ...leaf, target: { build: 'node' } }, capable)).toEqual({})
+  })
+})
+
+describe('prIssueLinksForForge', () => {
+  const capable = { closesIssues: true }
+  const leaf: { issueLinks: IssueLink[] } = {
+    issueLinks: [
+      { issue: 820, intent: 'closes' },
+      { issue: 824, intent: 'refs' },
+    ],
+  }
+  test('a leaf aimed at the base gets its sealed links', () => {
+    expect(prIssueLinksForForge(leaf, capable)).toEqual({ issueLinks: leaf.issueLinks })
+  })
+
+  test('a leaf aimed at a node gets every link as refs', () => {
+    expect(prIssueLinksForForge({ ...leaf, target: { build: 'node' } }, capable)).toEqual({
+      issueLinks: [
+        { issue: 820, intent: 'refs' },
+        { issue: 824, intent: 'refs' },
+      ],
+    })
+  })
+
+  test('a node, a capability-less forge or no links gets nothing', () => {
+    expect(prIssueLinksForForge({ ...leaf, kind: 'node' }, capable)).toEqual({})
+    expect(prIssueLinksForForge({ ...leaf, target: { build: 'node' } }, {})).toEqual({})
+    expect(prIssueLinksForForge({ issueLinks: [] }, capable)).toEqual({})
   })
 })
 

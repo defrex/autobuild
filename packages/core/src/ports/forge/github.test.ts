@@ -179,6 +179,87 @@ describe('GitHubForge.openPr', () => {
     expect(calls).toHaveLength(1)
   })
 
+  describe('adopting with issue links converges the keyword lines', () => {
+    const refsOnly = [
+      { issue: 820, intent: 'refs' as const },
+      { issue: 824, intent: 'refs' as const },
+    ]
+    const pr = (title: string, body: string | null) => ({
+      json: { number: 123, state: 'open', merged: false, title, body },
+    })
+    const converged = pr('Refs #820: login', 'Body.\n\nRefs #820\nRefs #824')
+
+    test('a stale title and body are PATCHed once and confirmed by readback', async () => {
+      const { forge, calls } = makeForge([
+        { json: [PR_REF] },
+        pr('Fix #820: login', 'Body.\n\nCloses #820\nCloses #824'),
+        { json: {} },
+        converged,
+      ])
+      expect((await forge.openPr({ ...opts, issueLinks: refsOnly })).number).toBe(123)
+      expect(paths(calls)).toEqual([
+        'GET repos/acme/app/pulls?head=acme%3Aab%2Ffix-login&base=main&state=open',
+        'GET repos/acme/app/pulls/123',
+        'PATCH repos/acme/app/pulls/123',
+        'GET repos/acme/app/pulls/123',
+      ])
+      expect(calls[2]?.opts?.body).toEqual({
+        title: 'Refs #820: login',
+        body: 'Body.\n\nRefs #820\nRefs #824',
+      })
+    })
+
+    test('an already converged PR makes no PATCH (retry or re-finalize)', async () => {
+      const { forge, calls } = makeForge([{ json: [PR_REF] }, converged, converged])
+      await forge.openPr({ ...opts, issueLinks: refsOnly })
+      expect(paths(calls)).toEqual([
+        'GET repos/acme/app/pulls?head=acme%3Aab%2Ffix-login&base=main&state=open',
+        'GET repos/acme/app/pulls/123',
+        'GET repos/acme/app/pulls/123',
+      ])
+    })
+
+    test('only the body differing PATCHes only the body', async () => {
+      const { forge, calls } = makeForge([
+        { json: [PR_REF] },
+        pr('Refs #820: login', 'Body.'),
+        { json: {} },
+        converged,
+      ])
+      await forge.openPr({ ...opts, issueLinks: refsOnly })
+      expect(calls[2]?.opts?.body).toEqual({ body: 'Body.\n\nRefs #820\nRefs #824' })
+    })
+
+    test('a raced 422 adoption converges the same way', async () => {
+      const { forge, calls } = makeForge([
+        { json: [] },
+        { status: 422, json: { message: 'A pull request already exists' } },
+        { json: [PR_REF] },
+        pr('Fix #820: login', 'Body.'),
+        { json: {} },
+        converged,
+      ])
+      expect((await forge.openPr({ ...opts, issueLinks: refsOnly })).number).toBe(123)
+      expect(paths(calls).slice(3)).toEqual([
+        'GET repos/acme/app/pulls/123',
+        'PATCH repos/acme/app/pulls/123',
+        'GET repos/acme/app/pulls/123',
+      ])
+      expect(calls[4]?.opts?.body).toEqual({
+        title: 'Refs #820: login',
+        body: 'Body.\n\nRefs #820\nRefs #824',
+      })
+    })
+
+    test('a title readback that disagrees throws', async () => {
+      const stale = pr('Fix #820: login', 'Body.\n\nRefs #820\nRefs #824')
+      const { forge } = makeForge([{ json: [PR_REF] }, stale, { json: {} }, stale])
+      await expect(forge.openPr({ ...opts, issueLinks: refsOnly })).rejects.toThrow(
+        'title readback disagrees',
+      )
+    })
+  })
+
   test('a malformed probe result throws rather than blindly creating', async () => {
     const { forge } = makeForge([{ json: { surprise: true } }])
     await expect(forge.openPr(opts)).rejects.toThrow('unexpected GitHub response')
@@ -2414,7 +2495,7 @@ describe('node PR retargeting', () => {
 
 describe('GitHubForge.updatePrIssueLinks', () => {
   const view = (body: string | null, over: Record<string, unknown> = {}) => ({
-    json: { number: 7, state: 'open', merged: false, body, ...over },
+    json: { number: 7, state: 'open', merged: false, title: 'Integration: N', body, ...over },
   })
   const links = [
     { issue: 5, intent: 'refs' as const },
@@ -2465,6 +2546,30 @@ describe('GitHubForge.updatePrIssueLinks', () => {
   test('a readback that disagrees throws', async () => {
     const { forge } = makeForge([view('x'), { json: {} }, view('x')])
     await expect(forge.updatePrIssueLinks('.', 7, links)).rejects.toThrow('readback disagrees')
+  })
+
+  test('a closing title reference to a linked refs issue is neutralized', async () => {
+    const title = 'Integration: N fixes #5'
+    const neutral = 'Integration: N refs #5'
+    const { forge, calls } = makeForge([
+      view(composed, { title }),
+      { json: {} },
+      view(composed, { title: neutral }),
+    ])
+    await forge.updatePrIssueLinks('.', 7, links)
+    expect(calls[1]?.opts?.body).toEqual({ title: neutral })
+  })
+
+  test('a title readback that disagrees throws', async () => {
+    const title = 'Integration: N fixes #5'
+    const { forge } = makeForge([
+      view(composed, { title }),
+      { json: {} },
+      view(composed, { title }),
+    ])
+    await expect(forge.updatePrIssueLinks('.', 7, links)).rejects.toThrow(
+      'title readback disagrees',
+    )
   })
 })
 
