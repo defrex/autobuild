@@ -6,6 +6,7 @@ import {
   writePrebuiltDistributionArchive,
 } from '@defrex/autobuild/distribution'
 import { selectDeploymentPlugins } from './deployment-plugins'
+import { defaultStageGitHost, stageGitForDeployment } from './ship-git'
 import { ensureDistributionArchiveInTrace, findArchive } from './ship-packed-distribution'
 import { restoresInstallIn, shipProviderPlugins } from './ship-provider-plugin'
 
@@ -98,8 +99,9 @@ export async function assertArchiveMatchesDistribution(
 }
 
 /** `ship-deployment`: after `next build`, carry the packed archive, the
- * distribution manifest, and the selected provider plugins into the
- * `/api/dispatch` function bundle. */
+ * distribution manifest, a self-contained `linux-x64` Git for kernel node
+ * operations, and the selected provider plugins into the `/api/dispatch`
+ * function bundle. */
 export async function runShipDeployment(
   args: string[],
   write: (text: string) => void = (text) => console.log(text),
@@ -118,6 +120,12 @@ export async function runShipDeployment(
     await ensureDistributionArchiveInTrace({
       root: parsed.root,
       distDir: parsed.distDir,
+      log: write,
+    })
+    await stageGitForDeployment({
+      root: parsed.root,
+      distDir: parsed.distDir,
+      host: defaultStageGitHost(env),
       log: write,
     })
     const selection = await selectDeploymentPlugins(parsed.root, parsed.plugins)

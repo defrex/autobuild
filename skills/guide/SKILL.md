@@ -2492,7 +2492,8 @@ The default watch reports actionable conditions only:
   authorized merges awaiting application are silent. One merge decision is reported per build/PR.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
-  `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+  `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`,
+  `dispatcher.kernel-git-unavailable`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,
@@ -2927,6 +2928,11 @@ Skipped polls preserve the episode across restart. After
 `policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
 notifies default watchers and appears on the build row. A successful attempt
 clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+A dispatcher that cannot execute Git for kernel node work (a missing or
+unloadable `git` for the bare clone) records no janitor failures. It records
+one durable `dispatcher.kernel-git-unavailable` repository condition, node work
+waits, and `dispatcher.kernel-git-recovered` closes the condition once a clone
+succeeds.
 
 A classified forge rate limit records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery

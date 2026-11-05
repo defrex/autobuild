@@ -457,6 +457,10 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `Account credentials recovered: ${JSON.stringify(event.payload.name)}`
     case 'dispatcher.forge-recovered':
       return `Forge recovered: ${event.payload.forge}`
+    case 'dispatcher.kernel-git-unavailable':
+      return `Kernel Git unavailable (${event.payload.executable}): ${singleLine(event.payload.detail)}`
+    case 'dispatcher.kernel-git-recovered':
+      return `Kernel Git recovered (${event.payload.executable})`
     case 'phase.deferral-escalated':
     case 'escalation.raised':
       return `${event.payload.id}: ${singleLine(event.payload.question)}`

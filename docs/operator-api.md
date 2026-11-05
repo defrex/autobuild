@@ -280,7 +280,8 @@ The default watch reports actionable conditions only:
   build/PR; it does not duplicate consent or hold attention.
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
-  `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+  `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`,
+  `dispatcher.kernel-git-unavailable`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,

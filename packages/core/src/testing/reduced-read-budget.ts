@@ -1494,6 +1494,65 @@ export async function nodePollingReadBudget(opts: {
   }
 }
 
+/** A kernel Git outage is one durable repository condition. Fresh
+ * dispatchers (one per hosted invocation) read it from the saved repository
+ * value: while nothing changes each tick spends at most one failed Git spawn
+ * and reads zero event rows, at 100 and at 100,000 events. */
+export async function kernelGitOutageReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  repo: string
+  slug: string
+  /** One tick on a fresh dispatcher whose kernel Git cannot execute. */
+  tick: () => Promise<unknown>
+  advance: (ms: number) => void
+  /** Kernel Git spawns attempted so far. */
+  spawns: () => number
+}) {
+  const { store, repo, slug } = opts
+  const unavailable = async () =>
+    (await store.getRepoEvents(repo)).filter(
+      (event) => event.type === 'dispatcher.kernel-git-unavailable',
+    ).length
+  let seeded = 0
+  let baseline: number[] | undefined
+  for (const length of [100, 100_000]) {
+    for (; seeded < length; seeded++) {
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+      if (seeded % 10 === 0)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'observation.recorded',
+          payload: { id: `obs-${seeded}`, kind: 'followup', summary: `budget padding ${seeded}` },
+        })
+    }
+    // Warm up: the outage tick, then one fresh read that catches up its own
+    // append. Nothing changes after that.
+    for (let n = 0; n < 2; n++) {
+      opts.advance(120_000)
+      await opts.tick()
+    }
+    const counter = memoryRepositoryReadCounter(store, repo)
+    const costs: number[] = []
+    for (let n = 0; n < 3; n++) {
+      opts.advance(120_000)
+      counter.reset()
+      const before = opts.spawns()
+      await opts.tick()
+      expect(counter.rows).toBe(0)
+      expect(counter.buildRows).toBe(0)
+      expect(opts.spawns() - before).toBeLessThanOrEqual(1)
+      costs.push(counter.rows, counter.buildRows, counter.reducedCalls, opts.spawns() - before)
+    }
+    expect(await unavailable()).toBe(1)
+    if (baseline) expect(costs).toEqual(baseline)
+    baseline = costs
+  }
+}
+
 /** Expired sampled owners resolve once through exact persisted run values. */
 export async function stoppedOwnerWatchReadBudget() {
   const { MemoryBuildStore } = await import('../store/memory')
