@@ -1,7 +1,12 @@
 import { expect, test } from 'bun:test'
 import { FakeForge } from './fake'
 import { LocalGitForge } from './local-git'
-import { inspectForgeReadiness, readinessChecks, readinessLabel } from './readiness'
+import {
+  branchGuardWarnings,
+  inspectForgeReadiness,
+  readinessChecks,
+  readinessLabel,
+} from './readiness'
 
 test('local forge trivially passes the complete inventory', async () => {
   const checks = await inspectForgeReadiness(new LocalGitForge({ repoRoot: '/unused' }), {
@@ -33,4 +38,11 @@ test('classify hard failures, recommendations, and unknown independently', () =>
   expect(readinessLabel(checks[5]!)).toBe('WARN')
   checks[0]!.status = 'unknown'
   expect(readinessLabel(checks[0]!)).toBe('UNKNOWN')
+})
+
+test('branch guard warns once only when the adapter lacks remote branch existence', () => {
+  expect(branchGuardWarnings(new FakeForge())).toEqual([])
+  const lines = branchGuardWarnings({ name: 'plugin', remoteBranchExists: undefined })
+  expect(lines).toHaveLength(1)
+  expect(lines[0]).toContain('forge plugin: cross-store branch collision protection is unavailable')
 })

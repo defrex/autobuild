@@ -2065,6 +2065,25 @@ export class GitHubForge implements Forge {
     })
   }
 
+  /** Exact-match branch existence on the remote. 404 is proven absence; any
+   * other failure throws. Deliberately unmemoized: a cached answer would hide
+   * a branch another store publishes later. */
+  async remoteBranchExists(branch: string): Promise<boolean> {
+    if (!isValidGitBranchName(branch)) throw new Error(`invalid branch ${branch}`)
+    const { owner, name } = await this.requireCoordinates()
+    try {
+      await this.request(
+        'GET',
+        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${encodeURIComponent(branch)}`,
+      )
+      return true
+    } catch (error) {
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
+      if (error instanceof GitHubApiError && error.status === 404) return false
+      throw error
+    }
+  }
+
   /** Raw file bytes from the repository. Ref omitted → the repository's
    * default branch. Throws (including 404) when the path does not exist. */
   async readFile(path: string, ref?: string): Promise<string> {
