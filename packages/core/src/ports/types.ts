@@ -156,9 +156,14 @@ export interface DependencyState {
    * Complete per this source's NATIVE lifecycle semantics — the adapter owns
    * this meaning and callers must not re-derive it from `state` (§13: the
    * provider's taxonomy never leaks above the port). Linear: `state.type` in
-   * `completed | canceled`. File: state equals the source's done state.
+   * `completed | canceled`. File: state equals the source's done state. The
+   * dispatcher applies the configured rejected role on top: a blocker whose
+   * `state` holds that role never resolves.
    */
   resolved: boolean
+  /** The blocker's native state name when the source knows it; absent when
+   * unsupported or when the ticket does not exist. */
+  state?: string
   /** This node's own declared blockers, so callers can close the graph. */
   blockedBy: string[]
 }

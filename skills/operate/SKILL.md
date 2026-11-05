@@ -306,6 +306,15 @@ filed from a forge issue carries it with `--issues N` (`closes`), or
 ticket into the ready state sends it to dispatch — do that only when the
 ticket genuinely conforms and the human's intent is clear.
 
+Move tickets by lifecycle role rather than by native state name:
+`ab ticket move <id> --role triage|ready|backlog|rejected`. "Ice it",
+"icebox" and "backlog" mean `--role backlog` (deferred work); "reject" and
+"won't do" mean `--role rejected` (declined work, which never unblocks its
+dependents and no longer holds a node open). Both roles are optional: when the
+move is refused naming `[tickets].backlogState` or `rejectedState`, tell the
+human and recommend setting that key rather than inventing a custom state.
+"Building" is the claimed role the dispatcher sets on claim, not a move target.
+
 ### What the CLI does not offer
 
 The registry has operator notes, harvest control, and `discard`, which have no
@@ -368,7 +377,10 @@ that does the job, and say what you are doing before you do it:
   addresses it.
 - `tickets.update`, `tickets.block`, `tickets.unblock` — edit fields and
   blocker relations. `issueLinks` on update replaces the whole set.
-- `tickets.move` — move a ticket between workflow states. Moving a ticket
+- `tickets.move` — move a ticket between workflow states, by native `state`
+  or by lifecycle `role` (`triage`, `ready`, `backlog`, `rejected`; give
+  exactly one). Use `role` for deferring and declining work, with the same
+  phrases and unconfigured-role handling as the CLI. Moving a ticket
   into the ready state sends it to dispatch — do that only when the ticket
   genuinely conforms and the human's intent is clear.
 - `notes.read`, `notes.write` — the operator-notes artifact: durable,
@@ -519,7 +531,8 @@ Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`
 or `hold`. Hold is available before readiness and suppresses automatic merge.
 Merge rechecks readiness and live node completeness, so act on failures by
-refreshing the facts. Open children keep a node collecting. When integration
+refreshing the facts. Open children keep a node collecting; a child moved to
+the rejected role no longer does. When integration
 verification fails, file a repair child targeting that node and let it merge
 before retrying the node cycle.
 

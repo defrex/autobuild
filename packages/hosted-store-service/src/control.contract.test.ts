@@ -161,6 +161,50 @@ async function assertBuildParity(
   )
 }
 
+/** A finalized node build with one merged contribution, ready to land. */
+async function readyNode(): Promise<MemoryBuildStore> {
+  const store = await makeStore({ active: false, ticket: true, ticketSource: 'fake' })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      repo: REPO,
+      ticket: { source: 'fake', id: 'AUT-1' },
+      baseBranch: 'main',
+      kind: 'node',
+    },
+  })
+  await store.append(SLUG, { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'parent' } })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+  })
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'integration.prepared',
+    payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
+  })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'pr.opened',
+    payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+  })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+      from: 'node',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
+  return store
+}
+
 describe('operator behavioral parity contract', () => {
   const buildCases: Array<{
     name: string
@@ -245,45 +289,7 @@ describe('operator behavioral parity contract', () => {
   }
 
   test('HTTP land rechecks ready node completeness through the configured ticket backend', async () => {
-    const store = await makeStore({ active: false, ticket: true, ticketSource: 'fake' })
-    await store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        repo: REPO,
-        ticket: { source: 'fake', id: 'AUT-1' },
-        baseBranch: 'main',
-        kind: 'node',
-      },
-    })
-    await store.append(SLUG, { actor: DISPATCHER, type: 'node.opened', payload: { sha: 'parent' } })
-    await store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'integration.observed',
-      payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
-    })
-    await store.append(SLUG, {
-      actor: KERNEL,
-      type: 'integration.prepared',
-      payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
-    })
-    await store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'pr.opened',
-      payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
-    })
-    await store.append(SLUG, {
-      actor: DISPATCHER,
-      type: 'landing.decided',
-      payload: {
-        candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
-        from: 'node',
-        into: { kind: 'root' },
-        labels: [],
-        mode: 'consent',
-        rule: { default: true },
-      },
-    })
+    const store = await readyNode()
     let reads = 0
     const backend: OperatorTicketBackend = {
       contextFor: async (repo) => ({
@@ -307,6 +313,68 @@ describe('operator behavioral parity contract', () => {
     expect(
       (await store.getEvents(SLUG)).filter((e) => e.type === 'build.land-requested'),
     ).toHaveLength(1)
+  })
+
+  test('HTTP and MCP land exclude a child in the configured rejected role', async () => {
+    const backend: OperatorTicketBackend = {
+      contextFor: async (repo) => ({
+        repo,
+        teamKey: 'test',
+        tickets: { source: 'file', readyState: 'ready', rejectedState: 'rejected' },
+      }),
+      sourceFor: () =>
+        ({
+          name: 'fake',
+          integrationTree: true,
+          listAll: async () => ({
+            tickets: [
+              {
+                ref: { source: 'fake', id: 'AUT-2' },
+                title: 'Rejected child',
+                state: 'Rejected',
+                target: 'AUT-1',
+                resolved: false,
+              },
+            ],
+            diagnostics: [],
+          }),
+        }) as unknown as TicketSource,
+      statesFor: () => [],
+    }
+    const landed = async (store: MemoryBuildStore) =>
+      (await store.getEvents(SLUG)).filter((e) => e.type === 'build.land-requested')
+
+    const httpStore = await readyNode()
+    await api(httpStore, backend).controlBuild(REPO, SLUG, { action: 'land' })
+    expect(await landed(httpStore)).toHaveLength(1)
+
+    const toolStore = await readyNode()
+    await buildRegistry({ store: toolStore, tickets: backend, clock }).call(
+      'builds.control',
+      { repo: REPO, slug: SLUG, action: 'merge' },
+      { identity: USER },
+    )
+    expect(await landed(toolStore)).toHaveLength(1)
+
+    // Without the role the same child keeps the node incomplete.
+    const unset: OperatorTicketBackend = {
+      ...backend,
+      contextFor: async (repo) => ({
+        repo,
+        teamKey: 'test',
+        tickets: { source: 'file', readyState: 'ready' },
+      }),
+    }
+    const openStore = await readyNode()
+    // The registry maps the plain incompleteness error to its generic refusal.
+    await expect(
+      buildRegistry({ store: openStore, tickets: unset, clock }).call(
+        'builds.control',
+        { repo: REPO, slug: SLUG, action: 'merge' },
+        { identity: USER },
+      ),
+    ).rejects.toThrow()
+    expect(await landed(openStore)).toHaveLength(0)
   })
 
   test('blocked resume returns answer-required and writes nothing on both surfaces', async () => {

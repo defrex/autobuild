@@ -32,7 +32,8 @@ import { RUNTIME_IDENTITY, formatDispatcherError } from '../runtime-identity'
 import { isDeepStrictEqual } from 'node:util'
 import { guardForge } from '../kernel/guarded-forge'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
-import { openTicketSource } from './ticket'
+import { lazyTicketSource, openTicketSource } from './ticket'
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import {
   inspectForgeReadiness,
   formatForgeReadiness,
@@ -1892,6 +1893,7 @@ class DispatchLoop {
       result = await controlBuild({
         store: this.wiring.store,
         ticketSource: async () => this.wiring.tickets,
+        rejectedState: async () => ticketLifecycle(this.currentConfig().config.tickets).rejected,
         repo: this.repoIdentity,
         slug,
         env: this.opts.env,
@@ -5024,9 +5026,9 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         },
         input: opts.input ?? { start: () => () => {} },
         ...(!interactive ? { plainOutput: opts.stdout } : {}),
-        ticketSource: async () =>
-          (
-            await openTicketSource(
+        controlTickets: () =>
+          lazyTicketSource(() =>
+            openTicketSource(
               {
                 targetRepo: state.checkout,
                 exec: opts.exec,
@@ -5035,8 +5037,8 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
                 stdout: opts.stdout,
               },
               'ab merge',
-            )
-          ).source,
+            ),
+          ),
         once: opts.once === true,
         ...(opts.intervalMs !== undefined ? { intervalMs: opts.intervalMs } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
@@ -5121,9 +5123,9 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         checkout: state.checkout,
         storeRef: opened.storeRef,
         store: opened.store,
-        ticketSource: async () =>
-          (
-            await openTicketSource(
+        controlTickets: () =>
+          lazyTicketSource(() =>
+            openTicketSource(
               {
                 targetRepo: state.checkout,
                 exec: resolvedOpts.exec,
@@ -5132,8 +5134,8 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
                 stdout: resolvedOpts.stdout,
               },
               'ab merge',
-            )
-          ).source,
+            ),
+          ),
         env: resolvedOpts.env,
         terminal: resolvedOpts.terminal,
         input: resolvedOpts.input,

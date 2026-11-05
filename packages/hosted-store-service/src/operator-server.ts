@@ -32,7 +32,7 @@ import {
   RouteRefusalError,
   requestNodeRestack,
   controlBuild,
-  openOperatorTickets,
+  operatorControlTickets,
   controlHarvestRun,
   effectiveStatus,
   getHarvestStatus,
@@ -368,7 +368,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             operation: {
               kind: 'move',
               id,
-              state: request.state,
+              ...(request.role !== undefined ? { role: request.role } : { state: request.state! }),
               expectedRevision: request.expectedRevision,
             },
           }),
@@ -619,12 +619,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             slug,
             user,
             action,
-            ticketSource: async () => {
-              if (!opts.ticketBackend) throw new Error('ticket source unavailable')
-              return (
-                await openOperatorTickets({ store: opts.store, repo, backend: opts.ticketBackend })
-              ).source
-            },
+            ...operatorControlTickets({ store: opts.store, repo, backend: opts.ticketBackend }),
           }),
         )
       }
