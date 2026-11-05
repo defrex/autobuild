@@ -30,6 +30,13 @@ import { parseConfig } from '../packages/core/src/config/load'
 import { DISPATCHER } from '../packages/core/src/testing'
 import { AUTH_SCHEMA_VERSION } from '../packages/postgres-store/src/auth-schema'
 import { repoRoot } from './git-tracked'
+import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
+import { parseLdDebug } from '../packages/hosted-dispatcher/src/ship-git'
+import {
+  locateShippedGit,
+  shippedGitExec,
+  type ShippedGitManifest,
+} from '../packages/hosted-dispatcher/src/shipped-git'
 
 export const deploymentTemplatePaths = [
   'templates/hosted-service',
@@ -131,7 +138,7 @@ const sha256 = async (path: string) =>
 const STAGED_PLUGIN = 'node_modules/@defrex/autobuild-vercel-sandbox'
 
 /** The dispatch trace entries this build ships: the archive, the distribution
- * manifest and the staged plugin, resolved to absolute paths. */
+ * manifest, the staged plugin and the shipped Git, resolved to absolute paths. */
 async function shippedTraceEntries(project: string): Promise<string[]> {
   const trace = join(project, '.next/server/app/api/dispatch/route.js.nft.json')
   const files = JSON.parse(await readFile(trace, 'utf8')).files as string[]
@@ -140,6 +147,7 @@ async function shippedTraceEntries(project: string): Promise<string[]> {
     .filter(
       (path) =>
         path.includes('/.autobuild-dist/') ||
+        path.includes('/.autobuild-git/') ||
         path.endsWith('/@defrex/autobuild/package.json') ||
         path.includes(`/@defrex/autobuild/${STAGED_PLUGIN}/`),
     )
@@ -238,7 +246,66 @@ console.log(JSON.stringify({ reports, archive }))
   assert.equal(report?.resolved, join(func, distRel, STAGED_PLUGIN, 'dist/index.js'))
   assert(report?.notice?.includes('builtin workspace-provider registration'), report?.notice)
   assert.equal(result.archive, join(func, archive))
+  await checkShippedGit(func, files, projectRel, probeRoot, PATH)
   return { archiveSha: await sha256(join(func, archive)) }
+}
+
+/** Vercel's documented uncompressed function size limit. */
+const FUNCTION_SIZE_LIMIT = 250 * 1024 * 1024
+
+/** The materialized function carries the shipped Git, stays inside the size
+ * limit, and its Git runs from a PATH without git while loading nothing from
+ * the host — exactly as the runtime locator unpacks it. */
+async function checkShippedGit(
+  func: string,
+  files: string[],
+  projectRel: string,
+  probeRoot: string,
+  PATH: string,
+) {
+  const tree = join(projectRel, '.autobuild-git')
+  assert(files.includes(join(tree, 'manifest.json')), `dispatch function lacks ${tree}`)
+  const manifest = JSON.parse(
+    await readFile(join(func, tree, 'manifest.json'), 'utf8'),
+  ) as ShippedGitManifest
+  for (const file of manifest.files)
+    assert(files.includes(join(tree, file)), `dispatch function lacks ${join(tree, file)}`)
+  let total = 0
+  for (const file of files) {
+    const info = await stat(join(func, file))
+    if (info.isFile()) total += info.size
+  }
+  assert(total < FUNCTION_SIZE_LIMIT, `dispatch function is ${total} bytes, over 250 MB`)
+  console.log(
+    `dispatch function ${(total / 1024 / 1024).toFixed(1)} MB, of which shipped Git ` +
+      `${(manifest.bytes / 1024 / 1024).toFixed(1)} MB (${manifest.gitVersion}, glibc ${manifest.glibcVersion})`,
+  )
+  const noGit = PATH.split(delimiter)
+    .filter((entry) => entry !== '' && !Bun.which('git', { PATH: entry }))
+    .join(delimiter)
+  try {
+    const located = await locateShippedGit({ roots: [join(func, projectRel)] })
+    assert(located.ok, located.ok ? '' : located.reason)
+    const exec = shippedGitExec(spawnExec, located.git, { PATH: noGit })
+    const trace = join(probeRoot, 'git-ld')
+    await mkdir(trace)
+    const env = { LD_DEBUG: 'libs', LD_DEBUG_OUTPUT: join(trace, 'trace'), HOME: probeRoot }
+    const version = await exec(['git', '--version'], { cwd: probeRoot, env })
+    assert.equal(version.exitCode, 0, version.stderr)
+    assert.equal(version.stdout.trim(), `git version ${manifest.gitVersion}`)
+    const init = await exec(['git', 'init', '--bare', '--quiet', join(probeRoot, 'kernel.git')], {
+      cwd: probeRoot,
+      env,
+    })
+    assert.equal(init.exitCode, 0, init.stderr)
+    let traces = ''
+    for (const name of await readdir(trace)) traces += await readFile(join(trace, name), 'utf8')
+    const loaded = parseLdDebug(traces, manifest.root)
+    assert(loaded.programs.length > 0, 'LD_DEBUG recorded no shipped Git programs')
+    assert.deepEqual(loaded.foreign, [], 'the shipped Git loaded host objects')
+  } finally {
+    await rm(manifest.root, { recursive: true, force: true })
+  }
 }
 
 /** Installed deployments with the dispatcher: a standalone template folder,
@@ -368,6 +435,9 @@ async function checkDispatcherDeployments(
   const archive = join(member, `.autobuild-dist/autobuild-${version}.tgz`)
   const staged = join(distributionRoot, STAGED_PLUGIN)
   const shipped = await shippedTraceEntries(member)
+  const gitManifest = JSON.parse(
+    await readFile(join(member, '.autobuild-git/manifest.json'), 'utf8'),
+  ) as ShippedGitManifest
   assert.deepEqual(
     shipped,
     [
@@ -375,6 +445,9 @@ async function checkDispatcherDeployments(
       join(distributionRoot, 'package.json'),
       join(staged, 'dist/index.js'),
       join(staged, 'package.json'),
+      ...[...gitManifest.files, 'manifest.json'].map((file) =>
+        join(member, '.autobuild-git', file),
+      ),
     ].sort(),
   )
   await stat(archive)

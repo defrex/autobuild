@@ -124,6 +124,7 @@ test('published pages keep navigation on-site and link only declared repository 
       [
         'docs/accounts.md#dispatcher-admission',
         'docs/setup.md#running-the-dispatcher-without-a-checkout-origin-mode',
+        'packages/hosted-dispatcher/README.md#shipped-git',
       ],
     ],
     ['docs/operating.md', ['docs/operator-api.md']],

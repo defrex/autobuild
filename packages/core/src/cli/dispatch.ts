@@ -538,6 +538,10 @@ async function defaultWire(
     env: opts.env,
     repoRoot: state.checkout,
     ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
+    // Origin mode runs kernel Git through the caller's exec seam (the hosted
+    // dispatcher routes it to its shipped Git), as `fetchOriginModeConfig`
+    // already does; a checkout dispatcher keeps finding Git on its PATH.
+    ...(originMode ? { exec: opts.exec } : {}),
   })
   // Checkout-less provider seams: the sandbox provider derives its origin and
   // remote branch heads from these instead of host `git` — every host-exec

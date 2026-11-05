@@ -135,6 +135,16 @@ credentials stay on the host and are applied by provider-scoped egress header
 transforms.
 See [origin-mode setup](setup.md#running-the-dispatcher-without-a-checkout-origin-mode) and [Workspaces](workspaces.md).
 
+Integration nodes need Git on the dispatcher host even in origin mode: the
+kernel bare-clones the origin to snapshot, restack, check presence and land.
+The hosted dispatcher deployment ships its own self-contained `linux-x64` Git
+(its glibc, loader, HTTPS helpers and CA bundle), so it needs only an x86_64
+Linux kernel and a writable `/tmp`; see
+[shipped Git](../packages/hosted-dispatcher/README.md#shipped-git). When kernel
+Git cannot run, the dispatcher records one durable
+`dispatcher.kernel-git-unavailable` repository condition, node janitors defer
+instead of failing per node, and `dispatcher.kernel-git-recovered` ends it.
+
 ## Writing your own
 
 There's no hosting plugin port. Invoke the local or origin dispatcher entrypoints with supported Store, workspace and forge adapters, and keep coordination in durable state, never private channels between processes.
