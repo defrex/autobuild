@@ -50,6 +50,8 @@ describe('repository attention projection', () => {
     ['dispatcher.tick-failed', {}, false],
     ['dispatcher.ticket-source-degraded', {}, false],
     ['dispatcher.ticket-source-recovered', {}, false],
+    ['dispatcher.kernel-git-unavailable', { executable: 'git', detail: 'missing' }, true],
+    ['dispatcher.kernel-git-recovered', { executable: 'git' }, false],
   ])('%s %j direct=%s', (type, payload, expected) => {
     expect(repositoryNeedsAttention(repo(type as string, payload, 1))).toBe(expected as boolean)
   })

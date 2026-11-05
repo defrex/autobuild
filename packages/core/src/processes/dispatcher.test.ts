@@ -12577,6 +12577,134 @@ test.each([10, 1000])(
   },
 )
 
+test('missing kernel Git is one durable repository condition, not per-node janitor failures', async () => {
+  const forge = new FakeForge()
+  const parent = 'b'.repeat(40)
+  const head = 'c'.repeat(40)
+  forge.seedCommit(BASE_SHA)
+  forge.seedCommit(parent, [BASE_SHA])
+  forge.seedCommit(head, [parent])
+  forge.remoteBranches.set('main', parent)
+  let gitWorks = false
+  const exec: Exec = async (args) => {
+    if (args[0] === 'git' && !gitWorks) throw new Error('Executable not found in $PATH: "git"')
+    return { stdout: args.includes('rev-list') ? '1' : '', stderr: '', exitCode: 0 }
+  }
+  // A forge that can snapshot needs a kernel repository for its node work.
+  const dispatchForge = new Proxy(forge, {
+    get(target, key) {
+      if (key === 'snapshotBase') return async () => parent
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const origin = { dispatchForge, exec, repoOrigin: 'https://github.com/acme/repo' }
+  const h = harness(origin)
+  await h.store.ensureRepo(REPO)
+  for (const slug of ['node-a', 'node-b']) {
+    const branch = `ab-node/${slug}`
+    forge.remoteBranches.set(branch, head)
+    forge.nodeComparisons.set(`main...${branch}`, 1)
+    await h.store.createBuild({ slug, repo: REPO, branch })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+        ticket: { source: 'fake', id: slug.toUpperCase() },
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: BASE_SHA },
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'node.inventory',
+      payload: { head, base: BASE_SHA, builds: [], foreign: [] },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.restack-requested',
+      payload: {
+        id: `restack-${slug}`,
+        reason: 'presence',
+        branch: 'main',
+        parent,
+        dependent: { source: 'fake', id: 'D' },
+        identities: ['build:ancestor-change'],
+      },
+    })
+    const pr = slug === 'node-a' ? 77 : 78
+    forge.setPrState(pr, { state: 'open', mergeable: true })
+    const child = await seedBuild(h, {
+      slug: `${slug}-leaf`,
+      pr: { number: pr, url: `https://example/${pr}`, headSha: head },
+    })
+    await h.store.append(child, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: `${slug.toUpperCase()}-CHILD` },
+        repo: REPO,
+        baseBranch: branch,
+        target: { build: slug, ticket: { source: 'fake', id: slug.toUpperCase() } },
+      },
+    })
+    await h.store.append(child, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+  }
+  const repoEvents = async (type: RepositoryEvent['type']) =>
+    (await h.store.getRepoEvents(REPO)).filter((event) => event.type === type)
+  const janitorFailures = async () =>
+    (await Promise.all(['node-a', 'node-b'].map((slug) => h.store.getEvents(slug))))
+      .flat()
+      .filter(
+        (event) =>
+          event.type === 'build.janitor-attempt-failed' || event.type === 'build.janitor-failing',
+      )
+
+  const first = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(first.janitorFailed).toBe(0)
+  const clones = h.execCalls.filter((args) => args.includes('clone')).length
+  // The tick memo: the second node defers without spawning Git again.
+  expect(clones).toBe(1)
+  expect(await repoEvents('dispatcher.kernel-git-unavailable')).toHaveLength(1)
+  expect((await repoEvents('dispatcher.kernel-git-unavailable'))[0]!.payload).toEqual({
+    executable: 'git',
+    detail: 'Executable not found in $PATH: "git"',
+  })
+  await h.dispatcher.tick({ acceptNewWork: false })
+  // Fresh processes, as on every hosted invocation, read the durable condition.
+  for (let n = 0; n < 2; n++)
+    await harness({ store: h.store, ...origin }).dispatcher.tick({
+      acceptNewWork: false,
+    })
+  expect(await repoEvents('dispatcher.kernel-git-unavailable')).toHaveLength(1)
+  expect(await janitorFailures()).toEqual([])
+  expect(
+    (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
+      .kernelGit,
+  ).toMatchObject({ executable: 'git' })
+
+  gitWorks = true
+  await harness({ store: h.store, ...origin }).dispatcher.tick({
+    acceptNewWork: false,
+  })
+  expect(await repoEvents('dispatcher.kernel-git-recovered')).toHaveLength(1)
+
+  // A moved node head needs a fresh kernel sample, which fails again.
+  gitWorks = false
+  forge.seedCommit('d'.repeat(40), [head])
+  forge.remoteBranches.set('ab-node/node-a', 'd'.repeat(40))
+  await harness({ store: h.store, ...origin }).dispatcher.tick({ acceptNewWork: false })
+  expect(await repoEvents('dispatcher.kernel-git-unavailable')).toHaveLength(2)
+  expect(await repoEvents('dispatcher.kernel-git-recovered')).toHaveLength(1)
+  expect(await janitorFailures()).toEqual([])
+})
+
 for (const storeLagMs of [0, 200])
   test(`node checkpoint growth across active and idle periods with ${storeLagMs}ms store lag`, async () => {
     const clock = manualClock()
@@ -13541,3 +13669,48 @@ describe('node issue links (SPEC "Forge issue links")', () => {
     })
   })
 })
+
+test('a kernel Git outage has bounded reads on fresh dispatchers at 100 and 100000 events', async () => {
+  let spawns = 0
+  const exec: Exec = async (args) => {
+    if (args[0] === 'git') {
+      spawns++
+      throw new Error('Executable not found in $PATH: "git"')
+    }
+    return { stdout: '', stderr: '', exitCode: 0 }
+  }
+  const forge = new FakeForge()
+  forge.seedBranch('main', BASE_SHA)
+  // A forge that can snapshot needs a kernel repository for its node work.
+  const dispatchForge = new Proxy(forge, {
+    get(target, key) {
+      if (key === 'snapshotBase') return async () => BASE_SHA
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const origin = { dispatchForge, exec, repoOrigin: 'https://github.com/acme/repo' }
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })], forge, ...origin })
+  forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  const node = (await h.store.listBuilds())[0]!
+  const { kernelGitOutageReadBudget } = await import('../testing/reduced-read-budget')
+  await kernelGitOutageReadBudget({
+    store: h.store as MemoryBuildStore,
+    repo: REPO,
+    slug: node.slug,
+    advance: (ms) => h.clock.advance(ms),
+    spawns: () => spawns,
+    tick: () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        forge,
+        ...origin,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+  expect(
+    (await h.store.getEvents(node.slug)).filter((event) => event.type.startsWith('build.janitor')),
+  ).toEqual([])
+}, 60_000)

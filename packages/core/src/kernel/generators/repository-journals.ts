@@ -241,6 +241,11 @@ export function randomStatusJournal(seed: number, length: number): RepositoryEve
       }),
       () => ({ type: 'dispatcher.forge-recovered', payload: { forge: 'github' } }),
       () => ({
+        type: 'dispatcher.kernel-git-unavailable',
+        payload: { executable: 'git', detail: 'Executable not found in $PATH: "git"' },
+      }),
+      () => ({ type: 'dispatcher.kernel-git-recovered', payload: { executable: 'git' } }),
+      () => ({
         type: 'dispatcher.run-started',
         payload: {
           run,
