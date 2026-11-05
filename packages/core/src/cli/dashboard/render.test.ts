@@ -1935,6 +1935,20 @@ describe('renderDashboard: `height` caps the LINE count', () => {
       blockers: ['maxVerifyAttempts (3) exhausted: verify:test is still failing'],
     })
   const many = (n: number): DashboardBuild[] => Array.from({ length: n }, (_, i) => blocked(i))
+  const isNotice = (line: string): boolean => line.trimStart().startsWith('... ')
+  const selecting = (n: number, selected: number): DashboardModel => ({
+    ...model(many(n)),
+    selection: { kind: 'build', slug: `interactive-build-dashboard-for-ab-${selected}` },
+  })
+  /** One blocked build's rendered line count at width 80, and the legend's. */
+  const geometry = (): { buildLines: number; controls: number } => {
+    const unbounded = rd(selecting(1, 0), { color: false, width: 80 })
+    const controls = unbounded.length - unbounded.lastIndexOf('') - 1
+    // [header, toggles, '', ...build, '', ...controls]
+    return { buildLines: unbounded.length - 4 - controls, controls }
+  }
+  /** The height whose body budget is exactly `budget` rows. */
+  const heightFor = (budget: number): number => 2 + 2 + budget + geometry().controls
 
   test('an unclamped frame really does overflow a default 80x24 — the bug', () => {
     // Only the RUNNING half of the listed set is bounded by capacity; blocked
@@ -1950,12 +1964,23 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     expect(lines.length).toBeLessThanOrEqual(24)
   })
 
-  test('never exceeds the height, over a sweep of heights and build counts', () => {
+  test('fills the height exactly, over a sweep of heights and build counts', () => {
+    // The list view pads its body region so the legend is pinned to the last
+    // rows: a bounded frame is never taller than its cap, and never shorter.
+    // Every overflow notice keeps a blank line on both sides at every height.
     for (const n of [0, 1, 2, 3, 5, 8, 20]) {
       for (let height = 0; height <= 40; height += 1) {
         for (const color of [false, true]) {
-          const lines = rd(model(many(n)), { color, width: 80, height })
-          expect(lines.length).toBeLessThanOrEqual(height)
+          for (const viewer of [undefined, { dispatchedBy: 'ops' }]) {
+            const m = { ...model(many(n)), ...(viewer ? { viewer } : {}) }
+            const lines = rd(m, { color, width: 80, height }).map(stripAnsi)
+            expect(lines).toHaveLength(height)
+            lines.forEach((line, index) => {
+              if (!isNotice(line)) return
+              expect(lines[index - 1]).toBe('')
+              expect(lines[index + 1]).toBe('')
+            })
+          }
         }
       }
     }
@@ -2118,6 +2143,148 @@ describe('renderDashboard: `height` caps the LINE count', () => {
     // alternate-display clear, which is worse than an empty region.
     expect(rd(model([]), { color: false, width: 80, height: 0 })).toEqual([])
     expect(rd(model(many(3)), { color: false, width: 80, height: 0 })).toEqual([])
+  })
+
+  test('a short list is padded so the legend sits on the last rows', () => {
+    const lines = rd(model(many(2)), { color: false, width: 80, height: 30 })
+    expect(lines).toHaveLength(30)
+    expect(lines.at(-1)).toContain('Keys:')
+    expect(lines.at(-2)).toBe('')
+    const lastBuildLine = lines.findLastIndex((line) => line.trimStart().startsWith('!'))
+    expect(lines.slice(lastBuildLine + 1, -1).length).toBeGreaterThan(1)
+    expect(lines.slice(lastBuildLine + 1, -1).every((line) => line === '')).toBe(true)
+  })
+
+  test('an overflowing list scrolls between a fixed header and a pinned legend', () => {
+    for (let selected = 0; selected < 8; selected += 1) {
+      const lines = rd(selecting(8, selected), { color: false, width: 80, height: 24 })
+      expect(lines).toHaveLength(24)
+      expect(lines[0]).toContain('Autobuild')
+      expect(lines.at(-1)).toContain('Keys:')
+      expect(lines.some((line) => line.startsWith(` > AB-${selected}`))).toBe(true)
+    }
+  })
+
+  test('a growing prompt panel takes its rows from the build list, staying pinned', () => {
+    const base = selecting(8, 3)
+    const slug = 'interactive-build-dashboard-for-ab-3'
+    const opts = { color: false, width: 80, height: 30 }
+    const frames = [
+      base,
+      { ...base, resumeInput: { slug, value: 'one line', cursor: 8 } },
+      { ...base, resumeInput: { slug, value: 'a\nb\nc', cursor: 5 } },
+    ].map((m) => rd(m, opts))
+    const regions = frames.map((lines) => {
+      // The body runs from the top separator to the separator before the
+      // controls; the controls are everything after it.
+      const legend = lines.findIndex((line) => line.includes('Keys:'))
+      const panel = lines.findIndex((line) => line.trimStart().startsWith(`Resume ${slug}`))
+      const controlsStart = panel >= 0 ? panel : legend
+      return { body: controlsStart - 1 - 3, controls: lines.length - controlsStart }
+    })
+    for (const lines of frames) {
+      expect(lines).toHaveLength(30)
+      expect(lines.at(-1)).not.toBe('')
+    }
+    expect(regions[1]!.controls).toBeGreaterThan(regions[0]!.controls)
+    expect(regions[2]!.controls).toBeGreaterThan(regions[1]!.controls)
+    for (const index of [1, 2]) {
+      expect(regions[0]!.body - regions[index]!.body).toBe(
+        regions[index]!.controls - regions[0]!.controls,
+      )
+    }
+  })
+
+  test('after a resize the legend is on the new last row', () => {
+    for (const height of [20, 33]) {
+      const lines = rd(selecting(3, 0), { color: false, width: 80, height })
+      expect(lines).toHaveLength(height)
+      expect(lines.at(-1)).toContain('Keys:')
+    }
+  })
+
+  test('the empty state keeps the legend pinned', () => {
+    const lines = rd(model([]), { color: false, width: 80, height: 20 })
+    expect(lines).toHaveLength(20)
+    expect(lines[2]).toBe('')
+    expect(lines[3]).toContain('no active builds')
+    expect(lines.at(-1)).toContain('Keys:')
+  })
+
+  test('each overflow notice is one blank line from the builds', () => {
+    const lines = rd(selecting(8, 4), { color: false, width: 80, height: 24 })
+    const above = lines.findIndex((line) => line.includes('more above'))
+    const below = lines.findIndex((line) => line.includes('more below'))
+    expect(above).toBeGreaterThan(0)
+    expect(below).toBeGreaterThan(above)
+    expect(lines[above + 1]).toBe('')
+    expect(lines[above + 2]).toContain('BLOCKED')
+    expect(lines[below - 1]).toBe('')
+    expect(lines[below - 2]!.trimStart().startsWith('!')).toBe(true)
+  })
+
+  test('the whole-build window and its fallback both keep the notice gap', () => {
+    const { buildLines } = geometry()
+    expect(buildLines).toBeGreaterThan(2)
+    const body = (lines: string[]): string[] => lines.slice(3, lines.lastIndexOf('', -2))
+
+    // Room for the whole selected build plus gap and notice.
+    const whole = rd(selecting(3, 0), {
+      color: false,
+      width: 80,
+      height: heightFor(buildLines + 2),
+    })
+    expect(whole).toHaveLength(heightFor(buildLines + 2))
+    const wholeBody = body(whole)
+    expect(wholeBody).toHaveLength(buildLines + 2)
+    expect(wholeBody.at(-2)).toBe('')
+    expect(wholeBody.at(-1)).toContain('and 2 more below')
+    expect(wholeBody.at(-3)!.trimStart().startsWith('!')).toBe(true)
+
+    // One row short: the build gives up its last line to keep gap and notice.
+    const fallback = rd(selecting(3, 0), {
+      color: false,
+      width: 80,
+      height: heightFor(buildLines + 1),
+    })
+    expect(fallback).toHaveLength(heightFor(buildLines + 1))
+    const fallbackBody = body(fallback)
+    expect(fallbackBody).toHaveLength(buildLines + 1)
+    expect(fallbackBody[0]).toContain('> AB-0')
+    expect(fallbackBody.at(-2)).toBe('')
+    expect(fallbackBody.at(-3)).not.toBe('')
+    expect(fallbackBody.at(-1)).toContain('and 2 more below')
+
+    // Selected in the middle with builds on both sides, truncated.
+    for (let budget = 1; budget < buildLines + 4; budget += 1) {
+      const height = heightFor(budget)
+      const lines = rd(selecting(3, 1), { color: false, width: 80, height })
+      expect(lines).toHaveLength(height)
+      const region = lines.slice(3, 3 + budget)
+      if (budget >= 5) {
+        expect(region[0]).toContain('1 more above')
+        expect(region[1]).toBe('')
+        expect(region[2]).toContain('> AB-1')
+        expect(region.at(-2)).toBe('')
+        expect(region.at(-1)).toContain('and 1 more below')
+      } else if (budget >= 3) {
+        expect(region[0]).toContain('> AB-1')
+        expect(region.at(-2)).toBe('')
+        expect(region.at(-1)).toContain('1 above, 1 below')
+      } else {
+        expect(region[0]).toContain('> AB-1')
+        expect(region.some(isNotice)).toBe(false)
+      }
+    }
+  })
+
+  test('an unbounded frame is not padded', () => {
+    const lines = rd(model(many(2)), { color: false, width: 80 })
+    const { buildLines, controls } = geometry()
+    expect(lines).toHaveLength(2 + 1 + buildLines * 2 + 1 + 1 + controls)
+    expect(lines.at(-1)).toContain('Keys:')
+    expect(lines.at(-2)).toBe('')
+    expect(lines.at(-3)).not.toBe('')
   })
 })
 

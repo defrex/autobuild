@@ -73,7 +73,11 @@ export interface RenderOpts {
    * must pass `paintableRows(rows)`, not `rows`. This module cannot enforce
    * that — it counts lines and knows nothing of the region's trailing newline.
    *
-   * Absent ⇒ unbounded, for callers that are not painting a screen.
+   * A list-view frame given a height fills it exactly: the body region is
+   * padded so the legend (or prompt panel) occupies the last lines.
+   *
+   * Absent ⇒ unbounded and unpadded, for callers that are not painting a
+   * screen.
    */
   height?: number
 }
@@ -1747,13 +1751,14 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
 
       // Brute force is intentional and tiny (dashboard row counts are bounded
       // by operator workload): choose the largest contiguous whole-row window
-      // containing selection, with explicit omission notices. Harvest and
-      // builds participate identically.
+      // containing selection, with explicit omission notices. Each notice
+      // costs two rows: the notice and the blank line separating it from the
+      // builds. Harvest and builds participate identically.
       let best: { start: number; end: number; count: number; used: number } | undefined
       for (let start = 0; start <= selectedIndex; start += 1) {
         for (let end = selectedIndex; end < rows.length; end += 1) {
           const rowLines = prefix[end + 1]! - prefix[start]! + (end - start)
-          const notices = (start > 0 ? 1 : 0) + (end < rows.length - 1 ? 1 : 0)
+          const notices = (start > 0 ? 2 : 0) + (end < rows.length - 1 ? 2 : 0)
           const used = rowLines + notices
           if (used > bodyBudget) continue
           const count = end - start + 1
@@ -1770,33 +1775,36 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       if (best !== undefined) {
         body = []
         if (best.start > 0) {
-          body.push(overflowNotice(`${best.start} more above`, color, width))
+          body.push(overflowNotice(`${best.start} more above`, color, width), '')
         }
         body.push(...flattenRows(rows.slice(best.start, best.end + 1)))
         const below = rows.length - best.end - 1
         if (below > 0) {
-          body.push(overflowNotice(`and ${below} more below`, color, width))
+          body.push('', overflowNotice(`and ${below} more below`, color, width))
         }
       } else {
-        // A detailed selected row itself cannot fit. Keep its selectable
-        // identity visible, then spend remaining rows on detail and omission.
+        // No whole-row window fits once notice gaps are counted. Keep the
+        // selected row's selectable identity visible, then spend remaining
+        // rows on detail and omission. Every notice keeps its one-line gap
+        // from the detail; with no room for a notice and its gap, the
+        // selection wins.
         const selectedLines = rows[selectedIndex]!.lines
         const above = selectedIndex
         const below = rows.length - selectedIndex - 1
-        let noticeLines = 0
-        if (bodyBudget > 1 && (above > 0 || below > 0)) {
-          noticeLines = bodyBudget > 2 && above > 0 && below > 0 ? 2 : 1
-        }
-        const detailCapacity = Math.max(1, bodyBudget - noticeLines)
+        let notices = 0
+        if (bodyBudget >= 5 && above > 0 && below > 0) notices = 2
+        else if (bodyBudget >= 3 && (above > 0 || below > 0)) notices = 1
+        const detailCapacity = Math.max(1, bodyBudget - notices * 2)
         body = []
-        if (noticeLines === 2 && above > 0) {
-          body.push(overflowNotice(`${above} more above`, color, width))
+        if (notices === 2) {
+          body.push(overflowNotice(`${above} more above`, color, width), '')
         }
         body.push(...selectedLines.slice(0, detailCapacity))
-        if (noticeLines === 2 && below > 0) {
-          body.push(overflowNotice(`and ${below} more below`, color, width))
-        } else if (noticeLines === 1) {
+        if (notices === 2) {
+          body.push('', overflowNotice(`and ${below} more below`, color, width))
+        } else if (notices === 1) {
           body.push(
+            '',
             overflowNotice(
               above > 0 && below > 0
                 ? `${above} above, ${below} below`
@@ -1814,8 +1822,14 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   }
 
   // Both blanks are structural frame chrome, independent of warning/upgrade
-  // content, and are charged exactly once in the body budget above.
-  return [...top, '', ...body, '', ...controls]
+  // content, and are charged exactly once in the body budget above. A bounded
+  // frame pads its body region to the budget so the controls are pinned to
+  // the bottom rows; an unbounded frame is not padded.
+  const fill =
+    height === undefined
+      ? 0
+      : Math.max(0, height - top.length - separatorCount - body.length - controls.length)
+  return [...top, '', ...body, ...Array.from({ length: fill }, () => ''), '', ...controls]
 }
 
 /** Render the dashboard inside a fixed one-column horizontal gutter.
