@@ -95,7 +95,9 @@ async function dependencyFacts(
   for (const dependency of states) {
     if (dependency.state === undefined) continue
     expect(dependency.exists).toBe(true)
-    expect(dependency.state).toBe((await harness.source.get(dependency.id))?.state)
+    expect<string | undefined>(dependency.state).toBe(
+      (await harness.source.get(dependency.id))?.state,
+    )
   }
   return states.map(({ state: _state, ...facts }) => facts)
 }

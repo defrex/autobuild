@@ -174,6 +174,8 @@ describe('createTicketSource — plugin', () => {
       readyState: 'Open',
       claimedState: 'Doing',
       createState: 'Triage',
+      backlogState: 'Icebox',
+      rejectedState: "Won't do",
       teamKey: 'APP',
       dir: 'adapter-option',
     }
