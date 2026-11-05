@@ -303,8 +303,9 @@ export interface TicketSource {
   /**
    * Optional bounded per-state counts for the named states (display only).
    * Each name resolves like `resolveState` (exact, else one case-insensitive
-   * match); unmatched or ambiguous names are omitted. Never returns ticket
-   * rows, and its cost must not grow with the number of tickets.
+   * match); unmatched or ambiguous names are omitted. Never returns or parses
+   * ticket rows. A store-backed source answers from maintained totals, so its
+   * cost does not grow with the number of tickets.
    */
   countStates?(names: readonly string[]): Promise<TicketStateCount[]>
   /**

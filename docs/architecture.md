@@ -90,7 +90,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `packages/core/src/plugin-sdk/` | The sole supported `@defrex/autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty, sandbox idle settlement and harvest trigger), harvest deterministic core + runner | §3.3, §7.1.2, §12, §15.7 |
-| `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the filesystem-only dispatch launcher and immutable generation cache, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
+| `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the filesystem-only dispatch launcher and immutable generation cache, the dispatch frontend (Store-backed, plus the viewer's ticket-source triage count), its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `packages/core/src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
@@ -993,9 +993,10 @@ It follows one dispatch run's repository facts incrementally through
 `packages/core/src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
-intervals. The header's triage count comes from the reduced `DispatchStatus`
-(`status.triage`), exactly like the queue depth, so a frontend refresh reads
-neither the ticket source nor any extra store value for it. The supervised
+intervals. In local execution mode the header's triage count comes from the
+reduced `DispatchStatus` (`status.triage`), exactly like the queue depth, so a
+frontend refresh reads neither the ticket source nor any extra store value for
+it; viewer mode differs, as described below. The supervised
 kernel child (`frontendStatus`) samples `TicketSource.listStates()` once per
 tick, after the Dispatcher tick and before publication, and carries the last
 successful count on `dispatcher.tick-completed`; a changed count is a

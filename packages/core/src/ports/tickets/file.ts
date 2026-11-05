@@ -451,7 +451,10 @@ export class FileTicketSource implements TicketSource {
     return infos
   }
 
-  /** Bounded per-state counts: directory listings only, never a ticket parse. */
+  /**
+   * Per-state counts from each matched state's directory listing, never a
+   * ticket parse. The listing still grows with that state's ticket files.
+   */
   async countStates(names: readonly string[]): Promise<TicketStateCount[]> {
     const counts: TicketStateCount[] = []
     for (const name of matchStateNames(names, await this.states())) {

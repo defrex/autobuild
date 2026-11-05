@@ -156,10 +156,13 @@ bodies and reads only the SQL-bounded window. File, Linear and the remote
 Bounded state counts are another optional capability:
 `countStates?(names: readonly string[]): Promise<TicketStateCount[]>`. It returns
 `{name, tickets}` for each requested name that resolves (exactly, else by one
-case-insensitive match) and never returns ticket rows. Its cost must not grow
-with the number of tickets. A dashboard viewer polls it for the header's triage
-count. Without it, the viewer shows `–`, and it never falls back to a listing.
-File and hosted sources implement it, and so does the hosted PostgreSQL
-source, from trigger-maintained totals. Linear does not. When a source declares
+case-insensitive match) and never returns ticket rows. A dashboard viewer polls
+it for the header's triage count. Without it, the viewer shows `–`, and it never
+falls back to a listing. A store-backed source should answer from maintained
+totals so the cost does not grow with the number of tickets: the hosted
+PostgreSQL source reads trigger-maintained totals, and the remote
+`HostedTicketSource` forwards the read to the server. The file source counts
+each matched state's directory entries without parsing a ticket, so its local
+cost grows with the files in that state. Linear does not implement it. When a source declares
 both `countStates` and `listStates`, the shared contract suite checks that they
 agree.

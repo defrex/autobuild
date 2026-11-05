@@ -1914,9 +1914,11 @@ in-session `put|get` still require ambient phase auth.
 ## Dispatch dashboard
 
 A plain `ab dispatch` reads dispatch placement once before starting local execution.
-For a hosted project it opens the Store-only viewer automatically, displaying
+For a hosted project it opens the viewer automatically, displaying
 `viewer · dispatched by <host>` from the placement origin (including a nondefault
 port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+The viewer reads its dashboard from the Store; its one ticket-source read is
+the header's triage count, through the source's optional `countStates`.
 `--takeover` explicitly dispatches locally, with a warning that it can displace
 the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
 flags require `--takeover` when placement selects viewer.
@@ -1937,10 +1939,11 @@ and emits state changes. `--once` reads one snapshot; `--interval <s>` sets the
 viewer polling cadence. Startup intake flags and explicit `--repository` are
 rejected. Without a durable effective configuration the viewer waits.
 
-Viewer uses the Store-only frontend with canonical repository facts for status,
+Viewer uses the dispatch frontend with canonical repository facts for status,
 settings, harvest and migrations, bypassing the dispatch presentation event feed
 and its checkpoints. Fresh viewers reuse server reductions; idle refreshes read
-zero event rows. It has no child, lease, execution wiring or upgrade-release timer.
+zero event rows. Its one ticket-source read is the header's triage count, at
+most once per 10 s. It has no child, lease, execution wiring or upgrade-release timer.
 All existing shared-store controls remain: merge/hold, build/global pause/resume,
 blocked feedback/retry, intake/harvest gates, harvest resume/acknowledgement,
 queued discard and confirmed abort. Navigation/session inspection also remain.
