@@ -1077,6 +1077,8 @@ function linkCapableForge(forge: import('../ports/types').Forge) {
   const options = { fail: false }
   const calls: string[] = []
   const updates: { number: number; issueLinks: unknown }[] = []
+  const opened: { head: string; base: string; issueLinks: unknown }[] = []
+  const openPr = forge.openPr.bind(forge)
   const rewrite = forge.rewrite!
   Object.defineProperty(forge, 'rewrite', {
     configurable: true,
@@ -1090,13 +1092,17 @@ function linkCapableForge(forge: import('../ports/types').Forge) {
   })
   Object.assign(forge, {
     closesIssues: true,
+    openPr: async (opts: Parameters<typeof openPr>[0]) => {
+      opened.push({ head: opts.head, base: opts.base, issueLinks: opts.issueLinks })
+      return openPr(opts)
+    },
     updatePrIssueLinks: async (_workspacePath: string, number: number, issueLinks: unknown) => {
       calls.push('updatePrIssueLinks')
       updates.push({ number, issueLinks })
       if (options.fail) throw new Error('PR body readback disagrees with issue keywords')
     },
   })
-  return { calls, updates, options }
+  return { calls, updates, opened, options }
 }
 
 for (const fail of [false, true])
@@ -1105,7 +1111,13 @@ for (const fail of [false, true])
       localGitForge: true,
       handlers: happyHandlers(),
       tickets: [
-        { ...readyTicket('NODE', { title: 'Release node' }), kind: 'node' },
+        {
+          ...readyTicket('NODE', {
+            title: 'Release node',
+            issueLinks: [{ issue: 830, intent: 'closes' }],
+          }),
+          kind: 'node',
+        },
         {
           ...readyTicket('CHILD', {
             title: 'Release child',
@@ -1119,7 +1131,7 @@ for (const fail of [false, true])
       ],
     })
     try {
-      const { calls, updates, options } = linkCapableForge(h.forgeAdapter)
+      const { calls, updates, opened, options } = linkCapableForge(h.forgeAdapter)
       await h.dispatcher.tick()
       const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'NODE')!
       h.clock.advance(60_000)
@@ -1127,17 +1139,35 @@ for (const fail of [false, true])
       await h.runLatest()
       const child = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'CHILD')!
       const childState = reduceBuild(await h.events(child.slug))
+      // The child's PR into the node references its issues without closing.
+      expect(opened.filter((pr) => pr.head === child.branch)).toEqual([
+        {
+          head: child.branch!,
+          base: node.branch!,
+          issueLinks: [
+            { issue: 820, intent: 'refs' },
+            { issue: 824, intent: 'refs' },
+          ],
+        },
+      ])
       await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
         buildSlug: child.slug,
       })
       for (let i = 0; i < 3; i++) await h.dispatcher.tick()
-      const union = [
+      const contribution = [
         { issue: 820, intent: 'closes' },
         { issue: 824, intent: 'refs' },
       ]
       expect(ofType(await h.events(node.slug), 'node.issue-links-recorded')).toMatchObject([
-        { payload: { build: child.slug, issueLinks: union } },
+        { payload: { build: child.slug, issueLinks: contribution } },
       ])
+      // The child's commit landed into the node carries no keyword lines.
+      const { git: nodeGit } = await import('./harness')
+      const nodeLog = await nodeGit(['log', '--format=%B', node.branch!], h.origin)
+      expect(nodeLog).toContain(`Autobuild-Build: ${child.slug}`)
+      expect(nodeLog).not.toMatch(/^(Closes|Refs) #/m)
+      // The root node's PR carries its own link merged with the union.
+      const union = [...contribution, { issue: 830, intent: 'closes' }]
       await h.runLatest()
       await h.dispatcher.tick()
       await controlBuild({
