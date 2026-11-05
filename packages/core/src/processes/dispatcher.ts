@@ -6853,13 +6853,15 @@ export class Dispatcher {
       const forge = this.deps.forge
       const exists = forge.remoteBranchExists
       if (ticket.comments === undefined || exists === undefined) return pending
-      const local = new Set(all.map(({ record }) => record.slug))
+      // Only a node branch this store owns is not evidence of another store:
+      // separate stores may reuse a slug for unrelated tickets or prefixes.
+      const owned = new Set(all.flatMap(({ record }) => record.branch ?? []))
       const slugs = [
         ...new Set(
           [...ticket.comments]
             .reverse()
             .flatMap((comment) => DISPATCH_COMMENT.exec(comment.body)?.[1] ?? [])
-            .filter((slug) => !local.has(slug)),
+            .filter((slug) => !owned.has(`ab-node/${slug}`)),
         ),
       ]
       if (slugs.length === 0) return pending

@@ -10477,13 +10477,14 @@ describe('integration node dispatch', () => {
       expect(shared.claims.filter((id) => id.startsWith('CHILD'))).toEqual([])
     })
 
-    test("this store's own dispatch comment never triggers a branch lookup", async () => {
+    test("a dispatch comment naming this store's own node branch never triggers a lookup", async () => {
       const shared = new CommentingTicketSource()
       const { forge, nodeProbes } = countedForge()
       const b = harness({ forge, wrapTickets: () => shared, toml: 'capacity = 2\n' })
-      shared.add(readyTicket('OTHER', { title: 'Other work' }))
+      shared.add(readyTicket('OTHER', { kind: 'node', title: 'Other work' }))
       await b.dispatcher.tick()
       const local = (await b.store.listBuilds())[0]!.slug
+      const before = nodeProbes().length
       shared.add(readyTicket('N', { kind: 'node', state: 'Blocked' }))
       shared.add(readyTicket('CHILD', { target: 'N', title: 'Child work' }))
       await shared.comment('N', `build ${local} dispatched`)
@@ -10492,7 +10493,36 @@ describe('integration node dispatch', () => {
       expect(report.dependencyDiagnostics).toContain(
         'ticket CHILD: target node N is not yet claimed',
       )
-      expect(nodeProbes()).toEqual([])
+      expect(nodeProbes().length).toBe(before)
+    })
+
+    test('a local build reusing the slug of a foreign node does not hide that node', async () => {
+      const shared = new CommentingTicketSource()
+      const { forge, nodeProbes } = countedForge()
+      const a = harness({ forge, wrapTickets: () => shared })
+      const b = harness({ forge, wrapTickets: () => shared, toml: 'capacity = 2\n' })
+      // B owns leaf OTHER at ab/<slug>; A owns node N at ab-node/<slug>.
+      shared.add(readyTicket('OTHER', { title: 'Shared name' }))
+      await b.dispatcher.tick()
+      shared.add(readyTicket('N', { kind: 'node', title: 'Shared name' }))
+      await a.dispatcher.tick()
+      const leaf = (await b.store.listBuilds())[0]!
+      const node = (await a.store.listBuilds())[0]!
+      expect(node.slug).toBe(leaf.slug)
+      expect(leaf.branch).toBe(`ab/${leaf.slug}`)
+      expect(node.branch).toBe(`ab-node/${node.slug}`)
+      shared.add(readyTicket('CHILD', { target: 'N', title: 'Child work' }))
+      await shared.transition('N', 'Blocked')
+      const before = nodeProbes().length
+      b.clock.advance(60_000)
+      const report = await b.dispatcher.tick()
+      expect(report.dependencyDiagnostics).toContainEqual(
+        expect.stringContaining(
+          `ticket CHILD: target node N ${foreignText}: its branch ${node.branch} exists on the remote`,
+        ),
+      )
+      expect(nodeProbes().length - before).toBe(1)
+      expect(shared.claims).not.toContain('CHILD')
     })
 
     test('a source without comments uses the claimed arm only', async () => {
