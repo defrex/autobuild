@@ -31,6 +31,7 @@ import {
   stripAnsi,
 } from './dashboard/render'
 import { DispatchFrontend } from './dispatch-frontend'
+import { lazyTicketSource, type ControlTickets, type ResolvedTicketCommand } from './ticket'
 import type { DispatchChildResult } from './dispatch-process'
 import type { TerminalInputEvent } from './terminal'
 import { paintableRows } from './dashboard/live'
@@ -1277,7 +1278,7 @@ async function seedSessionViewHarness(
   overrides: {
     viewer?: boolean
     clock?: () => Date
-    ticketSource?: () => Promise<import('../ports/types').TicketSource>
+    controlTickets?: () => ControlTickets
     /** Wrap the store (for a slow or pruned readStream). */
     refreshScheduler?: import('./dashboard/refresh').RefreshScheduler
     wrapStore?: (store: MemoryBuildStore) => BuildStore
@@ -1345,7 +1346,7 @@ async function seedSessionViewHarness(
     repo,
     storeRef: 'memory',
     store: overrides.wrapStore ? overrides.wrapStore(store) : store,
-    ticketSource: overrides.ticketSource,
+    ...(overrides.controlTickets ? { controlTickets: overrides.controlTickets } : {}),
     ...(overrides.clock !== undefined ? { clock: overrides.clock } : {}),
     ...(overrides.refreshScheduler !== undefined
       ? { refreshScheduler: overrides.refreshScheduler }
@@ -1399,6 +1400,63 @@ async function seedSessionViewHarness(
   }
 }
 
+/** Bring the harness build to a node awaiting consent with every gate passed. */
+async function seedReadyNode(h: SessionViewHarness): Promise<void> {
+  await h.store.append(h.slug, {
+    actor: KERNEL,
+    type: 'session.ended',
+    payload: {
+      session: 's_watch',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'test', resumedFromSeq: 0 },
+    },
+  })
+  await h.store.append(h.slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      repo: '/session-view-repo',
+      ticket: { source: 'fake', id: 'AUT-WATCH' },
+      baseBranch: 'main',
+      kind: 'node',
+    },
+  })
+  await h.store.append(h.slug, {
+    actor: DISPATCHER,
+    type: 'node.opened',
+    payload: { sha: 'parent' },
+  })
+  await h.store.append(h.slug, {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
+  })
+  await h.store.append(h.slug, {
+    actor: KERNEL,
+    type: 'integration.prepared',
+    payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
+  })
+  await h.store.append(h.slug, {
+    actor: DISPATCHER,
+    type: 'pr.opened',
+    payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
+  })
+  await h.store.append(h.slug, {
+    actor: DISPATCHER,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
+      from: 'node',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
+  const controller = h.frontend as unknown as { renderOnce(): Promise<void> }
+  await controller.renderOnce()
+}
+
 test.each([false, true])(
   'merge key records consent for a ready node using a fresh ticket-source read (viewer=%s)',
   async (viewer) => {
@@ -1406,66 +1464,16 @@ test.each([false, true])(
     const tickets = new FakeTicketSource()
     const h = await seedSessionViewHarness({
       viewer,
-      ticketSource: async () => {
-        reads++
-        return tickets
-      },
+      controlTickets: () => ({
+        ticketSource: async () => {
+          reads++
+          return tickets
+        },
+      }),
     })
     try {
       await waitFor(() => h.output().includes('watched'), 'initial frame')
-      await h.store.append(h.slug, {
-        actor: KERNEL,
-        type: 'session.ended',
-        payload: {
-          session: 's_watch',
-          outcome: 'reclaimed',
-          reclaimedBy: { instance: 'test', resumedFromSeq: 0 },
-        },
-      })
-      await h.store.append(h.slug, {
-        actor: DISPATCHER,
-        type: 'build.created',
-        payload: {
-          repo: '/session-view-repo',
-          ticket: { source: 'fake', id: 'AUT-WATCH' },
-          baseBranch: 'main',
-          kind: 'node',
-        },
-      })
-      await h.store.append(h.slug, {
-        actor: DISPATCHER,
-        type: 'node.opened',
-        payload: { sha: 'parent' },
-      })
-      await h.store.append(h.slug, {
-        actor: DISPATCHER,
-        type: 'integration.observed',
-        payload: { openChildren: [], diagnostics: [], contributions: ['child'] },
-      })
-      await h.store.append(h.slug, {
-        actor: KERNEL,
-        type: 'integration.prepared',
-        payload: { id: 'cycle', head: 'head', parent: 'parent', config: 'config' },
-      })
-      await h.store.append(h.slug, {
-        actor: DISPATCHER,
-        type: 'pr.opened',
-        payload: { pr: { number: 1, url: 'https://forge/1', headSha: 'head' } },
-      })
-      await h.store.append(h.slug, {
-        actor: DISPATCHER,
-        type: 'landing.decided',
-        payload: {
-          candidate: { head: 'head', parent: 'parent', cycle: 'cycle' },
-          from: 'node',
-          into: { kind: 'root' },
-          labels: [],
-          mode: 'consent',
-          rule: { default: true },
-        },
-      })
-      const controller = h.frontend as unknown as { renderOnce(): Promise<void> }
-      await controller.renderOnce()
+      await seedReadyNode(h)
       h.press({ type: 'down' })
       h.press({ type: 'text', text: 'l' })
       await waitFor(
@@ -1479,6 +1487,62 @@ test.each([false, true])(
     }
   },
 )
+
+test('each merge key press reads the current rejected role for node completeness', async () => {
+  // The node's only open child sits in Rejected; the configured role decides
+  // whether it still holds the node incomplete.
+  const tickets = new FakeTicketSource([
+    {
+      ref: { source: 'fake', id: 'AUT-CHILD' },
+      target: 'AUT-WATCH',
+      revision: 'r1',
+      title: 'Rejected child',
+      body: '',
+      state: 'Rejected',
+      resolved: false,
+      labels: [],
+    },
+  ])
+  let rejectedState = 'Declined'
+  let opens = 0
+  const h = await seedSessionViewHarness({
+    controlTickets: () =>
+      lazyTicketSource(async () => {
+        opens++
+        return {
+          source: tickets,
+          config: { tickets: { source: 'file', readyState: 'ready', rejectedState } },
+        } as unknown as ResolvedTicketCommand
+      }),
+  })
+  try {
+    await waitFor(() => h.output().includes('watched'), 'initial frame')
+    await seedReadyNode(h)
+    h.press({ type: 'down' })
+    h.press({ type: 'text', text: 'l' })
+    await waitFor(() => opens === 1, 'first merge request')
+    await waitFor(
+      async () =>
+        (await h.store.getRepoEvents('/session-view-repo')).some(
+          (event) =>
+            event.type === 'dispatcher.operator-reported' &&
+            event.payload.message.includes('Node is incomplete'),
+        ),
+      'incomplete refusal',
+    )
+    const landed = async () =>
+      (await h.store.getEvents(h.slug)).filter((e) => e.type === 'build.land-requested')
+    expect(await landed()).toHaveLength(0)
+
+    // A hot reload moves the role onto the child's state.
+    rejectedState = 'Rejected'
+    h.press({ type: 'text', text: 'l' })
+    await waitFor(async () => (await landed()).length === 1, 'second merge request lands')
+    expect(opens).toBe(2)
+  } finally {
+    await h.finish()
+  }
+})
 
 test('Enter on a session with a stream opens the read-only session view; every control key is inert', async () => {
   const h = await seedSessionViewHarness({ rows: 24 })

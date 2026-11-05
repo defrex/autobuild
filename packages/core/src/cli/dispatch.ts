@@ -5026,18 +5026,19 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         },
         input: opts.input ?? { start: () => () => {} },
         ...(!interactive ? { plainOutput: opts.stdout } : {}),
-        ...lazyTicketSource(() =>
-          openTicketSource(
-            {
-              targetRepo: state.checkout,
-              exec: opts.exec,
-              env,
-              storeRef: opened.storeRef,
-              stdout: opts.stdout,
-            },
-            'ab merge',
+        controlTickets: () =>
+          lazyTicketSource(() =>
+            openTicketSource(
+              {
+                targetRepo: state.checkout,
+                exec: opts.exec,
+                env,
+                storeRef: opened.storeRef,
+                stdout: opts.stdout,
+              },
+              'ab merge',
+            ),
           ),
-        ),
         once: opts.once === true,
         ...(opts.intervalMs !== undefined ? { intervalMs: opts.intervalMs } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
@@ -5122,18 +5123,19 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         checkout: state.checkout,
         storeRef: opened.storeRef,
         store: opened.store,
-        ...lazyTicketSource(() =>
-          openTicketSource(
-            {
-              targetRepo: state.checkout,
-              exec: resolvedOpts.exec,
-              env: resolvedOpts.env,
-              storeRef: opened.storeRef,
-              stdout: resolvedOpts.stdout,
-            },
-            'ab merge',
+        controlTickets: () =>
+          lazyTicketSource(() =>
+            openTicketSource(
+              {
+                targetRepo: state.checkout,
+                exec: resolvedOpts.exec,
+                env: resolvedOpts.env,
+                storeRef: opened.storeRef,
+                stdout: resolvedOpts.stdout,
+              },
+              'ab merge',
+            ),
           ),
-        ),
         env: resolvedOpts.env,
         terminal: resolvedOpts.terminal,
         input: resolvedOpts.input,

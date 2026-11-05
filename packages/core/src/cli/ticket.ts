@@ -250,8 +250,16 @@ export async function openTicketSource(
   return createTicketCommandSource(opts, await resolveTicketConfig(opts, label))
 }
 
-/** One lazily opened ticket command shared by a control's source and the
- * configured rejected role it reads for node completeness. */
+/** The ticket source and configured rejected role one build control reads
+ * for node completeness. */
+export interface ControlTickets {
+  ticketSource: () => Promise<TicketSource>
+  rejectedState?: () => Promise<string | undefined>
+}
+
+/** One lazily opened ticket command shared by a single control's source and
+ * the configured rejected role it reads for node completeness. Create one per
+ * control request so a hot-reloaded role is never served from an older one. */
 export function lazyTicketSource(open: () => Promise<ResolvedTicketCommand>): {
   ticketSource: () => Promise<TicketSource>
   rejectedState: () => Promise<string | undefined>
