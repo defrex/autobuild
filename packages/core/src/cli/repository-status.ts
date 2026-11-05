@@ -39,7 +39,12 @@ export interface RepositoryStatus extends DispatchSettings {
   upgrades: DispatchUpgradeState
   rollbackHold?: DispatchUpgradeState['lastRollback']
   capacity?: DispatchCapacity
+  /** Dispatcher startup warnings, then forge readiness warnings. */
   warningLines?: string[]
+  /** Standing dependency/target diagnostics from the latest completed ticket
+   * scan — for example a ticket held because its target node is being built
+   * by another store. */
+  dependencyDiagnostics?: string[]
   missingAccounts?: RepositoryReadFacts['missingAccounts']
   dispatcher: DispatcherLiveness
   forgeRequests?: ForgeRequestCounts
@@ -109,9 +114,17 @@ export function projectRepositoryStatus(
   publications.reverse()
   const active = reduceTicketSourceHealth(events)
   const latestRun = events.findLast((event) => event.type === 'dispatcher.run-started')
-  const warningLines =
+  const runStatus =
     latestRun?.type === 'dispatcher.run-started'
-      ? forgeReadinessWarnings(reduceDispatchStatus(events, latestRun.payload.run))
+      ? reduceDispatchStatus(events, latestRun.payload.run)
+      : undefined
+  const warningLines = runStatus
+    ? [...runStatus.roleWarnings, ...forgeReadinessWarnings(runStatus)]
+    : []
+  const latestScan = events.findLast((event) => event.type === 'dispatcher.ticket-scan-completed')
+  const dependencyDiagnostics =
+    latestScan?.type === 'dispatcher.ticket-scan-completed'
+      ? latestScan.payload.dependencyDiagnostics
       : []
   return {
     ...(forgeHealthReducer.reduce(events)
@@ -126,6 +139,7 @@ export function projectRepositoryStatus(
     upgrades: dispatchUpgradeReducer.reduce(events),
     rollbackHold: effectiveRollbackHold(dispatchUpgradeReducer.reduce(events), dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
+    ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
     dispatcher,
     ...(() => {
       const tick = (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.lastTick
@@ -154,7 +168,10 @@ export function repositoryStatusFromFacts(
   facts: RepositoryReadFacts,
   dispatcher: DispatcherLiveness,
 ): RepositoryStatus {
-  const warningLines = facts.status ? forgeReadinessWarnings(facts.status) : []
+  const warningLines = facts.status
+    ? [...facts.status.roleWarnings, ...forgeReadinessWarnings(facts.status)]
+    : []
+  const dependencyDiagnostics = facts.scan?.dependencyDiagnostics ?? []
   return {
     ...(Object.keys(facts.missingAccounts).length
       ? { missingAccounts: facts.missingAccounts }
@@ -164,6 +181,7 @@ export function repositoryStatusFromFacts(
     upgrades: facts.upgrades,
     rollbackHold: effectiveRollbackHold(facts.upgrades, dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
+    ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
     dispatcher,
     ...(() => {
       const tick = (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.lastTick
@@ -309,6 +327,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `intake: ${setting(status.intake)}`,
     `repository pause: ${setting(status.paused)}`,
     `default auto-merge: ${setting(status.defaultAutoMerge)}`,
+    ...(status.dependencyDiagnostics ?? []).map((line) => `queue: ${line}`),
     ...status.sandboxes.map(
       (sandbox) =>
         `operator sandbox ${sandbox.environmentId} (${sandbox.provider}) — ${sandbox.state}, idle since ${sandbox.lastEvidenceAt}`,
