@@ -721,10 +721,11 @@ export interface Forge {
    * landing messages; without it links are recorded but never emitted. */
   readonly closesIssues?: boolean
   /** Rewrite an open PR's keyword paragraph so the body ends with one line
-   * per link (composed with `kernel/issue-keywords`, `trailers: false`),
-   * writing only on change, then confirm by readback. Called only with
-   * `closesIssues`, for a root node's PR. Throws when the PR is not open or
-   * the readback disagrees. Without it a node's union is recorded but never
+   * per link (composed with `kernel/issue-keywords`, `trailers: false`) and
+   * neutralize closing references to `refs` issues in its title, writing
+   * only on change, then confirm both by readback. Called only with
+   * `closesIssues`, for a node's PR. Throws when the PR is not open or the
+   * readback disagrees. Without it a node's set is recorded but never
    * written. */
   updatePrIssueLinks?(
     workspacePath: string,
@@ -747,9 +748,15 @@ export interface Forge {
     /** Untouched deposited pr-description. Providers may use it as the
      * landing message; title/body remain the portable review projection. */
     mergeMessage?: string
-    /** Sealed issue links, passed only to a `closesIssues` forge for a leaf
-     * aimed at the default branch, or a root node's union of its landed
-     * children's links. */
+    /** Issue links, passed only to a `closesIssues` forge: a leaf aimed at
+     * the default branch gets its sealed links; a leaf aimed at a node gets
+     * them refs-only; a root node gets its own links merged with its landed
+     * children's union; a nested node gets that set refs-only. An adapter
+     * that adopts an existing open PR for the head must converge it
+     * idempotently when links are present: neutralize the existing title,
+     * canonicalize the body's keyword lines, write only on change and
+     * confirm by readback, without replacing the title, prose or merge
+     * message. */
     issueLinks?: readonly IssueLink[]
   }): Promise<PrRef>
   /** Optional authoritative base resolver. Capability-less adapters retain
