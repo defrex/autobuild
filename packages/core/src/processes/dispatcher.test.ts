@@ -12649,11 +12649,23 @@ test('fresh node polling has bounded reads at 100 and 100000 events', async () =
 }, 30_000)
 
 test('fresh node polling with many recorded child issue links has bounded reads', async () => {
-  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  // The node's own links merge with the union on every poll, in memory only.
+  const h = harness({
+    tickets: [
+      readyTicket('N', {
+        kind: 'node',
+        issueLinks: [
+          { issue: 1, intent: 'closes' },
+          { issue: 2, intent: 'refs' },
+        ],
+      }),
+    ],
+  })
   h.forge.remoteBranches.set('main', BASE_SHA)
   await h.dispatcher.tick()
   await h.dispatcher.tick({ acceptNewWork: false })
   const node = (await h.store.listBuilds())[0]!
+  expect(reduceBuild(await h.store.getEvents(node.slug)).issueLinks).toHaveLength(2)
   const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
   await nodePollingReadBudget({
     store: h.store as MemoryBuildStore,
@@ -13293,7 +13305,7 @@ test('workspace preservation refuses a live execution lease before any provider 
 
 describe('node issue links (SPEC "Forge issue links")', () => {
   type Link = { issue: number; intent: 'closes' | 'refs' }
-  async function seedNode(h: Harness, slug: string, target?: string) {
+  async function seedNode(h: Harness, slug: string, target?: string, issueLinks?: Link[]) {
     await h.store.createBuild({ slug, repo: REPO, branch: `ab-node/${slug}` })
     await h.store.append(slug, {
       actor: DISPATCHER,
@@ -13306,6 +13318,7 @@ describe('node issue links (SPEC "Forge issue links")', () => {
         ...(target !== undefined
           ? { target: { build: target, ticket: { source: 'fake', id: target.toUpperCase() } } }
           : {}),
+        ...(issueLinks !== undefined ? { issueLinks } : {}),
       },
     })
   }
@@ -13407,8 +13420,8 @@ describe('node issue links (SPEC "Forge issue links")', () => {
   })
 
   /** A root node whose PR is already open on the forge. */
-  async function seedOpenNodePr(h: Harness, slug: string) {
-    await seedNode(h, slug)
+  async function seedOpenNodePr(h: Harness, slug: string, issueLinks?: Link[]) {
+    await seedNode(h, slug, undefined, issueLinks)
     const pr = await h.forge.openPr({
       workspacePath: '/repo',
       head: `ab-node/${slug}`,
@@ -13465,9 +13478,40 @@ describe('node issue links (SPEC "Forge issue links")', () => {
     expect(h.forge.issueLinkUpdates).toHaveLength(calls)
   })
 
+  test("an in-flight root PR published with only the union gains the node's own links once", async () => {
+    const h = harness({ forge: linkForge() })
+    const number = await seedOpenNodePr(h, 'node-a', [{ issue: 830, intent: 'closes' }])
+    await seedMergedChild(h, 'child-a', 'node-a', 11, [{ issue: 820, intent: 'closes' }])
+    // The union alone was confirmed before the change.
+    await h.store.append('node-a', {
+      actor: KERNEL,
+      type: 'node.issue-links-recorded',
+      payload: { build: 'child-a', issueLinks: [{ issue: 820, intent: 'closes' }] },
+    })
+    await h.store.append('node-a', {
+      actor: DISPATCHER,
+      type: 'node.issue-links-published',
+      payload: { pr: number, issueLinks: [{ issue: 820, intent: 'closes' }] },
+    })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const set: Link[] = [
+      { issue: 820, intent: 'closes' },
+      { issue: 830, intent: 'closes' },
+    ]
+    expect(h.forge.issueLinkUpdates).toEqual([{ number, issueLinks: set }])
+    expect(h.forge.opened[number - 1]!.body).toBe(
+      'Integration build node-a.\n\nCloses #820\nCloses #830',
+    )
+    for (const elapsed of [10_000, 600_000, 120_000]) {
+      h.clock.advance(elapsed)
+      await h.dispatcher.tick({ acceptNewWork: false })
+    }
+    expect(h.forge.issueLinkUpdates).toHaveLength(1)
+  })
+
   test('a forge without the capability records the union and emits nothing', async () => {
     const h = harness()
-    const number = await seedOpenNodePr(h, 'node-a')
+    const number = await seedOpenNodePr(h, 'node-a', [{ issue: 830, intent: 'closes' }])
     await seedMergedChild(h, 'child-a', 'node-a', 11, [{ issue: 820, intent: 'closes' }])
     const report = await h.dispatcher.tick({ acceptNewWork: false })
     h.clock.advance(120_000)
@@ -13482,15 +13526,15 @@ describe('node issue links (SPEC "Forge issue links")', () => {
     })
   })
 
-  test('a nested node passes its union up and its own PR never gets keywords', async () => {
+  test('a nested node passes its own links and union up, and its PR gets refs-only lines', async () => {
     const h = harness({ forge: linkForge() })
     const root = await seedOpenNodePr(h, 'node-a')
-    await seedNode(h, 'node-b', 'node-a')
+    await seedNode(h, 'node-b', 'node-a', [{ issue: 840, intent: 'closes' }])
     const nested = await h.forge.openPr({
       workspacePath: '/repo',
       head: 'ab-node/node-b',
       base: 'ab-node/node-a',
-      title: 'Integration: node-b',
+      title: 'Integration: node-b fixes #820',
       body: 'Integration build node-b.',
     })
     h.forge.setPrState(nested.number, { state: 'open', mergeable: null })
@@ -13511,11 +13555,30 @@ describe('node issue links (SPEC "Forge issue links")', () => {
       824,
     )
     await h.dispatcher.tick({ acceptNewWork: false })
+    h.clock.advance(120_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
     expect(reduceBuild(await h.store.getEvents('node-b')).nodeIssueLinks?.links).toEqual([
       { issue: 820, intent: 'closes' },
       { issue: 824, intent: 'refs', downgraded: true },
     ])
-    expect(h.forge.issueLinkUpdates.filter((update) => update.number === nested.number)).toEqual([])
+    const refsOnly: Link[] = [
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'refs' },
+      { issue: 840, intent: 'refs' },
+    ]
+    const nestedUpdates = () =>
+      h.forge.issueLinkUpdates.filter((update) => update.number === nested.number)
+    expect(nestedUpdates().at(-1)).toEqual({ number: nested.number, issueLinks: refsOnly })
+    expect(h.forge.opened[nested.number - 1]).toMatchObject({
+      title: 'Integration: node-b refs #820',
+      body: 'Integration build node-b.\n\nRefs #820\nRefs #824\nRefs #840',
+    })
+    const synced = nestedUpdates().length
+    for (const elapsed of [10_000, 600_000, 120_000]) {
+      h.clock.advance(elapsed)
+      await h.dispatcher.tick({ acceptNewWork: false })
+    }
+    expect(nestedUpdates()).toHaveLength(synced)
     h.forge.setPrState(nested.number, { state: 'merged', sha: 'squash-nested' })
     for (const elapsed of [120_000, 120_000]) {
       h.clock.advance(elapsed)
@@ -13527,16 +13590,17 @@ describe('node issue links (SPEC "Forge issue links")', () => {
         issueLinks: [
           { issue: 820, intent: 'closes' },
           { issue: 824, intent: 'refs', downgraded: true },
+          { issue: 840, intent: 'closes' },
         ],
       },
     ])
-    expect(h.forge.opened[nested.number - 1]!.body).toBe('Integration build node-b.')
-    expect(h.forge.issueLinkUpdates.filter((update) => update.number === nested.number)).toEqual([])
+    expect(nestedUpdates()).toHaveLength(synced)
     expect(h.forge.issueLinkUpdates.at(-1)).toEqual({
       number: root,
       issueLinks: [
         { issue: 820, intent: 'closes' },
         { issue: 824, intent: 'refs' },
+        { issue: 840, intent: 'closes' },
       ],
     })
   })
