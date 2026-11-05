@@ -2407,7 +2407,8 @@ blockers, creation-key deduplication and assets are isolated by repository.
 Independent project ticket policy supplies hosted lifecycle names: triage, ready,
 doing, done (`doneState`), and create/proposal equal to triage by default. Hosted
 readyState defaults to ready; other sources require it. Legacy clients without
-independent policy use uploaded dispatcher config and its old defaults. Configured roles may overlap.
+independent policy use uploaded dispatcher config and its old defaults. Configured roles may overlap,
+except the backlog and rejected roles below.
 The service has no Linear backend and never relays external ticket sources.
 Projects using Linear, files or plugins keep their direct dispatcher connection;
 service ticket surfaces refuse with project/source feedback instead of empty data.
@@ -2454,11 +2455,28 @@ boundary: a label name need not already exist for either create or update.
 Adapters own reconciliation with provider-side label registries, including
 concurrent attempts to create the same name; callers never pre-register labels.
 
+**Lifecycle roles.** The roles are triage, backlog, ready, claimed, done and
+rejected, plus the create and proposal placements. Each source maps them to its
+own native state names through `[tickets].*State`. Backlog holds work that is
+deliberately deferred, and rejected holds work that was considered and declined.
+Both are optional and have no default: `backlogState` and `rejectedState` unset
+means the role does not exist, and a state that merely shares the role's name
+holds no role. Neither may share its native state with the ready, claimed, done,
+triage or proposal role, or with each other. The dispatcher never claims from,
+moves into, or files harvest proposals into either. A ticket in the rejected
+state never resolves a blocker, and a rejected child no longer keeps its node
+incomplete; a backlog child still does, as triage and ready children do. Moving
+a ticket out of the rejected state restores ordinary behavior. Agents and
+operators move tickets by role (`ab ticket move <id> --role backlog`); a role
+the repository has not configured is refused with the key to set. "Building"
+is the claimed role, not a role of its own.
+
 **Ticket dependencies.** A ticket may declare blockers within its source, at
 creation or later. The source owns representation (how a blocker is stored)
 and completion semantics (what "done" means); the dispatcher owns the
 decision — an unresolved blocker means the ticket is not claimed and creates
-no build. Dependencies are written during grooming or by an approved harvest
+no build. A blocker in the configured rejected state never resolves, whatever
+the source's native completion semantics. Dependencies are written during grooming or by an approved harvest
 create, then read at dispatch time. Harvest validates agent-declared source-local ids
 and automatically derives unresolved same-source observation origins through
 fresh configured-source lifecycle reads before creating the proposal ticket.
