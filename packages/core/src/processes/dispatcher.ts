@@ -513,6 +513,8 @@ export function emptyTickReport(): TickReport {
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
 const DEFAULT_SLUG_NAMING_TIMEOUT_MS = 10_000
+/** Bound on -2/-3/… candidates one claim may probe for a free slug. */
+const MAX_SLUG_CANDIDATES = 100
 /** Heartbeat cadence of a background provisioning continuation's execution
  * lease. A dead provisioner is therefore adopted within one lease TTL. */
 const PROVISION_HEARTBEAT_MS = 15_000
@@ -5538,8 +5540,9 @@ export class Dispatcher {
 
         stage = 'naming'
         const baseSlug = await this.chooseSlugBase(ticket.title, body)
-        const slug = await this.uniqueSlug(baseSlug)
-        const branch = `${ticket.kind === 'node' ? 'ab-node' : 'ab'}/${slug}`
+        const prefix = ticket.kind === 'node' ? 'ab-node' : 'ab'
+        const slug = await this.uniqueSlug(baseSlug, prefix)
+        const branch = `${prefix}/${slug}`
         const repoOrigin = await this.resolveRepoOriginOnce()
         createdSeed = {
           ...(ticket.kind === 'node' ? { kind: ticket.kind } : {}),
@@ -6772,12 +6775,19 @@ export class Dispatcher {
     }
   }
 
-  /** Valid bounded base, deduped store-wide with -2/-3/… suffixes. */
-  private async uniqueSlug(base: string): Promise<string> {
-    let slug = base
-    for (let n = 2; (await this.store.getBuild(slug)) !== null; n += 1) {
-      slug = `${base}-${n}`
+  /** Valid bounded base, deduped with -2/-3/… against this store's builds and,
+   * when the forge can answer, against build branches already on the remote
+   * (another store's builds, AUT-1106). Claim-time only; a forge failure fails
+   * the naming stage and the claim is handed back. */
+  private async uniqueSlug(base: string, prefix: 'ab' | 'ab-node'): Promise<string> {
+    const forge = this.deps.forge
+    const exists = forge.remoteBranchExists
+    for (let n = 1; n <= MAX_SLUG_CANDIDATES; n += 1) {
+      const slug = n === 1 ? base : `${base}-${n}`
+      if ((await this.store.getBuild(slug)) !== null) continue
+      if (exists !== undefined && (await exists.call(forge, `${prefix}/${slug}`))) continue
+      return slug
     }
-    return slug
+    throw new Error(`no free slug for ${base} after ${MAX_SLUG_CANDIDATES} candidates`)
   }
 }

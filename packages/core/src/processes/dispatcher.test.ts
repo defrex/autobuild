@@ -1518,6 +1518,107 @@ readyState = "Ready"
     expect(await h.store.getBuild('login-rate-limit-3')).not.toBeNull()
     expect((await h.store.getBuild(oldSlug))?.branch).toBe(`ab/${oldSlug}`)
   })
+
+  test('two stores sharing one remote take distinct branches for the same name (AUT-1106)', async () => {
+    const remote = new FakeForge()
+    remote.seedBranch('main', BASE_SHA)
+    const nameSlug = async () => 'login-rate-limit'
+    // Control: before any remote branch exists, a fresh store picks the bare
+    // name — the collision that would otherwise happen across stores.
+    const control = harness({ forge: remote, tickets: [readyTicket('C-1')], nameSlug })
+    expect((await control.dispatcher.tick()).dispatched).toBe(1)
+    expect((await control.store.listBuilds()).map((b) => b.slug)).toEqual(['login-rate-limit'])
+
+    const a = harness({ forge: remote, tickets: [readyTicket('A-1')], nameSlug })
+    const b = harness({ forge: remote, tickets: [readyTicket('B-1')], nameSlug })
+    expect((await a.dispatcher.tick()).dispatched).toBe(1)
+    expect((await a.store.listBuilds()).map((r) => r.branch)).toEqual(['ab/login-rate-limit'])
+    // A's implement publishes its branch.
+    remote.remoteBranches.set('ab/login-rate-limit', 'a-commit')
+    expect((await b.dispatcher.tick()).dispatched).toBe(1)
+    const builds = await b.store.listBuilds()
+    expect(builds.map((r) => r.slug)).toEqual(['login-rate-limit-2'])
+    expect(builds.map((r) => r.branch)).toEqual(['ab/login-rate-limit-2'])
+    expect(remote.remoteBranches.get('ab/login-rate-limit')).toBe('a-commit')
+  })
+
+  test('a node branch another store opened is skipped and left untouched', async () => {
+    const remote = new FakeForge()
+    remote.seedBranch('main', BASE_SHA)
+    const nameSlug = async () => 'auth-node'
+    const a = harness({ forge: remote, tickets: [readyTicket('NA', { kind: 'node' })], nameSlug })
+    const b = harness({ forge: remote, tickets: [readyTicket('NB', { kind: 'node' })], nameSlug })
+    await a.dispatcher.tick()
+    expect((await a.store.listBuilds()).map((r) => r.branch)).toEqual(['ab-node/auth-node'])
+    const head = remote.remoteBranches.get('ab-node/auth-node')
+    expect(head).toBe(BASE_SHA)
+    remote.remoteBranches.set('ab-node/auth-node', 'a-child')
+    await b.dispatcher.tick()
+    expect((await b.store.listBuilds()).map((r) => r.branch)).toEqual(['ab-node/auth-node-2'])
+    expect(remote.remoteBranches.get('ab-node/auth-node')).toBe('a-child')
+  })
+
+  test('remote branch probes happen only at claim time', async () => {
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    const probes: string[] = []
+    const exists = forge.remoteBranchExists.bind(forge)
+    forge.remoteBranchExists = async (branch) => {
+      probes.push(branch)
+      return exists(branch)
+    }
+    const h = harness({
+      forge,
+      tickets: [
+        readyTicket('BLOCKED', { blockedBy: ['OPEN'] }),
+        readyTicket('OPEN', { state: 'Todo' }),
+      ],
+      nameSlug: async () => 'login-rate-limit',
+    })
+    await h.dispatcher.tick()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect(probes).toEqual([])
+    h.tickets.add(readyTicket('T-1'))
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(probes).toEqual(['ab/login-rate-limit'])
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(probes).toEqual(['ab/login-rate-limit'])
+  })
+
+  test('a failed remote branch probe fails naming closed and hands the claim back', async () => {
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    forge.remoteBranchExists = async () => {
+      throw new Error('forge offline')
+    }
+    const h = harness({ forge, tickets: [readyTicket('T-1')] })
+    await expect(h.dispatcher.tick()).rejects.toThrow('ticket preparation failed (naming)')
+    expect(await h.store.listBuilds()).toEqual([])
+    expect(h.tickets.transitions).toContainEqual({ id: 'T-1', state: 'Ready' })
+  })
+
+  test('a forge without remote branch existence keeps store-only deduplication', async () => {
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    forge.remoteBranches.set('ab/login-rate-limit', 'foreign')
+    const dispatchForge = new Proxy(forge, {
+      get: (target, key, receiver) =>
+        key === 'remoteBranchExists' ? undefined : Reflect.get(target, key, receiver),
+      has: (target, key) => key !== 'remoteBranchExists' && Reflect.has(target, key),
+    })
+    const h = harness({
+      forge,
+      dispatchForge,
+      tickets: [readyTicket('T-1')],
+      nameSlug: async () => 'login-rate-limit',
+    })
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((r) => r.slug)).toEqual(['login-rate-limit'])
+  })
 })
 
 // ── Invocation budget (deadlineAt, AUT-319) ──────────────────────────────────
