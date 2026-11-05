@@ -66,15 +66,46 @@ describe('contributedIssueLinks', () => {
     ).toEqual([closes(820), downgraded(824)])
   })
 
-  test("a node contributes its union, never its ticket's own links", () => {
+  test('a node contributes its own effective links merged with its union', () => {
     expect(
       contributedIssueLinks({
         kind: 'node',
         issueLinks: [{ issue: 1, intent: 'closes' }],
         nodeIssueLinks: { links: [closes(820), downgraded(824)] },
       }),
-    ).toEqual([closes(820), downgraded(824)])
+    ).toEqual([closes(1), closes(820), downgraded(824)])
     expect(contributedIssueLinks({ kind: 'node', issueLinks: [] })).toEqual([])
+  })
+
+  test("a node's own links merge under the union rules, keeping its downgrade provenance", () => {
+    // Own closes, child downgrade: the downgrade wins.
+    expect(
+      contributedIssueLinks({
+        kind: 'node',
+        issueLinks: [{ issue: 824, intent: 'closes' }],
+        nodeIssueLinks: { links: [downgraded(824)] },
+      }),
+    ).toEqual([downgraded(824)])
+    // Own refs, child closes: closes.
+    expect(
+      contributedIssueLinks({
+        kind: 'node',
+        issueLinks: [{ issue: 820, intent: 'refs' }],
+        nodeIssueLinks: { links: [closes(820)] },
+      }),
+    ).toEqual([closes(820)])
+    // Own downgrade, child closes: the own downgrade wins.
+    expect(
+      contributedIssueLinks({
+        kind: 'node',
+        issueLinks: [{ issue: 820, intent: 'refs', downgrade: { reason: 'half', seq: 2 } }],
+        nodeIssueLinks: { links: [closes(820)] },
+      }),
+    ).toEqual([downgraded(820)])
+    // Own links alone.
+    expect(
+      contributedIssueLinks({ kind: 'node', issueLinks: [{ issue: 830, intent: 'closes' }] }),
+    ).toEqual([closes(830)])
   })
 })
 
@@ -92,9 +123,8 @@ describe('root node emission', () => {
     { issue: 824, intent: 'refs' },
   ]
 
-  test('applies only to a root node on a capable forge with a nonempty union', () => {
+  test('applies only to a node on a capable forge with a nonempty set', () => {
     expect(nodeIssueLinksForForge(root, forge)).toEqual(projected)
-    expect(nodeIssueLinksForForge({ ...root, target: { build: 'parent' } }, forge)).toBeUndefined()
     expect(nodeIssueLinksForForge({ ...root, kind: 'work' }, forge)).toBeUndefined()
     expect(
       nodeIssueLinksForForge(root, {
@@ -105,6 +135,68 @@ describe('root node emission', () => {
     expect(nodeIssueLinksForForge({ ...root, nodeIssueLinks: { links: [] } }, forge)).toBe(
       undefined,
     )
+  })
+
+  test("a root node's set includes its own links, which alone make it nonempty", () => {
+    expect(
+      nodeIssueLinksForForge(
+        {
+          ...root,
+          issueLinks: [
+            { issue: 830, intent: 'closes' },
+            { issue: 824, intent: 'closes' },
+          ],
+        },
+        forge,
+      ),
+    ).toEqual([
+      { issue: 820, intent: 'closes' },
+      { issue: 824, intent: 'refs' },
+      { issue: 830, intent: 'closes' },
+    ])
+    expect(
+      nodeIssueLinksForForge(
+        { ...root, issueLinks: [{ issue: 830, intent: 'closes' }], nodeIssueLinks: { links: [] } },
+        forge,
+      ),
+    ).toEqual([{ issue: 830, intent: 'closes' }])
+  })
+
+  test("a nested node's PR carries every issue as refs", () => {
+    const nested: NodeIssueLinkState = {
+      ...root,
+      target: { build: 'parent' },
+      issueLinks: [{ issue: 830, intent: 'closes' }],
+    }
+    const refsOnly: IssueLink[] = [
+      { issue: 820, intent: 'refs' },
+      { issue: 824, intent: 'refs' },
+      { issue: 830, intent: 'refs' },
+    ]
+    expect(nodeIssueLinksForForge(nested, forge)).toEqual(refsOnly)
+    expect(nodeIssueLinksForForge(nested, { closesIssues: true })).toBeUndefined()
+    expect(nodeIssueLinksSyncPending(nested, forge)).toEqual(refsOnly)
+    expect(
+      nodeIssueLinksSyncPending(
+        {
+          ...nested,
+          nodeIssueLinks: { ...nested.nodeIssueLinks!, published: { pr: 7, issueLinks: refsOnly } },
+        },
+        forge,
+      ),
+    ).toBeUndefined()
+  })
+
+  test('an in-flight root whose published lines hold only the union is pending with its own links', () => {
+    const inFlight: NodeIssueLinkState = {
+      ...root,
+      issueLinks: [{ issue: 830, intent: 'closes' }],
+      nodeIssueLinks: { ...root.nodeIssueLinks!, published: { pr: 7, issueLinks: projected } },
+    }
+    expect(nodeIssueLinksSyncPending(inFlight, forge)).toEqual([
+      ...projected,
+      { issue: 830, intent: 'closes' },
+    ])
   })
 
   test('sync is pending until the open PR confirms the union', () => {
