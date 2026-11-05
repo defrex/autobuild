@@ -85,6 +85,21 @@ async function freshLabel(harness: TicketSourceContractHarness, purpose: string)
   return (await harness.freshLabel?.(purpose)) ?? contractLabelName(purpose)
 }
 
+/** `state` is optional per source; when present it names the ticket's own
+ * state. Returns the remaining facts for exact comparison. */
+async function dependencyFacts(
+  harness: TicketSourceContractHarness,
+  ids: string[],
+): Promise<DependencyState[]> {
+  const states = await harness.source.dependencyStates(ids)
+  for (const dependency of states) {
+    if (dependency.state === undefined) continue
+    expect(dependency.exists).toBe(true)
+    expect(dependency.state).toBe((await harness.source.get(dependency.id))?.state)
+  }
+  return states.map(({ state: _state, ...facts }) => facts)
+}
+
 async function withTicketSource(
   factory: TicketSourceContractFactory,
   run: (harness: TicketSourceContractHarness) => Promise<void>,
@@ -600,9 +615,12 @@ export function describeTicketSourceContract(
           { id: completed.ref.id, exists: true, resolved: true, blockedBy: [] },
           { id: unresolved.ref.id, exists: true, resolved: false, blockedBy: [] },
         ]
-        expect(await harness.source.dependencyStates(expected.map((state) => state.id))).toEqual(
-          expected,
-        )
+        expect(
+          await dependencyFacts(
+            harness,
+            expected.map((state) => state.id),
+          ),
+        ).toEqual(expected)
       })
     })
 
@@ -659,7 +677,7 @@ export function describeTicketSourceContract(
           labels: [],
           blockedBy: [blocker.ref.id],
         })
-        expect(await harness.source.dependencyStates([created.ref.id])).toEqual([
+        expect(await dependencyFacts(harness, [created.ref.id])).toEqual([
           {
             id: created.ref.id,
             exists: true,
@@ -743,7 +761,7 @@ export function describeTicketSourceContract(
         await harness.source.addBlocker(dependent.ref.id, blocker.ref.id)
         await harness.source.addBlocker(dependent.ref.id, blocker.ref.id)
         expect((await harness.source.get(dependent.ref.id))?.blockedBy).toEqual([blocker.ref.id])
-        expect(await harness.source.dependencyStates([dependent.ref.id])).toEqual([
+        expect(await dependencyFacts(harness, [dependent.ref.id])).toEqual([
           {
             id: dependent.ref.id,
             exists: true,
@@ -757,7 +775,7 @@ export function describeTicketSourceContract(
         // Removing an unrelated/missing blocker has the same intended state.
         await harness.source.removeBlocker(dependent.ref.id, contractIdempotencyKey())
         expect((await harness.source.get(dependent.ref.id))?.blockedBy).toBeUndefined()
-        expect(await harness.source.dependencyStates([dependent.ref.id])).toEqual([
+        expect(await dependencyFacts(harness, [dependent.ref.id])).toEqual([
           {
             id: dependent.ref.id,
             exists: true,

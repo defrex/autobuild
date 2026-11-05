@@ -223,9 +223,13 @@ if (testUrl) {
       expect(second.blockedBy).toEqual(['ENG-1'])
       await source.addBlocker('eng-2', legacy)
       await expect(source.addBlocker('eng-1', legacy)).rejects.toThrow('cannot block itself')
+      // Existing ids report their row's native state; the read count is unchanged.
+      const legacyState = (await source.get(legacy))?.state
+      const secondState = (await source.get('eng-2'))?.state
+      expect(legacyState).toBeString()
       expect(await source.dependencyStates([legacy, 'eNg-2'])).toEqual([
-        { id: legacy, exists: true, resolved: false, blockedBy: [] },
-        { id: 'eNg-2', exists: true, resolved: false, blockedBy: ['ENG-1'] },
+        { id: legacy, exists: true, resolved: false, state: legacyState!, blockedBy: [] },
+        { id: 'eNg-2', exists: true, resolved: false, state: secondState!, blockedBy: ['ENG-1'] },
       ])
       await source.removeBlocker('eNg-2', 'eng-1')
       expect((await source.get('eng-2'))?.blockedBy).toBeUndefined()
