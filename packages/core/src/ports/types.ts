@@ -200,6 +200,12 @@ export interface TicketStateInfo {
   about?: string
 }
 
+/** One state's ticket total from a bounded count read; `name` is canonical. */
+export interface TicketStateCount {
+  name: string
+  tickets: number
+}
+
 /** Source methods may reject with this failure; it is not a dependency verdict. */
 export class TicketSourceRateLimitError extends Error {
   constructor(
@@ -294,6 +300,14 @@ export interface TicketSource {
    * Sources that cannot enumerate their states omit it.
    */
   listStates?(): Promise<TicketStateInfo[]>
+  /**
+   * Optional bounded per-state counts for the named states (display only).
+   * Each name resolves like `resolveState` (exact, else one case-insensitive
+   * match); unmatched or ambiguous names are omitted. Never returns or parses
+   * ticket rows. A store-backed source answers from maintained totals, so its
+   * cost does not grow with the number of tickets.
+   */
+  countStates?(names: readonly string[]): Promise<TicketStateCount[]>
   /**
    * Optional state creation (`ab ticket state create`). Duplicate policy is
    * adapter-specific: file creation is idempotent and can replace purpose;

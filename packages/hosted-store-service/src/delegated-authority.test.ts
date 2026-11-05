@@ -482,6 +482,7 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
     get: { id: 'unknown' },
     'dependency-states': { ids: ['unknown'] },
     states: {},
+    'state-counts': { names: ['Triage'] },
     'add-state': { name: 'icebox', about: 'Deferred' },
     create: { draft: { title: 'Proposal', body: 'Spec' } },
     claim: { id: 'unknown' },

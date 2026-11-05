@@ -5953,9 +5953,14 @@ describe('abDispatch --once with an interactive terminal', () => {
   function countingTriageStates(
     tickets: object,
     fail: (call: number) => boolean = () => false,
-  ): { calls: number } {
-    const probe = { calls: 0 }
+  ): { calls: number; counts: number } {
+    const probe = { calls: 0, counts: 0 }
     Object.assign(tickets, {
+      // Only a viewer reads bounded counts; a dispatcher's tick never does.
+      countStates: async () => {
+        probe.counts += 1
+        return [{ name: 'triage', tickets: 3 }]
+      },
       listStates: async () => {
         probe.calls += 1
         if (fail(probe.calls)) throw new Error('ticket states unavailable')
@@ -6036,7 +6041,11 @@ describe('abDispatch --once with an interactive terminal', () => {
         const completed = (await fx.store.getRepoEvents(fx.origin)).filter(
           (event) => event.type === 'dispatcher.tick-completed',
         )
-        return { calls: probe.calls, payloads: completed.map((event) => event.payload) }
+        return {
+          calls: probe.calls,
+          counts: probe.counts,
+          payloads: completed.map((event) => event.payload),
+        }
       } finally {
         await fx.cleanup()
       }
@@ -6054,6 +6063,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const frontend = await run({ kernelRunId: 'triage-frontend-kernel', frontendStatus: true })
     expect(frontend.calls).toBe(1)
     expect(frontend.payloads.at(-1)).toMatchObject({ triage: 3 })
+    for (const result of [plain, hosted, frontend]) expect(result.counts).toBe(0)
   }, 30_000)
 
   test('--once ticks exactly ONCE — a ticket that turns Ready mid-drain is not claimed', async () => {

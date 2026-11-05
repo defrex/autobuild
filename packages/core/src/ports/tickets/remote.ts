@@ -32,6 +32,7 @@ import {
   ticketListingWireSchema,
   ticketWireSchema,
   ticketStatesWireSchema,
+  ticketStateCountsWireSchema,
   ticketStateCreateWireSchema,
 } from './remote-protocol'
 import {
@@ -169,6 +170,10 @@ export class HostedTicketSource implements TicketSource {
 
   async listStates() {
     return this.request('states', {}, ticketStatesWireSchema)
+  }
+
+  async countStates(names: readonly string[]) {
+    return this.request('state-counts', { names: [...names] }, ticketStateCountsWireSchema)
   }
 
   async addState(name: string, opts: { about?: string } = {}) {

@@ -1,5 +1,6 @@
 import type { Exec } from './retry'
-import type { HostedTicketPolicy } from '@defrex/autobuild/hosted-tickets'
+import { matchStateNames, type HostedTicketPolicy } from '@defrex/autobuild/hosted-tickets'
+import type { TicketStateCount } from '@defrex/autobuild/plugin-sdk'
 
 export function policyStateNames(policy: HostedTicketPolicy): string[] {
   const t = policy.tickets
@@ -24,4 +25,25 @@ export async function seedTicketStates(q: Exec, repo: string, names: string[]): 
     if (!existing.has(name))
       await q`INSERT INTO ab_ticket_states (repo, name) VALUES (${repo}, ${name}) ON CONFLICT DO NOTHING`
   }
+}
+
+/** Bounded state counts: the project's state names plus one primary-key probe
+ * per matched name in the trigger-maintained `ab_ticket_state_counts`. It
+ * never reads `ab_tickets`, so its cost does not grow with ticket population. */
+export async function readTicketStateCounts(
+  q: Exec,
+  repo: string,
+  configured: string[],
+  names: readonly string[],
+): Promise<TicketStateCount[]> {
+  await seedTicketStates(q, repo, configured)
+  const existing = (await q`SELECT name FROM ab_ticket_states WHERE repo = ${repo}`).map((row) =>
+    String(row.name),
+  )
+  const matched = matchStateNames(names, existing)
+  if (matched.length === 0) return []
+  const rows = await q`SELECT state, tickets::integer AS tickets FROM ab_ticket_state_counts
+    WHERE repo = ${repo} AND state = ANY(${q.array(matched, 'text')})`
+  const counts = new Map(rows.map((row) => [String(row.state), Number(row.tickets)]))
+  return matched.map((name) => ({ name, tickets: counts.get(name) ?? 0 }))
 }
