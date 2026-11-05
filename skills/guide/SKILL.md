@@ -121,7 +121,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 - **`finalize`** — the agent writes the PR description; the kernel opens the
   PR, sealing the build's [issue links](#issue-links-in-builds) first and
   writing their `Closes #N` / `Refs #N` lines when the forge supports them
-  (a node child's lines go into the root node's PR instead).
+  (a node child's own PR gets `Refs` lines only; its closing lines go into the
+  root node's PR).
   `[finalize].steps` run afterward and are failure-tolerant. A
   content-producing step commits selected files locally and finishes clean;
   the runner pushes the exact descendant SHA and confirms forge readback before recording success.
@@ -1924,12 +1925,15 @@ through the build that claims it:
   the same repository, is rewritten to `refs`, so prose can't close it. Merging
   closes each `closes` issue and leaves each `refs` issue open with a back-link.
 - **Through a node.** GitHub closes issues only from the default branch, so a
-  leaf aimed at an integration node writes no lines into its own PR or landed
-  commit. When it lands, its effective links, downgrades included, are recorded
-  on the node; a nested node passes its whole set up to its parent the same
-  way. Only the root node's PR into the default branch gets the lines, kept
-  current as children land and refreshed before the kernel lands it. Merging
-  the node, by the kernel or a human, closes them. A downgrade by any child
+  leaf aimed at an integration node, and a nested node's PR into its parent,
+  end their PR body with one `Refs #N` line per linked issue, whatever its
+  intent, so each issue shows the PR without closing; their landed commits
+  carry no lines. When a leaf lands, its effective links, downgrades included,
+  are recorded on the node; a nested node passes its own links merged with its
+  children's union up to its parent the same way. The root node's PR into the default
+  branch gets the closing lines for the node's own links and every
+  contribution, kept current as children land and refreshed before the kernel
+  lands it. Merging the node, by the kernel or a human, closes them. A downgrade by any child
   makes that issue `Refs`; otherwise any child's `closes` makes it `Closes`.
   Child commits keep their own messages and carry no lines.
 - **What is not.** `local-git`, the fake forge and other forges without the
