@@ -121,4 +121,8 @@ local stores each see only their own builds:
 - **Branch collisions are only partly guarded.** A dispatcher skips any slug
   whose `ab/` or `ab-node/` branch already exists on the remote (when its forge
   supports `remoteBranchExists`), but two stores that claim the same name before
-  either pushes can still collide.
+  either pushes can still collide. The check is a safety step, not a best
+  effort: if the branch lookup fails, or the base slug and its `-2` … `-100`
+  suffixes are all taken, the claim fails at the naming stage. No build is
+  created, the ticket is handed back to its ready state, and a later tick
+  retries it.

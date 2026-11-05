@@ -205,8 +205,11 @@ The dispatcher owns a hard deadline, strict validation, and `-2`, `-3`, …
 collision suffixes that skip both this store's slugs and `ab/` or `ab-node/`
 build branches already on the remote, checked once at claim time. A forge
 without that capability deduplicates against the store only and says so in a
-startup warning. Absence or any failure falls back to the first
-three words of the kebab-cased title, so naming never blocks dispatch. The slug
+startup warning. A missing or failed model proposal falls back to the first
+three words of the kebab-cased title, so the proposal never blocks dispatch.
+The branch check is not optional: if a remote lookup fails, or the base and its
+`-2` … `-100` suffixes are all taken, the claim fails, no build is created, and
+the ticket is handed back to ready for a later tick. The slug
 and `ab/<slug>` branch are chosen once; existing builds are never renamed.
 Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 
