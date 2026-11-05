@@ -15,9 +15,11 @@ The dispatcher claims eligible tickets, starts and observes build runners, settl
 ## Viewing from a local checkout
 
 A plain `ab dispatch` reads dispatch placement once before starting local execution.
-For a hosted project it opens the Store-only viewer automatically, displaying
+For a hosted project it opens the viewer automatically, displaying
 `viewer · dispatched by <host>` from the placement origin (including a nondefault
 port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
+The viewer reads its dashboard from the Store; its one ticket-source read is
+the header's triage count, through the source's optional `countStates`.
 `--takeover` explicitly dispatches locally, with a warning that it can displace
 the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
 flags require `--takeover` when placement selects viewer.

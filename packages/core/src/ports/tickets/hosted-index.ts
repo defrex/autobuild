@@ -28,6 +28,12 @@ export { TicketIssueLinksUnsupported, refuseUnsupportedIssueLinks } from './issu
 export { hostedTicketPolicySchema, type HostedTicketPolicy } from './remote-protocol'
 export { ticketLifecycle } from './lifecycle'
 
-export { orderStates, resolveState, validateStateName, validateStatePurpose } from './states'
+export {
+  matchStateNames,
+  orderStates,
+  resolveState,
+  validateStateName,
+  validateStatePurpose,
+} from './states'
 
 export { hostedRequestedIds, MAX_TICKET_NUMBER } from './requested-id'

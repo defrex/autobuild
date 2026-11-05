@@ -90,7 +90,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
 | `packages/core/src/plugin-sdk/` | The sole supported `@defrex/autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty, sandbox idle settlement and harvest trigger), harvest deterministic core + runner | §3.3, §7.1.2, §12, §15.7 |
-| `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the filesystem-only dispatch launcher and immutable generation cache, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
+| `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the filesystem-only dispatch launcher and immutable generation cache, the dispatch frontend (Store-backed, plus the viewer's ticket-source triage count), its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `packages/core/src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
@@ -985,21 +985,36 @@ AgentRunner failure causes and the exhaustion contract fixture are additive
 plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit
 behavior.
 
-**Dashboard.** `packages/core/src/cli/dispatch-frontend.ts` is a Store-only terminal adapter:
-it has no ticket, forge, workspace-provider, LiveConfig, or runtime dependency.
+**Dashboard.** `packages/core/src/cli/dispatch-frontend.ts` is a Store-first terminal adapter:
+it has no forge, workspace-provider, LiveConfig, or runtime dependency, and
+holds only a lazy ticket-source opener for build actions and the viewer's
+triage count.
 It follows one dispatch run's repository facts incrementally through
 `packages/core/src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
-intervals. The header's triage count comes from the reduced `DispatchStatus`
-(`status.triage`), exactly like the queue depth, so a frontend refresh reads
-neither the ticket source nor any extra store value for it. The supervised
+intervals. In local execution mode the header's triage count comes from the
+reduced `DispatchStatus` (`status.triage`), exactly like the queue depth, so a
+frontend refresh reads neither the ticket source nor any extra store value for
+it; viewer mode differs, as described below. The supervised
 kernel child (`frontendStatus`) samples `TicketSource.listStates()` once per
 tick, after the Dispatcher tick and before publication, and carries the last
 successful count on `dispatcher.tick-completed`; a changed count is a
 standing-state change for publication suppression. Hosted, plain and
 non-TTY dispatchers never sample it. An unsupported source, failed read or
-unmatched state keeps the previous value (initially unknown, shown as `–`). A
+unmatched state keeps the previous value (initially unknown, shown as `–`).
+A viewer (`opts.viewer`) whose repository is dispatched elsewhere ignores
+`status.triage` and shows only its own count: on a refreshed frame it asks
+the source's optional `countStates([triage])` at most once per 10 s, in the
+background with one request in flight, while presentation is live and not in
+`--once`. It keeps the last good value through failures and shows `–` until
+the first success or for a source without `countStates`. The hosted
+`state-counts` operation answers that read with per-state totals only. The
+Postgres source reads them from `ab_ticket_state_counts`, which a row trigger
+on `ab_tickets` keeps exact in each ticket write's transaction, so the read
+never touches ticket rows. Like `REPO_CHANGE_DDL`, that table and trigger sit
+outside the ticket marker. Migration backfills them once when it creates the
+table, and project deletion removes the project's rows. A
 journal record that does not yet exist reads as an empty journal: the
 dispatcher's repository-wide journal reads (controls, settlement stages, and
 ready scans) and the operator sandbox service's journal reads go through
