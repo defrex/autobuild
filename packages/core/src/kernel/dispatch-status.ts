@@ -20,6 +20,7 @@ export interface DispatchStatus {
   yieldedHolder?: string
   availableUpgrade?: string
   forgeReadinessFailures?: RepositoryEventPayload<'dispatcher.forge-readiness-failed'>[]
+  /** Startup configuration warnings, including forge capability gaps. */
   roleWarnings: string[]
   diagnostics: string[]
   /** Latest notice of warning/failure severity, retained independently from routine notices. */

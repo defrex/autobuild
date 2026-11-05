@@ -97,3 +97,13 @@ export function formatReadinessFailure(check: {
 export function formatForgeReadiness(check: ForgeReadinessCheck): string {
   return `${readinessLabel(check)} ${formatReadinessFailure(check)}`
 }
+
+/** Startup warning when the adapter cannot prove a build branch is free on the
+ * remote: slugs then dedupe against this store only (AUT-1106). */
+export function branchGuardWarnings(forge: Pick<Forge, 'name' | 'remoteBranchExists'>): string[] {
+  return forge.remoteBranchExists === undefined
+    ? [
+        `forge ${forge.name}: cross-store branch collision protection is unavailable — the adapter lacks remoteBranchExists, so build slugs are deduplicated against this store only and a target node built by another store is recognized only by its claimed ticket. Upgrade the adapter, and run every dispatcher on one shared store (ab connect).`,
+      ]
+    : []
+}
