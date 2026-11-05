@@ -87,6 +87,12 @@ authentication, malformed responses or rate limits. Missing capability withholds
 new replay requiring proof. GitHub uses exact-SHA comparison; local-git requires
 an explicit served `repoRoot`. Unknown ancestry never authorizes replay.
 
+The optional `remoteBranchExists(branch)` returns false only for proven absence
+and throws on failure. Dispatch uses it at claim time to skip slugs whose build
+branch another store already published, and to recognize a target node branch
+another store opened. Without it, slugs are deduplicated against the local store
+only and the dispatcher records a startup warning.
+
 Stores may expose `getNodeRewrite(node, previousHead, beforePrevious)` as a bounded point
 lookup of a durable `node.rewritten` receipt. Built-in adapters index these
 validated publication facts atomically with append, including transactional

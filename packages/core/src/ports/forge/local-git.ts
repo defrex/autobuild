@@ -81,6 +81,20 @@ export class LocalGitForge implements Forge {
     return result.stdout.trim()
   }
 
+  async remoteBranchExists(branch: string): Promise<boolean> {
+    if (this.repoRoot === undefined) {
+      throw new Error('local-git forge has no repository root for remote branch reads')
+    }
+    const result = await this.command(
+      ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`],
+      this.repoRoot,
+      true,
+    )
+    if (result.exitCode === 0) return true
+    if (result.exitCode === 1) return false
+    throw new Error(`local-git branch probe failed: ${result.stderr.trim()}`)
+  }
+
   async isCommitAncestor(ancestor: string, descendant: string): Promise<boolean> {
     if (!this.repoRoot) throw new Error('local-git ancestry requires repoRoot')
     if (!gitOid.safeParse(ancestor).success || !gitOid.safeParse(descendant).success)

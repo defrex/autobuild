@@ -1306,6 +1306,18 @@ describe('GitHubForge optional capabilities', () => {
     expect(error?.status).toBe(404)
   })
 
+  test('remoteBranchExists reads the exact ref and treats only 404 as absence', async () => {
+    const { forge, calls } = makeForge([
+      { json: { ref: 'refs/heads/ab/work', object: { sha: 'abc' } } },
+      { status: 404, json: { message: 'Not Found' } },
+      { status: 500, json: { message: 'Server Error' } },
+    ])
+    expect(await forge.remoteBranchExists('ab/work')).toBe(true)
+    expect(calls).toEqual([{ method: 'GET', path: 'repos/acme/app/git/ref/heads/ab%2Fwork' }])
+    expect(await forge.remoteBranchExists('ab/gone')).toBe(false)
+    await expect(forge.remoteBranchExists('ab/broken')).rejects.toThrow()
+  })
+
   test('readFile fetches raw bytes, optionally at a ref', async () => {
     const { forge, calls } = makeForge([
       { bytes: new TextEncoder().encode('baseBranch = "main"\n') },

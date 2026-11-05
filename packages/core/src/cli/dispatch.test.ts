@@ -886,6 +886,51 @@ describe('abDispatch guards', () => {
     }
   }, 10_000)
 
+  test('a forge without remote branch existence records one durable startup warning', async () => {
+    for (const capable of [true, false]) {
+      const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)
+      try {
+        const err: string[] = []
+        await abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: (line) => err.push(line),
+          once: true,
+          plain: true,
+          wire: () => {
+            const wiring = fx.wire()
+            if (capable) return wiring
+            const inner = wiring.forge
+            wiring.forge = new Proxy(inner, {
+              get: (target, key, receiver) =>
+                key === 'remoteBranchExists' ? undefined : Reflect.get(target, key, receiver),
+              has: (target, key) => key !== 'remoteBranchExists' && Reflect.has(target, key),
+            })
+            return wiring
+          },
+        })
+        const marker = 'cross-store branch collision protection is unavailable'
+        const events = await fx.store.getRepoEvents(fx.origin)
+        const carrying = events.filter((event) => JSON.stringify(event.payload).includes(marker))
+        const start = events.find((event) => event.type === 'dispatcher.run-started')
+        if (capable) {
+          expect(carrying).toEqual([])
+          expect(err.join('\n')).not.toContain(marker)
+        } else {
+          expect(carrying.map((event) => event.type)).toEqual(['dispatcher.run-started'])
+          expect(start?.type === 'dispatcher.run-started' && start.payload.roleWarnings).toEqual([
+            expect.stringContaining(`forge fake: ${marker}`),
+          ])
+          expect(err.filter((line) => line.includes(marker))).toHaveLength(1)
+        }
+      } finally {
+        await fx.cleanup()
+      }
+    }
+  }, 20_000)
+
   test('each cold --once loads the bounded journal, including foreign durable facts', async () => {
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)
     try {

@@ -615,3 +615,9 @@ test('local-git does not declare issue-closing support, so builds emit no keywor
   expect(forge.closesIssues).toBeUndefined()
   expect(forge.updatePrIssueLinks).toBeUndefined()
 })
+
+test('remote branch existence requires the served repository root', async () => {
+  await expect(new LocalGitForge().remoteBranchExists('ab/any')).rejects.toThrow(
+    'no repository root',
+  )
+})
