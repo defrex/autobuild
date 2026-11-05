@@ -38,9 +38,12 @@ Guidance is an external operator answer, from the operator agent or a human.
    ends the PR body with one `Closes #N` or `Refs #N` line per linked issue
    and puts the same lines in the landed commit. It also rewrites any closing
    keyword aimed at a `refs` issue (`fixes #N`, `closes #N`, …) in the title
-   and body to `refs`. On a leaf aimed at an integration node, the lines go
-   into the node's PR to the default branch when this child lands, not into
-   this PR. Either way, if this PR only partly resolves a `closes` issue, run
+   and body to `refs`. On a leaf aimed at an integration node, the kernel ends
+   this PR body with one `Refs #N` line per linked issue, whatever its intent,
+   and rewrites any closing keyword aimed at a linked issue to `refs`, so the
+   issue shows this PR without closing. The `Closes` lines go into the root
+   node's PR to the default branch when this child lands, and the landed
+   commit carries none. Either way, if this PR only partly resolves a `closes` issue, run
    `ab issue downgrade N --reason "<what remains>"` **before** `ab done`.
    `ab done` seals the links, and a later downgrade is refused.
 3. Finish:
