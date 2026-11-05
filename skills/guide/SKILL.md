@@ -1957,9 +1957,11 @@ steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
 
 
-On a TTY, execution-mode `ab dispatch` renders one fixed interactive frame anchored at the
-terminal's first row. Its header remains on that top row as frame height changes
-and after a resize; unused rows remain below. On exit, the final frame is copied
+On a TTY, execution-mode `ab dispatch` renders one fixed interactive frame that fills the
+terminal's height. Its header stays on the top row, the legend or prompt panel
+is pinned to the bottom rows, and the build list fills the space between and
+scrolls within it, following the selection; after a resize the legend moves to
+the new bottom. On exit, the final frame is copied
 to the normal screen and remains in scrollback. Its always-present two-line
 process-global header has a selectable `Autobuild` summary with the repository
 basename followed by the compact counters
@@ -1997,7 +1999,9 @@ action confirmations are suppressed in the interactive frame. The latest true
 warning or error instead appears on a conditional row below the header, aligned
 to the title; when none exists, that row consumes no space. A blank line
 separates the global section from the first body row, and another separates the
-body from the legend or feedback controls. The duplicate startup banner is
+body from the legend or feedback controls. When the list overflows, it shows
+whole builds with `N more above` and `and N more below` notices, each separated
+from the builds by one blank line. The duplicate startup banner is
 suppressed; `--plain` and non-TTY output remain line-oriented and unchanged. A
 satisfied verify skip carries the literal `skipped` qualifier, so it remains
 distinct from a pass without color. Every nonterminal build has a row,
