@@ -9,6 +9,7 @@ import {
   parseHostedDispatcherEnv,
   type HostedDispatcherOptions,
 } from './dispatcher'
+import type { ShippedGitManifest } from './shipped-git'
 
 // Issuance seam records an opaque, distinct project-bound credential per tick.
 const issued = new Map<string, { repo: string; creator: string; expiresAt: Date }>()
@@ -456,6 +457,112 @@ describe('createDispatcherEndpoint', () => {
     const body = (await response.json()) as { error: string }
     expect(body.error).toContain('AB_STORE_SECRET')
     expect(body.error).not.toContain('cron-secret')
+  })
+})
+
+describe('hosted dispatcher kernel Git', () => {
+  const url = 'https://hosted.example.test/api/dispatch'
+  const authorized = { authorization: 'Bearer cron-secret' }
+
+  /** A stand-in shipped tree whose `git` records how it was invoked. */
+  async function fakeShippedGit() {
+    const { chmod, mkdir, mkdtemp, writeFile } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'ab-shipped-git-'))
+    const calls = join(root, 'calls.log')
+    await mkdir(join(root, 'bin'))
+    await writeFile(
+      join(root, 'bin', 'git'),
+      `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$0" "$*" "$GIT_EXEC_PATH" "$GIT_CONFIG_COUNT" >> '${calls}'\n`,
+    )
+    await chmod(join(root, 'bin', 'git'), 0o755)
+    const manifest: ShippedGitManifest = {
+      schema: 1,
+      platform: 'linux-x64',
+      gitVersion: '2.99.0',
+      glibcVersion: '2.34',
+      minimumKernel: '3.2.0',
+      root,
+      git: 'bin/git',
+      execPath: 'libexec/git-core',
+      lib: 'lib',
+      caBundle: 'ssl/ca-bundle.crt',
+      files: ['bin/git'],
+      executables: ['bin/git'],
+      bytes: 0,
+    }
+    return { root, calls, git: { root, manifest } }
+  }
+
+  test('every kernel Git command of a tick runs the shipped Git, never the host PATH', async () => {
+    const { readFile, rm } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const { GitHubForge } = await import('@defrex/autobuild/testing')
+    const shipped = await fakeShippedGit()
+    const lines: string[] = []
+    try {
+      const response = await createDispatcherEndpoint({
+        openProjectRegistry: async () => testProjects(['https://github.com/acme/one']),
+        env: {
+          ...baseEnv,
+          AB_DISPATCHER_REPOSITORIES: 'https://github.com/acme/one',
+          PATH: '/nonexistent-bin',
+        },
+        clock,
+        log: (line) => lines.push(line),
+        logError: () => {},
+        locateGit: async () => ({ ok: true, git: shipped.git }),
+        dispatch: async (opts) => {
+          // The plain exec seam.
+          expect((await opts.exec(['git', '--version'], {})).exitCode).toBe(0)
+          // The forge's credentialed kernelExec, as origin mode wires it.
+          const forge = new GitHubForge({
+            env: opts.env,
+            repository: opts.repository!,
+            exec: opts.exec,
+            token: 't',
+          })
+          await forge.kernelExec(['git', 'ls-remote', 'origin'], { cwd: shipped.root })
+        },
+      }).fetch(new Request(url, { headers: authorized }))
+      expect(response.status).toBe(200)
+      expect(lines).toContainEqual(expect.stringContaining('kernelGit=shipped:2.99.0'))
+      const gitPath = join(shipped.root, 'bin', 'git')
+      const execPath = join(shipped.root, 'libexec', 'git-core')
+      expect((await readFile(shipped.calls, 'utf8')).trim().split('\n')).toEqual([
+        `${gitPath}|--version|${execPath}|`,
+        `${gitPath}|ls-remote origin|${execPath}|7`,
+      ])
+    } finally {
+      await rm(shipped.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a deployment without a usable shipped Git falls back to the host and says why', async () => {
+    const { spawnExec } = await import('@defrex/autobuild/git-worktree')
+    const lines: string[] = []
+    let exec: unknown
+    await createDispatcherEndpoint({
+      openProjectRegistry: async () => testProjects(['https://github.com/acme/one']),
+      env: { ...baseEnv, AB_DISPATCHER_REPOSITORIES: 'https://github.com/acme/one' },
+      clock,
+      log: (line) => lines.push(line),
+      logError: () => {},
+      locateGit: async () => ({
+        ok: false,
+        reason: 'no .autobuild-git/manifest.json under /var/task',
+      }),
+      dispatch: async (opts) => {
+        exec = opts.exec
+      },
+    }).fetch(new Request(url, { headers: authorized }))
+    expect(exec).toBe(spawnExec)
+    expect(lines).toContainEqual(
+      expect.stringContaining(
+        'kernelGit=host-path (no .autobuild-git/manifest.json under /var/task)',
+      ),
+    )
   })
 })
 
