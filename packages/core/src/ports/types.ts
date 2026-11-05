@@ -755,6 +755,12 @@ export interface Forge {
   /** Authoritative forge branch tip. Absence or failure must defer target
    * observation; callers must never substitute dispatcher-host refs. */
   remoteBranchSha?(branch: string): Promise<string>
+  /** Whether `branch` exists on the authoritative forge remote. False is proven
+   * absence; transport, auth or malformed responses throw. Dispatch uses it at
+   * claim time so a new build never takes a branch another store owns, and to
+   * recognize a target node branch another store opened. Absent capability keeps
+   * store-only slug deduplication and reports one startup warning. */
+  remoteBranchExists?(branch: string): Promise<boolean>
   /** Prove ancestry of immutable commit OIDs in the authoritative repository.
    * False means a proven non-descendant; absent capability or unknown objects
    * must fail closed, never authorize replay. */

@@ -257,8 +257,9 @@ registry monitoring tools; operator presence is not exposed there.
   attaches with runtime identity, and recent events. Historical runtime is null
   in JSON and unrecorded in human output.
 - `ab repository status` — the repository's derived status, including the lease
-  holder’s recorded runtime version, commit, and source kind/location. Historical
-  runtime is null in JSON and unrecorded in human output.
+  holder’s recorded runtime version, commit, and source kind/location, and the
+  latest scan's queue diagnostics and startup warnings. Historical runtime is
+  null in JSON and unrecorded in human output.
 - `ab artifact` — fetch one artifact's bytes.
 
 Read events with a cursor or a small `--events` count; logs are long.
@@ -452,6 +453,10 @@ Stop and ask the human — in plain streamed text — whenever:
 - You would be guessing about product direction, priorities, or scope.
 - A tool refusal repeats and you cannot resolve it with the tools you have.
 - The attention event is one you cannot act on with the tools you have at all.
+- A queue diagnostic says a target node is being built by another store, or a
+  startup warning says cross-store branch protection is unavailable. Don't
+  retarget or reclaim; tell the human the repository's dispatchers should
+  share one store (`ab connect`).
 
 Filing a ticket is acting — do it when the request is concrete. Default to
 resolving attention yourself within these boundaries; ask the human only

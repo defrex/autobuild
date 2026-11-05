@@ -728,7 +728,9 @@ build that will thrash and escalate.
 
 **Build identity at dispatch:** once the final conforming spec is in hand,
 the selected runtime proposes a short kebab-case slug from its substance —
-judgment proposes; the dispatcher validates, deduplicates against the store,
+judgment proposes; the dispatcher validates, deduplicates against the store
+and, when the forge can answer, against `ab/` or `ab-node/` build branches
+already on the remote — so a build never takes a branch another store owns —
 and falls back to a deterministic title-derived name on any absence, invalid
 output, error, or timeout. Naming failure never prevents build creation. The
 slug and its `ab/<slug>` branch are recorded once and never renamed.

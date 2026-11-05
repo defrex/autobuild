@@ -731,3 +731,57 @@ test('account conditions survive run start, update descriptors, and recover on r
     'Missing credentials:',
   )
 })
+
+test('startup warnings and the latest scan queue diagnostics reach both status projections', async () => {
+  const { DISPATCHER } = await import('../events/envelope')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(REPO)
+  const warning = 'forge plugin: cross-store branch collision protection is unavailable'
+  const foreign =
+    'ticket CHILD: target node N is being built by another store: its ticket is claimed (Doing) but this store has no build for it; dispatchers on one repository must share one store (ab connect)'
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'run-1',
+      pid: 42,
+      host: 'host',
+      effectiveConfig: { kind: 'config', rev: 0 },
+      roleWarnings: [warning],
+    },
+  })
+  const scan = (dependencyDiagnostics: string[]) =>
+    store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-scan-completed',
+      payload: {
+        startedAt: '2026-11-05T00:00:00.000Z',
+        readinessFingerprint: 'r',
+        criteriaFingerprint: 'c',
+        mode: 'admission',
+        queued: 1,
+        invalidTickets: 0,
+        ticketDiagnostics: [],
+        dependencyBlocked: 1,
+        dependencyDiagnostics,
+        creationWithheld: 0,
+        creationDiagnostics: [],
+      },
+    })
+  await scan(['ticket OLD: superseded'])
+  await scan([foreign])
+
+  const projected = projectRepositoryStatus(REPO, await store.getRepoEvents(REPO))
+  expect(projected.warningLines).toEqual([warning])
+  expect(projected.dependencyDiagnostics).toEqual([foreign])
+  const lines = renderRepositoryStatus(projected)
+  expect(lines).toContain(warning)
+  expect(lines).toContain(`queue: ${foreign}`)
+  expect(lines.join('\n')).not.toContain('superseded')
+
+  const opts = options(store, { json: true })
+  await abRepositoryStatus(opts)
+  const json = JSON.parse(opts.output.join('\n'))
+  expect(json.warningLines).toEqual([warning])
+  expect(json.dependencyDiagnostics).toEqual([foreign])
+})
