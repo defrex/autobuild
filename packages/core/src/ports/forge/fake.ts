@@ -505,6 +505,10 @@ export class FakeForge implements Forge {
     return sha
   }
 
+  async remoteBranchExists(branch: string): Promise<boolean> {
+    return this.remoteBranches.has(branch)
+  }
+
   async readFile(path: string, ref?: string): Promise<string> {
     const key = `${ref ?? 'default'}\0${path}`
     const content = this.files.get(key)

@@ -201,9 +201,15 @@ terminal.
 
 **Slug naming is not a phase.** For each new build, a tool-free one-shot call
 proposes a lowercase kebab base of at most three meaningful spec-derived words.
-The dispatcher owns a hard deadline, strict validation, and store-wide `-2`,
-`-3`, … collision suffixes. Absence or any failure falls back to the first
-three words of the kebab-cased title, so naming never blocks dispatch. The slug
+The dispatcher owns a hard deadline, strict validation, and `-2`, `-3`, …
+collision suffixes that skip both this store's slugs and `ab/` or `ab-node/`
+build branches already on the remote, checked once at claim time. A forge
+without that capability deduplicates against the store only and says so in a
+startup warning. A missing or failed model proposal falls back to the first
+three words of the kebab-cased title, so the proposal never blocks dispatch.
+The branch check is not optional: if a remote lookup fails, or the base and its
+`-2` … `-100` suffixes are all taken, the claim fails, no build is created, and
+the ticket is handed back to ready for a later tick. The slug
 and `ab/<slug>` branch are chosen once; existing builds are never renamed.
 Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 
@@ -1615,6 +1621,26 @@ while worktrees and default file tickets remain under the repository-default
 `.autobuild/` directory. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
 
+### Several dispatchers on one repository
+
+One repository driven by several dispatchers — for example each engineer
+running `ab dispatch` locally — should share one store: connect every
+dispatcher to the same service with `ab connect`. Assignee gating
+(`[tickets].readyAssignee`) divides tickets between dispatchers but not
+store-owned state. Separate local stores each see only their own builds:
+
+- **Nodes are owned by one store.** A child ticket can target only a node built
+  in its own store; elsewhere it stays queued with `target node … is being
+  built by another store`.
+- **Harvest observations are split.** Each store harvests only its own builds'
+  observations.
+- **No shared build history.** `ab builds`, status, dashboards and the operator
+  API show only the local store's builds.
+- **Branch collisions are only partly guarded.** A dispatcher skips any slug
+  whose `ab/` or `ab-node/` branch already exists on the remote (when its forge
+  supports `remoteBranchExists`), but two stores that claim the same name
+  before either pushes can still collide.
+
 ## Connect a project
 
 From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
@@ -2360,6 +2386,10 @@ repository-local precedence. The command uses the same reducer as the
 dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
 and starts no dispatcher work. Dispatcher identity includes the held run’s recorded
 runtime; historical starts without metadata display `runtime unrecorded`.
+It also lists the latest ticket scan's dependency diagnostics (`queue:` lines,
+`dependencyDiagnostics` in JSON), including tickets held because their target
+node is being built by another store, and dispatcher startup warnings
+(`warningLines`).
 
 **`ab builds`** summarizes this repository's builds, one row each. It reports
 **active** builds by default — `running`, `paused`, `blocked` — because those

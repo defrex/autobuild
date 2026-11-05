@@ -513,6 +513,12 @@ export function emptyTickReport(): TickReport {
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
 const DEFAULT_SLUG_NAMING_TIMEOUT_MS = 10_000
+/** Bound on -2/-3/… candidates one claim may probe for a free slug. */
+const MAX_SLUG_CANDIDATES = 100
+/** Body of the comment dispatch posts on every claimed ticket. The
+ * foreign-target diagnostic parses it to find another store's node branch. */
+const dispatchCommentBody = (slug: string) => `build ${slug} dispatched`
+const DISPATCH_COMMENT = /^build ([a-z0-9][a-z0-9-]*) dispatched$/
 /** Heartbeat cadence of a background provisioning continuation's execution
  * lease. A dead provisioner is therefore adopted within one lease TTL. */
 const PROVISION_HEARTBEAT_MS = 15_000
@@ -526,6 +532,14 @@ export type DispatchOutcome = 'completed' | 'deferred' | 'parked' | 'failed'
 /** One tracked background provisioning continuation (process-local). Its
  * durable residue is the `workspace.provision-started` marker plus the
  * execution lease it claims and heartbeats. */
+/** Per-admission-scan inputs for target-node resolution: the ready listing's
+ * ids and the memoized foreign-target verdicts, one per distinct target. */
+interface TargetScan {
+  listed: ReadonlySet<string>
+  foreign: Map<string, Promise<string>>
+  generation: number
+}
+
 interface ProvisionContinuation {
   readonly slug: string
   readonly instance: string
@@ -760,6 +774,15 @@ export class Dispatcher {
     }
   >()
   private readonly nodePollingTickReads = new Map<string, Promise<BuildState>>()
+  /** Per-process cache of the foreign-target branch-arm lookup (AUT-1106),
+   * keyed by target ticket id and invalidated by the target ticket's revision
+   * and foreign dispatch-comment slugs. `scan` is the admission scan that last
+   * consulted the entry; entries older than the previous scan are dropped. */
+  private readonly foreignBranchCache = new Map<
+    string,
+    { fingerprint: string; branch: string | null; scan: number }
+  >()
+  private foreignScanGeneration = 0
 
   private async integrationClaimKey(slug: string, state: BuildState): Promise<string> {
     return nodeTicketObservationKey(state, await this.nodePollingChildren(slug))
@@ -4610,7 +4633,7 @@ export class Dispatcher {
       if (record.ticket !== undefined && !events.commentPosted) {
         await this.deps.tickets.comment(
           await this.currentTicketId(record),
-          `build ${record.slug} dispatched`,
+          dispatchCommentBody(record.slug),
         )
         await store.append(record.slug, {
           actor: DISPATCHER,
@@ -5226,15 +5249,7 @@ export class Dispatcher {
     const ready = listing.tickets.filter(
       (ticket) =>
         !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`) &&
-        !Object.values(this.store.repositoryFacts().preparation).some((attempt) => {
-          const ref = resolveTicketRef(
-            this.store.repositoryFacts().ticketMigrations,
-            attempt.ticket,
-            this.deps.tickets.name,
-            attempt.slug ?? attempt.attempt,
-          )
-          return ref.source === ticket.ref.source && ref.id === ticket.ref.id
-        }),
+        !this.preparing(ticket.ref.source, ticket.ref.id),
     )
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
@@ -5325,10 +5340,26 @@ export class Dispatcher {
     const failed = new Set<string>()
     const targetBlocked = new Set<string>()
     const preflightTargets = new Map<string, string>()
+    const generation = ++this.foreignScanGeneration
+    for (const [id, entry] of this.foreignBranchCache)
+      if (entry.scan < generation - 1) this.foreignBranchCache.delete(id)
+    const targetScan: TargetScan = {
+      listed: new Set(listing.tickets.map((ticket) => ticket.ref.id)),
+      foreign: new Map(),
+      generation,
+    }
     for (const ticket of ready) {
       if (this.outOfBudget(opts)) return
       if (withheld.has(ticket.ref.id)) continue
-      const target = await this.resolveNodeTarget(ticket)
+      let target: Awaited<ReturnType<Dispatcher['resolveNodeTarget']>>
+      try {
+        target = await this.resolveNodeTarget(ticket, targetScan)
+      } catch (error) {
+        if (error instanceof TicketSourceRateLimitError) {
+          await this.sourceFailure(error, 'dependency-check')
+        }
+        throw error
+      }
       if (typeof target === 'string') {
         targetBlocked.add(ticket.ref.id)
         report.dependencyBlocked += 1
@@ -5435,7 +5466,7 @@ export class Dispatcher {
       if (failed.has(ticket.ref.id) || targetBlocked.has(ticket.ref.id)) continue
       if ((verdicts.get(ticket.ref.id)?.unresolved.length ?? 0) > 0) continue
 
-      const target = await this.resolveNodeTarget(ticket)
+      const target = await this.resolveNodeTarget(ticket, targetScan)
       if (typeof target === 'string') {
         report.dependencyBlocked += 1
         report.dependencyDiagnostics.push(`ticket ${ticket.ref.id}: ${target}`)
@@ -5538,8 +5569,9 @@ export class Dispatcher {
 
         stage = 'naming'
         const baseSlug = await this.chooseSlugBase(ticket.title, body)
-        const slug = await this.uniqueSlug(baseSlug)
-        const branch = `${ticket.kind === 'node' ? 'ab-node' : 'ab'}/${slug}`
+        const prefix = ticket.kind === 'node' ? 'ab-node' : 'ab'
+        const slug = await this.uniqueSlug(baseSlug, prefix)
+        const branch = `${prefix}/${slug}`
         const repoOrigin = await this.resolveRepoOriginOnce()
         createdSeed = {
           ...(ticket.kind === 'node' ? { kind: ticket.kind } : {}),
@@ -5638,6 +5670,7 @@ export class Dispatcher {
    */
   private async resolveNodeTarget(
     ticket: Ticket,
+    scan: TargetScan,
   ): Promise<
     | { target: NonNullable<EventPayload<'build.created'>['target']>; branch: string }
     | string
@@ -5651,7 +5684,8 @@ export class Dispatcher {
       return `integration requires forge ${forge.name} capabilities createNodeBranch, compareBranches and remoteBranchSha; upgrade the plugin`
     if (ticket.target === undefined) return undefined
     const migrations = this.store.repositoryFacts().ticketMigrations
-    const entries = (await this.repoBuildDigests())
+    const all = await this.repoBuildDigests()
+    const entries = all
       .filter(
         ({ record }) =>
           record.ticket &&
@@ -5677,7 +5711,7 @@ export class Dispatcher {
     const latest = entries[0]
     if (latest && entries[1]?.record.createdAt === latest.record.createdAt)
       return `target node ${ticket.target} has ambiguous build generations at ${latest.record.createdAt}`
-    if (!latest) return `target node ${ticket.target} is not yet claimed`
+    if (!latest) return this.foreignTargetDiagnostic(ticket.target, ticket.ref.source, all, scan)
     const { record, digest } = latest
     if (digest.kind !== 'node') return `target ${ticket.target} is not a node`
     if (digest.terminal || digest.prClosed || digest.merged)
@@ -6772,12 +6806,106 @@ export class Dispatcher {
     }
   }
 
-  /** Valid bounded base, deduped store-wide with -2/-3/… suffixes. */
-  private async uniqueSlug(base: string): Promise<string> {
-    let slug = base
-    for (let n = 2; (await this.store.getBuild(slug)) !== null; n += 1) {
-      slug = `${base}-${n}`
+  /** Whether this store has an unresolved preparation attempt for the ticket. */
+  private preparing(source: string, id: string): boolean {
+    const facts = this.store.repositoryFacts()
+    return Object.values(facts.preparation).some((attempt) => {
+      const ref = resolveTicketRef(
+        facts.ticketMigrations,
+        attempt.ticket,
+        this.deps.tickets.name,
+        attempt.slug ?? attempt.attempt,
+      )
+      return ref.source === source && ref.id === id
+    })
+  }
+
+  /**
+   * A target node with no build in this store is either not yet claimed or
+   * being built by another store (AUT-1106). One ticket read per distinct
+   * target per admission scan; the forge branch lookup runs only when the
+   * target's revision or foreign dispatch-comment slugs change. Never fails
+   * admission: read failures fall back to the not-yet-claimed text.
+   */
+  private foreignTargetDiagnostic(
+    target: string,
+    source: string,
+    all: readonly { record: BuildRecord }[],
+    scan: TargetScan,
+  ): Promise<string> {
+    const pending = `target node ${target} is not yet claimed`
+    if (scan.listed.has(target) || this.preparing(source, target)) return Promise.resolve(pending)
+    const memo = scan.foreign.get(target)
+    if (memo !== undefined) return memo
+    const share = 'dispatchers on one repository must share one store (ab connect)'
+    const verdict = (async () => {
+      let ticket: Ticket | null
+      try {
+        ticket = await this.deps.tickets.get(target)
+      } catch (error) {
+        if (error instanceof TicketSourceRateLimitError) throw error
+        return pending
+      }
+      if (ticket === null) return pending
+      const doing = ticketLifecycle(this.deps.config.tickets).doing
+      if (!ticket.resolved && ticket.state?.toLowerCase() === doing.toLowerCase())
+        return `target node ${target} is being built by another store: its ticket is claimed (${ticket.state}) but this store has no build for it; ${share}`
+      const forge = this.deps.forge
+      const exists = forge.remoteBranchExists
+      if (ticket.comments === undefined || exists === undefined) return pending
+      // Only a node branch this store owns is not evidence of another store:
+      // separate stores may reuse a slug for unrelated tickets or prefixes.
+      const owned = new Set(all.flatMap(({ record }) => record.branch ?? []))
+      const slugs = [
+        ...new Set(
+          [...ticket.comments]
+            .reverse()
+            .flatMap((comment) => DISPATCH_COMMENT.exec(comment.body)?.[1] ?? [])
+            .filter((slug) => !owned.has(`ab-node/${slug}`)),
+        ),
+      ]
+      if (slugs.length === 0) return pending
+      const fingerprint = `${ticket.revision}\n${[...slugs].sort().join(',')}`
+      const cached = this.foreignBranchCache.get(target)
+      let branch: string | null
+      if (cached?.fingerprint === fingerprint) {
+        cached.scan = scan.generation
+        branch = cached.branch
+      } else {
+        branch = null
+        try {
+          for (const slug of slugs) {
+            if (await exists.call(forge, `ab-node/${slug}`)) {
+              branch = `ab-node/${slug}`
+              break
+            }
+          }
+        } catch {
+          return pending
+        }
+        this.foreignBranchCache.set(target, { fingerprint, branch, scan: scan.generation })
+      }
+      return branch === null
+        ? pending
+        : `target node ${target} is being built by another store: its branch ${branch} exists on the remote but this store has no build for it; ${share}`
+    })()
+    scan.foreign.set(target, verdict)
+    return verdict
+  }
+
+  /** Valid bounded base, deduped with -2/-3/… against this store's builds and,
+   * when the forge can answer, against build branches already on the remote
+   * (another store's builds, AUT-1106). Claim-time only; a forge failure fails
+   * the naming stage and the claim is handed back. */
+  private async uniqueSlug(base: string, prefix: 'ab' | 'ab-node'): Promise<string> {
+    const forge = this.deps.forge
+    const exists = forge.remoteBranchExists
+    for (let n = 1; n <= MAX_SLUG_CANDIDATES; n += 1) {
+      const slug = n === 1 ? base : `${base}-${n}`
+      if ((await this.store.getBuild(slug)) !== null) continue
+      if (exists !== undefined && (await exists.call(forge, `${prefix}/${slug}`))) continue
+      return slug
     }
-    return slug
+    throw new Error(`no free slug for ${base} after ${MAX_SLUG_CANDIDATES} candidates`)
   }
 }

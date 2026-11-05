@@ -101,3 +101,28 @@ with unknown or nonhosted placement retain local dispatch behavior. Local stores
 need no placement request. Origin mode (`--repository` or `AB_REPOSITORY`) and
 hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
 liveness probe or a polling input.
+
+## Several dispatchers on one repository
+
+One repository driven by several dispatchers, for example each engineer running
+`ab dispatch` locally, should share one store: connect every dispatcher to the
+same service with `ab connect`. Assignee gating (`tickets.readyAssignee`)
+divides tickets between dispatchers, but not the state a store owns. Separate
+local stores each see only their own builds:
+
+- **Nodes are owned by one store.** A child ticket can target only a node built
+  in its own store. Elsewhere it stays queued with `target node … is being built
+  by another store`, shown in `ab repository status` and the dispatch
+  diagnostics.
+- **Harvest observations are split.** Each store harvests only its own builds'
+  observations.
+- **No shared build history.** `ab builds`, status, dashboards and the operator
+  API show only the local store's builds.
+- **Branch collisions are only partly guarded.** A dispatcher skips any slug
+  whose `ab/` or `ab-node/` branch already exists on the remote (when its forge
+  supports `remoteBranchExists`), but two stores that claim the same name before
+  either pushes can still collide. The check is a safety step, not a best
+  effort: if the branch lookup fails, or the base slug and its `-2` … `-100`
+  suffixes are all taken, the claim fails at the naming stage. No build is
+  created, the ticket is handed back to its ready state, and a later tick
+  retries it.

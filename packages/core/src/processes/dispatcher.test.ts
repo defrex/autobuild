@@ -1518,6 +1518,107 @@ readyState = "Ready"
     expect(await h.store.getBuild('login-rate-limit-3')).not.toBeNull()
     expect((await h.store.getBuild(oldSlug))?.branch).toBe(`ab/${oldSlug}`)
   })
+
+  test('two stores sharing one remote take distinct branches for the same name (AUT-1106)', async () => {
+    const remote = new FakeForge()
+    remote.seedBranch('main', BASE_SHA)
+    const nameSlug = async () => 'login-rate-limit'
+    // Control: before any remote branch exists, a fresh store picks the bare
+    // name — the collision that would otherwise happen across stores.
+    const control = harness({ forge: remote, tickets: [readyTicket('C-1')], nameSlug })
+    expect((await control.dispatcher.tick()).dispatched).toBe(1)
+    expect((await control.store.listBuilds()).map((b) => b.slug)).toEqual(['login-rate-limit'])
+
+    const a = harness({ forge: remote, tickets: [readyTicket('A-1')], nameSlug })
+    const b = harness({ forge: remote, tickets: [readyTicket('B-1')], nameSlug })
+    expect((await a.dispatcher.tick()).dispatched).toBe(1)
+    expect((await a.store.listBuilds()).map((r) => r.branch)).toEqual(['ab/login-rate-limit'])
+    // A's implement publishes its branch.
+    remote.remoteBranches.set('ab/login-rate-limit', 'a-commit')
+    expect((await b.dispatcher.tick()).dispatched).toBe(1)
+    const builds = await b.store.listBuilds()
+    expect(builds.map((r) => r.slug)).toEqual(['login-rate-limit-2'])
+    expect(builds.map((r) => r.branch)).toEqual(['ab/login-rate-limit-2'])
+    expect(remote.remoteBranches.get('ab/login-rate-limit')).toBe('a-commit')
+  })
+
+  test('a node branch another store opened is skipped and left untouched', async () => {
+    const remote = new FakeForge()
+    remote.seedBranch('main', BASE_SHA)
+    const nameSlug = async () => 'auth-node'
+    const a = harness({ forge: remote, tickets: [readyTicket('NA', { kind: 'node' })], nameSlug })
+    const b = harness({ forge: remote, tickets: [readyTicket('NB', { kind: 'node' })], nameSlug })
+    await a.dispatcher.tick()
+    expect((await a.store.listBuilds()).map((r) => r.branch)).toEqual(['ab-node/auth-node'])
+    const head = remote.remoteBranches.get('ab-node/auth-node')
+    expect(head).toBe(BASE_SHA)
+    remote.remoteBranches.set('ab-node/auth-node', 'a-child')
+    await b.dispatcher.tick()
+    expect((await b.store.listBuilds()).map((r) => r.branch)).toEqual(['ab-node/auth-node-2'])
+    expect(remote.remoteBranches.get('ab-node/auth-node')).toBe('a-child')
+  })
+
+  test('remote branch probes happen only at claim time', async () => {
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    const probes: string[] = []
+    const exists = forge.remoteBranchExists.bind(forge)
+    forge.remoteBranchExists = async (branch) => {
+      probes.push(branch)
+      return exists(branch)
+    }
+    const h = harness({
+      forge,
+      tickets: [
+        readyTicket('BLOCKED', { blockedBy: ['OPEN'] }),
+        readyTicket('OPEN', { state: 'Todo' }),
+      ],
+      nameSlug: async () => 'login-rate-limit',
+    })
+    await h.dispatcher.tick()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect(probes).toEqual([])
+    h.tickets.add(readyTicket('T-1'))
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(probes).toEqual(['ab/login-rate-limit'])
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(probes).toEqual(['ab/login-rate-limit'])
+  })
+
+  test('a failed remote branch probe fails naming closed and hands the claim back', async () => {
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    forge.remoteBranchExists = async () => {
+      throw new Error('forge offline')
+    }
+    const h = harness({ forge, tickets: [readyTicket('T-1')] })
+    await expect(h.dispatcher.tick()).rejects.toThrow('ticket preparation failed (naming)')
+    expect(await h.store.listBuilds()).toEqual([])
+    expect(h.tickets.transitions).toContainEqual({ id: 'T-1', state: 'Ready' })
+  })
+
+  test('a forge without remote branch existence keeps store-only deduplication', async () => {
+    const forge = new FakeForge()
+    forge.seedBranch('main', BASE_SHA)
+    forge.remoteBranches.set('ab/login-rate-limit', 'foreign')
+    const dispatchForge = new Proxy(forge, {
+      get: (target, key, receiver) =>
+        key === 'remoteBranchExists' ? undefined : Reflect.get(target, key, receiver),
+      has: (target, key) => key !== 'remoteBranchExists' && Reflect.has(target, key),
+    })
+    const h = harness({
+      forge,
+      dispatchForge,
+      tickets: [readyTicket('T-1')],
+      nameSlug: async () => 'login-rate-limit',
+    })
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect((await h.store.listBuilds()).map((r) => r.slug)).toEqual(['login-rate-limit'])
+  })
 })
 
 // ── Invocation budget (deadlineAt, AUT-319) ──────────────────────────────────
@@ -10263,6 +10364,196 @@ describe('integration node dispatch', () => {
     await h.dispatcher.tick()
     expect(h.launches).toHaveLength(0)
     expect(reduceBuild(await h.store.getEvents(node.slug)).status).toBe('done')
+  })
+  describe('target nodes built by another store (AUT-1106)', () => {
+    /** Exposes the fake's comment journal on `get`, as GitHub/Linear do. */
+    class CommentingTicketSource extends FakeTicketSource {
+      readonly getCalls: string[] = []
+      failGet = false
+      override async get(id: string): Promise<Ticket | null> {
+        this.getCalls.push(id)
+        if (this.failGet) throw new Error('ticket source offline')
+        const ticket = await super.get(id)
+        if (ticket === null) return null
+        const comments = this.comments
+          .filter((comment) => comment.id === id)
+          .map((comment) => ({ body: comment.body, createdAt: '2026-11-05T00:00:00.000Z' }))
+        return { ...ticket, comments, revision: `${ticket.revision}:${comments.length}` }
+      }
+    }
+    function countedForge() {
+      const forge = new FakeForge()
+      forge.seedBranch('main', BASE_SHA)
+      const probes: string[] = []
+      const exists = forge.remoteBranchExists.bind(forge)
+      forge.remoteBranchExists = async (branch) => {
+        probes.push(branch)
+        return exists(branch)
+      }
+      return { forge, nodeProbes: () => probes.filter((b) => b.startsWith('ab-node/')) }
+    }
+    const foreignText = 'is being built by another store'
+    async function claimedElsewhere(shared: FakeTicketSource) {
+      const { forge, nodeProbes } = countedForge()
+      const a = harness({ forge, wrapTickets: () => shared })
+      const b = harness({ forge, wrapTickets: () => shared })
+      shared.add(readyTicket('N', { kind: 'node', title: 'Root node' }))
+      await a.dispatcher.tick()
+      const node = (await a.store.listBuilds())[0]!
+      expect(node.branch).toStartWith('ab-node/')
+      shared.add(readyTicket('CHILD', { target: 'N', title: 'Child work' }))
+      return { a, b, node, nodeProbes }
+    }
+
+    test('a claimed target ticket with no local build names the other store', async () => {
+      const shared = new CommentingTicketSource()
+      const { b, nodeProbes } = await claimedElsewhere(shared)
+      const before = nodeProbes().length
+      const report = await b.dispatcher.tick()
+      expect(report.dependencyDiagnostics).toContainEqual(
+        expect.stringContaining(
+          `ticket CHILD: target node N ${foreignText}: its ticket is claimed (Doing)`,
+        ),
+      )
+      expect(shared.claims).not.toContain('CHILD')
+      expect(await b.store.listBuilds()).toEqual([])
+      expect(nodeProbes().length).toBe(before)
+    })
+
+    test('a node another store claims between scans is recognized on the next scan', async () => {
+      const shared = new CommentingTicketSource()
+      const { forge } = countedForge()
+      const a = harness({ forge, wrapTickets: () => shared })
+      const b = harness({ forge, wrapTickets: () => shared })
+      shared.add(readyTicket('N', { kind: 'node', state: 'Triage' }))
+      shared.add(readyTicket('CHILD', { target: 'N', title: 'Child work' }))
+      const first = await b.dispatcher.tick()
+      expect(first.dependencyDiagnostics).toContain(
+        'ticket CHILD: target node N is not yet claimed',
+      )
+      await shared.transition('N', 'Ready')
+      await a.dispatcher.tick()
+      expect(shared.claims).toContain('N')
+      b.clock.advance(60_000)
+      const second = await b.dispatcher.tick()
+      expect(second.dependencyDiagnostics.join('\n')).toContain(`target node N ${foreignText}`)
+      expect(shared.claims).not.toContain('CHILD')
+    })
+
+    test('a dispatch-comment branch arm is bounded per scan and cached across idle scans', async () => {
+      const shared = new CommentingTicketSource()
+      const { b, node, nodeProbes } = await claimedElsewhere(shared)
+      shared.add(readyTicket('CHILD2', { target: 'N', title: 'Second child' }))
+      await shared.transition('N', 'Blocked')
+      const before = nodeProbes().length
+      const report = await b.dispatcher.tick()
+      expect(report.dependencyDiagnostics).toContainEqual(
+        expect.stringContaining(
+          `ticket CHILD: target node N ${foreignText}: its branch ${node.branch} exists on the remote`,
+        ),
+      )
+      expect(report.dependencyDiagnostics.join('\n')).toContain(`ticket CHILD2: target node N`)
+      expect(nodeProbes().length - before).toBe(1)
+      const gets = () => shared.getCalls.filter((id) => id === 'N').length
+      // Two children targeting N in one scan cost one read.
+      expect(gets()).toBe(1)
+      // Ticks inside the scan interval read nothing.
+      await b.dispatcher.tick()
+      await b.dispatcher.tick()
+      expect(gets()).toBe(1)
+      // Idle scans: one ticket read each, no forge lookups.
+      for (let scan = 0; scan < 3; scan += 1) {
+        b.clock.advance(60_000)
+        await b.dispatcher.tick()
+      }
+      expect(gets()).toBe(4)
+      expect(nodeProbes().length - before).toBe(1)
+      // A state change invalidates the fingerprint: exactly one new lookup.
+      await shared.transition('N', 'Paused')
+      b.clock.advance(60_000)
+      const changed = await b.dispatcher.tick()
+      expect(changed.dependencyDiagnostics.join('\n')).toContain(`its branch ${node.branch}`)
+      expect(nodeProbes().length - before).toBe(2)
+      expect(shared.claims.filter((id) => id.startsWith('CHILD'))).toEqual([])
+    })
+
+    test("a dispatch comment naming this store's own node branch never triggers a lookup", async () => {
+      const shared = new CommentingTicketSource()
+      const { forge, nodeProbes } = countedForge()
+      const b = harness({ forge, wrapTickets: () => shared, toml: 'capacity = 2\n' })
+      shared.add(readyTicket('OTHER', { kind: 'node', title: 'Other work' }))
+      await b.dispatcher.tick()
+      const local = (await b.store.listBuilds())[0]!.slug
+      const before = nodeProbes().length
+      shared.add(readyTicket('N', { kind: 'node', state: 'Blocked' }))
+      shared.add(readyTicket('CHILD', { target: 'N', title: 'Child work' }))
+      await shared.comment('N', `build ${local} dispatched`)
+      b.clock.advance(60_000)
+      const report = await b.dispatcher.tick()
+      expect(report.dependencyDiagnostics).toContain(
+        'ticket CHILD: target node N is not yet claimed',
+      )
+      expect(nodeProbes().length).toBe(before)
+    })
+
+    test('a local build reusing the slug of a foreign node does not hide that node', async () => {
+      const shared = new CommentingTicketSource()
+      const { forge, nodeProbes } = countedForge()
+      const a = harness({ forge, wrapTickets: () => shared })
+      const b = harness({ forge, wrapTickets: () => shared, toml: 'capacity = 2\n' })
+      // B owns leaf OTHER at ab/<slug>; A owns node N at ab-node/<slug>.
+      shared.add(readyTicket('OTHER', { title: 'Shared name' }))
+      await b.dispatcher.tick()
+      shared.add(readyTicket('N', { kind: 'node', title: 'Shared name' }))
+      await a.dispatcher.tick()
+      const leaf = (await b.store.listBuilds())[0]!
+      const node = (await a.store.listBuilds())[0]!
+      expect(node.slug).toBe(leaf.slug)
+      expect(leaf.branch).toBe(`ab/${leaf.slug}`)
+      expect(node.branch).toBe(`ab-node/${node.slug}`)
+      shared.add(readyTicket('CHILD', { target: 'N', title: 'Child work' }))
+      await shared.transition('N', 'Blocked')
+      const before = nodeProbes().length
+      b.clock.advance(60_000)
+      const report = await b.dispatcher.tick()
+      expect(report.dependencyDiagnostics).toContainEqual(
+        expect.stringContaining(
+          `ticket CHILD: target node N ${foreignText}: its branch ${node.branch} exists on the remote`,
+        ),
+      )
+      expect(nodeProbes().length - before).toBe(1)
+      expect(shared.claims).not.toContain('CHILD')
+    })
+
+    test('a source without comments uses the claimed arm only', async () => {
+      const shared = new FakeTicketSource()
+      const { b, nodeProbes } = await claimedElsewhere(shared)
+      const before = nodeProbes().length
+      const claimed = await b.dispatcher.tick()
+      expect(claimed.dependencyDiagnostics.join('\n')).toContain(`target node N ${foreignText}`)
+      await shared.transition('N', 'Blocked')
+      b.clock.advance(60_000)
+      const blocked = await b.dispatcher.tick()
+      expect(blocked.dependencyDiagnostics).toContain(
+        'ticket CHILD: target node N is not yet claimed',
+      )
+      expect(nodeProbes().length).toBe(before)
+    })
+
+    test('a failed target read falls back to not-yet-claimed and retries next scan', async () => {
+      const shared = new CommentingTicketSource()
+      const { b } = await claimedElsewhere(shared)
+      shared.failGet = true
+      const failed = await b.dispatcher.tick()
+      expect(failed.dependencyDiagnostics).toContain(
+        'ticket CHILD: target node N is not yet claimed',
+      )
+      shared.failGet = false
+      b.clock.advance(60_000)
+      const recovered = await b.dispatcher.tick()
+      expect(recovered.dependencyDiagnostics.join('\n')).toContain(`target node N ${foreignText}`)
+      expect(shared.getCalls.filter((id) => id === 'N')).toHaveLength(2)
+    })
   })
 })
 

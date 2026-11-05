@@ -150,6 +150,17 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
         }
       })
     })
+    test('optional remote branch existence distinguishes a pushed branch from proven absence', async () => {
+      await withForge(factory, undefined, async (h) => {
+        const forge = h.forge
+        if (!forge.remoteBranchExists) return
+        await forge.pushBranch(h.workspacePath, h.head)
+        expect(await forge.remoteBranchExists(h.head)).toBe(true)
+        expect(await forge.remoteBranchExists(`ab/contract-absent-${crypto.randomUUID()}`)).toBe(
+          false,
+        )
+      })
+    })
     test('optional retarget preserves review identity and acknowledges the new base idempotently', async () => {
       await withForge(factory, undefined, async (h) => {
         const forge = h.forge
