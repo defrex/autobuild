@@ -15,6 +15,7 @@ import {
   probeProblems,
   renderReport,
   serveSite,
+  tileId,
   WEBSITE_FRAMES,
 } from './website-capture'
 import { existsSync } from 'node:fs'
@@ -599,4 +600,194 @@ test('seams overview captures the remote interaction at both widths', async () =
     ['docs/seams/index.html', 1440],
     ['docs/seams/index.html', 390],
   ])
+})
+
+const tallImage = (width: number, height: number) => {
+  let seed = 12345
+  const rows = Array.from({ length: height }, (_, y) => {
+    const row = new Uint8Array(width * 3)
+    for (let i = 0; i < row.length; i++) {
+      if (y % 50 === 0) row[i] = 200
+      else if (y % 50 === 1) row[i] = i & 0xff
+      else if (y % 50 === 2) row[i] = (y + i) & 0xff
+      else {
+        seed = (seed * 1103515245 + 12345) >>> 0
+        row[i] = seed >>> 24
+      }
+    }
+    return row
+  })
+  return { width, colorType: 2, ancillary: [], rows }
+}
+
+describe('frame tiling under the artifact ceiling', () => {
+  test('the PNG codec round-trips every filter path and rejects unsupported input', async () => {
+    const { decodePng, encodePng } = await import('./website-capture-png')
+    const image = tallImage(300, 400)
+    const decoded = decodePng(encodePng(image))
+    expect([decoded.width, decoded.height, decoded.channels]).toEqual([300, 400, 3])
+    expect(decoded.rows).toEqual(image.rows)
+    // Hand-filter rows with every filter type so decoding does not rely on the encoder's choices.
+    const { deflateSync } = await import('node:zlib')
+    const stride = 300 * 3
+    const raw = new Uint8Array((stride + 1) * 5)
+    image.rows.slice(0, 5).forEach((row, y) => {
+      const prev = y ? image.rows[y - 1]! : new Uint8Array(stride)
+      raw[y * (stride + 1)] = y
+      for (let i = 0; i < stride; i++) {
+        const a = i >= 3 ? row[i - 3]! : 0
+        const b = prev[i]!
+        const c = i >= 3 ? prev[i - 3]! : 0
+        const p = a + b - c
+        const [pa, pb, pc] = [Math.abs(p - a), Math.abs(p - b), Math.abs(p - c)]
+        const pred = [0, a, b, (a + b) >> 1, pa <= pb && pa <= pc ? a : pb <= pc ? b : c][y]!
+        raw[y * (stride + 1) + 1 + i] = (row[i]! - pred) & 0xff
+      }
+    })
+    const reference = encodePng({ ...image, rows: image.rows.slice(0, 5) })
+    const ihdrEnd = 8 + 12 + 13
+    const { crc32 } = (await import('node:zlib')) as unknown as {
+      crc32?: (d: Uint8Array) => number
+    }
+    if (crc32) {
+      const body = deflateSync(raw)
+      const chunk = new Uint8Array(12 + body.byteLength)
+      const view = new DataView(chunk.buffer)
+      view.setUint32(0, body.byteLength)
+      chunk.set([73, 68, 65, 84], 4)
+      chunk.set(body, 8)
+      view.setUint32(8 + body.byteLength, crc32(chunk.subarray(4, 8 + body.byteLength)))
+      const handmade = Buffer.concat([
+        reference.subarray(0, ihdrEnd),
+        chunk,
+        reference.subarray(-12),
+      ])
+      expect(decodePng(handmade).rows).toEqual(image.rows.slice(0, 5))
+    }
+    const bad = (byte: number, value: number) => {
+      const copy = reference.slice()
+      copy[byte] = value
+      return copy
+    }
+    expect(() => decodePng(bad(8 + 8 + 8, 16))).toThrow('unsupported PNG')
+    expect(() => decodePng(bad(8 + 8 + 12, 1))).toThrow('unsupported PNG')
+    expect(() => decodePng(bad(0, 0))).toThrow('unsupported PNG')
+  })
+
+  test('an artificially tall page tiles below the given ceiling with full coverage', async () => {
+    const { decodePng, encodePng, tilePng } = await import('./website-capture-png')
+    const image = tallImage(300, 4000)
+    const bytes = encodePng(image)
+    expect(tilePng(bytes, bytes.byteLength)).toBeNull()
+    const max = Math.floor(bytes.byteLength / 3)
+    const tiles = tilePng(bytes, max)!
+    expect(tiles.length).toBeGreaterThanOrEqual(3)
+    expect(tiles.map((t) => t.index)).toEqual(tiles.map((_, i) => i + 1))
+    expect(tiles[0]!.top).toBe(0)
+    for (const [k, tile] of tiles.entries()) {
+      expect(tile.bytes.byteLength).toBeLessThanOrEqual(max)
+      expect(tile.count).toBe(tiles.length)
+      if (k > 0) expect(tile.top).toBe(tiles[k - 1]!.top + tiles[k - 1]!.height)
+    }
+    expect(tiles.reduce((sum, t) => sum + t.height, 0)).toBe(4000)
+    expect(tiles.flatMap((t) => decodePng(t.bytes).rows)).toEqual(image.rows)
+  })
+
+  test('tile ids are safe and ordered, and the ceiling mirrors the store', async () => {
+    const { ARTIFACT_MAX_BYTES } = await import('./website-capture-png')
+    const { HOSTED_ARTIFACT_MAX_BYTES } = await import(
+      '../packages/hosted-store-service/src/config'
+    )
+    expect(tileId('docs-ab-1440', 2, 12)).toBe('docs-ab-1440-tile-02-of-12')
+    expect(tileId('docs-ab-1440', 2, 12)).toMatch(/^[a-z0-9-]+$/)
+    expect(ARTIFACT_MAX_BYTES).toBe(HOSTED_ARTIFACT_MAX_BYTES)
+    expect(ARTIFACT_MAX_BYTES).toBe(2_621_440)
+  })
+
+  test('renderReport lists the tiles of a tiled frame', () => {
+    const frame = WEBSITE_FRAMES[0]!
+    const tiles = [1, 2].map((index) => ({
+      id: `desktop-tile-${index}-of-2`,
+      frame: 'desktop',
+      index,
+      count: 2,
+      top: (index - 1) * 500,
+      height: 500,
+      png: `.ab/website-frames/desktop-tile-${index}-of-2.png`,
+    }))
+    const report = renderReport(
+      [
+        {
+          frame,
+          probe: probe({ sectionGaps: [288] }),
+          height: 1000,
+          capped: false,
+          tiles,
+        },
+      ],
+      100,
+    )
+    expect(report).toContain('`desktop` — tiled into 2 PNGs (each ≤ 100 bytes), 1440x1000')
+    expect(report).toContain(
+      '  - tile 2/2 `desktop-tile-2-of-2` — `.ab/website-frames/desktop-tile-2-of-2.png`, rows 500–999',
+    )
+    expect(report).not.toContain('`.ab/website-frames/desktop.png`')
+  })
+
+  test.skipIf(!chromiumBinary())(
+    'a tall docs page captures as ceiling-bounded tiles; a fitting frame stays whole',
+    async () => {
+      const { decodePng } = await import('./website-capture-png')
+      const { readdir } = await import('node:fs/promises')
+      const blocks = Array.from(
+        { length: 120 },
+        (_, i) =>
+          `<div style="height:50px;background:hsl(${(i * 37) % 360},70%,60%)">block ${i} ${'lorem ipsum '.repeat(i % 7)}</div>`,
+      ).join('')
+      const files = fixtureFiles(blocks)
+      const docs = discoverFrames(files).filter((f) => f.kind === 'docs' && f.width === 1440)
+      const frames = [docs.find((f) => f.page === 'docs/index.html')!]
+      const dir = join(import.meta.dir, '..', '.ab', `website-tiles-${process.pid}`)
+      const max = 40_000
+      await captureWebsite({
+        files,
+        frames,
+        outputDir: dir,
+        includeMotionSamples: false,
+        maxFrameBytes: max,
+      })
+      const [entry] = await Bun.file(join(dir, 'inventory.json')).json()
+      expect(existsSync(join(dir, `${entry.frame.id}.png`))).toBe(false)
+      expect(entry.tiles.length).toBeGreaterThanOrEqual(2)
+      expect(new Set(entry.tiles.map((t: { id: string }) => t.id)).size).toBe(entry.tiles.length)
+      const report = await Bun.file(join(dir, 'verify-report.md')).text()
+      let rows = 0
+      for (const tile of entry.tiles) {
+        expect(tile.id).toBe(tileId(entry.frame.id, tile.index, tile.count))
+        expect(tile.frame).toBe(entry.frame.id)
+        expect(tile.top).toBe(rows)
+        rows += tile.height
+        expect(decodePng(await Bun.file(join(dir, `${tile.id}.png`)).bytes()).height).toBe(
+          tile.height,
+        )
+        expect(report).toContain(`\`${tile.id}\``)
+      }
+      expect(rows).toBe(entry.height)
+      for (const name of (await readdir(dir)).filter((n) => n.endsWith('.png')))
+        expect((await stat(join(dir, name))).size).toBeLessThanOrEqual(max)
+
+      await captureWebsite({
+        files,
+        frames,
+        outputDir: `${dir}-whole`,
+        includeMotionSamples: false,
+      })
+      const [whole] = await Bun.file(join(`${dir}-whole`, 'inventory.json')).json()
+      expect('tiles' in whole).toBe(false)
+      expect(existsSync(join(`${dir}-whole`, `${whole.frame.id}.png`))).toBe(true)
+      const full = decodePng(await Bun.file(join(`${dir}-whole`, `${whole.frame.id}.png`)).bytes())
+      expect(full.height).toBe(rows)
+    },
+    120_000,
+  )
 })
