@@ -57,6 +57,23 @@ export function triageStateCount(
   return matches.length === 1 ? matches[0]?.tickets : undefined
 }
 
+/** Canonical names for requested states using `resolveState`'s matching
+ * (exact, else one case-insensitive match); unmatched or ambiguous names are
+ * dropped, duplicates collapse, and request order is kept. */
+export function matchStateNames(names: readonly string[], existing: readonly string[]): string[] {
+  const matched: string[] = []
+  for (const name of names) {
+    let canonical: string | undefined
+    if (existing.includes(name)) canonical = name
+    else {
+      const matches = existing.filter((state) => state.toLowerCase() === name.toLowerCase())
+      if (matches.length === 1) canonical = matches[0]
+    }
+    if (canonical !== undefined && !matched.includes(canonical)) matched.push(canonical)
+  }
+  return matched
+}
+
 /** Portable directory vocabulary, without guessing lifecycle roles. */
 export function normalizeStateName(name: string): string {
   if (/^[a-z][a-z0-9-]{0,39}$/.test(name)) return name

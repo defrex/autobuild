@@ -2927,7 +2927,13 @@ facts.
 Successful dispatcher ticks with no effects, counters, diagnostics, queue change,
 sampled triage-count change, or attention transition append no tick boundary
 events. Only a dispatcher feeding an interactive dashboard samples the triage
-count, once per tick from the ticket source's state counts. The first queue baseline,
+count, once per tick from the ticket source's state counts. A viewer
+(`ab dispatch --viewer`, or the default viewer placement for hosted dispatch)
+reads the configured triage state's count itself, at most once per 10 s while
+its dashboard runs, through the ticket source's bounded state-count answer
+(`countStates`, the hosted `state-counts` operation). It never lists tickets
+or reads events for it, and its header shows only its own last successful
+count, never published status; a headless tick still makes no triage read. The first queue baseline,
 failed ticks, meaningful ticks, diagnostic clearing, failure recovery, and the
 first retry after a source cooldown remain recorded. Recorded starts may arrive
 with completion; optional `startedAt` preserves the actual start time, falling
