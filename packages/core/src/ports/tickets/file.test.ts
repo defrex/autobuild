@@ -1068,6 +1068,21 @@ describe('state discovery and creation', () => {
       await rm(target, { recursive: true, force: true })
     }
   })
+
+  test('countStates matches listStates, resolves case-insensitively and omits unknown names', async () => {
+    await mkdir(join(dir, 'icebox'), { recursive: true })
+    await seedTicket('file-1', { state: 'triage' })
+    await seedTicket('file-2', { state: 'icebox' })
+    await writeFile(join(dir, 'triage', 'file-1.md'), 'not a ticket')
+    const tickets = source()
+    const listed = await tickets.listStates()
+    expect(await tickets.countStates(listed.map((s) => s.name))).toEqual(
+      listed.map(({ name, tickets }) => ({ name, tickets })),
+    )
+    expect(await tickets.countStates(['Triage', 'missing', 'TRIAGE'])).toEqual([
+      { name: 'triage', tickets: 1 },
+    ])
+  })
 })
 
 test('guarded file writes detect direct body edits and directory moves without losing either', async () => {

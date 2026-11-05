@@ -1,5 +1,6 @@
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import type { TicketSource } from '../ports/types'
 import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
@@ -469,10 +470,19 @@ test('frontend renders the dispatcher-published triage count and never fabricate
   const write = (chunk: string): void => {
     output += chunk
   }
+  // Execution mode renders published status and never reads the source.
+  let sourceReads = 0
+  const tickets = Object.assign(new FakeTicketSource(), {
+    countStates: async () => {
+      sourceReads++
+      return [{ name: 'Triage', tickets: 1 }]
+    },
+  })
   const frontend = new DispatchFrontend({
     repo,
     storeRef: 'memory',
     store: backing,
+    ticketSource: async () => tickets,
     env: {},
     terminal: {
       write,
@@ -556,6 +566,7 @@ test('frontend renders the dispatcher-published triage count and never fabricate
   expect(frames.at(-1)?.triage).toBe(4)
   expect(frames.some((frame) => frame.triage === 0)).toBe(false)
   expect(output).not.toContain('observations')
+  expect(sourceReads).toBe(0)
 
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
@@ -3719,6 +3730,183 @@ test.each([false, true])(
     expect(await store.getRepo('/absent-viewer')).toBeNull()
   },
 )
+
+async function viewerTriageHarness(ticketSource?: () => Promise<TicketSource>) {
+  const store = new MemoryBuildStore()
+  const repo = '/viewer-triage'
+  await store.ensureRepo(repo)
+  await store.appendRepoWithArtifacts(
+    repo,
+    [
+      {
+        kind: 'config',
+        content: JSON.stringify({
+          capacity: 2,
+          roles: { default: { runtime: 'claude' } },
+          tickets: { source: 'file', readyState: 'ready', triageState: 'inbox' },
+        }),
+      },
+    ],
+    (artifacts) => ({
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'interactive',
+        pid: 42,
+        roleWarnings: [],
+        effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+      },
+    }),
+  )
+  // Some interactive dispatcher published a count the viewer must not show.
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-completed',
+    payload: {
+      run: 'interactive',
+      queued: 0,
+      triage: 9,
+      counters: tickCounters,
+      janitorDiagnostics: [],
+      ticketDiagnostics: [],
+      creationDiagnostics: [],
+      dependencyDiagnostics: [],
+    },
+  })
+  let now = 0
+  const controller = new AbortController()
+  const painted = deferred<void>()
+  let outputs = 0
+  const frontend = new DispatchFrontend({
+    viewer: {},
+    repo,
+    store,
+    storeRef: 'memory',
+    env: {},
+    once: false,
+    signal: controller.signal,
+    ...(ticketSource ? { ticketSource } : {}),
+    refreshScheduler: { now: () => now, set: () => undefined, clear: () => {} },
+    clock: () => new Date(now),
+    plainOutput: () => {
+      if (++outputs >= 2) painted.resolve()
+    },
+    terminal: {
+      columns: 100,
+      rows: 24,
+      interactive: false,
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    input: {
+      start: () => {
+        throw new Error('viewer input')
+      },
+    },
+    launchChild: () => {
+      throw new Error('viewer child')
+    },
+  })
+  const internals = frontend as unknown as {
+    readFrame(): Promise<void>
+    viewerTriageRead?: Promise<void>
+    model?: DashboardModel
+  }
+  const running = frontend.run()
+  await painted.promise
+  return {
+    running,
+    controller,
+    triage: () => internals.model?.triage,
+    settle: () => internals.viewerTriageRead,
+    frame: (ms: number) => {
+      now += ms
+      return internals.readFrame()
+    },
+    advance: async (ms: number) => {
+      now += ms
+      await internals.readFrame()
+      await internals.viewerTriageRead
+      // The next projection carries what the background read obtained.
+      await internals.readFrame()
+    },
+  }
+}
+
+test('a viewer without a counting ticket source shows – even when a count was published', async () => {
+  for (const ticketSource of [undefined, async () => new FakeTicketSource() as TicketSource]) {
+    const h = await viewerTriageHarness(ticketSource)
+    await h.advance(15_000)
+    expect(h.triage()).toBeUndefined()
+    h.controller.abort()
+    await h.running
+  }
+})
+
+test('a viewer shows only its own triage count, read at most once per 10 s', async () => {
+  const names: string[] = []
+  let gate = deferred<void>()
+  const source = Object.assign(new FakeTicketSource(), {
+    countStates: async (requested: readonly string[]) => {
+      names.push(...requested)
+      await gate.promise
+      return [{ name: 'Inbox', tickets: 3 }]
+    },
+  })
+  const h = await viewerTriageHarness(async () => source)
+  await waitFor(() => names.length === 1, 'first count request')
+  expect(names).toEqual(['inbox'])
+  // Before the viewer's own first read succeeds, the header shows –.
+  await h.frame(0)
+  expect(h.triage()).toBeUndefined()
+  gate.resolve()
+  await h.settle()
+  await h.advance(0)
+  expect(h.triage()).toBe(3)
+  await h.advance(500)
+  expect(names).toHaveLength(1)
+  // A stalled read suppresses the next due request instead of stacking one.
+  gate = deferred<void>()
+  await h.frame(10_000)
+  await waitFor(() => names.length === 2, 'due count request')
+  await h.frame(15_000)
+  expect(names).toHaveLength(2)
+  gate.resolve()
+  await h.settle()
+  h.controller.abort()
+  await h.running
+  // A stopped viewer starts no further reads.
+  await h.advance(15_000)
+  expect(names).toHaveLength(2)
+})
+
+test('failed opens and counts never fail the viewer and retry on the next due refresh', async () => {
+  let opens = 0
+  let counts = 0
+  const source = Object.assign(new FakeTicketSource(), {
+    countStates: async () => {
+      if (++counts === 1) throw new Error('ticket service unavailable')
+      return [{ name: 'inbox', tickets: 5 }]
+    },
+  })
+  const h = await viewerTriageHarness(async () => {
+    if (++opens === 1) throw new Error('cannot open ticket source')
+    return source
+  })
+  await h.settle()
+  expect(h.triage()).toBeUndefined()
+  await h.advance(15_000)
+  expect([opens, counts]).toEqual([2, 1])
+  expect(h.triage()).toBeUndefined()
+  await h.advance(15_000)
+  expect([opens, counts]).toEqual([2, 2])
+  expect(h.triage()).toBe(5)
+  h.controller.abort()
+  await h.running
+})
 
 test('viewer keeps shared intake, harvest, global pause/resume controls and Ctrl-C closes only presentation', async () => {
   const h = await seedSessionViewHarness({ viewer: true })

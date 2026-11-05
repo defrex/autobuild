@@ -152,3 +152,14 @@ listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
 `listReady`/`listAll`. The hosted PostgreSQL source counts matches without
 bodies and reads only the SQL-bounded window. File, Linear and the remote
 `HostedTicketSource` retain fallback; the POST list-ready protocol stays exhaustive.
+
+Bounded state counts are another optional capability:
+`countStates?(names: readonly string[]): Promise<TicketStateCount[]>`. It returns
+`{name, tickets}` for each requested name that resolves (exactly, else by one
+case-insensitive match) and never returns ticket rows. Its cost must not grow
+with the number of tickets. A dashboard viewer polls it for the header's triage
+count. Without it, the viewer shows `–`, and it never falls back to a listing.
+File and hosted sources implement it, and so does the hosted PostgreSQL
+source, from trigger-maintained totals. Linear does not. When a source declares
+both `countStates` and `listStates`, the shared contract suite checks that they
+agree.

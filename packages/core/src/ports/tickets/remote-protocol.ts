@@ -134,6 +134,7 @@ export const hostedTicketRequestSchemas = {
   ),
   'list-ready': envelope(criteriaSchema),
   states: envelope(z.strictObject({})),
+  'state-counts': envelope(z.strictObject({ names: z.array(z.string().min(1)).min(1).max(16) })),
   'add-state': envelope(z.strictObject({ name: z.string(), about: z.string().optional() })),
   get: envelope(idSchema),
   claim: envelope(idSchema),
@@ -207,6 +208,12 @@ export const ticketStateWireSchema = z.strictObject({
   about: z.string().optional(),
 })
 export const ticketStatesWireSchema = z.array(ticketStateWireSchema)
+/** `state-counts` answers per-state totals only, never ticket rows. */
+export const ticketStateCountWireSchema = z.strictObject({
+  name: z.string().min(1),
+  tickets: z.number().int().nonnegative(),
+})
+export const ticketStateCountsWireSchema = z.array(ticketStateCountWireSchema)
 export const ticketStateCreateWireSchema = z.strictObject({
   state: ticketStateWireSchema,
   created: z.boolean(),

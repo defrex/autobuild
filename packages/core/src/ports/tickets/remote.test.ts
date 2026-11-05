@@ -29,6 +29,7 @@ import {
   TICKET_REVISIONS_CAPABILITY,
   dependencyStatesWireSchema,
   successWireSchema,
+  ticketStateCountsWireSchema,
   ticketListingWireSchema,
   ticketWireSchema,
 } from './remote-protocol'
@@ -270,6 +271,29 @@ describe('HostedTicketSource (client half)', () => {
       { id: 'ENG-8', exists: true, resolved: true, blockedBy: [] },
       { id: 'ENG-9', exists: false, resolved: false, blockedBy: ['ENG-8'] },
     ])
+  })
+
+  test('countStates posts the requested names and decodes counts only', async () => {
+    const { source, calls } = makeSource([
+      { body: ticketStateCountsWireSchema.parse([{ name: 'Triage', tickets: 3 }]) },
+    ])
+    expect(await source.countStates(['triage'])).toEqual([{ name: 'Triage', tickets: 3 }])
+    expect(calls[0]?.url).toBe('https://tickets.example/tickets/state-counts')
+    expect(calls[0]?.body.input).toEqual({ names: ['triage'] })
+    expect(hostedTicketRequestSchemas['state-counts'].safeParse(calls[0]?.body).success).toBe(true)
+  })
+
+  test('countStates rejects when an older server does not know the operation', async () => {
+    const missing = makeSource([
+      { status: 404, body: wireError('unknown ticket operation', 'validation') },
+    ])
+    await expect(missing.source.countStates(['Triage'])).rejects.toThrow()
+    const invalid = makeSource([
+      { status: 400, body: wireError('invalid request body', 'validation') },
+    ])
+    await expect(invalid.source.countStates(['Triage'])).rejects.toThrow()
+    const rows = makeSource([{ body: [{ name: 'Triage', tickets: 1, about: 'x' }] }])
+    await expect(rows.source.countStates(['Triage'])).rejects.toThrow()
   })
 
   // ── Error rehydration ────────────────────────────────────────────────────

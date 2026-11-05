@@ -264,6 +264,17 @@ export function createTicketServer(options: TicketServerOptions): {
           })),
         )
       }
+      case 'state-counts': {
+        // Bounded display counts only; no listing fallback for other sources.
+        const { input } = hostedTicketRequestSchemas['state-counts'].parse(raw)
+        if (!source.countStates)
+          throw new TicketRequestError(
+            409,
+            'conflict',
+            'ticket source does not support state counts',
+          )
+        return json(200, await source.countStates(input.names))
+      }
       case 'list-ready': {
         const request = hostedTicketRequestSchemas['list-ready'].parse(raw)
         const listing = await source.listReady(request.input)

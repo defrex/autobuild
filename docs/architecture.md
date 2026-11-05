@@ -985,8 +985,10 @@ AgentRunner failure causes and the exhaustion contract fixture are additive
 plugin API 1.3 surfaces; legacy failures without a cause retain permanent-bit
 behavior.
 
-**Dashboard.** `packages/core/src/cli/dispatch-frontend.ts` is a Store-only terminal adapter:
-it has no ticket, forge, workspace-provider, LiveConfig, or runtime dependency.
+**Dashboard.** `packages/core/src/cli/dispatch-frontend.ts` is a Store-first terminal adapter:
+it has no forge, workspace-provider, LiveConfig, or runtime dependency, and
+holds only a lazy ticket-source opener for build actions and the viewer's
+triage count.
 It follows one dispatch run's repository facts incrementally through
 `packages/core/src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
@@ -999,7 +1001,19 @@ tick, after the Dispatcher tick and before publication, and carries the last
 successful count on `dispatcher.tick-completed`; a changed count is a
 standing-state change for publication suppression. Hosted, plain and
 non-TTY dispatchers never sample it. An unsupported source, failed read or
-unmatched state keeps the previous value (initially unknown, shown as `–`). A
+unmatched state keeps the previous value (initially unknown, shown as `–`).
+A viewer (`opts.viewer`) whose repository is dispatched elsewhere ignores
+`status.triage` and shows only its own count: on a refreshed frame it asks
+the source's optional `countStates([triage])` at most once per 10 s, in the
+background with one request in flight, while presentation is live and not in
+`--once`. It keeps the last good value through failures and shows `–` until
+the first success or for a source without `countStates`. The hosted
+`state-counts` operation answers that read with per-state totals only. The
+Postgres source reads them from `ab_ticket_state_counts`, which a row trigger
+on `ab_tickets` keeps exact in each ticket write's transaction, so the read
+never touches ticket rows. Like `REPO_CHANGE_DDL`, that table and trigger sit
+outside the ticket marker. Migration backfills them once when it creates the
+table, and project deletion removes the project's rows. A
 journal record that does not yet exist reads as an empty journal: the
 dispatcher's repository-wide journal reads (controls, settlement stages, and
 ready scans) and the operator sandbox service's journal reads go through

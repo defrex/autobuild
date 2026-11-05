@@ -1998,8 +1998,13 @@ The dispatcher samples it once per tick, only for an interactive dashboard,
 through the ticket source's state counts; it reads no events. It shows `–`
 when the source cannot enumerate states (Linear) or no sample has succeeded
 yet; a failed read keeps the last value, appends nothing, and never fails the
-tick. The Store-only interactive frontend takes it from the dispatcher's
-published status and never reads the ticket source. `queue` is the
+tick. The interactive frontend of a local dispatch takes it from the
+dispatcher's published status and never reads the ticket source. A viewer
+(`ab dispatch --viewer`, or the default placement for hosted dispatch) reads
+the configured source's bounded state count itself, at most once per 10 s
+while it runs. It keeps its last good value through failed reads and through
+headless ticks that publish no count, and shows `–` until its first read
+succeeds or when the source has no state counts (Linear). `queue` is the
 ready-ticket queue depth, and `active` is the current nonterminal-build count
 against root `capacity`. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports
