@@ -250,6 +250,20 @@ export async function openTicketSource(
   return createTicketCommandSource(opts, await resolveTicketConfig(opts, label))
 }
 
+/** One lazily opened ticket command shared by a control's source and the
+ * configured rejected role it reads for node completeness. */
+export function lazyTicketSource(open: () => Promise<ResolvedTicketCommand>): {
+  ticketSource: () => Promise<TicketSource>
+  rejectedState: () => Promise<string | undefined>
+} {
+  let opened: Promise<ResolvedTicketCommand> | undefined
+  const tickets = () => (opened ??= open())
+  return {
+    ticketSource: async () => (await tickets()).source,
+    rejectedState: async () => ticketLifecycle((await tickets()).config.tickets).rejected,
+  }
+}
+
 async function createTicketCommandSource(
   opts: TicketCommandOpts,
   { targetRepo, config }: { targetRepo: string; config: Config },

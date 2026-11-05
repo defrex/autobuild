@@ -110,6 +110,7 @@ export interface DispatchFrontendOptions {
   storeRef: string
   store: BuildStore
   ticketSource?: () => Promise<TicketSource>
+  rejectedState?: () => Promise<string | undefined>
   env: Record<string, string | undefined>
   terminal: TerminalOut
   input: TerminalInput
@@ -788,6 +789,7 @@ export class DispatchFrontend {
     const result = await controlBuild({
       store: this.opts.store,
       ticketSource: this.opts.ticketSource,
+      ...(this.opts.rejectedState ? { rejectedState: this.opts.rejectedState } : {}),
       repo: this.opts.repo,
       slug,
       env: this.opts.env,
