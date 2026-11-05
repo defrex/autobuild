@@ -334,7 +334,10 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     id: 'headline-happy-wide',
     scenario: 'happy',
     columns: 140,
-    rows: 40,
+    // The dashboard fills its paintable height (rows - 1) and pins the legend
+    // to the bottom; these rows make that height exactly the content, so the
+    // legend sits directly under the builds with no blank band.
+    rows: 23,
     requires: HAPPY_EVIDENCE,
     forbids: HAPPY_FORBIDDEN,
   },
@@ -346,7 +349,9 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     id: 'website-hero',
     scenario: 'happy',
     columns: WEBSITE_HERO_COLUMNS,
-    rows: 40,
+    // Chosen like the headline's rows: the pinned legend sits directly under
+    // the content.
+    rows: 23,
     requires: HAPPY_EVIDENCE,
     forbids: HAPPY_FORBIDDEN,
   },
