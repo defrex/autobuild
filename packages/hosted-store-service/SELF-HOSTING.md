@@ -82,6 +82,7 @@ tsconfig.json
 .autobuild-service-assets.json
 # Dispatcher-enabled deployments only:
 .autobuild-dist/
+.autobuild-git/
 ```
 
 `ab-hosted-service-build` generates the application on every build. It stages
@@ -102,7 +103,7 @@ A store-only deployment has no cron. Its `GET /api/dispatch` answers 503 with
 | Extra dependencies | none | `@defrex/autobuild-hosted-dispatcher`, `@defrex/autobuild-vercel-sandbox` |
 | `GET /api/dispatch` | 503, dispatch runs elsewhere | runs one bounded dispatcher tick |
 | Cron | none | one `crons` entry in `vercel.json` |
-| Build | stage, migrate, `next build` | also packs the guest distribution and ships provider plugins |
+| Build | stage, migrate, `next build` | also packs the guest distribution and ships Git and provider plugins |
 | Variables | [service variables](#service-variables) | also the [dispatcher variables](#dispatcher-variables) |
 | Who runs builds | each project's own dispatcher | this deployment |
 
@@ -123,7 +124,11 @@ Run `bun install` and commit `bun.lock`. With the dispatcher installed,
 `ab-hosted-dispatcher pack-distribution` before `next build` and
 `ab-hosted-dispatcher ship-deployment` after it. These commands put the guest
 distribution archive, its manifest and the selected provider plugins into the
-`/api/dispatch` function.
+`/api/dispatch` function. The function also ships its own self-contained Git
+for node operations, because the Vercel Function runtime has none. It targets
+`linux-x64`: the build must run on a `linux-x64` host, as Vercel's builds do,
+and the runtime needs an x86_64 Linux kernel and a writable `/tmp`. See
+[shipped Git](https://github.com/defrex/autobuild/blob/main/packages/hosted-dispatcher/README.md#shipped-git).
 
 ### Which provider plugins ship
 
