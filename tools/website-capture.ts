@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { buildFiles, type SiteFiles } from '../packages/website/src/build'
 import { SEAMS } from '../packages/website/src/seams'
+import { ARTIFACT_MAX_BYTES, tilePng } from './website-capture-png'
 
 const REPO_ROOT = join(import.meta.dir, '..')
 export const DEFAULT_OUTPUT_DIR = join(REPO_ROOT, '.ab', 'website-frames')
@@ -462,15 +463,50 @@ export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
   return problems
 }
 
+export interface CaptureTile {
+  id: string
+  /** The frame id this tile belongs to. */
+  frame: string
+  /** 1-based position in the frame's sequence. */
+  index: number
+  count: number
+  /** First page row this tile covers. */
+  top: number
+  height: number
+  /** Repo-relative PNG path. */
+  png: string
+}
+
+export interface CaptureResult {
+  frame: WebsiteFrame
+  probe: Probe
+  height: number
+  capped: boolean
+  /** Present only when the frame exceeded the PNG ceiling and was cut into row tiles. */
+  tiles?: CaptureTile[]
+}
+
+/** Safe, in-order id for tile `index` of `count` within a frame. */
+export function tileId(frameId: string, index: number, count: number): string {
+  return `${frameId}-tile-${String(index).padStart(String(count).length, '0')}-of-${count}`
+}
+
 export function renderReport(
-  results: readonly { frame: WebsiteFrame; probe: Probe; height: number; capped: boolean }[],
+  results: readonly CaptureResult[],
+  maxFrameBytes: number = ARTIFACT_MAX_BYTES,
 ): string {
   const lines = ['# Website capture report', '', '## Frames', '']
-  for (const { frame, probe, height, capped } of results) {
+  for (const { frame, probe, height, capped, tiles } of results) {
     lines.push(
-      `- \`${frame.id}\` — \`.ab/website-frames/${frame.id}.png\`, ${frame.width}x${height}${
-        capped ? ` (page height capped at ${MAX_PAGE_HEIGHT}px)` : ''
-      }`,
+      `- \`${frame.id}\` — ${
+        tiles
+          ? `tiled into ${tiles.length} PNGs (each ≤ ${maxFrameBytes} bytes)`
+          : `\`.ab/website-frames/${frame.id}.png\``
+      }, ${frame.width}x${height}${capped ? ` (page height capped at ${MAX_PAGE_HEIGHT}px)` : ''}`,
+      ...(tiles ?? []).map(
+        (tile) =>
+          `  - tile ${tile.index}/${tile.count} \`${tile.id}\` — \`${tile.png}\`, rows ${tile.top}–${tile.top + tile.height - 1}`,
+      ),
       `  - URL: /${frame.page ?? 'index.html'}; duration: ${frame.duration ?? 'none'}ms; page: ${frame.page ?? 'index.html'}; kind: ${frame.kind ?? 'landing'}; motion: ${frame.motion ?? 'reduce'}; figure: ${frame.figure ?? 'none'}; sample: ${frame.sample ?? 'still'}`,
       `  - reduced-motion: ${probe.reducedMotion}; still: ${probe.still}; figures (${probe.figures.length}): ${JSON.stringify(probe.figures)}`,
       `  - reference: ${frame.reference ? `\`${frame.reference}\`` : 'none (design-system and spec review)'}`,
@@ -807,6 +843,8 @@ export interface CaptureOptions {
   /** Include extra animated-figure samples; defaults to true for full capture. */
   includeMotionSamples?: boolean
   files?: CaptureFiles
+  /** Per-PNG ceiling; defaults to the store's artifact ceiling; tests pass a small value. */
+  maxFrameBytes?: number
 }
 
 export async function captureWebsite(options: CaptureOptions = {}): Promise<string> {
@@ -832,7 +870,8 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
   const frames = [...(options.frames ?? discoverFrames(files))]
   const site = serveSite(files, frames)
   let profileRoot: string | undefined
-  const results: Parameters<typeof renderReport>[0][number][] = []
+  const maxFrameBytes = options.maxFrameBytes ?? ARTIFACT_MAX_BYTES
+  const results: CaptureResult[] = []
   try {
     profileRoot = await mkdtemp(join(tmpdir(), 'ab-website-capture-'))
     for (const frame of frames) {
@@ -886,16 +925,60 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
           throw new Error(`no screenshot written at ${png}`)
         }
       })
-      results.push({ frame, probe, height, capped: probe.scrollHeight > MAX_PAGE_HEIGHT })
+      const result: CaptureResult = {
+        frame,
+        probe,
+        height,
+        capped: probe.scrollHeight > MAX_PAGE_HEIGHT,
+      }
+      let tiled: ReturnType<typeof tilePng>
+      try {
+        tiled = tilePng(new Uint8Array(await readFile(png)), maxFrameBytes)
+      } catch (error) {
+        throw new Error(
+          `website capture ${frame.id} tiling: ${error instanceof Error ? error.message : error}`,
+        )
+      }
+      if (tiled) {
+        result.tiles = []
+        for (const tile of tiled) {
+          const id = tileId(frame.id, tile.index, tile.count)
+          await writeFile(join(outputDir, `${id}.png`), tile.bytes)
+          result.tiles.push({
+            id,
+            frame: frame.id,
+            index: tile.index,
+            count: tile.count,
+            top: tile.top,
+            height: tile.height,
+            png: `.ab/website-frames/${id}.png`,
+          })
+        }
+        await rm(png)
+      }
+      results.push(result)
     }
     if (results.length !== frames.length) throw Error('incomplete frame inventory')
+    const pngs = results.flatMap((r) => (r.tiles ? r.tiles.map((t) => t.id) : [r.frame.id]))
+    const ids = [
+      ...results.map((r) => r.frame.id),
+      ...results.flatMap((r) => r.tiles ?? []).map((t) => t.id),
+    ]
+    const duplicate = ids.find((id, i) => ids.indexOf(id) !== i)
+    if (duplicate) throw Error(`duplicate capture id ${duplicate}`)
+    for (const id of pngs) {
+      const size = (await stat(join(outputDir, `${id}.png`))).size
+      if (size === 0 || size > maxFrameBytes) {
+        throw Error(`capture PNG ${id} is ${size} bytes; expected 1..${maxFrameBytes}`)
+      }
+    }
     await writeFile(join(outputDir, 'inventory.json'), JSON.stringify(results, null, 2))
-    await writeFile(join(outputDir, 'verify-report.md'), renderReport(results))
+    await writeFile(join(outputDir, 'verify-report.md'), renderReport(results, maxFrameBytes))
     return outputDir
   } catch (error) {
     await writeFile(
       join(outputDir, 'verify-report.md'),
-      `${renderReport(results)}\nFAIL: ${String(error)}\nExpected inventory: ${JSON.stringify(frames)}`,
+      `${renderReport(results, maxFrameBytes)}\nFAIL: ${String(error)}\nExpected inventory: ${JSON.stringify(frames)}`,
     )
     throw error
   } finally {
