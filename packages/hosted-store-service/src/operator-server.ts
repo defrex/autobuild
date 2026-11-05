@@ -368,7 +368,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             operation: {
               kind: 'move',
               id,
-              state: request.state,
+              ...(request.role !== undefined ? { role: request.role } : { state: request.state! }),
               expectedRevision: request.expectedRevision,
             },
           }),

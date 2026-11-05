@@ -211,7 +211,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '  ab ticket unblock <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
       '  ab ticket list [--state <state>] [--labels a,b] [--json]',
       '  ab ticket show <id> [--store <ref>] [--json]',
-      '  ab ticket move <id> <state> [--expected-revision <opaque>] [--json]',
+      '  ab ticket move <id> (<state> | --role triage|ready|backlog|rejected) [--expected-revision <opaque>] [--json]',
       '  ab ticket states [--json]',
       '  ab ticket state create <name> [--about <text>] [--json]',
       '  ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json]',

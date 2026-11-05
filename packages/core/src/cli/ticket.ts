@@ -22,9 +22,16 @@ import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { createTicketSource } from '../ports/tickets/create'
 import {
+  holdsState,
+  TICKET_MOVE_ROLES,
+  ticketLifecycle,
+  type TicketMoveRole,
+} from '../ports/tickets/lifecycle'
+import {
   changeBlockers,
   createTicket,
   moveTicket,
+  moveTicketToRole,
   requireTicket,
   ticketListCriteria,
   updateTicket,
@@ -158,12 +165,21 @@ export interface TicketAssetRmOpts extends TicketCommandOpts {
   stderr?: (line: string) => void
 }
 
-export interface TicketMoveOpts extends TicketCommandOpts {
+export type TicketMoveOpts = TicketCommandOpts & {
   id: string
-  /** Source-local workflow state; validation belongs to the adapter. */
-  state: string
   json?: boolean
-}
+} & (
+    | {
+        /** Source-local workflow state; validation belongs to the adapter. */
+        state: string
+        role?: undefined
+      }
+    | {
+        /** Lifecycle role, resolved through the configured [tickets] names. */
+        role: TicketMoveRole
+        state?: undefined
+      }
+  )
 
 export interface TicketStatesOpts extends TicketCommandOpts {
   json?: boolean
@@ -301,7 +317,11 @@ function assetLine(asset: TicketAssetSummary): string {
   return `    ${asset.kind}/${asset.name}  rev ${asset.revision}  ${formatAssetSize(asset.size)}`
 }
 
-function ticketDetail(ticket: Ticket, assets: TicketAssetSummary[] = []): string[] {
+function ticketDetail(
+  ticket: Ticket,
+  assets: TicketAssetSummary[] = [],
+  rejected: ReadonlySet<string> = new Set(),
+): string[] {
   const lines = [
     `ticket ${ticket.ref.source}:${ticket.ref.id}`,
     `  title:   ${ticket.title}`,
@@ -311,7 +331,8 @@ function ticketDetail(ticket: Ticket, assets: TicketAssetSummary[] = []): string
     `  labels:  ${ticket.labels.join(', ') || '(none)'}`,
   ]
   if (ticket.blockedBy !== undefined && ticket.blockedBy.length > 0) {
-    lines.push(`  blocked by: ${ticket.blockedBy.join(', ')}`)
+    const blockers = ticket.blockedBy.map((id) => (rejected.has(id) ? `${id} (rejected)` : id))
+    lines.push(`  blocked by: ${blockers.join(', ')}`)
   }
   if (ticket.issueLinks?.length) lines.push(`  issues:  ${formatIssueLinks(ticket.issueLinks)}`)
   if (ticket.ref.url !== undefined) lines.push(`  url:     ${ticket.ref.url}`)
@@ -458,17 +479,29 @@ export async function abTicketList(opts: TicketListOpts): Promise<void> {
 
 /** `ab ticket show <id>` — complete metadata plus the body/spec. */
 export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
-  const { source } = await resolveTicketCommand(opts, 'show')
+  const { config, source } = await resolveTicketCommand(opts, 'show')
   const ticket = await requireTicket(source, opts.id)
   // An asset-listing failure fails the command rather than hiding the assets.
   const assets = await withTicketAssets(opts, source, ({ store, repo }) =>
     store.listTicketAssets(repo, opts.id),
   )
+  // One batched read, only when the ticket declares blockers.
+  const rejectedName = ticketLifecycle(config.tickets).rejected
+  const blockers = ticket.blockedBy?.length
+    ? (await source.dependencyStates(ticket.blockedBy)).map(({ id, exists, resolved, state }) => ({
+        id,
+        exists,
+        resolved,
+        ...(state !== undefined ? { state } : {}),
+        rejected: holdsState(state, rejectedName),
+      }))
+    : []
   if (opts.json === true) {
     opts.stdout(
       JSON.stringify(
         {
           ...ticket,
+          ...(blockers.length > 0 ? { blockers } : {}),
           assets: assets.map(({ kind, name, revision, size, layout, fileCount }) => ({
             kind,
             name,
@@ -484,7 +517,8 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
     )
     return
   }
-  for (const line of ticketDetail(ticket, assets)) opts.stdout(line)
+  const rejected = new Set(blockers.filter((blocker) => blocker.rejected).map(({ id }) => id))
+  for (const line of ticketDetail(ticket, assets, rejected)) opts.stdout(line)
   // Keep the adapter-provided body untouched. It may itself be multiline and
   // may intentionally end (or not end) with a newline.
   opts.stdout(ticket.body)
@@ -665,10 +699,14 @@ export async function abTicketAssetRm(opts: TicketAssetRmOpts): Promise<void> {
   opts.stdout(`ticket asset removed: ${source.name}:${opts.id} ${opts.kind}/${opts.name}`)
 }
 
-/** `ab ticket move <id> <state>` — adapter-owned state validation and move. */
+/** `ab ticket move <id> (<state> | --role <role>)` — adapter-owned state
+ * validation; a role resolves through the configured [tickets] names. */
 export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
-  const { source } = await resolveTicketCommand(opts, 'move')
-  const moved = await moveTicket(source, opts.id, opts.state, opts.expectedRevision)
+  const { config, source } = await resolveTicketCommand(opts, 'move')
+  const moved =
+    opts.role !== undefined
+      ? await moveTicketToRole(source, config.tickets, opts.id, opts.role, opts.expectedRevision)
+      : await moveTicket(source, opts.id, opts.state, opts.expectedRevision)
   if (opts.json === true) {
     opts.stdout(JSON.stringify(moved, null, 2))
     return
@@ -676,7 +714,27 @@ export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
   opts.stdout(`ticket moved: ${ticketSummary(moved)}`)
 }
 
-export type TicketStateRole = 'create' | 'ready' | 'claimed' | 'triage' | 'proposal' | 'done'
+export type TicketStateRole =
+  | 'create'
+  | 'ready'
+  | 'claimed'
+  | 'triage'
+  | 'proposal'
+  | 'done'
+  | 'backlog'
+  | 'rejected'
+
+/** Workflow order: placements sit beside triage, the role they default to. */
+const STATE_ROLE_ORDER: readonly TicketStateRole[] = [
+  'triage',
+  'create',
+  'proposal',
+  'backlog',
+  'ready',
+  'claimed',
+  'done',
+  'rejected',
+]
 
 export interface TicketStateRow extends TicketStateInfo {
   roles: TicketStateRole[]
@@ -702,6 +760,9 @@ export function stateRoles(
     ['proposal', tickets.proposalState ?? triage],
     ['done', tickets.source === 'hosted' ? (tickets.doneState ?? 'done') : 'done'],
   ]
+  if (tickets.backlogState !== undefined) named.push(['backlog', tickets.backlogState])
+  if (tickets.rejectedState !== undefined) named.push(['rejected', tickets.rejectedState])
+  named.sort(([a], [b]) => STATE_ROLE_ORDER.indexOf(a) - STATE_ROLE_ORDER.indexOf(b))
   const roles = new Map<string, TicketStateRole[]>(names.map((name) => [name, []]))
   for (const [role, target] of named) {
     const match =
@@ -736,7 +797,11 @@ export async function abTicketStates(opts: TicketStatesOpts): Promise<void> {
     config.tickets,
     infos.map((info) => info.name),
   )
-  const rows = infos.map((info) => stateRow(info, roles))
+  // Role-holding states in workflow order by their first role; the rest after
+  // them in source order. The sort is stable.
+  const rank = (row: TicketStateRow) =>
+    row.roles.length > 0 ? STATE_ROLE_ORDER.indexOf(row.roles[0]!) : STATE_ROLE_ORDER.length
+  const rows = infos.map((info) => stateRow(info, roles)).sort((a, b) => rank(a) - rank(b))
   if (opts.json === true) {
     opts.stdout(JSON.stringify(rows, null, 2))
     return
@@ -795,7 +860,7 @@ const ASSET_GET_USAGE =
 const ASSET_RM_USAGE =
   'usage: ab ticket asset rm <id> <kind> <name> [--store <ref>] [--json] (§8.8)'
 const MOVE_USAGE =
-  'usage: ab ticket move <id> <state> [--expected-revision <opaque>] [--json] (§8.8)'
+  'usage: ab ticket move <id> (<state> | --role triage|ready|backlog|rejected) [--expected-revision <opaque>] [--json] (§8.8)'
 const STATES_USAGE = 'usage: ab ticket states [--json] (§8.8)'
 const STATE_CREATE_USAGE = 'usage: ab ticket state create <name> [--about <text>] [--json] (§8.8)'
 export const TICKET_USAGE = [
@@ -1159,26 +1224,36 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     case 'move': {
       const parsed = parseArgs(
         args,
-        { json: 'boolean', 'expected-revision': 'value' },
+        { json: 'boolean', 'expected-revision': 'value', role: 'value' },
         TICKET_USAGE,
       )
       const [id, state, ...extra] = parsed.positionals
+      const role = stringFlag(parsed, 'role')
       if (
         id === undefined ||
         id.trim() === '' ||
-        state === undefined ||
-        state.trim() === '' ||
+        (state === undefined) === (role === undefined) ||
+        state?.trim() === '' ||
         extra.length > 0
       ) {
         throw new Error(TICKET_USAGE)
       }
-      await abTicketMove({
+      if (role !== undefined && !(TICKET_MOVE_ROLES as readonly string[]).includes(role)) {
+        throw new Error(
+          `ab ticket move: unknown --role "${role}"; expected one of ${TICKET_MOVE_ROLES.join(', ')}\n${MOVE_USAGE}`,
+        )
+      }
+      const common = {
         ...opts,
         id,
-        state,
         expectedRevision: stringFlag(parsed, 'expected-revision'),
         json: parsed.flags.has('json'),
-      })
+      }
+      await abTicketMove(
+        role !== undefined
+          ? { ...common, role: role as TicketMoveRole }
+          : { ...common, state: state! },
+      )
       return
     }
 

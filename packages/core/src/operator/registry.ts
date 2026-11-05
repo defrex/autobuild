@@ -57,7 +57,9 @@ import {
   harvestControlRequestSchema,
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
-  ticketMoveRequestSchema,
+  exactlyOneMoveTarget,
+  MOVE_TARGET_MESSAGE,
+  ticketMoveRequestShape,
   ticketUpdateRequestSchema,
   type OperatorAnswerRequest,
 } from './protocol'
@@ -355,16 +357,19 @@ const ticketsBlockersInput = ticketBlockerRequestSchema.extend({
     ),
 })
 
-const ticketsMoveInput = ticketMoveRequestSchema.extend({
-  repo: repoField,
-  id: ticketIdField,
-  state: z
-    .string()
-    .min(1)
-    .describe(
-      'Provider state to move the ticket into. Destructive: moving a ticket into the repository’s configured ready state queues it for dispatch.',
-    ),
-})
+const ticketsMoveInput = ticketMoveRequestShape
+  .extend({
+    repo: repoField,
+    id: ticketIdField,
+    state: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Provider state to move the ticket into; give this or `role`, not both. Destructive: moving a ticket into the repository’s configured ready state queues it for dispatch.',
+      ),
+  })
+  .refine(exactlyOneMoveTarget, MOVE_TARGET_MESSAGE)
 
 const notesReadInput = z.strictObject({ repo: repoField })
 
@@ -941,7 +946,7 @@ export const TOOLS: readonly ToolEntry[] = [
         operation: {
           kind: 'move',
           id: input.id,
-          state: input.state,
+          ...(input.role !== undefined ? { role: input.role } : { state: input.state! }),
           expectedRevision: input.expectedRevision,
         },
       })

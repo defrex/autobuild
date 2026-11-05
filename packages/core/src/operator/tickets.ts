@@ -16,6 +16,7 @@ import {
   changeBlockers,
   createTicket,
   moveTicket,
+  moveTicketToRole,
   requireTicket,
   updateTicket,
 } from '../ports/tickets/operations'
@@ -28,7 +29,7 @@ import type {
   TicketPageListing,
 } from '../ports/types'
 import type { BuildStore } from '../store/types'
-import { ticketLifecycle } from '../ports/tickets/lifecycle'
+import { ticketLifecycle, type TicketMoveRole } from '../ports/tickets/lifecycle'
 import { effectiveConfig } from './query'
 
 export interface OperatorTicketContext {
@@ -255,7 +256,10 @@ export async function mutateOperatorTicket(opts: {
         patch: OperatorTicketPatch
         expectedRevision?: string
       }
-    | { kind: 'move'; id: string; state: string; expectedRevision?: string }
+    | ({ kind: 'move'; id: string; expectedRevision?: string } & (
+        | { state: string; role?: undefined }
+        | { role: TicketMoveRole; state?: undefined }
+      ))
     | { kind: 'block' | 'unblock'; id: string; blockerIds: string[]; expectedRevision?: string }
 }): Promise<OperatorTicketDetail> {
   const { source, context } = await openOperatorTickets(opts)
@@ -296,7 +300,15 @@ export async function mutateOperatorTicket(opts: {
                 operation.expectedRevision,
               )))!
         : operation.kind === 'move'
-          ? await moveTicket(source, operation.id, operation.state, operation.expectedRevision)
+          ? operation.role !== undefined
+            ? await moveTicketToRole(
+                source,
+                context.tickets,
+                operation.id,
+                operation.role,
+                operation.expectedRevision,
+              )
+            : await moveTicket(source, operation.id, operation.state, operation.expectedRevision)
           : await changeBlockers(
               source,
               operation.id,
