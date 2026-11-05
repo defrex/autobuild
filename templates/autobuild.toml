@@ -37,3 +37,7 @@ harvestThreshold = 5
 [tickets]
 source = "file"
 readyState = "ready"
+# Optional, recommended lifecycle roles: deferred and declined work.
+# Remove either to go without that role.
+backlogState = "backlog"
+rejectedState = "rejected"

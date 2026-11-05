@@ -37,11 +37,14 @@ createState = "triage"
 triageState = "triage"
 proposalState = "triage"
 doneState = "done"
+backlogState = "backlog"
+rejectedState = "rejected"
 ```
 <!-- seam-config:end -->
 
 - **States are directories** (`.tickets/ready/`, `.tickets/doing/`). Claims move to `doing`; `claimedState` isn't configurable.
 - **Claiming** needs `readyState`, every `readyLabels` entry and resolved blockers; `[]` adds no label gate.
+- **Backlog and rejected** directories are created on the first role move into them.
 
 Initialize with `bun ab init`; manage with `bun ab ticket states` and the other ticket commands.
 
@@ -61,6 +64,7 @@ createState = "Backlog"
 triageState = "Backlog"
 proposalState = "Backlog"
 doneState = "Done"
+rejectedState = "Canceled"
 ```
 <!-- seam-config:end -->
 
@@ -70,6 +74,7 @@ Replace `ENG` and the case-sensitive workflow names with your team's.
 - **Labels.** `readyLabels` defaults to `["autobuild"]`; `[]` removes the gate.
 - **No `project` key.** Scope the queue through team access, states and labels.
 - **Rate limits** are shared with your other API callers.
+- **Backlog and rejected.** Neither role has a default, and neither may share a state with triage. Here `Backlog` is the triage state, so a deferred-work state needs its own name, such as `backlogState = "Icebox"`. Linear counts `Canceled` as complete; mapped to `rejectedState`, it no longer resolves blockers.
 
 ### Hosted (`hosted`)
 
@@ -94,12 +99,15 @@ createState = "triage"
 triageState = "triage"
 proposalState = "triage"
 doneState = "done"
+backlogState = "backlog"
+rejectedState = "rejected"
 ```
 <!-- seam-config:end -->
 
 - `teamKey` identifies the registered project's team.
 - **URL.** `tickets.url` defaults to the remote BuildStore service (`AB_STORE` or `[store].url`); it's required with a local Store, as here.
 - **Authority.** A separate ticket service needs its own project credential; a Store connection grants nothing there. Delegated child sessions are read-only and can't redefine policy.
+- **Backlog and rejected.** Role moves create a missing role state on first use. Blocker facts carry each blocker's state, so a rejected blocker is named in diagnostics; the project ticket policy itself doesn't define these roles.
 
 ### Optional issue links
 

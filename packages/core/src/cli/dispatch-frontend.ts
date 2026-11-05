@@ -70,7 +70,7 @@ import {
   type DispatchChildOptions,
 } from './dispatch-process'
 
-import type { TicketSource } from '../ports/types'
+import type { ControlTickets } from './ticket'
 
 const PAINT_MS = 250
 const ABORTABLE_STATUSES = new Set(['queued', 'running', 'collecting', 'paused', 'blocked'])
@@ -109,7 +109,9 @@ export interface DispatchFrontendOptions {
   checkout?: string
   storeRef: string
   store: BuildStore
-  ticketSource?: () => Promise<TicketSource>
+  /** Opens the tickets one control reads, fresh for every control so node
+   * completeness sees the current configured rejected role. */
+  controlTickets?: () => ControlTickets
   env: Record<string, string | undefined>
   terminal: TerminalOut
   input: TerminalInput
@@ -787,7 +789,7 @@ export class DispatchFrontend {
   ): Promise<void> {
     const result = await controlBuild({
       store: this.opts.store,
-      ticketSource: this.opts.ticketSource,
+      ...this.opts.controlTickets?.(),
       repo: this.opts.repo,
       slug,
       env: this.opts.env,

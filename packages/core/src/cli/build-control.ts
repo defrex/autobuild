@@ -476,6 +476,9 @@ export interface ControlBuildOpts {
   via?: Via
   action: BuildControlAction
   ticketSource?: () => Promise<TicketSource>
+  /** The configured rejected role's state, read when a node's completeness is
+   * established; a rejected child does not hold the node open. */
+  rejectedState?: () => Promise<string | undefined>
   /** Injected only for --revise-spec-from-ticket. */
   prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>
   readTicketBody?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<string>
@@ -546,10 +549,14 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
           if (current.kind === 'node') {
             if (!opts.ticketSource)
               throw new Error('Cannot establish node completeness: ticket source unavailable')
+            const source = await opts.ticketSource()
+            const rejectedState = await opts.rejectedState?.()
             const observed = await observeIntegration(
               opts.store,
-              await opts.ticketSource(),
+              source,
               opts.slug,
+              undefined,
+              rejectedState === undefined ? {} : { rejectedState },
             )
             if (
               observed.openChildren.length ||
@@ -1045,6 +1052,7 @@ export interface AbBuildControlOpts {
   slug: string
   action: BuildControlAction
   ticketSource?: () => Promise<TicketSource>
+  rejectedState?: () => Promise<string | undefined>
   /** Explicit `--store`; selection remains --store > AB_STORE > repo-local. */
   storeRef?: string
   /** Injected only for --revise-spec-from-ticket. */
@@ -1068,6 +1076,7 @@ export async function abBuildControl(opts: AbBuildControlOpts): Promise<BuildCon
       env: opts.env,
       action: opts.action,
       ticketSource: opts.ticketSource,
+      ...(opts.rejectedState !== undefined ? { rejectedState: opts.rejectedState } : {}),
       ...(opts.readTicketBody !== undefined ? { readTicketBody: opts.readTicketBody } : {}),
       ...(opts.prepareTicketAssets ? { prepareTicketAssets: opts.prepareTicketAssets } : {}),
     }),

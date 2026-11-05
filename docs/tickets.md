@@ -49,6 +49,21 @@ bun ab ticket create "Close stale sandboxes" --body spec.md --issues 824,820:ref
 ```
 
 
+## Backlog and rejected
+
+Two optional lifecycle roles sit beside triage, ready, claimed and done:
+
+- **Backlog** holds work you deferred on purpose. Nothing dispatches from it.
+- **Rejected** holds work you considered and declined. A rejected ticket never unblocks the tickets it blocks, and a rejected child no longer holds its node open.
+
+Both roles are recommended. Map each to a native state with `[tickets].backlogState` and `[tickets].rejectedState`; `ab init` writes `backlog` and `rejected` for the file source, and a Linear team might use `Icebox` and `Canceled`. With a key unset, that role doesn't exist. Your operator agent moves tickets by role, so it never needs your native names:
+
+```sh
+bun ab ticket move AUT-12 --role backlog
+```
+
+Moving a ticket back to triage, backlog or ready restores ordinary behavior. "Building" isn't a role you move work into: it's the claimed state (`doing` for the file source), which the dispatcher sets.
+
 ## Ready is a gate, not a guarantee
 
 The dispatcher claims only tickets in the ready state with the required labels and any source-specific filter. A ready ticket still waits on:

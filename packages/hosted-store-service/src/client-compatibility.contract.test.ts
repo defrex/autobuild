@@ -591,6 +591,48 @@ for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.v
   })
 }
 
+// Blocker state needs an explicit capability, so published clients keep their
+// strict historical dependency-state shape (frozen in tickets-v1.2.ts).
+for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
+  const version = publication.version
+  test(`published ${version} dependency-state decoders never receive blocker state`, async () => {
+    const source = new FakeTicketSource()
+    const blocker = await source.create({ title: 'Blocker', body: 'Body' })
+    const server = createTicketServer({ secret, sourceFor: () => source })
+    const body = ticket120.hostedTicketRequestSchemas['dependency-states'].parse({
+      context: { teamKey: 'ENG' },
+      input: { ids: [blocker.ref.id, 'ENG-404'] },
+    })
+    const req = request('/tickets/dependency-states', version, body, token, publication.protocol!)
+    req.headers.set(ticket120.TICKET_TREE_HEADER, ticket120.TICKET_TREE_CAPABILITY)
+    const response = await server.fetch(req)
+    expect(response.ok).toBe(true)
+    const states = ticket120.dependencyStatesWireSchema.parse(await response.json())
+    expect(states.map((state) => state.id)).toEqual([blocker.ref.id, 'ENG-404'])
+    // Prove that projection, rather than permissive fixture decoding, enables compatibility.
+    expect(
+      ticket120.dependencyStateWireSchema.safeParse({ ...states[0], state: 'triage' }).success,
+    ).toBe(false)
+  })
+}
+
+test('a current client receives each existing blocker native state', async () => {
+  const backend = new FakeTicketSource()
+  const server = createTicketServer({ secret, sourceFor: () => backend })
+  const client = new HostedTicketSource({
+    url: 'https://tickets.example',
+    token,
+    teamKey: 'ENG',
+    fetchFn: (input, init) => server.fetch(new Request(input.toString(), init)),
+  })
+  const blocker = await client.create({ title: 'Blocker', body: 'Body' })
+  await backend.transition(blocker.ref.id, 'rejected')
+  expect(await client.dependencyStates([blocker.ref.id, 'ENG-404'])).toEqual([
+    { id: blocker.ref.id, exists: true, resolved: false, state: 'rejected', blockedBy: [] },
+    { id: 'ENG-404', exists: false, resolved: false, blockedBy: [] },
+  ])
+})
+
 test('a current client reports a published server refusing issue links with a typed error', async () => {
   const backend = new FakeTicketSource()
   const current = createTicketServer({ secret, sourceFor: () => backend })

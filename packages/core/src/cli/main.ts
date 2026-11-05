@@ -64,7 +64,7 @@ import { abWait, WAIT_USAGE } from './wait'
 import { abMcp, AB_MCP_USAGE } from './mcp'
 import type { StoreOpener } from './store-opening'
 import { done, escalate, verdict } from './terminals'
-import { abTicket, openTicketSource } from './ticket'
+import { abTicket, lazyTicketSource, openTicketSource } from './ticket'
 import { checkUpgradeCompatibility, type CompatibilityFetch } from './upgrade-compatibility'
 import { abUpgrade, type ResolveConflict } from './upgrade'
 import { withUpgradeProgress } from './upgrade-progress'
@@ -342,19 +342,18 @@ async function runBuildControl(
     )
   }
   const result = await abBuildControl({
-    ticketSource: async () =>
-      (
-        await openTicketSource(
-          {
-            targetRepo: deps.workspacePath,
-            env: deps.processEnv ?? {},
-            exec: deps.exec!,
-            stdout: deps.stdout,
-            ...(storeRef !== undefined ? { storeRef } : {}),
-          },
-          `ab ${action.kind}`,
-        )
-      ).source,
+    ...lazyTicketSource(() =>
+      openTicketSource(
+        {
+          targetRepo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          exec: deps.exec!,
+          stdout: deps.stdout,
+          ...(storeRef !== undefined ? { storeRef } : {}),
+        },
+        `ab ${action.kind}`,
+      ),
+    ),
     targetRepo: deps.workspacePath,
     env: deps.processEnv ?? {},
     exec: deps.exec,

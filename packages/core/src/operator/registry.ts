@@ -2,7 +2,7 @@ import { readBuildPage } from '../store/event-reads'
 import { requestNodeRestack } from './restack'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
-import { openOperatorTickets } from './tickets'
+import { openOperatorTickets, operatorControlTickets } from './tickets'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
 import { TicketIssueLinksUnsupported } from '../ports/tickets/issue-links'
 /**
@@ -57,7 +57,9 @@ import {
   harvestControlRequestSchema,
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
-  ticketMoveRequestSchema,
+  exactlyOneMoveTarget,
+  MOVE_TARGET_MESSAGE,
+  ticketMoveRequestShape,
   ticketUpdateRequestSchema,
   type OperatorAnswerRequest,
 } from './protocol'
@@ -355,16 +357,19 @@ const ticketsBlockersInput = ticketBlockerRequestSchema.extend({
     ),
 })
 
-const ticketsMoveInput = ticketMoveRequestSchema.extend({
-  repo: repoField,
-  id: ticketIdField,
-  state: z
-    .string()
-    .min(1)
-    .describe(
-      'Provider state to move the ticket into. Destructive: moving a ticket into the repository’s configured ready state queues it for dispatch.',
-    ),
-})
+const ticketsMoveInput = ticketMoveRequestShape
+  .extend({
+    repo: repoField,
+    id: ticketIdField,
+    state: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Provider state to move the ticket into; give this or `role`, not both. Destructive: moving a ticket into the repository’s configured ready state queues it for dispatch.',
+      ),
+  })
+  .refine(exactlyOneMoveTarget, MOVE_TARGET_MESSAGE)
 
 const notesReadInput = z.strictObject({ repo: repoField })
 
@@ -627,12 +632,7 @@ export const TOOLS: readonly ToolEntry[] = [
             : { kind: input.action }
       return controlBuild({
         store: ctx.store,
-        ticketSource: async () => {
-          if (!ctx.tickets) throw new Error('ticket source unavailable')
-          return (
-            await openOperatorTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets })
-          ).source
-        },
+        ...operatorControlTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets }),
         repo: input.repo,
         slug: input.slug,
         user: attributed(ctx),
@@ -941,7 +941,7 @@ export const TOOLS: readonly ToolEntry[] = [
         operation: {
           kind: 'move',
           id: input.id,
-          state: input.state,
+          ...(input.role !== undefined ? { role: input.role } : { state: input.state! }),
           expectedRevision: input.expectedRevision,
         },
       })

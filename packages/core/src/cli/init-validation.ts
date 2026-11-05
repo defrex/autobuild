@@ -16,7 +16,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { effectiveRuntimeReferences } from '../config/roles'
-import type { Config } from '../config/schema'
+import type { Config, TicketsConfig } from '../config/schema'
 import { loadConfig } from '../config/load'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
@@ -37,6 +37,8 @@ import { diagnosePlugins, loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
 import { LinearTicketSource } from '../ports/tickets/linear'
+import { holdsState } from '../ports/tickets/lifecycle'
+import type { TicketSource } from '../ports/types'
 import { inspectLocalStoreSnapshot } from '../store/local/store'
 import type { StoreOpener } from './store-opening'
 import { openProductionStore } from './store-opening'
@@ -54,6 +56,53 @@ export type {
   InitValidationReport,
   ReadinessCheck,
 } from '../ports/workspace/provider-capabilities'
+
+const OPTIONAL_ROLES = [
+  { role: 'backlog', key: 'backlogState', recommended: 'backlog' },
+  { role: 'rejected', key: 'rejectedState', recommended: 'rejected' },
+] as const
+
+/**
+ * Advisory findings for the optional backlog and rejected roles. An unset role
+ * is an informational note, never a failure. A configured role naming no state
+ * is a warning, unless the source creates states on first use. Costs one state
+ * listing, and only when a role is configured.
+ */
+export async function ticketRoleReadiness(
+  tickets: TicketsConfig,
+  source: () => Promise<TicketSource>,
+): Promise<{ notes: string[]; checks: ReadinessCheck[] }> {
+  const notes: string[] = []
+  const checks: ReadinessCheck[] = []
+  const configured = OPTIONAL_ROLES.filter(({ key }) => tickets[key] !== undefined)
+  for (const { role, key, recommended } of OPTIONAL_ROLES)
+    if (tickets[key] === undefined)
+      notes.push(
+        `Note: [tickets].${key} is not set; the ${role} role is unavailable (recommended: ${key} = "${recommended}")`,
+      )
+  if (configured.length === 0) return { notes, checks }
+  const ticketSource = await source()
+  const names =
+    ticketSource instanceof LinearTicketSource
+      ? await ticketSource.workflowStateNames()
+      : ticketSource.listStates
+        ? (await ticketSource.listStates()).map((info) => info.name)
+        : undefined
+  if (names === undefined) return { notes, checks }
+  for (const { role, key } of configured) {
+    const name = tickets[key]!
+    if (names.some((state) => holdsState(state, name))) continue
+    if (ticketSource.addState)
+      notes.push(`Note: ${role} role state "${name}" is created on first use`)
+    else
+      checks.push({
+        name: `ticket-role-${role}`,
+        status: 'warning',
+        detail: `[tickets].${key} "${name}" names no state in the ${ticketSource.name} source (known: ${names.join(', ') || 'none'})`,
+      })
+  }
+  return { notes, checks }
+}
 
 async function shell(
   exec: Exec,
@@ -497,6 +546,7 @@ async function validateInitReadinessInner(opts: {
   ])
   let caps: WorkspaceProviderCapabilities | undefined
   let assigneeLine: string | undefined
+  let roles: Awaited<ReturnType<typeof ticketRoleReadiness>> = { notes: [], checks: [] }
   let forgeChecks: ForgeReadinessCheck[] = readinessChecks(
     'unknown',
     'Host forge construction unavailable; check adapter configuration and access.',
@@ -560,14 +610,17 @@ async function validateInitReadinessInner(opts: {
         }
       }
     }
-    if (config.tickets.source !== 'file') {
-      const ticketSource = await createTicketSource(
+    let ticketSource: TicketSource | undefined
+    const openTicketSource = async () =>
+      (ticketSource ??= await createTicketSource(
         config.tickets,
         { ...opts.env, AB_STORE: state.storeRef },
         repo,
         state.localStateRoot,
         hostPlugins,
-      )
+      ))
+    if (config.tickets.source !== 'file') {
+      const ticketSource = await openTicketSource()
       await ticketSource.listReady({
         ...(config.tickets.readyLabels !== undefined ? { labels: config.tickets.readyLabels } : {}),
         state: config.tickets.readyState,
@@ -588,6 +641,7 @@ async function validateInitReadinessInner(opts: {
         assigneeLine = `Ticket assignee gate: ${assignee} → ${user.name} <${user.email}>`
       }
     }
+    roles = await ticketRoleReadiness(config.tickets, openTicketSource)
   } catch (error) {
     throw new Error(redact(error))
   }
@@ -709,6 +763,7 @@ async function validateInitReadinessInner(opts: {
   }
 
   if (report === undefined) throw new Error('readiness validation produced no report')
+  report.checks.push(...roles.checks)
   report.checks.push(
     ...forgeChecks.map(
       (check): ReadinessCheck => ({
@@ -728,6 +783,7 @@ async function validateInitReadinessInner(opts: {
   stdout(`Store: ${state.storeRef}`)
   stdout(`Forge: ${config.forge}`)
   if (assigneeLine !== undefined) stdout(assigneeLine)
+  for (const note of roles.notes) stdout(note)
   // Same raw `[workspace.config]` fallback guestEnvNames gets (f_55ba7591): a
   // provider that declares describeEnvironment without a configSchema still
   // receives a defined argument — the raw table — never undefined.
