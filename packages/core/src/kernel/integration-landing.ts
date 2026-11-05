@@ -101,9 +101,10 @@ export async function landIntegrationRoot(deps: IntegrationLandingDeps): Promise
         return
       }
       await inspectIntegrationStack(exec, workspacePath, parent, head)
-      // Refresh the PR body to the final union and confirm the readback
-      // before any merge request, even when the published fact matches, so
-      // landing closes every fully resolved issue. A failure throws first.
+      // Refresh the PR body to the final set (own links and children's
+      // union) and confirm the readback before any merge request, even when
+      // the published fact matches, so landing closes every fully resolved
+      // issue. A failure throws first.
       state = (await readBuildFacts(store, slug)).value.state
       const issueLinks = nodeIssueLinksForForge(state, forge)
       if (issueLinks) {

@@ -4,7 +4,7 @@ import { suspendNativeLanding } from '../kernel/landing-publication'
 import { validateNodeChange } from '../kernel/node-restack'
 import { validateRestack, retainReplay } from '../kernel/reconcile-restack'
 import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
-import { issueLinksForForge } from '../kernel/issue-keywords'
+import { prIssueLinksForForge } from '../kernel/issue-keywords'
 /**
  * The three terminal commands — `ab done`, `ab verdict`, `ab escalate`
  * (SPEC §8.4 D5, §8.5 D6, §8.6 D7).
@@ -289,7 +289,7 @@ export async function completeFinalizePr(
     title: input.title,
     body: input.body,
     mergeMessage: input.mergeMessage,
-    ...issueLinksForForge(boundary, deps.forge),
+    ...prIssueLinksForForge(boundary, deps.forge),
   })
   if (input.expectedHeadSha !== undefined && pr.headSha !== input.expectedHeadSha) {
     throw new Error(
