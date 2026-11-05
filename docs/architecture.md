@@ -827,12 +827,15 @@ links into `Closes #N` / `Refs #N` lines, neutralizes closing keywords aimed at
 `refs` issues, and places the keyword paragraph before the trailer block; a
 `closesIssues` adapter uses it for the PR title and body, the landing writes and
 the freshness comparison alike.
-`packages/core/src/kernel/node-issue-links.ts` owns a node's issue-link union:
+`packages/core/src/kernel/node-issue-links.ts` owns a node's issue-link set:
 the dispatcher records each landed child's contribution on its node as
 `node.issue-links-recorded` before the child completes, the build reducer folds
-them per issue, and a root node's PR body is synced through the optional
-`Forge.updatePrIssueLinks` when its `node.issue-links-published` readback
-differs, and refreshed again by `landIntegrationRoot` before any merge request.
+them per issue into a union, and the node's set merges its own effective links
+with that union. A node's PR body is synced to the set (refs-only into a parent
+node) through the optional `Forge.updatePrIssueLinks` when its
+`node.issue-links-published` readback differs, and a root node's is refreshed
+again by `landIntegrationRoot` before any merge request. A leaf aimed at a node
+opens its PR with refs-only lines (`prIssueLinksForForge`) and lands with none.
 
 Destination observations retain versioned, head-bound Git witnesses (reachable
 commit SHAs and direct build trailers) and a fixed-length evidence digest. Current
