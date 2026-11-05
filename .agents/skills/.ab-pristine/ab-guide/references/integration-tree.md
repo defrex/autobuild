@@ -145,14 +145,17 @@ consent. Automatic authorization still requires every readiness and merge gate.
 A merged node completes its ticket and closes admission; it is not a perpetual
 staging branch. Releases remain separate maintainer operations.
 
-Issue links close when the node lands. Children aimed at a node write no
-`Closes` or `Refs` lines of their own; as each lands, its links, downgrades
-included, are recorded on the node, and a nested node passes its set up to its
-parent. On a forge that closes issues and can update PR bodies (GitHub), the
-root node's PR into the default branch carries one line per issue, kept current
-as children land and refreshed before the kernel lands it. A downgrade by any
-child makes the issue `Refs`. Merging the root node PR, by the kernel or a
-human, closes the rest; landed child commits keep their own messages.
+Issue links close when the node lands. On GitHub, a child's PR into a node
+ends with one `Refs #N` line per linked issue, so each issue shows the PR that
+did the work, but it never closes anything, and its landed commit carries no
+lines. As each child lands, its links, downgrades included, are recorded on the
+node, and a nested node passes its own links and its set up to its parent. On a
+forge that closes issues and can update PR bodies (GitHub), the root node's PR
+into the default branch carries one line per issue for the node's own links and
+every contribution, kept current as children land and refreshed before the
+kernel lands it. A downgrade by any child makes the issue `Refs`. Merging the
+root node PR, by the kernel or a human, closes the rest, including the node's
+own issue; landed child commits keep their own messages.
 
 Human forge merges are an explicit escape hatch, including while incomplete,
 paused or unverified. The janitor records human provenance and whether the actual
