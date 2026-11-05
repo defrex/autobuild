@@ -275,7 +275,7 @@ test('unrecognized source catalogs preserve canonical fields and event facts', (
 })
 
 import { MemoryBuildStore } from '../memory'
-import { KERNEL } from '../../events/envelope'
+import { DISPATCHER, KERNEL } from '../../events/envelope'
 
 for (const release of matrixReleases)
   test(`published ${release.version}: new latest-event discriminants are omitted only from optional display fields, including nested state`, async () => {
@@ -381,3 +381,36 @@ test('health echoes only admitted same-line protocols with a published public de
     expect(healthIdentity(client!, protocol!, '1.3.0', '7').protocolVersion).toBe(expected!)
   expect(healthIdentity(null, null, '1.4.0', '7').protocolVersion).toBe('7')
 })
+
+for (const release of matrixReleases)
+  test(`published ${release.version}: repository facts with an active kernel Git condition project to the released contract`, async () => {
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]!
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('repo')
+    await store.appendRepo('repo', {
+      actor: DISPATCHER,
+      type: 'dispatcher.kernel-git-unavailable',
+      payload: { executable: 'git', detail: 'Executable not found in $PATH: "git"' },
+    })
+    const answer = await store.getReducerValue(
+      { kind: 'repo', repo: 'repo' },
+      { reducer: 'repositoryReadFacts' },
+    )
+    expect((answer.value as { kernelGit?: { executable: string } }).kernelGit?.executable).toBe(
+      'git',
+    )
+    const projected = reducerValueForClient(
+      {
+        version: release.version,
+        projects: release.projects ?? false,
+        catalogIdentity: release.catalogIdentity,
+      },
+      'repositoryReadFacts',
+      answer,
+      matrixReleases,
+    )
+    expect(projected.version).toBe(catalog.versions.repositoryReadFacts!)
+    expect(projectReducerValue('repositoryReadFacts', projected.value, catalog)).toEqual({
+      value: projected.value,
+    })
+  })

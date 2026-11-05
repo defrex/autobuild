@@ -3658,3 +3658,24 @@ test('expired hosted watch resume is terminal and never replays the prefix', asy
   expect(h.out).toEqual([])
   expect((Reflect.get(store, 'snapshots') as Map<string, unknown>).size).toBe(0)
 })
+
+test('kernel Git condition events render as repository attention lines', async () => {
+  const { summarizeEvent } = await import('./watch')
+  const base = { repo: 'repo', seq: 1, ts: '2026-11-05T00:00:00.000Z', actor: DISPATCHER }
+  expect(
+    summarizeEvent(
+      {
+        ...base,
+        type: 'dispatcher.kernel-git-unavailable',
+        payload: { executable: 'git', detail: 'Executable not found in $PATH: "git"\nmore' },
+      },
+      null,
+    ),
+  ).toBe(String.raw`Kernel Git unavailable (git): Executable not found in $PATH: "git"\u{a}more`)
+  expect(
+    summarizeEvent(
+      { ...base, type: 'dispatcher.kernel-git-recovered', payload: { executable: 'git' } },
+      null,
+    ),
+  ).toBe('Kernel Git recovered (git)')
+})

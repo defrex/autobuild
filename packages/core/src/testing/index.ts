@@ -75,6 +75,7 @@ export {
 } from './reduced-read-budget'
 
 export { gitRewrite } from '../ports/forge/git-rewrite'
+export { GitHubForge } from '../ports/forge/github'
 
 export { newerFact, seedNewerMemoryFact, NEWER_EVENT_TYPE } from './newer-writer'
 export { READ_CATALOG_IDENTITY, catalogIdentity } from '../events/compatibility'

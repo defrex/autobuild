@@ -46,6 +46,7 @@ import {
 } from '../kernel/mixed-version'
 import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
 import { recordJanitorFailure } from '../kernel/janitor-failure'
+import { KernelGitUnavailable, kernelGitUnavailableDetail } from '../kernel/kernel-git'
 import { isForgeFailure } from '../ports/forge-failure'
 import {
   ForgeRequestDeferred,
@@ -176,7 +177,7 @@ import {
   nodeIssueLinksForForge,
   nodeIssueLinksSyncPending,
 } from '../kernel/node-issue-links'
-import type { Exec } from '../ports/workspace/git-worktree'
+import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
 import { preparePinnedAssets } from '../store/ticket-assets'
 import { resolveRepoOrigin } from '../cli/repo-state'
@@ -949,6 +950,9 @@ export class Dispatcher {
   private availabilityLandings?: ReturnType<typeof confirmedLandings>
   private availabilityLandingKey?: string
   private availabilityEntries?: ReturnType<Dispatcher['repoBuildDigests']>
+  /** Set once kernel Git proved unable to run this tick; later node work in
+   * the same tick defers on it without spawning again. */
+  private kernelGitUnavailable?: KernelGitUnavailable
 
   /** The incremental repository view every stage reads and writes through
    * (AUT-647): `deps.store` itself when the caller already wrapped it. */
@@ -1004,6 +1008,7 @@ export class Dispatcher {
 
   lastForgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
   async tick(opts: TickOpts = {}): Promise<TickReport> {
+    this.kernelGitUnavailable = undefined
     this.availabilityEntries = undefined
     this.availabilityLandings = undefined
     this.availabilityLandingKey = undefined
@@ -5750,21 +5755,64 @@ export class Dispatcher {
   private async kernelRepository(root: string): Promise<string> {
     const checkout = this.deps.checkout ?? this.deps.repo
     if (!this.deps.repoOrigin) return checkout
+    if (this.kernelGitUnavailable) throw this.kernelGitUnavailable
     // Origin-mode CLI wiring supplies a scratch checkout path too. Only an
     // actual Git repository can provide the kernel's local object database.
     if (this.deps.checkout) {
-      const probe = await this.deps.exec(['git', 'rev-parse', '--git-dir'], { cwd: checkout })
-      if (probe.exitCode === 0) return checkout
+      const probe = await this.kernelGit(() =>
+        this.deps.exec(['git', 'rev-parse', '--git-dir'], { cwd: checkout }),
+      )
+      if (probe.exitCode === 0) {
+        await this.kernelGitRecovered()
+        return checkout
+      }
     }
     const path = join(root, 'repository.git')
-    const clone = await (this.deps.forge.kernelExec ?? this.deps.exec)(
-      ['git', 'clone', '--bare', this.deps.repoOrigin, path],
-      {
-        cwd: root,
-      },
+    const clone = await this.kernelGit(() =>
+      (this.deps.forge.kernelExec ?? this.deps.exec)(
+        ['git', 'clone', '--bare', this.deps.repoOrigin!, path],
+        { cwd: root },
+      ),
     )
     if (clone.exitCode !== 0) throw new Error(clone.stderr)
+    await this.kernelGitRecovered()
     return path
+  }
+
+  /** Run one kernel Git command, turning "Git cannot execute" into the
+   * repository-level condition: one durable `dispatcher.kernel-git-unavailable`
+   * per outage (read from the already-advanced repository projection, so a
+   * fresh process does not repeat it) and a deferral for the node work. */
+  private async kernelGit(run: () => Promise<ExecResult>): Promise<ExecResult> {
+    let detail: string | undefined
+    let result: ExecResult | undefined
+    try {
+      result = await run()
+      detail = kernelGitUnavailableDetail({ result })
+    } catch (error) {
+      detail = kernelGitUnavailableDetail({ error })
+      if (detail === undefined) throw error
+    }
+    if (detail === undefined) return result!
+    this.kernelGitUnavailable = new KernelGitUnavailable('git', detail)
+    if (this.store.repositoryFacts().kernelGit === undefined) {
+      await this.store.ensureRepo(this.deps.repo)
+      await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.kernel-git-unavailable',
+        payload: { executable: 'git', detail },
+      })
+    }
+    throw this.kernelGitUnavailable
+  }
+
+  private async kernelGitRecovered(): Promise<void> {
+    if (this.store.repositoryFacts().kernelGit === undefined) return
+    await this.store.appendRepo(this.deps.repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.kernel-git-recovered',
+      payload: { executable: 'git' },
+    })
   }
 
   private async withKernelRepository<T>(run: (path: string) => Promise<T>): Promise<T> {

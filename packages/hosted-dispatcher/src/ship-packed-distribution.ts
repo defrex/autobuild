@@ -62,6 +62,11 @@ const ROUTE_DIRECTORY = join('server', 'app', 'api', 'dispatch')
 /** The operator HTTP route; retained legacy skill trace entry. */
 const OPERATOR_ROUTE_DIRECTORY = join('server', 'app', 'operator', '[[...path]]')
 
+/** The `/api/dispatch` route's Next.js trace file under a project. */
+export function dispatchTracePath(root: string, distDir = '.next'): string {
+  return join(root, distDir, ROUTE_DIRECTORY, TRACE_FILE)
+}
+
 /** The single packed archive under `<root>/.autobuild-dist/`. */
 export async function findArchive(root: string): Promise<string> {
   const dist = join(root, DIST_DIRECTORY)
@@ -90,7 +95,7 @@ export async function findArchive(root: string): Promise<string> {
   return join(dist, archives[0]!)
 }
 
-async function readTrace(path: string): Promise<string[]> {
+export async function readTrace(path: string): Promise<string[]> {
   let raw: string
   try {
     raw = await readFile(path, 'utf8')

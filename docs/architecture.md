@@ -58,7 +58,8 @@ surface with `packages/postgres-store`; the separate optional
 `packages/hosted-dispatcher` workspace owns the cron-driven hosted dispatcher
 (the `/api/dispatch` route driver, and the deploy-time `pack-distribution` and
 `ship-deployment` commands that pack the guest archive and ship it, its
-manifest and the selected provider plugins into the dispatch function) and
+manifest, a self-contained `linux-x64` Git for kernel node operations, and the
+selected provider plugins into the dispatch function) and
 peers on both the core and the store service. The optional `packages/vercel-sandbox` workspace publishes the
 `@defrex/autobuild-vercel-sandbox` provider plugin (AUT-517): while the
 builtin hosts the implementation, its manifest re-registers the provider name
@@ -81,7 +82,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/store/` | BuildStore contract spanning builds, the repository journal, and operator sessions; interface-enforced build, operator-session, and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
 | `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, the Next.js operator web app (`app/`, `server.ts`, `next.config.ts`, `vercel.json`), tests, and deployment guide | §7.2, §18 |
-| `packages/hosted-dispatcher/` | The optional cron-driven hosted dispatcher: endpoint driver, deploy-time `pack-distribution` and `ship-deployment` binary, packed-distribution trace helper, provider plugin shipper, tests, and operator guide | §7.2, §12, §18 |
+| `packages/hosted-dispatcher/` | The optional cron-driven hosted dispatcher: endpoint driver, deploy-time `pack-distribution` and `ship-deployment` binary, packed-distribution trace helper, Git stager (`ship-git.ts`, `elf.ts`) and runtime locator (`shipped-git.ts`), provider plugin shipper, tests, and operator guide | §7.2, §12, §18 |
 | `packages/vercel-sandbox/` | Published `@defrex/autobuild-vercel-sandbox` provider plugin: transitional manifest over the shared capability object with a guarded factory (implementation stays builtin-hosted until AUT-505) | §3.2.1 |
 | `packages/hosted-store-service/server.ts`, `packages/hosted-store-service/vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
@@ -1828,6 +1829,11 @@ Skipped polls preserve the episode across restart. After
 `policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
 notifies default watchers and appears on the build row. A successful attempt
 clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+A dispatcher that cannot execute Git for kernel node work (a missing or
+unloadable `git` for the bare clone) records no janitor failures. It records
+one durable `dispatcher.kernel-git-unavailable` repository condition, node work
+waits, and `dispatcher.kernel-git-recovered` closes the condition once a clone
+succeeds.
 
 A classified forge rate limit records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery

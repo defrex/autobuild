@@ -826,6 +826,30 @@ test('forge readiness notices only accept hard check keys and dispatcher authors
   expect(() => validateRepositoryEventWrite({ ...notice, actor: humanActor('user') })).toThrow()
 })
 
+test('kernel Git condition events are bounded and dispatcher-authored', () => {
+  const unavailable = {
+    actor: DISPATCHER,
+    type: 'dispatcher.kernel-git-unavailable' as const,
+    payload: { executable: 'git', detail: 'Executable not found in $PATH: "git"' },
+  }
+  expect(validateRepositoryEventWrite(unavailable)).toEqual(unavailable)
+  const recovered = {
+    actor: DISPATCHER,
+    type: 'dispatcher.kernel-git-recovered' as const,
+    payload: { executable: 'git' },
+  }
+  expect(validateRepositoryEventWrite(recovered)).toEqual(recovered)
+  for (const payload of [
+    { executable: '', detail: 'x' },
+    { executable: 'git', detail: '' },
+    { executable: 'git', detail: 'x'.repeat(1_001) },
+    { executable: 'git', detail: 'x', extra: true },
+  ])
+    expect(() => validateRepositoryEventWrite({ ...unavailable, payload })).toThrow()
+  expect(() => validateRepositoryEventWrite({ ...unavailable, actor: KERNEL })).toThrow()
+  expect(() => validateRepositoryEventWrite({ ...recovered, actor: humanActor('user') })).toThrow()
+})
+
 test('harvest provider evidence retains configured indexes after native alternate reordering', () => {
   const failed = {
     index: 2,

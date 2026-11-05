@@ -20,6 +20,23 @@ describe('createForge', () => {
     expect(forge.name).toBe('github')
   })
 
+  test('routes the GitHub builtin kernel Git through an injected exec', async () => {
+    const calls: string[][] = []
+    const forge = await createForge({
+      name: 'github',
+      registry: createPluginRegistry(),
+      env: { GITHUB_TOKEN: 'secret' },
+      repoRoot: '.',
+      repository: 'https://github.com/acme/app',
+      exec: async (cmd) => {
+        calls.push(cmd)
+        return { stdout: '', stderr: '', exitCode: 0 }
+      },
+    })
+    await forge.kernelExec!(['git', 'rev-parse', 'HEAD'], {})
+    expect(calls).toEqual([['git', 'rev-parse', 'HEAD']])
+  })
+
   test('constructs the reserved local-git builtin', async () => {
     const forge = await createForge({
       name: 'local-git',

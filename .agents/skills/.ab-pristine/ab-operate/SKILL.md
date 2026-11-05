@@ -582,6 +582,11 @@ Skipped polls preserve the episode across restart. After
 `policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
 notifies default watchers and appears on the build row. A successful attempt
 clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+A dispatcher that cannot execute Git for kernel node work (a missing or
+unloadable `git` for the bare clone) records no janitor failures. It records
+one durable `dispatcher.kernel-git-unavailable` repository condition, node work
+waits, and `dispatcher.kernel-git-recovered` closes the condition once a clone
+succeeds.
 
 A classified forge rate limit records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery

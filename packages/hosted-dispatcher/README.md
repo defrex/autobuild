@@ -32,13 +32,47 @@ dispatch function installs and loads. The bin has two commands for that:
   It removes archives left over from other versions.
 - `ship-deployment [--root DIR] [--dist-dir DIR] [--plugin NAME]...`, run after
   `next build`, appends the archive and the distribution manifest to the
-  `/api/dispatch` route's Next.js trace. It then stages each selected provider
-  plugin into the function bundle. It fails the build, naming the missing
-  piece, when it cannot ship the archive, the manifest or a selected plugin,
-  and when the archive's version differs from the installed `@defrex/autobuild`.
+  `/api/dispatch` route's Next.js trace. It then stages the deployment's own
+  Git (see [Shipped Git](#shipped-git)) and each selected provider plugin into
+  the function bundle. It fails the build, naming the missing piece, when it
+  cannot ship the archive, the manifest, Git or a selected plugin, and when the
+  archive's version differs from the installed `@defrex/autobuild`.
 
 The hosted store service's published `ab-hosted-service-build` runs both
 commands automatically when this package is installed.
+
+### Shipped Git
+
+Node operations (snapshotting a node's parent, restacking, proving a change is
+present, landing) run `git` on a bare clone inside the dispatch function. The
+Vercel Function runtime has no `git`, so the deployment ships its own:
+`ship-deployment` copies the build host's Git into `<root>/.autobuild-git/`
+and adds it to the `/api/dispatch` bundle, about 55 MB. The tree is
+self-contained: Git, its HTTPS remote helpers, the complete shared-library
+closure including glibc and the dynamic loader, and a CA bundle.
+
+- **Platform.** The target is `linux-x64`, and the build host must be one, as
+  Vercel's build image is. On any other host `ship-deployment` fails, naming
+  both platforms. It also fails when the host lacks `git`, `ldd`, Git's HTTPS
+  helper or a CA bundle, or when a library cannot be resolved.
+- **Proof at build time.** Every staged program is checked statically to load
+  only from the tree. The build then runs the staged Git with an empty `PATH`,
+  clones over HTTP on loopback, and fails if anything loaded from the build
+  host. The build log reports the Git and glibc versions, the size Git adds
+  and the dispatch function's total.
+- **Runtime contract.** An x86_64 Linux kernel at least as new as the bundled
+  glibc supports (recorded in the manifest, 3.2 for current glibc) and a
+  writable `/tmp`. Each function instance copies the tree to a fixed
+  `/tmp/abg…` path once before its first Git command.
+- **Isolation.** Every kernel Git command of a tick runs the shipped Git with
+  its own libraries, no system or global Git config, and HTTPS as the only
+  transport, so it never starts a host program. The tick log line says
+  `kernelGit=shipped:<version>`, or `kernelGit=host-path (<reason>)` when the
+  tree could not be used.
+
+If Git still cannot run, the dispatcher records one
+`dispatcher.kernel-git-unavailable` repository event, node work waits, and
+`dispatcher.kernel-git-recovered` closes the condition once a clone succeeds.
 
 ### Which provider plugins ship
 
