@@ -108,6 +108,18 @@ test('backlog and rejected may not share a state with a dispatcher role or each 
   expect(refusal({ ...file, backlogState: 'parked', rejectedState: 'Parked' })).toContain(
     'the backlog and rejected roles must name different states',
   )
+  // The file source ignores claimedState and doneState overrides: it always
+  // claims into doing and completes into Done, so those stay refused.
+  const overridden = { ...file, claimedState: 'building', doneState: 'completed' }
+  expect(refusal({ ...overridden, rejectedState: 'doing' })).toContain(
+    '([tickets].claimedState resolves to "doing"); the rejected and claimed roles',
+  )
+  expect(refusal({ ...overridden, backlogState: 'done' })).toContain(
+    '([tickets].doneState resolves to "Done"); the backlog and done roles',
+  )
+  expect(refusal({ ...overridden, backlogState: 'completed' })).toContain(
+    'the backlog and done roles must name different states',
+  )
   // Linear's default triage state is Backlog, so the overlap names both keys.
   expect(
     refusal({ source: 'linear', teamKey: 'ENG', readyState: 'Todo', backlogState: 'Backlog' }),

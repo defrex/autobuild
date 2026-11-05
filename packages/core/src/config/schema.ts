@@ -970,6 +970,8 @@ documentSchema(ticketsInputSchema.shape.dir, {
   constraints:
     'Forbidden for linear and hosted. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.',
 })
+const FILE_CLAIMED_STATE = 'doing'
+const FILE_DONE_STATE = 'Done'
 const OPTIONAL_ROLES = [
   ['backlog', 'backlogState'],
   ['rejected', 'rejectedState'],
@@ -987,25 +989,30 @@ const DISPATCHER_ROLES = [
  * other lifecycle names say, and the two may not share a state. */
 function refuseOptionalRoleOverlap(tickets: TicketsConfig, ctx: z.RefinementCtx): void {
   const names = ticketLifecycle({ ...tickets, readyState: tickets.readyState ?? 'ready' })
-  const resolved = {
-    ready: names.ready,
-    claimed: names.doing,
-    done: names.done,
-    triage: names.triage,
-    proposal: names.proposal,
-    backlog: names.backlog,
-    rejected: names.rejected,
+  // The file source ignores claimedState and doneState: claims always move
+  // into doing and completion is Done. Check the states it actually uses as
+  // well as the configured spellings.
+  const file = tickets.source === 'file'
+  const resolved: Record<string, (string | undefined)[]> = {
+    ready: [names.ready],
+    claimed: file ? [FILE_CLAIMED_STATE, tickets.claimedState] : [names.doing],
+    done: file ? [FILE_DONE_STATE, tickets.doneState] : [names.done],
+    triage: [names.triage],
+    proposal: [names.proposal],
+    backlog: [names.backlog],
+    rejected: [names.rejected],
   }
   for (const [index, [role, key]] of OPTIONAL_ROLES.entries()) {
     const name = tickets[key]
     if (name === undefined) continue
     const others = [...DISPATCHER_ROLES, ...OPTIONAL_ROLES.slice(index + 1)]
     for (const [other, otherKey] of others) {
-      if (!holdsState(name, resolved[other])) continue
+      const held = resolved[other]?.find((state) => holdsState(name, state))
+      if (held === undefined) continue
       ctx.addIssue({
         code: 'custom',
         path: [key],
-        message: `[tickets].${key} "${name}" names the same state as the ${other} role ([tickets].${otherKey} resolves to "${resolved[other]}"); the ${role} and ${other} roles must name different states`,
+        message: `[tickets].${key} "${name}" names the same state as the ${other} role ([tickets].${otherKey} resolves to "${held}"); the ${role} and ${other} roles must name different states`,
       })
     }
   }
