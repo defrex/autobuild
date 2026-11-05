@@ -108,7 +108,8 @@ streams build and repository events by polling the same event logs client-side
 (the store protocol's `GET /builds/{slug}/events` and `GET /repos/{repo}/events`
 reads), not as a transport on this API. `triageState`, `readyState`,
 `doneState`, and every entry in `states` are backend state names and must be sent back verbatim
-when used with the move control.
+when used as the move control's `state`. A move may instead name a lifecycle `role`,
+which the service resolves through the repository's `[tickets]` configuration.
 
 ## Controls
 
@@ -126,7 +127,7 @@ JSON bodies are strict: unknown fields are rejected.
 | `POST …/tickets/states` | `{name,about?}` → `{state,created}`; requires attributed operator identity (`tickets.state.create` in MCP). Hosted duplicate names are refused case-insensitively. |
 | `POST …/tickets` | `{"title":"…","body":"…","labels"?:[],"state"?:"…","blockedBy"?:[],"issueLinks"?:[{"issue":N,"intent"?:"closes"|"refs"}],"kind"?:"work"|"node","target"?:"id"|null}`; omitted state preserves the backend default, and omitted intent is `closes`. A backend that cannot store issue links refuses with `code: "issue-links-unsupported"`. |
 | `PATCH …/tickets/{id}` | Any nonempty subset of `title`, `body`, complete-replacement `labels`, complete-replacement `issueLinks` (`[]` clears), `kind` (`work` or `node`), and nullable `target` (null clears). Body bytes are not normalized. |
-| `POST …/tickets/{id}/move` | `{"state":"backend state name"}`. |
+| `POST …/tickets/{id}/move` | Exactly one of `{"state":"backend state name"}` or `{"role":"triage"\|"ready"\|"backlog"\|"rejected"}`; both or neither is `400 validation` (`tickets.move` in MCP takes the same target). A role resolves to the configured `triageState`, `readyState`, `backlogState`, or `rejectedState`. An unset `backlogState` or `rejectedState` refuses with a message naming the key to set, and never guesses a native state. A source that can create states creates a missing role state before moving. |
 | `POST …/tickets/{id}/block` | `{"blockerIds":["…"]}`. |
 | `POST …/tickets/{id}/unblock` | `{"blockerIds":["…"]}`. |
 
