@@ -177,6 +177,37 @@ export function describeTicketSourceContract(
       })
     })
 
+    test('bounded state counts agree with listed states when declared', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        if (!source.countStates || !source.listStates) return
+        await createTracked(
+          harness,
+          { title: contractTicketTitle('state-counts'), body: CONTRACT_TICKET_BODY },
+          { state: harness.states.ready },
+        )
+        const listed = await source.listStates()
+        const ready = listed.find((state) => state.name === harness.states.ready)
+        // A forwarding client whose backend cannot enumerate states lists none.
+        if (ready === undefined) return
+        expect(ready.tickets).toBeGreaterThan(0)
+        for (let i = 0; i < listed.length; i += 16) {
+          const chunk = listed.slice(i, i + 16)
+          expect(await source.countStates(chunk.map((state) => state.name))).toEqual(
+            chunk.map(({ name, tickets }) => ({ name, tickets })),
+          )
+        }
+        const flipped = harness.states.ready.toUpperCase()
+        const unique =
+          listed.filter((state) => state.name.toLowerCase() === flipped.toLowerCase()).length === 1
+        if (unique && flipped !== harness.states.ready)
+          expect(await source.countStates([flipped])).toEqual([
+            { name: harness.states.ready, tickets: ready.tickets },
+          ])
+        expect(await source.countStates([`missing-${crypto.randomUUID()}`])).toEqual([])
+      })
+    })
+
     test('optional integration tree metadata preserves graph invariants', async () => {
       await withTicketSource(factory, async (harness) => {
         const source = harness.source

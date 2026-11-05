@@ -5,7 +5,7 @@ import {
   validateStateName,
   validateStatePurpose,
 } from '@defrex/autobuild/hosted-tickets'
-import { seedTicketStates, lockTicketStates } from './ticket-states'
+import { seedTicketStates, lockTicketStates, readTicketStateCounts } from './ticket-states'
 import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
 import { SQL } from 'bun'
 import { normalizeIssueLinks } from '@defrex/autobuild/plugin-sdk'
@@ -21,6 +21,7 @@ import type {
   TicketPageListing,
   TicketSource,
   TicketUpdate,
+  TicketStateCount,
   TicketStateInfo,
   TicketMutation,
 } from '@defrex/autobuild/plugin-sdk'
@@ -142,6 +143,12 @@ export class PostgresTicketSource implements TicketSource {
 
   async listStates(): Promise<TicketStateInfo[]> {
     return this.retry.tx(this.sql, (q) => this.states(q))
+  }
+
+  async countStates(names: readonly string[]): Promise<TicketStateCount[]> {
+    return this.retry.tx(this.sql, (q) =>
+      readTicketStateCounts(q, this.repo, this.configured, names),
+    )
   }
 
   async addState(

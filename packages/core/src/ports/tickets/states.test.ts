@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import {
+  matchStateNames,
   orderStates,
   resolveState,
   triageStateCount,
@@ -57,4 +58,14 @@ test('triage count matches like resolveState and reports unknown without a uniqu
       'triage',
     ),
   ).toBe(2)
+})
+
+test('matchStateNames resolves canonical names in request order and drops misses', () => {
+  const existing = ['Triage', 'Ready', 'icebox', 'Done', 'DONE']
+  expect(matchStateNames(['triage', 'ICEBOX', 'Triage', 'missing'], existing)).toEqual([
+    'Triage',
+    'icebox',
+  ])
+  expect(matchStateNames(['done'], existing)).toEqual([])
+  expect(matchStateNames(['Done'], existing)).toEqual(['Done'])
 })
