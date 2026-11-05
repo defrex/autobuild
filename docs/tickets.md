@@ -42,7 +42,7 @@ Your operator agent grooms the ticket with you using `ab-spec`, then moves it to
 
 When the work comes from a forge issue, record it on the ticket: `--issues 824` when the ticket fully resolves issue #824 (`closes`, the default), or `--issues 820:refs` when it only partly addresses it. `ab ticket update --issues` replaces the set and `--issues ''` clears it. Sources that can't store issue links refuse the write and name the source.
 
-A build freezes the links when it claims the ticket. On GitHub, a leaf build that targets the default branch writes `Closes #824` or `Refs #820` lines at the end of its PR body and before the trailers of its landed commit, so merging closes each fully resolved issue and back-links the rest. A leaf that targets a node branch writes no lines of its own; its links ride up to the root node's PR into the default branch, so they close when the node lands. A build that turns out to only partly resolve an issue downgrades it to `refs` with a recorded reason.
+A build freezes the links when it claims the ticket. On GitHub, a leaf build that targets the default branch writes `Closes #824` or `Refs #820` lines at the end of its PR body and before the trailers of its landed commit, so merging closes each fully resolved issue and back-links the rest. A leaf that targets a node branch writes only `Refs` lines into its PR body, which never close anything, and none into its landed commit; its links ride up to the root node's PR into the default branch, together with the node's own links, so they close when the node lands. A build that turns out to only partly resolve an issue downgrades it to `refs` with a recorded reason.
 
 ```sh
 bun ab ticket create "Close stale sandboxes" --body spec.md --issues 824,820:refs
