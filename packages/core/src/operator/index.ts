@@ -89,6 +89,7 @@ export type {
 } from './tickets'
 export {
   openOperatorTickets,
+  operatorControlTickets,
   prepareOperatorTicketAssets,
   listOperatorTicketStates,
   createOperatorTicketState,

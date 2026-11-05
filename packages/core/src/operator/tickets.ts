@@ -101,6 +101,30 @@ export async function openOperatorTickets(opts: {
   return { context, source: compatibleTicketSource(await opts.backend.sourceFor(context)) }
 }
 
+/** Lazily open a repository's operator tickets once for a build control:
+ * node merge completeness needs the source and the configured rejected role,
+ * and only the land path reaches either. */
+export function operatorControlTickets(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend | undefined
+}): {
+  ticketSource: () => Promise<TicketSource>
+  rejectedState: () => Promise<string | undefined>
+} {
+  let opened: ReturnType<typeof openOperatorTickets> | undefined
+  const tickets = () => {
+    const backend = opts.backend
+    if (!backend) throw new Error('ticket source unavailable')
+    opened ??= openOperatorTickets({ store: opts.store, repo: opts.repo, backend })
+    return opened
+  }
+  return {
+    ticketSource: async () => (await tickets()).source,
+    rejectedState: async () => ticketLifecycle((await tickets()).context.tickets).rejected,
+  }
+}
+
 export async function listOperatorTickets(opts: {
   store: BuildStore
   repo: string

@@ -2,7 +2,7 @@ import { readBuildPage } from '../store/event-reads'
 import { requestNodeRestack } from './restack'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
-import { openOperatorTickets } from './tickets'
+import { openOperatorTickets, operatorControlTickets } from './tickets'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
 import { TicketIssueLinksUnsupported } from '../ports/tickets/issue-links'
 /**
@@ -632,12 +632,7 @@ export const TOOLS: readonly ToolEntry[] = [
             : { kind: input.action }
       return controlBuild({
         store: ctx.store,
-        ticketSource: async () => {
-          if (!ctx.tickets) throw new Error('ticket source unavailable')
-          return (
-            await openOperatorTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets })
-          ).source
-        },
+        ...operatorControlTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets }),
         repo: input.repo,
         slug: input.slug,
         user: attributed(ctx),
