@@ -314,6 +314,38 @@ describe('FakeForge', () => {
     await expect(forge.updatePrIssueLinks!('/ws/a', pr.number, links)).rejects.toThrow('not open')
   })
 
+  test('PR issue-link updates neutralize a closing title reference', async () => {
+    const forge = new FakeForge({ closesIssues: true })
+    const pr = await forge.openPr(prOpts({ title: 'Integration: N fixes #5', body: 'x\n' }))
+    await forge.updatePrIssueLinks!('/ws/a', pr.number, [{ issue: 5, intent: 'refs' }])
+    expect(forge.opened[0]).toMatchObject({
+      title: 'Integration: N refs #5',
+      body: 'x\n\nRefs #5\n',
+    })
+  })
+
+  test('adopting an open PR with links converges its title and body idempotently', async () => {
+    const forge = new FakeForge({ closesIssues: true })
+    const pr = await forge.openPr(
+      prOpts({ title: 'Fix #820', body: 'x\n\nCloses #820', mergeMessage: 'Fix #820\n' }),
+    )
+    const links = [{ issue: 820, intent: 'refs' as const }]
+    const retry = prOpts({ title: 'Other', body: 'other', issueLinks: links })
+    expect((await forge.openPr(retry)).number).toBe(pr.number)
+    expect(forge.opened).toHaveLength(1)
+    expect(forge.opened[0]).toMatchObject({
+      title: 'Refs #820',
+      body: 'x\n\nRefs #820',
+      mergeMessage: 'Fix #820\n',
+    })
+    expect(forge.issueLinkAdoptions).toEqual([{ number: pr.number, issueLinks: links }])
+    await forge.openPr(retry)
+    expect(forge.opened[0]!.body).toBe('x\n\nRefs #820')
+    // Without links, adoption leaves the PR alone.
+    await forge.openPr(prOpts({ title: 'Other' }))
+    expect(forge.issueLinkAdoptions).toHaveLength(2)
+  })
+
   test('guarded squash rejects a moved head and never journals or lands it', async () => {
     const forge = new FakeForge({ gatePresence: 'absent', headSha: 'old-head' })
     const pr = await forge.openPr(prOpts())
