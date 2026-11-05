@@ -269,7 +269,7 @@ describe('finalize seals and composes issue links', () => {
     expect((await state()).issueLinks).toEqual(LINKS)
   })
 
-  test('a leaf aimed at a node writes no keywords into its PR', async () => {
+  async function seedNodeTargetLeaf() {
     await store.close()
     store = await seedStore({
       issueLinks: LINKS,
@@ -280,9 +280,53 @@ describe('finalize seals and composes issue links', () => {
       kind: 'pr-description',
       content: '# Title\n\nfixes #824 here\n',
     })
+  }
+
+  test('a leaf aimed at a node writes refs-only lines into its PR', async () => {
+    await seedNodeTargetLeaf()
     const forge = new FakeForge({ closesIssues: true })
     await done(finalizeDeps(forge))
-    expect(forge.opened[0]).toMatchObject({ base: 'ab-node/site', body: 'fixes #824 here\n' })
+    expect(forge.opened[0]).toMatchObject({
+      base: 'ab-node/site',
+      body: 'refs #824 here\n\nRefs #820\nRefs #824\n',
+    })
+  })
+
+  test('re-finalizing a node-target leaf converges an adopted PR without duplicating lines', async () => {
+    await seedNodeTargetLeaf()
+    const forge = new FakeForge({ closesIssues: true })
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+    forge.setHeadSha(head)
+    await forge.openPr({
+      workspacePath: workspace,
+      head: BRANCH,
+      base: 'ab-node/site',
+      title: 'Fix #820',
+      body: 'x\n\nCloses #820',
+    })
+    const failing = Object.create(store) as MemoryBuildStore
+    let fail = true
+    failing.appendWithArtifactsIfCurrent = (async (slug, cursor, artifacts, make) => {
+      if (fail && make([]).type === 'finalize.completed') {
+        fail = false
+        throw new Error('injected append failure')
+      }
+      return store.appendWithArtifactsIfCurrent(slug, cursor, artifacts, make)
+    }) as MemoryBuildStore['appendWithArtifactsIfCurrent']
+
+    await expect(done(finalizeDeps(forge, failing))).rejects.toThrow(/injected append failure/)
+    expect(forge.opened).toHaveLength(1)
+    expect(forge.opened[0]).toMatchObject({ title: 'Refs #820', body: 'x\n\nRefs #820\nRefs #824' })
+    const refsOnly = [
+      { issue: 820, intent: 'refs' as const },
+      { issue: 824, intent: 'refs' as const },
+    ]
+    expect(forge.issueLinkAdoptions).toEqual([{ number: 1, issueLinks: refsOnly }])
+
+    await done(finalizeDeps(forge, failing))
+    expect(forge.opened).toHaveLength(1)
+    expect(forge.opened[0]).toMatchObject({ title: 'Refs #820', body: 'x\n\nRefs #820\nRefs #824' })
+    expect(forge.issueLinkAdoptions).toHaveLength(2)
   })
 
   test('a build without links appends no seal', async () => {
