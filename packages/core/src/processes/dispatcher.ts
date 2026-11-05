@@ -3364,10 +3364,11 @@ export class Dispatcher {
         throw new Error('node-target native auto-merge cancellation unconfirmed')
       nativeCancelled = true
     }
-    // Keep a root node's PR body on its children's union. A pure comparison
-    // with the last confirmed readback: no forge call while nothing changed.
+    // Keep a node PR's keyword lines on its set (refs-only into a parent). A
+    // pure comparison with the last confirmed readback: no forge call while
+    // nothing changed.
     const issueLinksPending =
-      integration && !nodeTarget && prState.state === 'open' && !executionLeaseLive
+      integration && prState.state === 'open' && !executionLeaseLive
         ? nodeIssueLinksSyncPending(state, forge)
         : undefined
     if (issueLinksPending) {
@@ -6494,8 +6495,9 @@ export class Dispatcher {
     )
       return
     let pr: Awaited<ReturnType<typeof forge.openPr>>
-    // A root node's PR carries its landed children's union from the start;
-    // checkPr keeps it current as later children land.
+    // A node's PR carries its set (its own links and its landed children's
+    // union) from the start, refs-only into a parent; checkPr keeps it
+    // current as later children land.
     const issueLinks = nodeIssueLinksForForge(state, forge)
     try {
       pr = await forge.openPr({

@@ -2562,36 +2562,50 @@ body or landing message, including `owner/name#N` and issue URLs for the
 adapter's own repository, is rewritten to `refs`. A forge without the
 capability records links without emitting them.
 
-A leaf targeting a node writes no keywords into its own PR or landed commit,
-because only the default branch closes issues. Its links travel to the node
-instead. When a child of node N, a leaf or a nested node, reaches `pr.merged`
+A leaf targeting a node cannot close anything, because only the default
+branch closes issues. Its PR body still ends with one `Refs #N` line per linked
+issue, ascending by number, whatever each link's intent, so each issue shows
+the PR, and every closing keyword aimed at a linked issue in its title or body
+is rewritten to `refs`. Its landed commit carries no keyword lines. Its links
+travel to the node. When a child of node N, a leaf or a nested node, reaches `pr.merged`
 by kernel landing, human merge or abort cleanup, the dispatcher appends
 `node.issue-links-recorded {build, issueLinks}` to N before the child completes.
 Until that fact exists, a merged child with links that has not completed stays
 one of N's open children, even when it is aborted or its ticket no longer
 targets N, so N cannot verify or land without its contribution. The payload is the child's contribution: a leaf's effective links, with
 `downgraded: true` where a downgrade applied before its seal, or a nested node's
-own union. Every contributing child gets its own fact, even when the union does
+set: its own effective links, with the same downgrade provenance, merged with
+its union. Every contributing child gets its own fact, even when the union does
 not change, and N's reducer keeps the recorded child slugs so a retry never
 records twice. N's reducer folds contributions into a running union, never
 re-reading child history. Per issue, a downgrade by any child makes it `refs`;
 otherwise any `closes` makes it `closes`; an issue every child only references
-stays `refs`. A node ticket's own links are not part of the union.
+stays `refs`.
 
-Only a root node's PR into the default branch carries the union, and only
-through a forge with both `closesIssues` and `updatePrIssueLinks`. The PR opens
-with the union, and each later contribution rewrites the body's keyword lines
-through `updatePrIssueLinks`, which preserves prose, writes only on change and
-confirms by readback. `node.issue-links-published {pr, issueLinks}` records the
-confirmed lines, so a poll compares reduced state and calls the forge only when
-the union or PR changed. Before the kernel lands a root node it refreshes the
-body to the final union and confirms the readback, whatever was published; a
-failure stops the attempt before any merge request. Merging the node PR, by the
+A node's set is its own effective links merged with its union under the same
+per-issue rules. A root node's PR into the default branch carries the set, and
+only through a forge with both `closesIssues` and `updatePrIssueLinks`. The PR
+opens with the set, and each later contribution rewrites the body's keyword
+lines through `updatePrIssueLinks`, which preserves prose, neutralizes closing
+references to `refs` issues in the title, writes only on change and confirms by
+readback. `node.issue-links-published {pr, issueLinks}` records the confirmed
+lines, so a poll compares reduced state and calls the forge only when the set
+or PR changed. An open root PR whose confirmed lines predate the node's own
+links gains them on its next sync. Before the kernel lands a root node it
+refreshes the body to the final set and confirms the readback, whatever was
+published; a failure stops the attempt before any merge request. Merging the node PR, by the
 kernel's rebase landing or a human, closes every fully resolved issue. Landed
 child commits keep their own messages and carry no keywords, so one child's
-`Closes` cannot override another child's downgrade. A nested node's PR never
-carries keywords. A forge lacking either capability records the union and
-emits nothing.
+`Closes` cannot override another child's downgrade. A nested node's PR into its
+parent carries its set as refs-only lines, kept current the same way. A forge
+lacking either capability records the union and emits nothing.
+
+When a `closesIssues` adapter's `openPr` adopts an existing open PR for the
+head with links, it converges that PR as a fresh one would be composed: it
+neutralizes the kept title, recomposes the body's keyword lines, writes only on
+change and confirms by readback. The title, prose and merge message are never
+replaced, so a retry, re-finalize, reconcile or hand-opened PR carries the same
+lines as the first publication, never duplicated.
 
 In repositories with integration nodes, a blocker that has a build resolves only
 when its change identity is present in the dependent's sampled target head
@@ -2680,8 +2694,9 @@ Merge refuses incomplete nodes and names open children; `ab hold` remains availa
 Node parents and local-git roots receive guarded fast-forwards, preserving one
 commit and identity trailer per contributing build. GitHub shared roots use the
 PR rebase endpoint guarded on verified head, after a final parent freshness read.
-A root node's PR body carries its landed children's issue links and is refreshed
-before landing, so merging it closes them (see Forge issue links).
+A root node's PR body carries the node's own issue links and its landed
+children's, and is refreshed before landing, so merging it closes them (see
+Forge issue links).
 Authoritative enforced up-to-date protection records fenced merge; uncertainty
 records unfenced merge and triggers immutable merged-tree comparison. A mismatch
 raises operator attention and never rewrites the shared parent.
