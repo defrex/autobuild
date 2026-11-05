@@ -53,6 +53,7 @@ import {
   dispatcherOrigin,
   type HostedStoreEnv,
 } from '@defrex/autobuild-hosted-store-service'
+import { locateShippedGitOnce, shippedGitExec, type LocateShippedGitResult } from './shipped-git'
 
 /** The service environment the dispatcher reads. Secrets are only ever taken
  * through `parseHostedStoreEnv`'s already-validated fields. */
@@ -236,6 +237,11 @@ export interface HostedDispatcherOptions {
   /** The kernel entry. Defaults to the real `abDispatch`; integration tests
    * wrap it with `wire`/`nonStoreWire` fakes and `originConfigTransport`. */
   dispatch?: (opts: DispatchOpts) => Promise<void>
+  /** Find the deployment's shipped Git (`ship-deployment` stages it). Resolved
+   * once per invocation; defaults to the per-process memoized locator. When it
+   * fails, kernel Git falls back to the host `PATH` and the kernel reports the
+   * durable kernel-Git condition if that cannot run either. */
+  locateGit?: () => Promise<LocateShippedGitResult>
   /** Where the kernel's own report lines go. Unset, they are forwarded to
    * `log`/`logError` prefixed with the repository so a deployment's runtime
    * logs carry every tick report and warning the kernel prints locally. */
@@ -340,6 +346,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
   const dispatch = options.dispatch ?? ((opts: DispatchOpts) => abDispatch(opts))
   const log = options.log ?? ((line: string) => console.log(line))
   const logError = options.logError ?? ((line: string) => console.error(line))
+  const locateGit = options.locateGit ?? locateShippedGitOnce
   return {
     async tick(
       invocation = invocationId(),
@@ -351,8 +358,20 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
       const now = clock().getTime()
       const deadlineAt = now + config.budgetSeconds * 1000
       const sandboxAuth = sandboxAuthSource(env, credentials)
+      // Every kernel Git command of the tick runs the shipped Git: the plain
+      // exec seam and, in origin mode, the forge's credentialed kernelExec.
+      const git = await locateGit().catch(
+        (error: unknown): LocateShippedGitResult => ({
+          ok: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+      )
+      const exec = git.ok ? shippedGitExec(spawnExec, git.git, { PATH: env.PATH }) : spawnExec
+      const kernelGit = git.ok
+        ? `shipped:${git.git.manifest.gitVersion}`
+        : `host-path (${git.reason})`
       log(
-        `${LOG_PREFIX} ${invocation}: tick start repositories=${selected.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin} sandboxAuth=${sandboxAuth}`,
+        `${LOG_PREFIX} ${invocation}: tick start repositories=${selected.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin} sandboxAuth=${sandboxAuth} kernelGit=${kernelGit}`,
       )
       const repositories: HostedDispatcherRepositoryOutcome[] = []
       const placementFailures = new Set<string>()
@@ -487,7 +506,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             once: true,
             plain: true,
             env: childEnv,
-            exec: spawnExec,
+            exec,
             stdout: (line) => stdout(redact(line).replaceAll(token, '[redacted]')),
             stderr: (line) => stderr(redact(line).replaceAll(token, '[redacted]')),
             kernelRunId: runId,

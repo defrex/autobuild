@@ -735,6 +735,19 @@ export const forgeHealthEventPayloadSchemas = {
   }),
 } as const
 
+/** The dispatcher could not execute Git for kernel-side node work. One event
+ * opens the repository condition and one closes it; node janitors defer while
+ * it is active instead of each recording failed attempts. */
+export const kernelGitHealthEventPayloadSchemas = {
+  'dispatcher.kernel-git-unavailable': z.strictObject({
+    executable: z.string().min(1),
+    detail: z.string().min(1).max(1_000),
+  }),
+  'dispatcher.kernel-git-recovered': z.strictObject({
+    executable: z.string().min(1),
+  }),
+} as const
+
 export const ticketMigrationEventPayloadSchemas = {
   'tickets.migration-recorded': z
     .strictObject({
@@ -825,6 +838,7 @@ export const repositoryEventPayloadSchemas = {
   ...ticketPreparationEventPayloadSchemas,
   ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
+  ...kernelGitHealthEventPayloadSchemas,
   ...changePresenceEventPayloadSchemas,
   ...ticketSourceHealthEventPayloadSchemas,
   ...harvestEventPayloadSchemas,
@@ -847,6 +861,8 @@ export const REPOSITORY_ATTENTION_EVENTS = [
   'harvest.failed',
   'dispatcher.forge-degraded',
   'dispatcher.forge-recovered',
+  'dispatcher.kernel-git-unavailable',
+  'dispatcher.kernel-git-recovered',
   'dispatcher.ticket-source-degraded',
   'dispatcher.ticket-source-recovered',
   'dispatcher.tick-failed',
@@ -971,6 +987,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.ticket-source-dependency-limited': ['dispatcher'],
   'dispatcher.forge-degraded': ['dispatcher', 'kernel'],
   'dispatcher.forge-recovered': ['dispatcher', 'kernel', 'human'],
+  'dispatcher.kernel-git-unavailable': ['dispatcher'],
+  'dispatcher.kernel-git-recovered': ['dispatcher'],
   'dispatcher.ticket-source-degraded': ['dispatcher'],
   'dispatcher.ticket-source-recovered': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],

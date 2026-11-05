@@ -13,3 +13,7 @@ export type {
 export { ensureDistributionArchiveInTrace } from './ship-packed-distribution'
 export type { EnsureOptions, EnsureResult } from './ship-packed-distribution'
 export { dispatcherEndpoint } from './runtime'
+export { stageGitForDeployment } from './ship-git'
+export type { StageGitHost, StagedGit } from './ship-git'
+export { locateShippedGit, shippedGitExec } from './shipped-git'
+export type { ShippedGit, ShippedGitManifest } from './shipped-git'
