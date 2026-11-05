@@ -850,6 +850,33 @@ describe('agent tool registry contract', () => {
     expectJsonClean(tool)
   })
 
+  test('tickets.move by role matches the route, and both refuse zero or two targets', async () => {
+    const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
+    const call = api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+        ticketBackend: routeWorld.backend,
+      }),
+    )
+    const path = `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/AUT-2/move`
+    const route = await call('POST', path, { role: 'ready' })
+    const tool = await toolFor(toolWorld)('tickets.move', { repo, id: 'AUT-2', role: 'ready' })
+    expectEqual(tool, route.body)
+    expect((tool as { ticket: { state: string } }).ticket.state).toBe('Todo')
+    for (const body of [{}, { state: 'Todo', role: 'ready' }]) {
+      const refused = await call('POST', path, body)
+      expect(refused.status).toBe(400)
+      expect(JSON.stringify(refused.body)).toContain('exactly one of state or role')
+      const failure = await toolFailure(() =>
+        toolFor(toolWorld)('tickets.move', { repo, id: 'AUT-2', ...body }),
+      )
+      expect(JSON.stringify(failure)).toContain('exactly one of state or role')
+    }
+  })
+
   test('mapped failure bodies equal their routes, per tool', async () => {
     // Not-found build through the query service (OperatorQueryError path).
     const queryWorld = await seedWorld()

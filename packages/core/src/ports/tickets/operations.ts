@@ -9,7 +9,8 @@ import {
   TicketRevisionConflict,
   TicketRevisionUnsupported,
 } from './revision'
-import type { Config } from '../../config/schema'
+import type { Config, TicketsConfig } from '../../config/schema'
+import { holdsState, TICKET_MOVE_ROLES, ticketLifecycle, type TicketMoveRole } from './lifecycle'
 import { readyCriteria } from '../../processes/dispatcher'
 import type { Ticket, TicketDraft, TicketSource, TicketUpdate } from '../types'
 
@@ -168,6 +169,71 @@ export async function moveTicket(
     )
   }
   return requirePostMutationTicket(source, id, 'the move')
+}
+
+const OPTIONAL_ROLE_KEYS = {
+  backlog: {
+    key: 'backlogState',
+    holds: 'deferred work',
+    recommended: 'backlog',
+    about: 'Deferred on purpose; nothing dispatches from here',
+  },
+  rejected: {
+    key: 'rejectedState',
+    holds: 'declined work',
+    recommended: 'rejected',
+    about: 'Considered and declined; kept for the record',
+  },
+} as const
+
+/** The native state a role names, or a refusal naming the key that configures
+ * it. An unset optional role never falls back to a state sharing its name. */
+export function roleStateName(tickets: TicketsConfig, role: string): string {
+  if (!(TICKET_MOVE_ROLES as readonly string[]).includes(role)) {
+    throw new TicketOperationError(
+      'refusal',
+      `unknown ticket role "${role}"; expected one of ${TICKET_MOVE_ROLES.join(', ')}`,
+    )
+  }
+  const lifecycle = ticketLifecycle(tickets)
+  if (role === 'triage' || role === 'ready') return lifecycle[role]
+  const name = lifecycle[role as 'backlog' | 'rejected']
+  if (name !== undefined) return name
+  const { key, holds, recommended } = OPTIONAL_ROLE_KEYS[role as 'backlog' | 'rejected']
+  throw new TicketOperationError(
+    'refusal',
+    `the ${role} role is not configured for this repository; set [tickets].${key} to the native state that holds ${holds} (recommended: "${recommended}")`,
+  )
+}
+
+/** Move a ticket into a lifecycle role through this repository's [tickets]
+ * names. A source that creates states gets a missing role state on first use. */
+export async function moveTicketToRole(
+  source: TicketSource,
+  tickets: TicketsConfig,
+  id: string,
+  role: TicketMoveRole | string,
+  expectedRevision?: string,
+): Promise<Ticket> {
+  let state = roleStateName(tickets, role)
+  await requireTicket(source, id)
+  if (source.listStates) {
+    const known = (await source.listStates()).find((info) => holdsState(info.name, state))
+    if (known !== undefined) state = known.name
+    else if (source.addState) {
+      const about =
+        role === 'backlog' || role === 'rejected' ? OPTIONAL_ROLE_KEYS[role].about : undefined
+      try {
+        await source.addState(state, about === undefined ? {} : { about })
+      } catch (error) {
+        throw new TicketOperationError(
+          'refusal',
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    }
+  }
+  return moveTicket(source, id, state, expectedRevision)
 }
 
 export async function changeBlockers(

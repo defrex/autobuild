@@ -213,8 +213,8 @@ describe('FakeTicketSource', () => {
     ])
 
     expect(await source.dependencyStates(['t-1', 't-2', 't-404'])).toEqual([
-      { id: 't-1', exists: true, resolved: true, blockedBy: [] },
-      { id: 't-2', exists: true, resolved: false, blockedBy: ['t-1'] },
+      { id: 't-1', exists: true, resolved: true, state: 'Done', blockedBy: [] },
+      { id: 't-2', exists: true, resolved: false, state: 'Ready', blockedBy: ['t-1'] },
       { id: 't-404', exists: false, resolved: false, blockedBy: [] },
     ])
   })

@@ -99,7 +99,7 @@ interface RelationOwner {
 interface DependencyIssue extends RelationOwner {
   id?: string
   identifier: string
-  state: { type: string } | null
+  state: { name?: string; type: string } | null
 }
 interface Connection<T> {
   nodes: T[]
@@ -236,7 +236,7 @@ const PAGE_INFO = 'pageInfo { hasNextPage endCursor }'
 const DEPENDENCY_RELATIONS = 'type issue { identifier }'
 const READY_RELATIONS = 'id type issue { id identifier state { type } }'
 const relationFields = (ready: boolean) => (ready ? READY_RELATIONS : DEPENDENCY_RELATIONS)
-const dependencyFields = `id identifier state { type } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${DEPENDENCY_RELATIONS} } ${PAGE_INFO} }`
+const dependencyFields = `id identifier state { name type } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${DEPENDENCY_RELATIONS} } ${PAGE_INFO} }`
 const DEPENDENCY_QUERY = `query Dependencies($filter: IssueFilter!, $first: Int!, $after: String) { issues(filter: $filter, first: $first, after: $after, includeArchived: true) { nodes { ${dependencyFields} } ${PAGE_INFO} } }`
 const DEPENDENCY_FALLBACK_QUERY = `query Dependency($id: String!) { issue(id: $id) { ${dependencyFields} } }`
 const READY_FIELDS = `${METADATA_FIELDS} id identifier title description url state { name type } labels(first: ${READY_LABEL_PAGE_SIZE}) { nodes { name } ${PAGE_INFO} } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} }`
@@ -922,6 +922,7 @@ export class LinearTicketSource implements TicketSource {
         id,
         exists: !!issue,
         resolved: !!issue && RESOLVED_STATE_TYPES.has(issue.state?.type ?? ''),
+        ...(issue?.state?.name ? { state: issue.state.name } : {}),
         blockedBy: issue ? blockersOf(issue) : [],
       }
     })

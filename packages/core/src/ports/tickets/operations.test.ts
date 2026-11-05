@@ -1,7 +1,18 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { parseConfig } from '../../config/load'
+import { ticketsSchema } from '../../config/schema'
 import { FakeTicketSource } from './fake'
-import { changeBlockers, createTicket, ticketListCriteria, updateTicket } from './operations'
+import { FileTicketSource } from './file'
+import {
+  changeBlockers,
+  createTicket,
+  moveTicketToRole,
+  ticketListCriteria,
+  updateTicket,
+} from './operations'
 
 const config = parseConfig(`
 [tickets]
@@ -72,4 +83,70 @@ test('guarded blockers are one adapter call and legacy plugins cannot silently d
     updateTicket(source, target.ref.id, { title: 'Lost' }, false, before!.revision),
   ).rejects.toThrow('does not support')
   expect(await source.get(target.ref.id)).toEqual(before)
+})
+
+describe('moving by role', () => {
+  const roles = ticketsSchema.parse({
+    source: 'file',
+    readyState: 'ready',
+    triageState: 'triage',
+    backlogState: 'Icebox',
+    rejectedState: 'rejected',
+  })
+  const bare = ticketsSchema.parse({ source: 'file', readyState: 'ready', triageState: 'triage' })
+
+  test('each role resolves through the configured native names', async () => {
+    const source = new FakeTicketSource()
+    const ticket = await source.create({ title: 'T', body: 'b' })
+    for (const [role, state] of [
+      ['backlog', 'Icebox'],
+      ['rejected', 'rejected'],
+      ['ready', 'ready'],
+      ['triage', 'triage'],
+    ] as const) {
+      expect((await moveTicketToRole(source, roles, ticket.ref.id, role)).state).toBe(state)
+    }
+  })
+
+  test('an unconfigured role is refused naming its key, never a same-named state', async () => {
+    const source = new FakeTicketSource()
+    const ticket = await source.create({ title: 'T', body: 'b' })
+    await source.transition(ticket.ref.id, 'triage')
+    await expect(moveTicketToRole(source, bare, ticket.ref.id, 'backlog')).rejects.toThrow(
+      'the backlog role is not configured for this repository; set [tickets].backlogState',
+    )
+    await expect(moveTicketToRole(source, bare, ticket.ref.id, 'rejected')).rejects.toThrow(
+      '[tickets].rejectedState',
+    )
+    await expect(moveTicketToRole(source, bare, ticket.ref.id, 'doing')).rejects.toThrow(
+      'unknown ticket role "doing"',
+    )
+    expect((await source.get(ticket.ref.id))?.state).toBe('triage')
+  })
+
+  test('the file source creates a role state on first use, and a custom backlog is not the role', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-role-move-'))
+    try {
+      const source = new FileTicketSource({ dir, createState: 'triage', doneState: 'done' })
+      const ticket = await source.create({ title: 'T', body: 'b' })
+      await source.addState('backlog')
+      await expect(moveTicketToRole(source, bare, ticket.ref.id, 'backlog')).rejects.toThrow(
+        'backlogState',
+      )
+      const fileRoles = { ...roles, backlogState: 'icebox' }
+      const iced = await moveTicketToRole(source, fileRoles, ticket.ref.id, 'backlog')
+      expect(iced.state).toBe('icebox')
+      const rejected = await moveTicketToRole(source, fileRoles, ticket.ref.id, 'rejected')
+      expect(rejected.state).toBe('rejected')
+      expect(await readdir(dir)).toEqual(expect.arrayContaining(['backlog', 'icebox', 'rejected']))
+      expect((await source.listStates()).find((s) => s.name === 'rejected')?.about).toBe(
+        'Considered and declined; kept for the record',
+      )
+      expect((await moveTicketToRole(source, fileRoles, ticket.ref.id, 'ready')).state).toBe(
+        'ready',
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
