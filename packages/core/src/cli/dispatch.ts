@@ -34,6 +34,7 @@ import { guardForge } from '../kernel/guarded-forge'
 import { dispatchCapacity } from '../kernel/dispatch-capacity'
 import { openTicketSource } from './ticket'
 import {
+  branchGuardWarnings,
   inspectForgeReadiness,
   formatForgeReadiness,
   hardReadinessKeys,
@@ -261,6 +262,13 @@ export function slugNamingPrompt(spec: string): string {
     spec,
     '</build-spec>',
   ].join('\n')
+}
+
+/** Configuration-level warnings recorded durably as `roleWarnings` on run
+ * start and config reload: role-key diagnostics plus forge capability gaps
+ * such as missing cross-store branch protection (AUT-1106). */
+function startupWarnings(config: Config, forge: Forge): string[] {
+  return [...roleKeyWarnings(config), ...branchGuardWarnings(forge)]
 }
 
 function definedEnv(env: Record<string, string | undefined>): Record<string, string> {
@@ -3778,7 +3786,7 @@ class DispatchLoop {
   }
 
   private reportRoleDiagnostics(): void {
-    const lines = roleKeyWarnings(this.currentConfig().config)
+    const lines = startupWarnings(this.currentConfig().config, this.wiring.forge)
     if (this.dashboard) {
       this.configWarnings = lines
       this.syncModelControls()
@@ -5304,7 +5312,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
                 kind: effectiveArtifact.kind,
                 rev: effectiveArtifact.revision,
               },
-              roleWarnings: roleKeyWarnings(effectiveConfig),
+              roleWarnings: startupWarnings(effectiveConfig, wiring.forge),
             },
           }
         },
@@ -5358,7 +5366,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
           pid: process.pid,
           host: hostname(),
           effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
-          roleWarnings: roleKeyWarnings(config),
+          roleWarnings: startupWarnings(config, wiring.forge),
         },
       }
     },

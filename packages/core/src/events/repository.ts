@@ -557,6 +557,8 @@ export const dispatcherStatusEventPayloadSchemas = {
     pid: z.number().int().positive(),
     host: z.string().trim().min(1).optional(),
     effectiveConfig: artifactRefSchema,
+    /** Startup configuration warnings: role keys, plus forge capability gaps
+     * such as missing cross-store branch protection. */
     roleWarnings: boundedDiagnostics,
   }),
   'dispatcher.stop-requested': z.strictObject({ run: dispatchRun, signal: z.string().min(1) }),
@@ -649,6 +651,7 @@ export const dispatcherSettingEventPayloadSchemas = {
     effectiveChanged: z.boolean(),
     run: dispatchRun.optional(),
     effectiveConfig: artifactRefSchema.optional(),
+    /** Same startup warnings as `dispatcher.run-started`, re-derived on reload. */
     roleWarnings: boundedDiagnostics.optional(),
   }),
   /** Current repository-wide intake gate sampled by every dispatcher tick. */
