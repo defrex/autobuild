@@ -970,10 +970,17 @@ export class GitHubForge implements Forge {
       if (existing === undefined) return undefined
       return { number: existing.number, url: existing.html_url, headSha: existing.head.sha }
     }
-    const existing = await probe()
-    if (existing) return existing
     const links = opts.issueLinks ?? []
     const repository = `${owner}/${name}`
+    // An adopted PR keeps its title and prose, but its keyword lines converge
+    // to the same canonical form a fresh PR gets, so a retry, re-finalize or
+    // hand-opened PR never keeps stale or closing references.
+    const adopt = async (pr: PrRef): Promise<PrRef> => {
+      if (links.length > 0) await this.convergeIssueKeywords(pr.number, links)
+      return pr
+    }
+    const existing = await probe()
+    if (existing) return adopt(existing)
     try {
       const created = this.parse(
         restPrRef,
@@ -992,7 +999,7 @@ export class GitHubForge implements Forge {
       if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
       if (error instanceof GitHubApiError && error.status === 422) {
         const raced = await probe()
-        if (raced) return raced
+        if (raced) return adopt(raced)
         const validation = z
           .object({
             errors: z.array(z.object({ message: z.string().optional() }).passthrough()).optional(),
@@ -1253,19 +1260,33 @@ export class GitHubForge implements Forge {
     this.invalidateReads()
   }
 
-  /** Rewrite the PR body's keyword paragraph for a root node's union and
-   * confirm it by readback. Prose is preserved; stale lines for linked
-   * issues are replaced, so a later downgrade flips `Closes` to `Refs`. */
+  /** Rewrite a node PR's keyword paragraph for its set and confirm it by
+   * readback. Prose is preserved; stale lines for linked issues are
+   * replaced, so a later downgrade flips `Closes` to `Refs`, and a closing
+   * reference to a `refs` issue in the title is neutralized. */
   async updatePrIssueLinks(
     _workspacePath: string,
     number: number,
     issueLinks: readonly IssueLink[],
   ): Promise<void> {
+    await this.convergeIssueKeywords(number, issueLinks)
+  }
+
+  /** Bring an open PR's title and body to the canonical keyword form for
+   * `issueLinks`: neutralize the title, recompose the body's keyword lines,
+   * PATCH only the fields that differ, and confirm both by readback. The
+   * title and prose are otherwise kept. Idempotent. */
+  private async convergeIssueKeywords(
+    number: number,
+    issueLinks: readonly IssueLink[],
+  ): Promise<void> {
     const { owner, name } = await this.requireCoordinates()
     const path = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`
+    const repository = `${owner}/${name}`
     const view = z.object({
       state: z.string(),
       merged: z.boolean().optional(),
+      title: z.string(),
       body: z.string().nullable(),
     })
     const read = async (operation: string) =>
@@ -1275,15 +1296,19 @@ export class GitHubForge implements Forge {
     if (before.state !== 'open' || before.merged === true)
       throw new Error(`PR #${number} is not open; issue keywords not updated`)
     const current = normalize(before.body)
-    const desired = withIssueKeywords(current, issueLinks, {
-      repository: `${owner}/${name}`,
-      trailers: false,
-    })
-    if (current.trimEnd() !== desired.trimEnd()) {
-      await this.request('PATCH', path, { body: { body: desired } })
+    const desired = withIssueKeywords(current, issueLinks, { repository, trailers: false })
+    const title = neutralizeClosingReferences(before.title, issueLinks, { repository })
+    const patch = {
+      ...(title !== before.title ? { title } : {}),
+      ...(current.trimEnd() !== desired.trimEnd() ? { body: desired } : {}),
+    }
+    if (Object.keys(patch).length > 0) {
+      await this.request('PATCH', path, { body: patch })
       this.invalidateReads()
     }
     const after = await read(`PR #${number} body readback`)
+    if (after.title !== title)
+      throw new Error(`PR #${number} title readback disagrees with issue keywords`)
     if (normalize(after.body).trimEnd() !== desired.trimEnd())
       throw new Error(`PR #${number} body readback disagrees with issue keywords`)
   }

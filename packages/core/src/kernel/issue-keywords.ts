@@ -134,9 +134,11 @@ export function landingMessage(
 }
 
 /** A leaf's own keywords reach the default branch only when it is aimed at
- * the configured base, through a forge whose merges close issues. Nodes and
- * node-target leaves carry links upward instead (`kernel/node-issue-links`),
- * and only a root node's PR body emits their union. */
+ * the configured base, through a forge whose merges close issues. This gates
+ * the landing call and a base-aimed leaf's PR. Nodes and node-target leaves
+ * carry links upward instead (`kernel/node-issue-links`), a root node's PR
+ * body emits the node's set, and a node-target leaf's PR gets refs-only lines
+ * from `prIssueLinksForForge`. */
 export function emitsIssueKeywords(
   state: {
     kind?: 'work' | 'node'
@@ -153,7 +155,9 @@ export function emitsIssueKeywords(
   )
 }
 
-/** The `{issue, intent}` projection a forge receives, when it should. */
+/** The `{issue, intent}` projection a forge's landing call receives, when it
+ * should. Always `{}` for a node-target leaf: a commit landed into a node
+ * carries no keyword lines. */
 export function issueLinksForForge(
   state: Parameters<typeof emitsIssueKeywords>[0],
   forge: Pick<Forge, 'closesIssues'>,
@@ -161,6 +165,25 @@ export function issueLinksForForge(
   return emitsIssueKeywords(state, forge)
     ? { issueLinks: state.issueLinks.map(({ issue, intent }) => ({ issue, intent })) }
     : {}
+}
+
+/** The `{issue, intent}` projection a leaf's PR receives when it opens. A
+ * leaf aimed at the configured base gets its sealed links unchanged. A leaf
+ * aimed at a node gets every link as `refs`, so each issue shows the PR
+ * without the PR closing it; the closing lines land in the root node's PR. */
+export function prIssueLinksForForge(
+  state: Parameters<typeof emitsIssueKeywords>[0],
+  forge: Pick<Forge, 'closesIssues'>,
+): { issueLinks: IssueLink[] } | Record<string, never> {
+  if (forge.closesIssues !== true || state.kind === 'node' || state.issueLinks.length === 0)
+    return {}
+  const nested = state.target !== undefined
+  return {
+    issueLinks: state.issueLinks.map(({ issue, intent }) => ({
+      issue,
+      intent: nested ? ('refs' as const) : intent,
+    })),
+  }
 }
 
 /** Human form with downgrade provenance, e.g.

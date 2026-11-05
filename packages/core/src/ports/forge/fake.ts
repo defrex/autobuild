@@ -148,6 +148,8 @@ export class FakeForge implements Forge {
   /** Present only with `closesIssues`, like GitHub's PR body rewrite. */
   readonly updatePrIssueLinks?: Forge['updatePrIssueLinks']
   readonly issueLinkUpdates: { number: number; issueLinks: IssueLink[] }[] = []
+  /** Each adoption by `openPr` that converged an open PR's keyword lines. */
+  readonly issueLinkAdoptions: { number: number; issueLinks: IssueLink[] }[] = []
   /** Test knob: the next readbacks disagree with the composed body. */
   failIssueLinkReadback = false
   readonly archives = new Map<string, string>()
@@ -256,6 +258,7 @@ export class FakeForge implements Forge {
         if (!pr || this.prs.get(number)?.state !== 'open')
           throw new Error(`PR #${number} is not open; issue keywords not updated`)
         this.issueLinkUpdates.push({ number, issueLinks: issueLinks.map((link) => ({ ...link })) })
+        pr.title = neutralizeClosingReferences(pr.title, issueLinks)
         pr.body = withIssueKeywords(pr.body, issueLinks, { trailers: false })
         if (this.failIssueLinkReadback)
           throw new Error(`PR #${number} body readback disagrees with issue keywords`)
@@ -563,6 +566,15 @@ export class FakeForge implements Forge {
       const number = i + 1
       if (this.opened[i]!.head !== opts.head || this.opened[i]!.base !== opts.base) continue
       if (this.prs.get(number)?.state !== 'open') continue
+      const adopted = this.opened[i]!
+      const links = this.closesIssues === true ? (opts.issueLinks ?? []) : []
+      if (links.length > 0) {
+        // Converge like GitHubForge: neutralize the kept title and recompose
+        // the body's keyword lines; the merge message is never replaced.
+        this.issueLinkAdoptions.push({ number, issueLinks: links.map((link) => ({ ...link })) })
+        adopted.title = neutralizeClosingReferences(adopted.title, links)
+        adopted.body = withIssueKeywords(adopted.body, links, { trailers: false })
+      }
       return {
         number,
         url: `https://fake.forge/pr/${number}`,
