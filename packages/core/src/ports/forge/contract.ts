@@ -198,6 +198,18 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
           const links = [{ issue: 1, intent: 'refs' as const }]
           await forge.updatePrIssueLinks(h.workspacePath, pr.number, links)
           await forge.updatePrIssueLinks(h.workspacePath, pr.number, links)
+          // Adopting the open PR with links converges it, idempotently.
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const adopted = await forge.openPr({
+              workspacePath: h.workspacePath,
+              head: h.head,
+              base: h.base,
+              title: h.title,
+              body: h.body,
+              issueLinks: links,
+            })
+            expect(adopted.number).toBe(pr.number)
+          }
         } finally {
           await h.controls.closePr(pr.number)
         }
