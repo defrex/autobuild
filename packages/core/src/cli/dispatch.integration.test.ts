@@ -3750,6 +3750,243 @@ describe('abDispatch watch build-runner coordination', () => {
     }
   }, 10_000)
 
+  test.each(['expired-lease', 'launch'] as const)(
+    'a forge-rejected finalize PR create escalates once instead of failing the sandbox start (%s)',
+    async (path) => {
+      const clock = manualClock()
+      const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+      const slug = 'remote-rejected-finalize'
+      const branch = `ab/${slug}`
+      const base = 'a'.repeat(40)
+      const head = 'b'.repeat(40)
+      fx.forge.seedBranch(branch, head)
+      await fx.store.createBuild({ slug, repo: fx.origin, branch })
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'fake', id: 'T-rejected', title: 'rejected finalize' },
+          repo: fx.origin,
+          baseBranch: 'main',
+        },
+      })
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'remote-test',
+          ref: 'sandbox-g0',
+          path: '/remote/workspace',
+          branch,
+          base: { source: 'remote', sha: base },
+        },
+      })
+      await fx.store.appendWithArtifacts(
+        slug,
+        [
+          { kind: 'spec', content: '# Spec' },
+          { kind: 'plan', content: '# Plan' },
+          { kind: 'plan-review', content: 'approved' },
+          { kind: 'implement-notes', content: 'implemented' },
+          { kind: 'code-review', content: 'approved' },
+          { kind: 'pr-description', content: '# Rejected title\n\nBody.\n' },
+        ],
+        (deposited) => ({
+          actor: DISPATCHER,
+          type: 'spec.imported',
+          payload: {
+            artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+            ticket: { source: 'fake', id: 'T-rejected', title: 'rejected finalize' },
+          },
+        }),
+      )
+      await fx.store.append(slug, {
+        actor: agentActor('plan', 'plan-session'),
+        type: 'plan.completed',
+        payload: { round: 1, artifact: { kind: 'plan', rev: 0 }, verifySteps: [] },
+      })
+      await fx.store.append(slug, {
+        actor: agentActor('plan-review', 'review-session'),
+        type: 'plan-review.verdict',
+        payload: {
+          round: 1,
+          verdict: 'approve',
+          findings: [],
+          artifact: { kind: 'plan-review', rev: 0 },
+        },
+      })
+      await fx.store.append(slug, {
+        actor: KERNEL,
+        type: 'implement.started',
+        payload: { round: 1 },
+      })
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'implement.completed',
+        payload: {
+          round: 1,
+          commits: { base, head },
+          artifact: { kind: 'implement-notes', rev: 0 },
+        },
+      })
+      await fx.store.append(slug, {
+        actor: KERNEL,
+        type: 'code-review.started',
+        payload: { round: 1 },
+      })
+      await fx.store.append(slug, {
+        actor: agentActor('code-review', 'code-review-session'),
+        type: 'code-review.verdict',
+        payload: {
+          round: 1,
+          verdict: 'approve',
+          findings: [],
+          artifact: { kind: 'code-review', rev: 0 },
+        },
+      })
+      await fx.store.append(slug, { actor: KERNEL, type: 'finalize.started', payload: {} })
+      await fx.store.append(slug, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 'finalize-session',
+          role: 'finalize',
+          runner: 'pi',
+          phase: 'finalize',
+        },
+      })
+      await fx.store.append(slug, {
+        actor: agentActor('finalize', 'finalize-session'),
+        type: 'publication.requested',
+        payload: {
+          operation: 'finalize',
+          branch,
+          sha: head,
+          description: { kind: 'pr-description', rev: 0 },
+        },
+      })
+      await fx.store.append(slug, {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session: 'finalize-session',
+          outcome: 'reclaimed',
+          reclaimedBy: { instance: 'replacement', resumedFromSeq: 0 },
+        },
+      })
+      await fx.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: {
+          provider: 'remote-test',
+          workspaceRef: 'sandbox-g0',
+          instance: 'finalize-instance',
+          environmentId: 'sandbox-g0',
+          sessionId: 'finalize-execution',
+        },
+      })
+      if (path === 'expired-lease') {
+        expect(await fx.store.claimLease(slug, 'finalize-instance', 100)).toBe(true)
+        clock.advance(101)
+      } else {
+        // The incident shape: the guest ended normally and the next launch
+        // settles the finalize request before starting anything.
+        await fx.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: {
+            instance: 'finalize-instance',
+            workspaceRef: 'sandbox-g0',
+            outcome: 'completed',
+            exitCode: 0,
+          },
+        })
+      }
+      const message = `Validation Failed: No commits between main and ${branch}`
+      fx.forge.rejectNextOpenPr(422, message, 'GitHub')
+
+      let starts = 0
+      const remote: WorkspaceProvider = {
+        name: 'remote-test',
+        preservation: async () => ({ outcome: 'preserved', heads: [] }),
+        publication: {
+          isPublished: async (input) => input.sha === head && input.branch === branch,
+          publish: async () => {},
+        },
+        recovery: {
+          fence: async () => ({ outcome: 'confirmed' }),
+          reap: async () => ({
+            outcome: 'confirmed',
+            snapshots: { outcome: 'confirmed', deleted: 0 },
+          }),
+        },
+        provision: async (opts) => ({
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision! },
+        }),
+        release: async () => undefined,
+      }
+      const execution: BuildExecution = {
+        async start() {
+          starts += 1
+          return {
+            supervision: 'environment',
+            completion: Promise.resolve({ exitCode: 0 }),
+            stop: async () => ({ outcome: 'confirmed' }),
+            detach: async () => {},
+          }
+        },
+      }
+      const baseWire = fx.wire()
+      const dispatchOnce = () =>
+        abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          wire: () => ({ ...baseWire, workspaces: remote, buildExecution: execution }),
+        })
+
+      try {
+        await dispatchOnce()
+        clock.advance(60_000)
+        await dispatchOnce()
+        const events = await fx.store.getEvents(slug)
+        const escalations = events.filter((event) => event.type === 'escalation.raised')
+        expect(escalations).toHaveLength(1)
+        expect(escalations[0]).toMatchObject({
+          payload: {
+            phase: 'finalize',
+            source: 'policy',
+            policyCause: 'non-retryable-phase-failure',
+            question: expect.stringContaining(
+              `GitHub rejected the PR create with HTTP 422: ${message}`,
+            ),
+          },
+        })
+        expect(events.filter((event) => event.type === 'infrastructure.failed')).toHaveLength(0)
+        expect(
+          events.filter(
+            (event) =>
+              event.type === 'dispatcher.runner-settled' &&
+              (event.payload as { outcome?: string }).outcome === 'launch-failed',
+          ),
+        ).toHaveLength(0)
+        expect(events.filter((event) => event.type === 'finalize.completed')).toHaveLength(0)
+        expect(starts).toBe(0)
+        expect(fx.forge.openPrAttempts).toBe(1)
+      } finally {
+        await fx.cleanup()
+      }
+    },
+    10_000,
+  )
+
   test('retains the accepted config across deletion and reloads after restoration', async () => {
     const scanClock = manualClock()
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, scanClock)
