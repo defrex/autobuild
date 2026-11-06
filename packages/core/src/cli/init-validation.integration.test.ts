@@ -21,6 +21,7 @@ import { openLocalStore } from '../store/local/store'
 import { loadConfig } from '../config/load'
 import type { BuildStore } from '../store/types'
 import {
+  assertGitHubStateLabels,
   createReadinessRedactor,
   runGuestReadinessProbe,
   ticketRoleReadiness,
@@ -2923,5 +2924,32 @@ describe('optional ticket role readiness', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('github ticket source init validation', () => {
+  test('a configured state that cannot be an autobuild: label is refused naming the key', () => {
+    const tickets = ticketsSchema.parse({ source: 'github', readyState: 'Ready Now' })
+    expect(() => assertGitHubStateLabels(tickets)).toThrow(
+      '[tickets].readyState "Ready Now" cannot be a GitHub state label (autobuild:<state>)',
+    )
+    expect(() =>
+      assertGitHubStateLabels(
+        ticketsSchema.parse({ source: 'github', backlogState: 'x'.repeat(41) }),
+      ),
+    ).toThrow('[tickets].backlogState')
+  })
+
+  test('done and rejected are closing reasons and need no label', () => {
+    expect(() =>
+      assertGitHubStateLabels(
+        ticketsSchema.parse({
+          source: 'github',
+          doneState: 'Done Done',
+          rejectedState: 'Won’t Do',
+          backlogState: 'backlog',
+        }),
+      ),
+    ).not.toThrow()
   })
 })

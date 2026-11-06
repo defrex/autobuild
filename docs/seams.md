@@ -14,7 +14,7 @@ Adapters supply storage, agent execution, code publication, workspaces and ticke
 ## Storage and tickets
 
 - **BuildStore.** Local SQLite with filesystem artifacts by default; a remote store implementing the remote BuildStore protocol.
-- **Tickets.** Local files, Linear, or hosted tickets. A hosted Store doesn't require hosted tickets.
+- **Tickets.** Local files, Linear, hosted tickets, or GitHub issues. A hosted Store doesn't require hosted tickets.
 
 See [Build store](build-store.md) and [Tickets](ticket-sources.md).
 
@@ -56,7 +56,7 @@ See [Dispatcher hosting](dispatcher-hosting.md).
 
 ## Seam guides
 
-- [Tickets](ticket-sources.md): file, Linear, hosted, ticket trees.
+- [Tickets](ticket-sources.md): file, Linear, hosted, GitHub, ticket trees.
 - [Agent runtimes](agent-runtimes.md): Claude Code, Codex, Pi, models.
 - [Workspaces](workspaces.md): git worktree, Vercel Sandbox, provisioning.
 - [Forges](forges.md): GitHub, local git, publication adapters.

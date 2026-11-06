@@ -248,10 +248,13 @@ export class HostedTicketSource implements TicketSource {
   // request and normal is dropped, so requests stay byte-identical.
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
     const write = withoutUnsupportedPriority(this, draft)
+    // The hosted server keeps its own key index and its strict options schema
+    // predates the reservation time, so it never travels on the wire.
+    const { idempotencyKeyReservedAt: _reservedAt, ...wireOptions } = options
     return this.project(
       await this.request(
         'create',
-        { draft: write, options },
+        { draft: write, options: wireOptions },
         ticketWireSchema,
         write.issueLinks !== undefined,
       ),
