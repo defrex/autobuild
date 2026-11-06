@@ -509,3 +509,37 @@ test('policy roles reach operator role moves and survive publishers predating th
     await store.close()
   }
 })
+
+test('hosted role-aware ticks cost no extra ticket request at any log length', async () => {
+  const { ticketRoleTickBudget } = await import('@defrex/autobuild/testing')
+  const { hostedTicketPolicy } = await import('@defrex/autobuild/hosted-tickets')
+  const perTick = await ticketRoleTickBudget(async (config) => {
+    const store = new MemoryBuildStore()
+    const projects = testProjects([repo])
+    const credentials = testCredentials(projects, 'secret').store
+    const { token } = await credentials.issue(repo, 'owner')
+    const backend = new FakeTicketSource([], { createState: 'triage', doneState: 'done' })
+    const service = createHostedStoreService({
+      env,
+      openStore: async () => store,
+      openProjectRegistry: async () => projects,
+      openCredentials: async () => credentials,
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+      sourceFor: () => backend,
+    })
+    let requests = 0
+    const tickets = new HostedTicketSource({
+      url: 'http://test',
+      token,
+      repo,
+      teamKey: 'ENG',
+      fetchFn: async (input, init) => {
+        if (new URL(String(input)).pathname.startsWith('/tickets/')) requests++
+        return service.fetch(new Request(input, init))
+      },
+    })
+    await tickets.synchronizePolicy(hostedTicketPolicy(config.tickets))
+    return { tickets, requests: () => requests }
+  })
+  expect(perTick.every((count) => count > 0)).toBe(true)
+}, 60_000)
