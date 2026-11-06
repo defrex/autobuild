@@ -78,6 +78,15 @@ describe('createTicketSource — github', () => {
     expect(source.name).toBe('github')
   })
 
+  test('constructs with readyAssignee, which github declares', async () => {
+    const source = await createTicketSource(
+      { ...config, readyAssignee: 'me' },
+      { AB_REPOSITORY: 'acme/widgets', GITHUB_TOKEN: 'token' },
+      REPO,
+    )
+    expect(source.readyAssignee).toBe(true)
+  })
+
   test('refuses an origin that is not on github.com', async () => {
     await expect(
       createTicketSource(config, { AB_REPOSITORY: 'https://gitlab.com/acme/widgets' }, REPO),
@@ -250,6 +259,32 @@ describe('createTicketSource — plugin', () => {
     await expect(
       createTicketSource({ source: 'missing', readyState: 'Open' }, {}, REPO, undefined, registry),
     ).rejects.toThrow(/unknown ticket source "missing".*file, github, hosted, jira, linear/)
+  })
+
+  test('readyAssignee needs the constructed source to declare the capability', async () => {
+    const config = { source: 'jira', readyState: 'Open', readyAssignee: 'me' }
+    await expect(
+      createTicketSource(
+        config,
+        {},
+        REPO,
+        undefined,
+        pluginRegistry(() => new FakeTicketSource()),
+      ),
+    ).rejects.toThrow(
+      'ticket source "jira" from plugin "acme-tracker" cannot filter ready tickets by assignee',
+    )
+    const capable = new FakeTicketSource()
+    Object.defineProperty(capable, 'readyAssignee', { value: true })
+    const source = await createTicketSource(
+      config,
+      {},
+      REPO,
+      undefined,
+      pluginRegistry(() => capable),
+    )
+    // The facade forwards the declaration.
+    expect(source.readyAssignee).toBe(true)
   })
 
   test('factory failures retain cause and identify source ownership', async () => {

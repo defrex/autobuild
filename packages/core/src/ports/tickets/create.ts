@@ -28,6 +28,7 @@ import { normalizeGitRemoteUrl } from '../../kernel/origin'
 import { HostedTicketSource } from './remote'
 import { ticketLifecycle } from './lifecycle'
 import { normalizeServiceURL } from '../../connection'
+import { assertReadyAssigneeSupported } from '../../config/ready-assignee'
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -227,7 +228,13 @@ async function rawTicketSource(
 export async function createTicketSource(
   ...args: Parameters<typeof rawTicketSource>
 ): Promise<TicketSource> {
-  return compatibleTicketSource(await rawTicketSource(...args))
+  const [config, , , , plugins] = args
+  const source = await rawTicketSource(...args)
+  // Plugins load after config parse, so the capability is checked here, on
+  // the constructed source, rather than in the schema.
+  const owner = plugins?.ticketSources.get(config.source)?.owner
+  assertReadyAssigneeSupported(config, source, owner?.kind === 'plugin' ? owner.name : undefined)
+  return compatibleTicketSource(source)
 }
 
 /** Owner and name of a github.com origin: an `owner/name` slug, or a URL or
