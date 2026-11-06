@@ -142,8 +142,9 @@ kernel bare-clones the origin to snapshot, restack, check presence and land.
 The hosted dispatcher deployment ships its own self-contained `linux-x64` Git
 (its glibc, loader, HTTPS helpers and CA bundle), so it needs only an x86_64
 Linux kernel and a writable `/tmp`; see
-[shipped Git](../packages/hosted-dispatcher/README.md#shipped-git). When kernel
-Git cannot run, the dispatcher records one durable
+[shipped Git](../packages/hosted-dispatcher/README.md#shipped-git). Kernel Git
+resolves the shipped Git whether the kernel runs it directly or from a shell
+pipeline. When the shipped Git cannot run, the dispatcher records one durable
 `dispatcher.kernel-git-unavailable` repository condition, node janitors defer
 instead of failing per node, and `dispatcher.kernel-git-recovered` ends it.
 
