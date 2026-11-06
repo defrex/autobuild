@@ -16,6 +16,15 @@ import type { PluginFactoryContext } from '../../plugins/manifest'
 import type { TicketSource } from '../types'
 import { DEFAULT_TICKETS_DIR, FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
+import { GitHubTicketSource } from './github'
+import { FileGitHubValidatorStore } from './github-validators'
+import {
+  createGitHubFetchTransport,
+  githubTokenSource,
+  resolveGitHubToken,
+} from '../forge/github-transport'
+import { parseRepoCoordinates } from '../forge/github'
+import { normalizeGitRemoteUrl } from '../../kernel/origin'
 import { HostedTicketSource } from './remote'
 import { ticketLifecycle } from './lifecycle'
 import { normalizeServiceURL } from '../../connection'
@@ -130,6 +139,42 @@ async function rawTicketSource(
     })
   }
 
+  if (config.source === 'github') {
+    const origin = env.AB_REPOSITORY?.trim() || (await resolveRepoOrigin(targetRepo, spawnExec))
+    if (origin === undefined || origin === '')
+      throw new Error(
+        '[tickets].source = "github" needs the repository\'s origin remote on github.com; set the checkout\'s origin or export AB_REPOSITORY',
+      )
+    const coordinates = githubCoordinates(origin)
+    if (coordinates === null)
+      throw new Error(
+        `[tickets].source = "github" needs an origin on github.com; origin is ${origin}`,
+      )
+    return new GitHubTicketSource({
+      transport: createGitHubFetchTransport({ token: githubTokenSource(env) }),
+      repository: coordinates,
+      lifecycle: ticketLifecycle(config),
+      readyLabels: config.readyLabels ?? ['autobuild'],
+      ...(localStateRoot !== undefined
+        ? {
+            validators: new FileGitHubValidatorStore(
+              resolve(
+                localStateRoot,
+                'github-tickets',
+                coordinates.owner,
+                coordinates.name,
+                'validators',
+              ),
+            ),
+          }
+        : {}),
+      credentialMiss: async () => {
+        const credential = await resolveGitHubToken(env)
+        return 'reason' in credential ? credential.reason : undefined
+      },
+    })
+  }
+
   if (config.source === 'file') {
     return new FileTicketSource({
       dir:
@@ -183,4 +228,18 @@ export async function createTicketSource(
   ...args: Parameters<typeof rawTicketSource>
 ): Promise<TicketSource> {
   return compatibleTicketSource(await rawTicketSource(...args))
+}
+
+/** Owner and name of a github.com origin: an `owner/name` slug, or a URL or
+ * SSH spelling whose host is github.com. Anything else is null. */
+export function githubCoordinates(origin: string): { owner: string; name: string } | null {
+  const normalized = normalizeGitRemoteUrl(origin)
+  let host: string | undefined
+  try {
+    host = new URL(normalized).hostname
+  } catch {
+    host = undefined
+  }
+  if (host !== undefined && host !== '' && host.toLowerCase() !== 'github.com') return null
+  return parseRepoCoordinates(normalized)
 }

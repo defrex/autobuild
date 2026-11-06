@@ -66,9 +66,9 @@ those children are completed. Clear or reparent its children first.
 File tickets persist kind and target in frontmatter. Hosted tickets validate
 changes transactionally within the project. Existing tickets default to work with
 no target; metadata changes increment the revision once, while equivalent aliases
-and unchanged values do not. Legacy plugins without `integrationTree` support
-read as work with no target and refuse explicit metadata writes, including clears
-and mixed patches, with guidance to use a capable source.
+and unchanged values do not. The `github` source and legacy plugins without
+`integrationTree` support read as work with no target and refuse explicit metadata
+writes, including clears and mixed patches, with guidance to use a capable source.
 
 Linear uses the exact `node` label for kind and the parent relation for target only when that parent has the node
 label. Ordinary grouping parents remain grouping and survive unrelated edits;
