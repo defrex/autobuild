@@ -107,8 +107,10 @@ export interface IssueLink {
 export interface TicketCriteria {
   labels?: string[]
   state?: string
-  /** `me` (the API key's owner) or a user's email; only sources that can honour it
-   * accept it — others reject `[tickets].readyAssignee` at config parse. */
+  /** Only the ready tickets assigned to this user. The value's forms are
+   * source-defined; `me` is the owner of the source's credential. Only sources
+   * declaring `readyAssignee` receive it — the rest refuse
+   * `[tickets].readyAssignee` before any listing. */
   assignee?: string
 }
 
@@ -263,6 +265,24 @@ export interface TicketSource {
    * boundary, including create and guarded writes. Sources without it refuse
    * any write naming issue links. */
   readonly issueLinks?: boolean
+  /** Opt in only when `listReady` (and `listPage`, if implemented) honour
+   * `criteria.assignee` and an unassigned ticket is never ready while it is
+   * set. Sources without it refuse `[tickets].readyAssignee` at startup,
+   * `ab init --validate` and on reload, naming the source. */
+  readonly readyAssignee?: boolean
+  /** Resolve, outside any dispatcher tick, what a value like `me` needs (for
+   * example the credential's owner). Dispatch calls it once at startup whether
+   * or not `readyAssignee` is set. Memoize the result; record a credential
+   * with no user instead of throwing, and throw only for infrastructure
+   * failures. */
+  prepareReadyAssignee?(): Promise<void>
+  /** Synchronous and request-free: why this value cannot be honoured given
+   * what `prepareReadyAssignee` resolved, or undefined. Checked at dispatcher
+   * startup and on every reload. */
+  readyAssigneeRefusal?(value: string): string | undefined
+  /** `ab init --validate`: a one-line summary of who the value names (for
+   * example `me → @octocat`); throws an actionable error when it names nobody. */
+  describeReadyAssignee?(value: string): Promise<string>
   /** Every lifecycle state, including archived/completed tickets; no ready gate. */
   listAll?(): Promise<TicketListing>
   /** Import support: the same pure id policy used by create, for mutation-free preflight. */

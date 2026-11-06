@@ -201,6 +201,7 @@ A plugin relying on a capability declares an `apiVersion` range containing its v
 - **1.7** Workspace factory seams.
 - **1.8** Forge failure classification and request observers.
 - **1.9** Optional native ticket-source paging (`listPage`); older sources retain operator slicing.
+- **1.10** Optional ticket-source ready-assignee capability (`readyAssignee`, with `prepareReadyAssignee`, `readyAssigneeRefusal` and `describeReadyAssignee`); sources without it refuse `[tickets].readyAssignee`.
 
 ## 2. Create a repository-local module
 
@@ -499,6 +500,31 @@ where `[]` clears, and include nonempty links in revisions. `normalizeIssueLinks
 validates, defaults intent to `closes` and sorts. Without the flag, the
 compatibility facade refuses any write naming links with
 `TicketIssueLinksUnsupported` before your methods run, and strips links from reads.
+
+## Optional ready assignee capability
+
+An adapter opts in to `[tickets].readyAssignee` with `readyAssignee: true` and
+must then honour `criteria.assignee` in `listReady` (and `listPage`, if
+implemented): only tickets assigned to that user are ready, and an unassigned
+ticket is never ready while it is set. `"me"` means the owner of the source's
+credential; any other value's forms are the source's to define and enforce.
+Without the flag, dispatcher startup, `ab init --validate` and live reloads
+refuse a configured `readyAssignee` with an error naming the source and plugin.
+
+Three optional methods support it:
+
+- `prepareReadyAssignee(): Promise<void>` is called once at dispatcher startup,
+  before the loop and never in a tick, whether or not `readyAssignee` is set.
+  Resolve whatever `"me"` needs and memoize it. A credential with no user is a
+  recorded result, not a throw; throw only for infrastructure failures, which
+  fail startup when `readyAssignee` is set and are otherwise a warning.
+- `readyAssigneeRefusal(value): string | undefined` is synchronous and makes no
+  request. Return why the value can't be honoured from what was prepared, or
+  `undefined`. Startup and every reload call it, so a refused reload keeps the
+  previous configuration.
+- `describeReadyAssignee(value): Promise<string>` serves `ab init --validate`:
+  return a one-line summary of who the value names, such as `me → @octocat`,
+  or throw an error that says how to fix a value that names nobody.
 
 ## Optional ticket paging capability
 
