@@ -142,7 +142,7 @@ rejectedState = "rejected"
 - **Comments and assets.** Dispatcher notices post as issue comments, but tickets carry no comment history, so `ab ticket show` lists none. Assets live in the BuildStore, with the usual note left as an issue comment.
 - **Not supported:** guarded writes (`--expected-revision` is refused, as with Linear), kind and targets (the ticket tree), and `ab ticket export` and `import`.
 - **Cost.** Dispatcher reads are conditional requests. Their validators live under the local state root, in `github-tickets/<owner>/<repo>/validators/`, and are evicted after 7 days unused, so a tick on an unchanged repository spends no primary rate-limit budget. A process without them, such as a cold hosted instance, pays one read sized by the ready candidates. Rate limits surface as the ticket-source rate-limit error, with GitHub's reset time.
-- **State counts** are display-only: one fresh, bounded GraphQL request per call, never cached, with done and rejected subject to GitHub's search-index lag. Three cases approximate. A stale reopen label counts in its label's state until the first read strips it. An issue with two or more state labels counts once in each until its labels are fixed; the first read reports it. A closure that predates GitHub's close reasons reads as done but may count as rejected or `not-planned`, and never heals.
+- **State counts** are display-only: one fresh GraphQL request per call, plus one more for each further page of 100 `autobuild:` labels, never cached and never reading issue history, with done and rejected subject to GitHub's search-index lag. Three cases approximate. A stale reopen label counts in its label's state until the first read strips it. An issue with two or more state labels counts once in each until its labels are fixed; the first read reports it. A closure that predates GitHub's close reasons reads as done but may count as rejected or `not-planned`, and never heals.
 - **Creation keys** live in a hidden marker in the issue body. A keyed create needs `idempotencyKeyReservedAt`; harvest supplies it.
 
 ### Optional issue links
@@ -208,6 +208,6 @@ totals so the cost does not grow with the number of tickets: the hosted
 PostgreSQL source reads trigger-maintained totals, and the remote
 `HostedTicketSource` forwards the read to the server. The file source counts
 each matched state's directory entries without parsing a ticket, so its local
-cost grows with the files in that state. The GitHub source sends one bounded GraphQL request per call and keeps no count between calls. Linear does not implement it. When a source declares
+cost grows with the files in that state. The GitHub source sends one GraphQL request per call, plus one per further page of 100 `autobuild:` labels, so its cost grows with matching labels rather than tickets, and keeps no count between calls. Linear does not implement it. When a source declares
 both `countStates` and `listStates`, the shared contract suite checks that they
 agree.

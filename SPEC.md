@@ -2439,8 +2439,8 @@ history. A ticket's own issue is an implicit `closes` link. The source has no
 guarded writes, no ticket tree and no export or import. Dispatcher reads are
 conditional requests whose validators live only under the local state root, so
 an unchanged repository costs a tick no primary rate-limit budget; display-only
-state counts are one fresh, bounded GraphQL request per call and are never
-cached.
+state counts are one fresh GraphQL request per call, plus one per further
+page of 100 `autobuild:` labels, and are never cached.
 
 
 The TicketSource **initiates and receives projections; it is never consulted

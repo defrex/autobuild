@@ -724,7 +724,8 @@ unchanged.
 
 The `github` source spans four modules. `ports/tickets/github.ts` is the
 adapter: REST over the forge's `GitHubRequest` transport and credential order,
-plus one GraphQL request for display-only state counts and the bounded
+plus display-only state counts (one GraphQL request, and one more per
+further page of 100 `autobuild:` labels) and the bounded
 `last: 100` timeline read that decides whether a reopened issue's state label
 is stale. `ports/tickets/github-issues.ts` holds the pure mapping: issue to
 state through `autobuild:` labels and closing reasons, state to write, issue

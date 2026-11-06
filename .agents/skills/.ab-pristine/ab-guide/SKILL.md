@@ -1370,8 +1370,8 @@ used; harvest supplies it. Drive all of it through `ab ticket`, never by
 hand-editing state or link labels.
 
 State counts from the `github` source are display-only: each `countStates` or
-`listStates` call sends one fresh, bounded GraphQL request and nothing is
-cached; done and rejected follow GitHub's search-index lag. Three cases
+`listStates` call sends one fresh GraphQL request, plus one more per further
+page of 100 `autobuild:` labels, and nothing is cached; done and rejected follow GitHub's search-index lag. Three cases
 approximate. A stale reopen label counts in its label's state until the first
 read strips it. An issue with two or more state labels counts once in each of
 them; the first read reports it, and counts correct once its labels are fixed.
@@ -1980,8 +1980,8 @@ For a hosted project it opens the viewer automatically, displaying
 port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
 The viewer reads its dashboard from the Store; its one ticket-source read is
 the header's triage count, through the source's optional `countStates`.
-The `github` source answers it with one fresh, bounded GraphQL request and
-caches nothing; see its display-only count notes under `[tickets]`.
+The `github` source answers it with one fresh GraphQL request, plus one per
+further page of 100 `autobuild:` labels, and caches nothing; see its display-only count notes under `[tickets]`.
 `--takeover` explicitly dispatches locally, with a warning that it can displace
 the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
 flags require `--takeover` when placement selects viewer.
