@@ -1,10 +1,14 @@
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { openLocalStore } from '../store/local/store'
 import { humanActor } from '../events/envelope'
+
+import { temporaryDirectories } from '../testing/temp-directories'
+
+const temporaryDirectory = temporaryDirectories(afterEach)
 
 const entry = resolve(import.meta.dir, '../../../..', 'bin/ab.ts')
 async function waitFor(check: () => Promise<boolean>): Promise<void> {
@@ -26,7 +30,7 @@ async function fixture(
   }) => Promise<void>,
   timeout = '0',
 ): Promise<void> {
-  const repo = await mkdtemp(join(tmpdir(), 'ab-watch-termination-'))
+  const repo = await temporaryDirectory(join(tmpdir(), 'ab-watch-termination-'))
   // Remove the repository even when setup, child shutdown or store closure throws.
   try {
     const state = join(repo, 'state')
