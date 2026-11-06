@@ -2755,9 +2755,9 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Require the ticket to be assigned to one Linear user, in addition to the state and label gates.
+**Description:** Require the ticket to be assigned to one user, in addition to the state and label gates.
 
-**Constraints:** [tickets].readyAssignee must be "me" (the owner of the API key) or a user email address (e.g. "person@example.com"); Allowed only for linear.
+**Constraints:** [tickets].readyAssignee must be a nonblank value with no surrounding whitespace; Allowed for sources that can filter by assignee: linear ("me" or an email), github ("me" or a GitHub username, including managed-user logins such as mona_acme), and plugin sources that declare readyAssignee. Refused for file and hosted.
 
 #### `tickets.teamKey`
 
@@ -2878,16 +2878,31 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 <!-- configuration-reference:/tickets -->
 
-`readyAssignee = "me"` resolves to the Linear user who owns `LINEAR_API_KEY`,
-so one committed value makes each person's local dispatcher take only the work
-assigned to them; an email names a specific user, for a shared or bot key. The
-gate is conjunctive with `readyState` and `readyLabels`, and a ticket with no
-assignee is never ready while it is set. It applies to every ready surface
+`readyAssignee` narrows readiness to tickets assigned to one user, so one
+committed `readyAssignee = "me"` makes each person's local dispatcher take only
+the work assigned to them. It is a ticket-source capability: `linear`, `github`
+and plugin sources that declare it accept it, each with its own value forms.
+
+- **Linear:** `"me"` is the user who owns `LINEAR_API_KEY`; an email names a
+  specific user, for a shared or bot key.
+- **GitHub:** `"me"` is the login that owns the GitHub credential the source
+  authenticates with; a GitHub username, including an Enterprise Managed User
+  login such as `mona_acme`, names a specific user. An issue with several
+  assignees is ready when the user is any one of them.
+
+The gate is conjunctive with `readyState` and `readyLabels`, and a ticket with
+no assignee is never ready while it is set. It applies to every ready surface
 (dispatch, the queued count, and `ab ticket list` without filters); blockers
-still prevent claim. It is empty or blank, or neither `"me"` nor an email,
-fails validation. `ab init --validate` prints the user the gate resolves to and
-fails when an email matches no workspace user. The field reloads without a
-restart.
+still prevent claim. A blank value, or one outside the source's forms, fails
+validation. `file`, `hosted` and plugin sources that don't declare the
+capability refuse it: startup and `ab init --validate` fail with an error that
+names the source. `ab init --validate` prints the user the gate resolves to
+and fails when it names nobody: a Linear email that matches no workspace user,
+a GitHub `"me"` whose credential has no user (a GitHub App installation
+token), or a GitHub user who can't be assigned issues in the repository. The
+field reloads without a restart; a reload that names it for a source without
+the capability, or a GitHub `"me"` the startup credential couldn't resolve, is
+rejected and the previous configuration stays active.
 
 When `readyLabels` is absent, direct Linear uses `["autobuild"]`; hosted, file,
 and plugin sources use `[]`, meaning no host-imposed label gate. An explicit value always
