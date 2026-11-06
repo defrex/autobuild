@@ -30,6 +30,17 @@ export async function assertTicketPage(
   })
 }
 
+/** Shared assertion also used by negative controls: a declared targeted
+ * listing holds exactly the exhaustive listing's tickets targeting the node. */
+export async function assertTargetingListing(source: TicketSource, nodeId: string): Promise<void> {
+  const ids = (tickets: Ticket[]) => tickets.map((ticket) => ticket.ref.id).sort()
+  const all = await source.listAll!()
+  const targeting = await source.listTargeting!(nodeId)
+  expect(ids(targeting.tickets)).toEqual(
+    ids(all.tickets.filter((ticket) => ticket.target === nodeId)),
+  )
+}
+
 /** Lifecycle names supplied by an adapter's contract fixture. */
 export interface TicketSourceContractStates {
   /** A state from which the fixture's source can claim a ticket. */
@@ -280,6 +291,43 @@ export function describeTicketSourceContract(
         await source.update(nested.ref.id, { target: null, kind: 'work' })
         await source.update(node.ref.id, { kind: 'work' })
         expect((await source.get(node.ref.id))?.kind).toBe('work')
+      })
+    })
+
+    test('a declared targeted listing equals the exhaustive listing filtered by target', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        if (!source.listTargeting) return
+        expect(source.integrationTree).toBe(true)
+        const node = await createTracked(harness, {
+          title: contractTicketTitle('targeted node'),
+          body: CONTRACT_TICKET_BODY,
+          kind: 'node',
+        })
+        const open = await createTracked(harness, {
+          title: contractTicketTitle('targeted child'),
+          body: CONTRACT_TICKET_BODY,
+          target: node.ref.id,
+        })
+        await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('resolved child'),
+            body: CONTRACT_TICKET_BODY,
+            target: node.ref.id,
+          },
+          { state: harness.states.completed },
+        )
+        await createTracked(harness, {
+          title: contractTicketTitle('untargeted'),
+          body: CONTRACT_TICKET_BODY,
+        })
+        await assertTargetingListing(source, node.ref.id)
+        expect(
+          (await source.listTargeting(node.ref.id)).tickets.map((ticket) => ticket.ref.id),
+        ).toContain(open.ref.id)
+        await assertTargetingListing(source, open.ref.id)
+        expect((await source.listTargeting(contractIdempotencyKey())).tickets).toEqual([])
       })
     })
 
