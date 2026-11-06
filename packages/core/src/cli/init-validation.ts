@@ -654,6 +654,11 @@ async function validateInitReadinessInner(opts: {
     if (config.tickets.source !== 'file') {
       const ticketSource = await openTicketSource()
       if (ticketSource instanceof GitHubTicketSource) await ticketSource.validateAccess()
+      // Who the assignee gate names, before the read it narrows, so an
+      // unresolvable value fails with the source's own remediation.
+      const assignee = config.tickets.readyAssignee
+      if (assignee !== undefined && ticketSource.describeReadyAssignee !== undefined)
+        assigneeLine = `Ticket assignee gate: ${await ticketSource.describeReadyAssignee(assignee)}`
       await ticketSource.listReady({
         ...(config.tickets.readyLabels !== undefined ? { labels: config.tickets.readyLabels } : {}),
         state: config.tickets.readyState,
@@ -661,18 +666,6 @@ async function validateInitReadinessInner(opts: {
           ? { assignee: config.tickets.readyAssignee }
           : {}),
       })
-      const assignee = config.tickets.readyAssignee
-      if (assignee !== undefined && ticketSource instanceof LinearTicketSource) {
-        const user = await ticketSource.resolveAssignee(assignee)
-        if (user === null) {
-          throw new Error(
-            assignee === 'me'
-              ? '[tickets].readyAssignee = "me" but LINEAR_API_KEY did not resolve to a Linear user — check the key'
-              : `[tickets].readyAssignee "${assignee}" matches no user in the Linear workspace — check the address or use "me"`,
-          )
-        }
-        assigneeLine = `Ticket assignee gate: ${assignee} → ${user.name} <${user.email}>`
-      }
     }
     roles = await ticketRoleReadiness(config.tickets, openTicketSource)
   } catch (error) {

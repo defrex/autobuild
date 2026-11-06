@@ -213,8 +213,9 @@ import { settlePublicationFactsBeforeRelease } from './publication-loss'
  * likewise receive no host-imposed label convention. An explicit
  * `readyLabels` wins for every source.
  *
- * `[tickets].readyAssignee` (Linear only) adds a third conjunctive gate: the
- * ticket must be assigned to that user.
+ * `[tickets].readyAssignee` adds a third conjunctive gate for any source: the
+ * ticket must be assigned to that user. Only sources declaring the capability
+ * get this far (`config/ready-assignee.ts`).
  */
 export function readyCriteria(config: Config): {
   labels: string[]
@@ -222,16 +223,12 @@ export function readyCriteria(config: Config): {
   assignee?: string
 } {
   const { readyLabels, readyState, readyAssignee } = config.tickets
-  if (config.tickets.source === 'github')
-    return { labels: readyLabels ?? ['autobuild'], state: readyState }
-  if (config.tickets.source === 'linear') {
-    return {
-      labels: readyLabels ?? ['autobuild'],
-      state: readyState,
-      ...(readyAssignee !== undefined ? { assignee: readyAssignee } : {}),
-    }
+  const source = config.tickets.source
+  return {
+    labels: readyLabels ?? (source === 'github' || source === 'linear' ? ['autobuild'] : []),
+    state: readyState,
+    ...(readyAssignee !== undefined ? { assignee: readyAssignee } : {}),
   }
-  return { labels: readyLabels ?? [], state: readyState }
 }
 
 /**
