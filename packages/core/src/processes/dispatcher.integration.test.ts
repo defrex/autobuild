@@ -4,6 +4,7 @@ import { missingAccountCredentials, MissingAccountCredentialsError } from '../ac
 import {
   flaggedWorkspaceSweepReadBudget,
   parkedSweepReadBudget,
+  provisionContinuationGuardReadBudget,
 } from '../testing/reduced-read-budget'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
@@ -9648,32 +9649,33 @@ test('recovered dispatch completion shares the guard before its first attachment
 
 // ── No-progress guard on provision continuation tails ───────────────────────
 
-describe('no-progress guard on provision continuation tails', () => {
-  function continuationProvider(operations: string[]): WorkspaceProvider {
-    return {
-      name: 'remote-test',
-      preservation: async () => ({ outcome: 'preserved', heads: [] }),
-      recovery: {
-        fence: async () => ({ outcome: 'confirmed' }),
-        reap: async () => ({
-          outcome: 'confirmed',
-          snapshots: { outcome: 'confirmed', deleted: 0 },
-        }),
-      },
-      async provision(opts) {
-        operations.push('provision')
-        return {
-          provider: 'remote-test',
-          ref: `sandbox-g${operations.length}`,
-          path: '/remote/workspace',
-          branch: opts.branch,
-          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
-        }
-      },
-      async release() {},
-    }
+/** A recovery-capable remote provider whose provisions always succeed. */
+function continuationProvider(operations: string[]): WorkspaceProvider {
+  return {
+    name: 'remote-test',
+    preservation: async () => ({ outcome: 'preserved', heads: [] }),
+    recovery: {
+      fence: async () => ({ outcome: 'confirmed' }),
+      reap: async () => ({
+        outcome: 'confirmed',
+        snapshots: { outcome: 'confirmed', deleted: 0 },
+      }),
+    },
+    async provision(opts) {
+      operations.push('provision')
+      return {
+        provider: 'remote-test',
+        ref: `sandbox-g${operations.length}`,
+        path: '/remote/workspace',
+        branch: opts.branch,
+        base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
+      }
+    },
+    async release() {},
   }
+}
 
+describe('no-progress guard on provision continuation tails', () => {
   type Tail = 'launch' | 'dispatch'
 
   function tailHarness(tail: Tail, operations: string[]): Harness {
@@ -10015,6 +10017,46 @@ command = "run"
       effects: () => ({ reaps, launches }),
     })
     expect({ reaps, launches }).toEqual({ reaps: 0, launches: 0 })
+  }, 60_000)
+
+  test('provision continuation guard read budget stays bounded at 100 and 100,000 events', async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    let launches = 0
+    const tickets: Ticket[] = []
+    const build = (): Harness =>
+      harness({
+        store,
+        clock,
+        tickets,
+        workspaceProvider: continuationProvider([]),
+        opts: { leaseTtlMs: 0 },
+        onLaunch: () => {
+          launches++
+        },
+      })
+    await provisionContinuationGuardReadBudget({
+      store,
+      async seed(tail, length) {
+        const slug = `continuation-${tail}-${length}`
+        const ticketId = `T-${slug}`
+        tickets.push(readyTicket(ticketId))
+        const h = build()
+        if (tail === 'dispatch')
+          return seedBuild(h, { slug, ticketId, attached: false, workspace: false })
+        await seedBuild(h, { slug, workspaceRef: 'sandbox-g0', workspaceProvider: 'remote-test' })
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'workspace.released',
+          payload: { ref: 'sandbox-g0', reason: 'replacement' },
+        })
+        return slug
+      },
+      dispatcher: () => build().dispatcher,
+      advance: () => clock.advance(60_000),
+      launches: () => launches,
+    })
+    expect(launches).toBe(0)
   }, 60_000)
 
   for (const table of ['verify', 'finalize'] as const) {
