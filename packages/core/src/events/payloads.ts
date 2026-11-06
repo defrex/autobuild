@@ -974,6 +974,11 @@ export const eventPayloadSchemas = {
     stream: z.string().min(1).optional(),
     /** Present only when this target substituted for the preceding failed one. */
     substitution: providerSubstitutionSchema.optional(),
+    /** Effective first message this bracket sends the model: the runtime's
+     * skill invocation for a fresh start, the continuation message for a live
+     * continue, the interruption notice for a native resume. Absent on
+     * historical events and when the runtime cannot report it. */
+    prompt: z.string().min(1).optional(),
   }),
   'session.suspended': z.strictObject({
     session: z.string().min(1),

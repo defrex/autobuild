@@ -27,7 +27,7 @@ import {
 } from '../kernel/mixed-version'
 import { hostname } from 'node:os'
 import { resumeAgent } from '../ports/runner/native-session'
-import type { AgentStartOpts } from '../ports/types'
+import type { AgentStartOpts, StartPromptOpts } from '../ports/types'
 import { readTerminalGuardBoundary } from '../store/reduced-reads'
 import type { OpenSession } from '../kernel/reducer'
 import { nativeSessionHandleSchema } from '../ports/runner/native-session'
@@ -341,6 +341,20 @@ function errorMessage(error: unknown): string {
 function capDiffOutput(output: string): string {
   if (output.length <= FINALIZE_DIFF_CAPTURE_CAP) return output
   return `${output.slice(0, FINALIZE_DIFF_CAPTURE_CAP)}\n... (truncated at ${FINALIZE_DIFF_CAPTURE_CAP} characters)`
+}
+
+/** The runtime's own first message for a fresh start, spread onto
+ * `session.started`; empty when the runtime cannot report it. */
+function recordedStartPrompt(runner: AgentRunner, opts: StartPromptOpts): { prompt?: string } {
+  const prompt = runner.startPrompt?.(opts)
+  return typeof prompt === 'string' && prompt !== '' ? { prompt } : {}
+}
+
+/** The message a native resume sends after an interruption. */
+function interruptionMessage(
+  cause: NonNullable<EventPayload<'session.started'>['continuation']>['cause'],
+): string {
+  return `This session was interrupted (${cause}). Re-check the worktree and re-run anything that was in flight. Continue the current phase and round; run ab context for its durable inputs.`
 }
 
 function sessionBudgetError(seconds: number): string {
@@ -829,6 +843,15 @@ export class BuildRunner {
             },
           },
         }
+        // A continuation resumes the native session with the interruption
+        // notice, never the caller's start prompt.
+        write = {
+          ...write,
+          payload: {
+            ...write.payload,
+            prompt: interruptionMessage(write.payload.continuation!.cause),
+          },
+        }
         started = await store.appendIfCurrent(slug, facts.cursor, write)
         if (started) break
       }
@@ -844,7 +867,7 @@ export class BuildRunner {
     const continuation = this.continuationIntents.get(opts.env.AB_SESSION!)
     this.continuationIntents.delete(opts.env.AB_SESSION!)
     if (!continuation) return runner.start(opts)
-    const message = `This session was interrupted (${continuation.cause}). Re-check the worktree and re-run anything that was in flight. Continue the current phase and round; run ab context for its durable inputs.`
+    const message = interruptionMessage(continuation.cause)
     this.interruptionPrompts.set(opts.env.AB_SESSION!, message)
     if (opts.stream)
       opts.stream.append([
@@ -2836,6 +2859,7 @@ export class BuildRunner {
           phase: 'finalize',
           round: 1,
           ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
+          ...recordedStartPrompt(target.runner, { skill, invocation: slug, buildSlug: slug }),
           ...(substitution !== undefined
             ? { substitution: { failed: substitution, selectedIndex: index } }
             : {}),
@@ -2991,6 +3015,7 @@ export class BuildRunner {
         phase: 'finalize',
         round: 1,
         ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
+        ...recordedStartPrompt(runner, { skill, invocation: slug, buildSlug: slug }),
       },
     } satisfies EventWrite<'session.started'>)
 
@@ -3616,6 +3641,7 @@ export class BuildRunner {
         round: spec.round,
       })
       const stream = streamBracket?.sink
+      const live = index === 0 ? primaryLive : undefined
       const startedEnvelope = await this.startBracket({
         actor: KERNEL,
         type: 'session.started',
@@ -3632,10 +3658,16 @@ export class BuildRunner {
           ...(substitution !== undefined
             ? { substitution: { failed: substitution, selectedIndex: index } }
             : {}),
+          ...(live !== undefined
+            ? { prompt: continueMessage(spec) }
+            : recordedStartPrompt(target.runner, {
+                skill: spec.skill,
+                invocation: slug,
+                buildSlug: slug,
+              })),
         },
       } satisfies EventWrite<'session.started'>)
       const preSeq = startedEnvelope.seq
-      const live = index === 0 ? primaryLive : undefined
 
       let handle: AgentSessionHandle | undefined = live?.handle
       let result: AgentTurnResult | undefined
@@ -3940,6 +3972,9 @@ export class BuildRunner {
         phase: spec.phase,
         round: spec.round,
         ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
+        ...(live !== undefined
+          ? { prompt: continueMessage(spec) }
+          : recordedStartPrompt(runner, { skill: spec.skill, invocation: slug, buildSlug: slug })),
       },
     } satisfies EventWrite<'session.started'>)
     const preSeq = startedEnvelope.seq

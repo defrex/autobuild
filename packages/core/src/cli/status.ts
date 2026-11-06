@@ -814,6 +814,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       lines.push(
         `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})${session.resumed ? ' — resumed' : ''}${stream}`,
       )
+      if (session.prompt !== undefined)
+        lines.push(`      prompt:  ${safeStatusText(session.prompt)}`)
     }
   }
 
