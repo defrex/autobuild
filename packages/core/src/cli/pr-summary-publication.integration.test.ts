@@ -270,6 +270,49 @@ describe('phase summary publication', () => {
     expect((await h.store.getBuild(BUILD))!.lease?.holder).toBe('launch')
   })
 
+  test('a coalescing guest defers a new request but re-asserts an eligible outstanding one', async () => {
+    const h = await fixture(true)
+    const requests = async () =>
+      (await h.store.getEvents(BUILD)).filter((e) => e.type === 'pr-summary.requested')
+    await start(h)
+    await finish(h)
+    expect(await refreshSummaryBoundary(h.deps, { continuesVerifyCycle: true })).toBe(false)
+    expect(await requests()).toHaveLength(0)
+    expect(await refreshSummaryBoundary(h.deps)).toBe(true)
+    // Host path: an outstanding request is reported without a write.
+    expect(await refreshSummaryBoundary(h.deps)).toBe(true)
+    expect(await requests()).toHaveLength(1)
+    // Guest path: a relaunched guest re-asserts it, whatever the cycle.
+    expect(
+      await refreshSummaryBoundary(h.deps, { continuesVerifyCycle: true, reassert: true }),
+    ).toBe(true)
+    const [first, second] = await requests()
+    expect(second!.payload).toEqual(first!.payload)
+    await settleSummaryRequests({ ...h.deps, holder: 'host' })
+    expect(pendingSummaryRequests(await h.store.getEvents(BUILD))).toHaveLength(0)
+    expect(h.forge.comments).toHaveLength(1)
+    expect(
+      (await h.store.getEvents(BUILD)).filter((e) => e.type === 'pr-summary.attempted'),
+    ).toHaveLength(1)
+    expect(await refreshSummaryBoundary(h.deps, { reassert: true })).toBe(false)
+    expect(await requests()).toHaveLength(2)
+
+    // Inside a rate-limit cooldown the guest neither re-asserts nor yields.
+    h.forge.commentOnPr = async () => {
+      throw new GitHubApiError(429, 'limited')
+    }
+    await start(h, 'next')
+    await finish(h, 'next', 'fail')
+    expect(await refreshSummaryBoundary(h.deps)).toBe(true)
+    await settleSummaryRequests({ ...h.deps, holder: 'host' })
+    await start(h, 'last')
+    await finish(h, 'last')
+    expect(await refreshSummaryBoundary(h.deps)).toBe(true)
+    const count = (await requests()).length
+    expect(await refreshSummaryBoundary(h.deps, { reassert: true })).toBe(false)
+    expect(await requests()).toHaveLength(count)
+  })
+
   test('phase boundary waits for all sessions to end and selects latest completed occurrence', async () => {
     const h = await fixture()
     await start(h)

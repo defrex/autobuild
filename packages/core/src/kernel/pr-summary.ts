@@ -1,5 +1,6 @@
 import { defineReducer } from './incremental'
 import type { AbEvent } from '../events/catalog'
+import type { Decision } from './engine'
 
 /** Latest completed occurrence only: never replay an obsolete publication backlog. */
 export const summaryBoundaryReducer = defineReducer<
@@ -62,6 +63,29 @@ export const summaryBoundaryReducer = defineReducer<
 
 export function summaryBoundary(events: readonly AbEvent[]) {
   return summaryBoundaryReducer.reduce(events)
+}
+
+const VERIFY_CONTINUATIONS = new Set<Decision['kind']>([
+  'run-check',
+  'run-agent-verify',
+  'evaluate-verify',
+  'skip-verify',
+  'run-verify-stage',
+  'cancel-verify-stage',
+  'record-verify-stage-failure',
+])
+
+/** Remote guests coalesce a verify cycle into one summary handoff: a completed
+ * verify-step occurrence whose next decision stays in the same cycle requests
+ * nothing. Local runners never consult this. */
+export function continuesVerifyCycle(
+  boundary: { occurrence: number } | undefined,
+  verifyStarted: readonly { seq: number }[],
+  next: Decision,
+): boolean {
+  if (boundary === undefined) return false
+  if (!verifyStarted.some((record) => record.seq === boundary.occurrence)) return false
+  return VERIFY_CONTINUATIONS.has(next.kind)
 }
 
 type SummaryRequest = Extract<AbEvent, { type: 'pr-summary.requested' }>

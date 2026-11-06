@@ -246,6 +246,7 @@ export const repositoryEventPolicy = {
   'dispatcher.ticket-source-recovered': 'decisive',
   'dispatcher.tick-failed': 'decisive',
   'dispatcher.runner-settled': 'decisive',
+  'dispatcher.summary-handoff': 'advisory',
   'dispatcher.harvest-runner-failed': 'decisive',
   'dispatcher.upgrade-available': 'advisory',
   'dispatcher.operator-reported': 'advisory',

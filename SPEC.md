@@ -1239,6 +1239,8 @@ every refresh and edit it, recreating it only after confirmed absence. The
 full audit trail is queryable, not committed to the branch.
 
 Summary publication is best effort, once per completed phase occurrence,
+except that a remote guest coalesces a verify cycle into one publication at
+the cycle's end (a passing cycle, a failing step, or any other stop), and
 after sessions end; attaching artifacts performs no summary write. Durable
 claim-before-write facts consume the occurrence budget even across crashes.
 Rate limits stop that occurrence and persist a cooldown (provider headers or
@@ -1249,9 +1251,12 @@ artifact; a compact comment provides the exact pinned download command.
 Current-API plugins retain `commentOnPr` and receive the same bounded calls;
 legacy plugins may append instead of editing.
 
-Local runners publish under their build lease. Remote guests record durable
-summary boundary requests and yield; only the credentialed dispatcher settles
-those requests, after guest execution ends and under exclusive ownership,
+Local runners publish under their build lease, at every boundary. Remote
+guests record a durable summary request at the end of each non-verify phase
+occurrence and at the end of each verify cycle, then yield. The dispatcher
+records such an exit as a routine, advisory `dispatcher.summary-handoff`, not a
+parked runner, and it raises no dashboard warning. Only the credentialed
+dispatcher settles those requests, after guest execution ends and under exclusive ownership,
 before replacement execution or workspace cleanup. Attempts and request
 dispositions survive restart and do not alter pipeline routing.
 
