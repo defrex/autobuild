@@ -6941,6 +6941,12 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
     expect('assignee' in criteria(`${LINEAR}readyState = "Ready"\n`)).toBe(false)
   })
 
+  test('github source: the "autobuild" label gate is the default, and [] removes it', () => {
+    const GITHUB = '[tickets]\nsource = "github"\n'
+    expect(criteria(GITHUB)).toEqual({ labels: ['autobuild'], state: 'ready' })
+    expect(criteria(`${GITHUB}readyLabels = []\n`)).toEqual({ labels: [], state: 'ready' })
+  })
+
   test('plugin sources have no host-imposed label convention', () => {
     expect(criteria(`${PLUGIN}readyState = "Open"\n`)).toEqual({
       labels: [],

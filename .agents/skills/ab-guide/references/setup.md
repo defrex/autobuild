@@ -126,7 +126,9 @@ exits nonzero on failure. Then:
    alternate. The runtime that launched setup and the temporary fresh-skeleton
    default do not constrain the final arrangement.
 3. Choose the ticket source and workflow states. Confirm account/team facts and
-   required environment credentials. Author a repository-owned acceptance-check skill and select it from an agent
+   required environment credentials. The `github` source needs no new secret:
+   it uses the forge's `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth login`, which must
+   read and write the repository's issues. Author a repository-owned acceptance-check skill and select it from an agent
    verify step in every repository. An **acceptance check** is a repository-owned agent verify step that runs the built software, exercises each acceptance criterion in the spec, attaches evidence, and returns a typed verdict. Every repository must configure one. It is not a test suite and leaves no test files behind.
    Wire an existing maintained end-to-end or browser test suite into an ordinary `check` step. If none exists, do not create one during setup. The acceptance check neither substitutes for nor seeds a suite.
 4. Preserve an existing `autobuild.toml` and unrelated repository choices on a
@@ -430,7 +432,7 @@ Owner admin requests require an explicit registered context.repo; project creden
 cannot select another project. See [local builds with hosted tickets](#local-builds-with-hosted-tickets).
 
 The service never contacts Linear. Projects with external sources (including
-file and Linear) keep using those sources directly through their dispatcher;
+file, Linear and GitHub) keep using those sources directly through their dispatcher;
 service ticket HTTP and operator surfaces refuse with project/source
 feedback rather than returning an empty queue.
 
