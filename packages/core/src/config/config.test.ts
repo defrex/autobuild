@@ -1094,7 +1094,7 @@ describe('parseConfig — [tickets]', () => {
       'Mona-Cat',
       'mona_acme',
       'mona-cat_octo',
-      'a'.repeat(31) + '_shortco', // 39 characters
+      `${'a'.repeat(31)}_shortco`, // 39 characters
     ]) {
       expect(parseConfig(github(JSON.stringify(good))).tickets.readyAssignee).toBe(good)
     }
@@ -1104,7 +1104,7 @@ describe('parseConfig — [tickets]', () => {
       'a@b.co',
       '-bad',
       'x'.repeat(40),
-      'a'.repeat(32) + '_shortco', // 40 characters
+      `${'a'.repeat(32)}_shortco`, // 40 characters
       'bot[bot]',
       'mona_ac',
       'mona_acmeacme1',
