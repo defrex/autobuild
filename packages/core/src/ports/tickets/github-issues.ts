@@ -10,6 +10,9 @@
  *   is done; closed as not planned or duplicate is the rejected role, or the
  *   fixed `not-planned` state when no rejected role is configured;
  * - a link to another forge issue is an `autobuild-link:<intent> #<n>` label;
+ * - a node is an issue carrying the exact `node` label; a ticket targets a
+ *   node by being a sub-issue of the node's issue, and any other parent is
+ *   ordinary grouping with no target;
  * - a creation key is a hidden HTML comment at the end of the body.
  */
 import { z } from 'zod'
@@ -44,6 +47,12 @@ export const githubIssueSchema = z
     pull_request: z.unknown().optional(),
     repository_url: z.string().optional(),
     created_at: z.string().optional(),
+    parent_issue_url: z.string().nullable().optional(),
+    sub_issues_summary: z
+      .object({ total: z.number().int().optional() })
+      .passthrough()
+      .nullable()
+      .optional(),
     issue_dependencies_summary: z
       .object({
         blocked_by: z.number().int().optional(),
@@ -119,6 +128,48 @@ export function stateLabelsOf(issue: Pick<GitHubIssue, 'labels'>): string[] {
 /** The ticket's own labels: every label except state and link labels. */
 export function ticketLabelsOf(issue: Pick<GitHubIssue, 'labels'>): string[] {
   return labelNames(issue).filter((name) => !isStateLabel(name) && !isLinkLabel(name))
+}
+
+// ── Kind and target ──────────────────────────────────────────────────────────
+
+/** The label that makes an issue a node, compared exactly as Linear does. */
+export const NODE_LABEL = 'node'
+
+export function isNode(issue: Pick<GitHubIssue, 'labels'>): boolean {
+  return labelNames(issue).includes(NODE_LABEL)
+}
+
+/** The issue's GitHub parent, from `parent_issue_url`, as `owner/repo` and
+ * number; `undefined` when it has none. */
+export function parentOf(
+  issue: Pick<GitHubIssue, 'parent_issue_url'>,
+): { repo: string; number: number } | undefined {
+  const match = /\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(issue.parent_issue_url ?? '')
+  if (!match) return undefined
+  const number = Number(match[2])
+  return Number.isSafeInteger(number) && number > 0 ? { repo: match[1]!, number } : undefined
+}
+
+/** The ticket labels a kind and label instruction leave, with Linear's
+ * semantics: a kind adds or removes `node` over the given (or existing)
+ * labels; an explicit kind and labels that disagree about `node` conflict. */
+export function effectiveLabels(
+  kind: string | undefined,
+  labels: readonly string[] | undefined,
+  existing: readonly string[],
+): string[] | undefined {
+  if (kind !== undefined && kind !== 'work' && kind !== 'node')
+    throw new Error('kind must be work or node')
+  if (
+    kind !== undefined &&
+    labels !== undefined &&
+    (kind === 'node') !== labels.includes(NODE_LABEL)
+  )
+    throw new Error('conflicting kind and node label instructions')
+  if (kind === undefined) return labels === undefined ? undefined : [...labels]
+  const result = (labels ?? existing).filter((label) => label !== NODE_LABEL)
+  if (kind === 'node') result.push(NODE_LABEL)
+  return result
 }
 
 /** The lifecycle names in workflow order, without duplicates. */
@@ -314,6 +365,8 @@ export interface CreationIntent {
   state: string
   issueLinks: IssueLink[]
   blockedBy: string[]
+  /** The node the issue becomes a sub-issue of; absent in older markers. */
+  target?: string
 }
 
 const creationIntentSchema = z.object({
@@ -322,6 +375,7 @@ const creationIntentSchema = z.object({
     z.object({ issue: z.number().int().positive(), intent: z.enum(['closes', 'refs']) }),
   ),
   blockedBy: z.array(z.string()),
+  target: z.string().optional(),
 })
 
 export function validCreationKey(key: string): boolean {

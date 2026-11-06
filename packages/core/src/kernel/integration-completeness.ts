@@ -8,25 +8,51 @@ import type { EventPayload } from '../events/payloads'
 import { contributedIssueLinks } from './node-issue-links'
 import { holdsState } from '../ports/tickets/lifecycle'
 
-/** One exhaustive source sample shared by every node in a dispatcher pass.
- * Scheduling may be cached; publication always requests a sample from this pass. */
+/** The pass's source sample: either one exhaustive listing shared by every
+ * node, or, when the source lists one node's targeting tickets, a per-node
+ * targeted listing memoized for the pass. Scheduling may be cached;
+ * publication always requests a sample from this pass. */
 export interface IntegrationObservationInputs {
   migrations?: TicketMigrations
-  listing: TicketListing
+  listing?: TicketListing
+  targeting?: (nodeId: string) => Promise<TicketListing>
   builds: { record: BuildRecord; state: BuildState }[]
+}
+
+function canEnumerate(tickets: TicketSource): boolean {
+  return !!tickets.integrationTree && (!!tickets.listAll || !!tickets.listTargeting)
+}
+
+/** One targeted listing per node for the life of an inputs object; a failed
+ * read is forgotten so a later pass retries it. */
+function memoizedTargeting(
+  tickets: TicketSource & { listTargeting: NonNullable<TicketSource['listTargeting']> },
+): (nodeId: string) => Promise<TicketListing> {
+  const listings = new Map<string, Promise<TicketListing>>()
+  return (nodeId) => {
+    let listing = listings.get(nodeId)
+    if (listing === undefined) {
+      listing = tickets.listTargeting(nodeId)
+      listings.set(nodeId, listing)
+      listing.catch(() => listings.delete(nodeId))
+    }
+    return listing
+  }
 }
 export async function integrationObservationInputs(
   store: BuildStore,
   tickets: TicketSource,
   repo: string,
 ): Promise<IntegrationObservationInputs> {
-  if (!tickets.integrationTree || !tickets.listAll)
+  if (!canEnumerate(tickets))
     throw new Error('ticket source cannot establish exhaustive integration completeness')
-  const listing = await tickets.listAll()
+  const sample: Pick<IntegrationObservationInputs, 'listing' | 'targeting'> = tickets.listTargeting
+    ? { targeting: memoizedTargeting(tickets as Parameters<typeof memoizedTargeting>[0]) }
+    : { listing: await tickets.listAll!() }
   const builds = []
   for (const record of await store.listBuildsForRepo(repo))
     builds.push({ record, state: (await readBuildFacts(store, record.slug)).value.state })
-  return { listing, builds, migrations: await readTicketMigrations(store, repo) }
+  return { ...sample, builds, migrations: await readTicketMigrations(store, repo) }
 }
 
 /** A failed or partial enumeration cannot authorize verification or publication. */
@@ -51,15 +77,19 @@ export async function observeIntegration(
   observation.children = state.integration?.observation?.children
 
   try {
-    if (!record?.ticket || !tickets.integrationTree || !tickets.listAll)
+    if (!record?.ticket || !canEnumerate(tickets))
       throw new Error('ticket source cannot establish exhaustive integration completeness')
     const {
-      listing,
+      listing: shared,
+      targeting,
       builds,
       migrations: supplied,
     } = await (inputs ? inputs() : integrationObservationInputs(store, tickets, record.repo))
     const migrations = supplied ?? (await readTicketMigrations(store, record.repo))
     const nodeRef = resolveTicketRef(migrations, record.ticket, tickets.name, slug)
+    const listing = shared ?? (await targeting?.(nodeRef.id))
+    if (listing === undefined)
+      throw new Error('ticket source cannot establish exhaustive integration completeness')
     observation.membershipSource = tickets.name
     const current = (build: BuildRecord) =>
       build.ticket
@@ -170,6 +200,9 @@ export async function observeIntegration(
       const entry = display.get(JSON.stringify([ref.source, ref.id]))
       if (entry) entry.claims = [...new Set([...(entry.claims ?? []), build.slug])].sort()
     }
+    // A targeted listing holds only current children, so a contribution whose
+    // ticket has since moved keeps its previous or build title. Display only:
+    // membership above does not depend on it.
     for (const ticket of listing.tickets)
       if (
         (ticket.ref.source === tickets.name && children.has(ticket.ref.id)) ||
