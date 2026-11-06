@@ -129,6 +129,9 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
       throw new Error(`runner.${method} must be a function`)
     }
   }
+  if (runner.startPrompt !== undefined && typeof runner.startPrompt !== 'function') {
+    throw new Error('runner.startPrompt must be a function when provided')
+  }
 
   const servesModels = value.servesModels
   if (
