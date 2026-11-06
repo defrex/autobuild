@@ -1364,3 +1364,164 @@ describe('github kernel marker labels', () => {
     await expect(source.addState('aborted')).rejects.toThrow('cannot be a state')
   })
 })
+
+describe('github ready assignee', () => {
+  const READY = { state: 'ready', labels: [] as string[] }
+
+  function assigneeSetup(identity: string | null = 'alice') {
+    const github = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: github.transportAs(identity),
+      repository: github.repository,
+      lifecycle: LIFECYCLE,
+      readyLabels: [],
+    })
+    const file = (...assignees: string[]) =>
+      String(github.fileIssue({ labels: ['autobuild:ready'], assignees }))
+    return { github, source, file }
+  }
+
+  const ids = async (source: GitHubTicketSource, assignee?: string) =>
+    (
+      await source.listReady({ ...READY, ...(assignee !== undefined ? { assignee } : {}) })
+    ).tickets.map((ticket) => ticket.ref.id)
+
+  test('declares the capability', () => {
+    expect(assigneeSetup().source.readyAssignee).toBe(true)
+  })
+
+  test('unassigned issues are never ready; any one of several assignees matches', async () => {
+    const { github, source, file } = assigneeSetup()
+    const alice = file('alice')
+    const shared = file('carol', 'Alice')
+    file()
+    const bob = file('bob')
+    expect(await ids(source, 'alice')).toEqual([alice, shared])
+    expect(await ids(source, 'ALICE')).toEqual([alice, shared])
+    expect(await ids(source, 'carol')).toEqual([shared])
+    expect(await ids(source, 'bob')).toEqual([bob])
+    const lists = github.requests.filter((r) => r.kind === 'list-issues')
+    expect(lists.map((r) => r.params?.assignee)).toEqual(['alice', 'ALICE', 'carol', 'bob'])
+    expect(github.count('user')).toBe(0)
+  })
+
+  test('the membership check holds even if the server ignored the filter', async () => {
+    const { github, file } = assigneeSetup()
+    const alice = file('alice')
+    file('bob')
+    file()
+    const unfiltered: GitHubRequest = (method, path, opts = {}) => {
+      const { assignee: _assignee, ...query } = opts.query ?? {}
+      return github.transport(method, path, { ...opts, query })
+    }
+    const source = new GitHubTicketSource({
+      transport: unfiltered,
+      repository: github.repository,
+      lifecycle: LIFECYCLE,
+      readyLabels: [],
+    })
+    expect(await ids(source, 'alice')).toEqual([alice])
+  })
+
+  test('"me" is the credential owner, resolved once', async () => {
+    const { github, source, file } = assigneeSetup('alice')
+    const alice = file('alice')
+    file('bob')
+    expect(await ids(source, 'me')).toEqual([alice])
+    expect(await ids(source, 'me')).toEqual([alice])
+    expect(github.count('user')).toBe(1)
+    expect(github.requests.find((r) => r.kind === 'list-issues')?.params?.assignee).toBe('alice')
+  })
+
+  test('"me" with a credential that has no user is refused, and stays memoized', async () => {
+    const { github, source, file } = assigneeSetup(null)
+    file('alice')
+    await expect(ids(source, 'me')).rejects.toThrow('the GitHub credential has no user')
+    await expect(ids(source, 'me')).rejects.toThrow('the GitHub credential has no user')
+    expect(github.count('user')).toBe(1)
+    expect(github.count('list-issues')).toBe(0)
+  })
+
+  test('prepareReadyAssignee resolves once and decides refusals without requests', async () => {
+    const { github, source } = assigneeSetup('alice')
+    expect(source.readyAssigneeRefusal('me')).toContain(
+      'could not be resolved at dispatcher startup',
+    )
+    await source.prepareReadyAssignee()
+    await source.prepareReadyAssignee()
+    expect(github.count('user')).toBe(1)
+    github.resetRequests()
+    expect(source.readyAssigneeRefusal('me')).toBeUndefined()
+    expect(source.readyAssigneeRefusal('octocat')).toBeUndefined()
+    expect(source.readyAssigneeRefusal('mona_acme')).toBeUndefined()
+    expect(source.readyAssigneeRefusal('a@b.co')).toContain('or a GitHub username')
+    expect(github.requests).toHaveLength(0)
+
+    const noUser = assigneeSetup(null)
+    await noUser.source.prepareReadyAssignee()
+    expect(noUser.source.readyAssigneeRefusal('me')).toContain('the GitHub credential has no user')
+    expect(noUser.source.readyAssigneeRefusal('octocat')).toBeUndefined()
+
+    const failing = assigneeSetup('alice')
+    failing.github.failNext(500, {}, { message: 'boom' }, (_method, path) => path === 'user')
+    await expect(failing.source.prepareReadyAssignee()).rejects.toThrow('boom')
+    expect(failing.source.readyAssigneeRefusal('me')).toContain(
+      'could not be resolved at dispatcher startup',
+    )
+    expect(failing.source.readyAssigneeRefusal('me')).toContain('restart dispatch')
+    failing.github.resetRequests()
+    expect(failing.source.readyAssigneeRefusal('octocat')).toBeUndefined()
+    expect(failing.github.requests).toHaveLength(0)
+  })
+
+  test('describeReadyAssignee names the user and checks they can be assigned', async () => {
+    const { github, source } = assigneeSetup('alice')
+    github.assignable.add('alice')
+    expect(await source.describeReadyAssignee('me')).toBe('me → @alice')
+    await expect(source.describeReadyAssignee('ghost')).rejects.toThrow(
+      '"ghost" cannot be assigned issues in acme/widgets',
+    )
+    const noUser = assigneeSetup(null)
+    await expect(noUser.source.describeReadyAssignee('me')).rejects.toThrow(
+      'the GitHub credential has no user',
+    )
+    expect(noUser.github.count('assignee-check')).toBe(0)
+  })
+
+  test('a managed user login is used as given', async () => {
+    const { github, source, file } = assigneeSetup('alice')
+    github.assignable.add('mona_acme')
+    const mona = file('mona_acme')
+    file('octocat')
+    file()
+    expect(await source.describeReadyAssignee('mona_acme')).toBe('mona_acme → @mona_acme')
+    expect(github.count('assignee-check')).toBe(1)
+    expect(github.count('user')).toBe(0)
+    expect(await ids(source, 'mona_acme')).toEqual([mona])
+    expect(github.requests.find((r) => r.kind === 'list-issues')?.params?.assignee).toBe(
+      'mona_acme',
+    )
+    expect(source.readyAssigneeRefusal('mona_acme')).toBeUndefined()
+  })
+
+  test('an assignee gate costs no more requests than none, from the first call', async () => {
+    const without = assigneeSetup('alice')
+    const withMe = assigneeSetup('alice')
+    for (const fixture of [without, withMe]) {
+      fixture.file('alice')
+      fixture.file('alice', 'bob')
+      fixture.file()
+    }
+    await withMe.source.prepareReadyAssignee()
+    withMe.github.resetRequests()
+    for (let call = 1; call <= 3; call++) {
+      const before = { a: without.github.requests.length, b: withMe.github.requests.length }
+      await ids(without.source)
+      await ids(withMe.source, 'me')
+      expect(withMe.github.requests.length - before.b).toBe(
+        without.github.requests.length - before.a,
+      )
+    }
+    expect(withMe.github.count('user')).toBe(0)
+  })
+})

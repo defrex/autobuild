@@ -177,7 +177,7 @@ describe('loadPlugins', () => {
     expect(diagnosis.reports[2]).toMatchObject({
       resolutionKind: 'repo-path',
       pluginName: 'good',
-      api: { hostVersion: '1.9.0', status: 'compatible' },
+      api: { hostVersion: '1.10.0', status: 'compatible' },
     })
   })
 

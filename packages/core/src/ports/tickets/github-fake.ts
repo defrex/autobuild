@@ -7,7 +7,10 @@
  * ETags (a hash of the response) and `If-None-Match` → 304, and counts every
  * request by route so budget tests can assert exact costs. It deliberately
  * serves no comment-history, REST issue-events or REST search route: any
- * adapter read of those fails a test with a 404.
+ * adapter read of those fails a test with a 404. Identity routes answer for
+ * the requesting credential: `GET user` returns its login (or 403 for a
+ * credential with no user, `transportAs(null)`), and
+ * `GET repos/{repo}/assignees/{login}` answers 204 for `assignable` logins.
  *
  * UI-style mutators simulate what people do on GitHub outside the adapter.
  */
@@ -27,6 +30,8 @@ interface FakeIssue {
   state: 'open' | 'closed'
   state_reason: string | null
   labels: string[]
+  /** Assignee logins. */
+  assignees: string[]
   created_at: string
   updated_at: string
   pull_request: boolean
@@ -63,6 +68,8 @@ export type FakeGitHubRequestKind =
   | 'count'
   | 'timeline-reopen'
   | 'timeline-closed'
+  | 'user'
+  | 'assignee-check'
   | 'unknown'
 
 export interface FakeGitHubRequestRecord {
@@ -70,6 +77,8 @@ export interface FakeGitHubRequestRecord {
   path: string
   kind: FakeGitHubRequestKind
   status: number
+  /** REST query parameters, as sent. */
+  params?: Record<string, string>
   /** GraphQL only: the count query's requested fields. */
   fields?: string[]
   /** GraphQL only: the query text. */
@@ -111,6 +120,11 @@ export class FakeGitHubIssues {
   /** When false, UI labelling leaves `updated_at` untouched. */
   labelsBumpUpdatedAt = true
   searchLagMs: number
+  /** The login `transport`'s credential belongs to; null has no user (an App
+   * installation token). */
+  viewer: string | null = 'fake-user'
+  /** Logins (lowercased) that can be assigned issues in the repository. */
+  readonly assignable = new Set<string>()
 
   private readonly issues = new Map<number, FakeIssue>()
   private readonly foreign = new Map<string, FakeIssue & { repo: string }>()
@@ -206,9 +220,11 @@ export class FakeGitHubIssues {
       labels?: string[]
       state?: 'open' | 'closed'
       state_reason?: string | null
+      assignees?: string[]
     } = {},
   ): number {
     const issue = this.insert(opts.title ?? 'Filed in the UI', opts.body ?? 'From the UI.', [])
+    issue.assignees = [...(opts.assignees ?? [])]
     for (const label of opts.labels ?? []) this.uiAddLabel(issue.number, label)
     if (opts.state === 'closed')
       this.uiClose(issue.number, opts.state_reason === undefined ? 'completed' : opts.state_reason)
@@ -253,6 +269,13 @@ export class FakeGitHubIssues {
     if (issue.labels.length === before) return
     issue.events.push({ type: 'unlabeled', label: name })
     this.changed(issue, this.labelsBumpUpdatedAt)
+  }
+
+  /** Replace the issue's assignees. */
+  uiAssign(number: number, ...logins: string[]): void {
+    const issue = this.require(number)
+    issue.assignees = [...logins]
+    this.changed(issue, true)
   }
 
   uiEditTitle(number: number, title: string): void {
@@ -310,6 +333,7 @@ export class FakeGitHubIssues {
         state,
         state_reason: state === 'closed' ? 'completed' : null,
         labels: [],
+        assignees: [],
         created_at: at,
         updated_at: at,
         pull_request: false,
@@ -382,13 +406,29 @@ export class FakeGitHubIssues {
 
   // ── Transport ─────────────────────────────────────────────────────────────
 
-  readonly transport: GitHubRequest = async (
-    method,
-    rawPath,
-    opts = {},
-  ): Promise<GitHubResponse> => {
+  readonly transport: GitHubRequest = (method, rawPath, opts) =>
+    this.serve(this.viewer, method, rawPath, opts)
+
+  /** A transport authenticated as `login` (null: a credential with no user),
+   * over the same repository state. */
+  transportAs(login: string | null): GitHubRequest {
+    return (method, rawPath, opts) => this.serve(login, method, rawPath, opts)
+  }
+
+  private async serve(
+    identity: string | null,
+    method: string,
+    rawPath: string,
+    opts: Parameters<GitHubRequest>[2] = {},
+  ): Promise<GitHubResponse> {
     const path = rawPath.replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '')
-    const record: FakeGitHubRequestRecord = { method, path, kind: 'unknown', status: 0 }
+    const record: FakeGitHubRequestRecord = {
+      method,
+      path,
+      kind: 'unknown',
+      status: 0,
+      ...(opts.query !== undefined ? { params: { ...opts.query } } : {}),
+    }
     this.requests.push(record)
     const failure = this.failures.findIndex((f) => f.match?.(method, path) ?? true)
     if (failure >= 0) {
@@ -403,7 +443,11 @@ export class FakeGitHubIssues {
       )
     }
     try {
-      const result = this.route(method, path, opts.query ?? {}, opts.body, record)
+      const result = this.route(identity, method, path, opts.query ?? {}, opts.body, record)
+      if (method === 'GET' && result.status === 204) {
+        record.status = 204
+        return { status: 204, headers: {} }
+      }
       if (method === 'GET') {
         const etag = etagOf(result.json, result.link)
         const sent = opts.headers?.['If-None-Match'] ?? opts.headers?.['if-none-match']
@@ -435,7 +479,9 @@ export class FakeGitHubIssues {
     }
     const prefix = `repos/${this.fullName}`
     const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path
+    if (path === 'user') return 'user'
     if (rest === '') return 'repo'
+    if (/^\/assignees\/[^/]+$/.test(rest)) return 'assignee-check'
     if (rest === '/issues') return method === 'POST' ? 'create-issue' : 'list-issues'
     if (/^\/issues\/\d+$/.test(rest)) return method === 'PATCH' ? 'patch-issue' : 'get-issue'
     if (/^\/issues\/\d+\/comments$/.test(rest)) return 'comment'
@@ -448,6 +494,7 @@ export class FakeGitHubIssues {
   }
 
   private route(
+    identity: string | null,
     method: string,
     path: string,
     query: Record<string, string>,
@@ -456,9 +503,19 @@ export class FakeGitHubIssues {
   ): { json: unknown; link?: string; status?: number } {
     record.kind = this.classify(method, path, body)
     if (path === 'graphql' && method === 'POST') return this.graphql(body, record)
+    if (path === 'user' && method === 'GET') {
+      if (identity === null) throw new GitHubApiError(403, 'Resource not accessible by integration')
+      return { json: { login: identity } }
+    }
     const prefix = `repos/${this.fullName}`
     if (!path.startsWith(prefix)) throw this.notFound()
     const rest = path.slice(prefix.length)
+    const assigneePath = /^\/assignees\/([^/]+)$/.exec(rest)
+    if (assigneePath && method === 'GET') {
+      if (!this.assignable.has(decodeURIComponent(assigneePath[1]!).toLowerCase()))
+        throw this.notFound()
+      return { json: undefined, status: 204 }
+    }
     if (!this.issueWrites && method !== 'GET')
       throw new GitHubApiError(403, 'Resource not accessible by personal access token')
     if (rest === '' && method === 'GET')
@@ -548,11 +605,20 @@ export class FakeGitHubIssues {
       .split(',')
       .map((label) => label.trim().toLowerCase())
       .filter((label) => label !== '')
+    const assignee = query.assignee?.toLowerCase()
+    const assigned = (issue: FakeIssue) =>
+      assignee === undefined ||
+      (assignee === 'none'
+        ? issue.assignees.length === 0
+        : assignee === '*'
+          ? issue.assignees.length > 0
+          : issue.assignees.some((login) => login.toLowerCase() === assignee))
     let issues = [...this.issues.values()].filter(
       (issue) =>
         !issue.gone &&
         (state === 'all' || issue.state === state) &&
-        wanted.every((label) => issue.labels.some((held) => held.toLowerCase() === label)),
+        wanted.every((label) => issue.labels.some((held) => held.toLowerCase() === label)) &&
+        assigned(issue),
     )
     const sort = query.sort ?? 'created'
     const key = (issue: FakeIssue) =>
@@ -768,6 +834,7 @@ export class FakeGitHubIssues {
       state: 'open',
       state_reason: null,
       labels,
+      assignees: [],
       created_at: at,
       updated_at: at,
       pull_request: false,
@@ -843,6 +910,7 @@ export class FakeGitHubIssues {
       state: issue.state,
       state_reason: issue.state_reason,
       labels: issue.labels.map((name) => ({ name })),
+      assignees: issue.assignees.map((login) => ({ login })),
       comments: issue.comments,
       created_at: issue.created_at,
       updated_at: issue.updated_at,
