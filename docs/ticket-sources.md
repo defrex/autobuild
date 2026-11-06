@@ -107,7 +107,7 @@ rejectedState = "rejected"
 - `teamKey` identifies the registered project's team.
 - **URL.** `tickets.url` defaults to the remote BuildStore service (`AB_STORE` or `[store].url`); it's required with a local Store, as here.
 - **Authority.** A separate ticket service needs its own project credential; a Store connection grants nothing there. Delegated child sessions are read-only and can't redefine policy.
-- **Backlog and rejected.** Role moves create a missing role state on first use. Blocker facts carry each blocker's state, so a rejected blocker is named in diagnostics; the project ticket policy itself doesn't define these roles.
+- **Backlog and rejected.** `ab connect` and every policy publication carry both roles, so operator and MCP role moves use them too. Mapping a role onto an existing state, such as `backlogState = "icebox"`, keeps that state and its tickets; a missing role state is created. Blocker facts carry each blocker's state, so a rejected blocker is named in diagnostics.
 
 ### Optional issue links
 

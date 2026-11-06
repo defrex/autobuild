@@ -1511,7 +1511,7 @@ kind and operation.
 Ticket admission uses the credential project. Hosted tickets, comments, blockers, creation-key
 deduplication and assets are partitioned by registered repository, never team.
 Lifecycle comes from independent project ticket policy (triage, ready, doing, done
-by default; configurable doneState). Legacy projects without independent policy
+by default; configurable doneState; optional backlog and rejected roles). Legacy projects without independent policy
 use their uploaded configuration with Backlog / Doing / Done defaults. Owner admin ticket requests explicitly select a registered
 repository. The service has no Linear ticket backend: external tracker and
 file sources remain dispatcher-side, and service ticket surfaces refuse those
@@ -2410,7 +2410,8 @@ repository; an owner selects a registered repository explicitly. Team and state
 fields from clients convey no authority or lifecycle policy. Tickets, comments,
 blockers, creation-key deduplication and assets are isolated by repository.
 Independent project ticket policy supplies hosted lifecycle names: triage, ready,
-doing, done (`doneState`), and create/proposal equal to triage by default. Hosted
+doing, done (`doneState`), and create/proposal equal to triage by default, plus
+the optional backlog and rejected roles. Hosted
 readyState defaults to ready; other sources require it. Legacy clients without
 independent policy use uploaded dispatcher config and its old defaults. Configured roles may overlap,
 except the backlog and rejected roles below.
