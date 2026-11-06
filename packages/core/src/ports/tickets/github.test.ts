@@ -765,6 +765,44 @@ describe('github blockers', () => {
     expect(listing.tickets.find((t) => t.ref.id === a)?.blockersResolved).toBe(true)
   })
 
+  test('a refused dependency 422 fails; only a read-back edge counts as already held', async () => {
+    const { github, source } = setup()
+    const a = await created(source, 'ready')
+    const b = await created(source, 'ready')
+    const refused = { message: 'Validation Failed', errors: [{ message: 'Dependency refused' }] }
+    const post = (method: string, path: string) => method === 'POST' && path.endsWith('/blocked_by')
+    github.failNext(422, {}, refused, post)
+    await expect(source.addBlocker(a, b)).rejects.toThrow('Validation Failed')
+    expect((await source.get(a))?.blockedBy).toBeUndefined()
+    // A person adds the same edge between the read and the POST.
+    github.failNext(422, {}, refused, (method, path) => {
+      if (!post(method, path)) return false
+      github.uiAddDependency(Number(a), Number(b))
+      return true
+    })
+    await source.addBlocker(a, b)
+    expect((await source.get(a))?.blockedBy).toEqual([b])
+  })
+
+  test('a refused dependency 422 during keyed creation keeps the retry intent', async () => {
+    const { github, source } = setup()
+    const blocker = await created(source, 'ready')
+    const key = { idempotencyKey: 'k-422', idempotencyKeyReservedAt: new Date().toISOString() }
+    github.failNext(
+      422,
+      {},
+      { message: 'Validation Failed', errors: [{ message: 'Dependency refused' }] },
+      (method, path) => method === 'POST' && path.endsWith('/blocked_by'),
+    )
+    await expect(
+      source.create({ title: 't', body: 'b', blockedBy: [blocker] }, { state: 'ready', ...key }),
+    ).rejects.toThrow(`Blockers not recorded: "${blocker}"`)
+    expect(github.issue(1002)?.body).toContain(' pending ')
+    const retry = await source.create({ title: 't', body: 'b' }, { state: 'ready', ...key })
+    expect(retry).toMatchObject({ ref: { id: '1002' }, blockedBy: [blocker] })
+    expect(github.issue(1002)?.body).not.toContain(' pending ')
+  })
+
   test('a cross-repository blocker exists, never resolves and never crashes a listing', async () => {
     const { github, source } = setup()
     const a = await created(source, 'ready')
@@ -1159,8 +1197,36 @@ describe('github access checks', () => {
     )
     await expect(access(github)).rejects.toThrow('token cannot read the issues of acme/widgets')
     github.permissions = { pull: true, push: false }
+    await expect(access(github)).resolves.toBeUndefined()
+    expect(github.issueCount()).toBe(0)
+  })
+
+  test('push access is not issue-write access, with or without labels', async () => {
+    const github = new FakeGitHubIssues()
+    github.issueWrites = false
+    await expect(access(github)).rejects.toThrow(
+      'token cannot write the issues of acme/widgets — grant Issues: read and write',
+    )
     github.fileIssue({ labels: ['bug'] })
     await expect(access(github)).rejects.toThrow('token cannot write the issues of acme/widgets')
+    github.permissions = { pull: true } as typeof github.permissions
+    await expect(access(github)).rejects.toThrow('token cannot write the issues of acme/widgets')
+    github.issueWrites = true
+    await expect(access(github)).resolves.toBeUndefined()
+    expect(github.issueCount()).toBe(1)
+  })
+
+  test('an unexplained write-probe refusal is reported, never passed', async () => {
+    const github = new FakeGitHubIssues()
+    github.failNext(
+      422,
+      {},
+      { message: 'endpoint has been spammed' },
+      (method) => method === 'POST',
+    )
+    await expect(access(github)).rejects.toThrow(
+      'could not confirm the token can write the issues of acme/widgets',
+    )
   })
 })
 

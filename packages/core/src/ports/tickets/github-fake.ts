@@ -100,6 +100,8 @@ export class FakeGitHubIssues {
   readonly comments = new Map<number, string[]>()
   hasIssues = true
   permissions = { pull: true, push: true }
+  /** When false, the token lacks Issues write: every REST write is refused. */
+  issueWrites = true
   /** Simulates a token without push access: GitHub silently drops labels. */
   dropLabelsOnCreate = false
   /** When false, UI labelling leaves `updated_at` untouched. */
@@ -435,6 +437,8 @@ export class FakeGitHubIssues {
     const prefix = `repos/${this.fullName}`
     if (!path.startsWith(prefix)) throw this.notFound()
     const rest = path.slice(prefix.length)
+    if (!this.issueWrites && method !== 'GET')
+      throw new GitHubApiError(403, 'Resource not accessible by personal access token')
     if (rest === '' && method === 'GET')
       return {
         json: {

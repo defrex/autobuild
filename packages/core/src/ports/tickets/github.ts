@@ -145,6 +145,13 @@ function statusOf(error: unknown): number | undefined {
   return cause instanceof GitHubApiError ? cause.status : undefined
 }
 
+/** The API error's message and response body, for classifying a refusal. */
+function apiDetail(error: unknown): string {
+  const cause = error instanceof GitHubApiError ? error : (error as { cause?: unknown })?.cause
+  if (!(cause instanceof GitHubApiError)) return message(error)
+  return `${cause.message} ${JSON.stringify(cause.body ?? null)}`
+}
+
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -1102,9 +1109,29 @@ export class GitHubTicketSource implements TicketSource {
         body: { issue_id: blocker.issue.id },
       })
     } catch (error) {
-      // An existing dependency answers 422: the retry already holds.
+      // GitHub answers 422 both for an existing dependency and for a refused
+      // one; only the edge itself, read back, says the retry already holds.
       if (statusOf(error) !== 422) throw error
+      if (!(await this.holdsBlocker(operation, number, blocker.issue.id))) throw error
     }
+  }
+
+  /** Whether issue `number` is blocked by the issue with database id `id`,
+   * read unconditionally from the dependency list. */
+  private async holdsBlocker(operation: string, number: number, id: number): Promise<boolean> {
+    let page: string | undefined = '1'
+    while (page !== undefined) {
+      const response = await this.must(
+        operation,
+        'GET',
+        this.path(`/issues/${number}/dependencies/blocked_by`),
+        { query: { per_page: PAGE, page } },
+      )
+      for (const json of z.array(z.unknown()).parse(response.json))
+        if (this.parseIssue(operation, json).id === id) return true
+      page = nextPage(response.link)
+    }
+    return false
   }
 
   async removeBlocker(id: string, blockerId: string): Promise<void> {
@@ -1289,10 +1316,7 @@ export class GitHubTicketSource implements TicketSource {
     }
     if (repository === null) throw new Error(`github tickets: token cannot read ${this.fullName}`)
     const info = z
-      .object({
-        has_issues: z.boolean().optional(),
-        permissions: z.object({ push: z.boolean().optional() }).passthrough().optional(),
-      })
+      .object({ has_issues: z.boolean().optional() })
       .passthrough()
       .parse(repository.json)
     if (info.has_issues === false)
@@ -1307,27 +1331,26 @@ export class GitHubTicketSource implements TicketSource {
         )
       throw error
     }
-    if (info.permissions?.push === true) return
-    // Side-effect-free write probe: creating a label that already exists is
-    // refused as a duplicate (422) only when the token may write.
-    const labels = await this.labelRegistry()
-    const probe = labels[0]?.name
+    // Repository push access says nothing about a fine-grained or App token's
+    // Issues permission, so probe issue creation itself with no title: GitHub
+    // authorizes before it validates, so a writer is refused for the missing
+    // title (422) and nothing is created, while a reader is refused (403/404).
     const readOnly = new Error(
       `github tickets: token cannot write the issues of ${this.fullName} — grant Issues: read and write`,
     )
-    if (probe === undefined) {
-      if (info.permissions?.push === false) throw readOnly
-      return
-    }
     try {
-      await this.must('validate', 'POST', this.path('/labels'), {
-        body: { name: probe, color: LABEL_COLOR },
-      })
+      await this.must('validate', 'POST', this.path('/issues'), { body: {} })
     } catch (error) {
       const status = statusOf(error)
-      if (status === 422) return
       if (status === 403 || status === 404) throw readOnly
-      throw error
+      if (status === 422 && /title/i.test(apiDetail(error))) return
+      throw new Error(
+        `github tickets: could not confirm the token can write the issues of ${this.fullName} — ${message(error)}`,
+        { cause: error },
+      )
     }
+    throw new Error(
+      `github tickets: could not confirm the token can write the issues of ${this.fullName} — GitHub accepted an issue without a title`,
+    )
   }
 }
