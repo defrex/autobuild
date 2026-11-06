@@ -115,7 +115,7 @@ export { retainReplay, restoreReplay } from './replay-retention'
 import { restoreReplay } from './replay-retention'
 
 /** Restore a sandbox-only change from durable bytes without remote write access. */
-async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
+export async function restoreChange(deps: RestackDeps, sha: string): Promise<boolean> {
   const artifact = await deps.store.getArtifact(deps.slug, `reconcile-change-${sha}`)
   if (artifact === null) return restoreReplay(deps, sha)
   const content = new TextDecoder().decode(artifact.content)
