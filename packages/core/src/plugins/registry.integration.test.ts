@@ -66,6 +66,7 @@ describe('PluginRegistry', () => {
     })
     expect(registry.adapters('ticket-source')).toEqual([
       expect.objectContaining({ name: 'file', source: { kind: 'builtin' } }),
+      expect.objectContaining({ name: 'github', source: { kind: 'builtin' } }),
       expect.objectContaining({ name: 'hosted', source: { kind: 'builtin' } }),
       expect.objectContaining({ name: 'linear', source: { kind: 'builtin' } }),
       expect.objectContaining({
