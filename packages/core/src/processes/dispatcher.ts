@@ -207,7 +207,8 @@ import { settlePublicationFactsBeforeRelease } from './publication-loss'
  *
  * The only per-source difference left is the *label* default. Linear has no
  * `ready/` directory, so a label is the only thing that can mark a ticket
- * dispatchable: the historical `["autobuild"]` default. The file tracker's gate
+ * dispatchable: the historical `["autobuild"]` default. GitHub shares it, so
+ * an issue anyone can file still needs the opt-in label. The file tracker's gate
  * is otherwise the directory, so it defaults to no label gate. Plugin sources
  * likewise receive no host-imposed label convention. An explicit
  * `readyLabels` wins for every source.
@@ -221,6 +222,8 @@ export function readyCriteria(config: Config): {
   assignee?: string
 } {
   const { readyLabels, readyState, readyAssignee } = config.tickets
+  if (config.tickets.source === 'github')
+    return { labels: readyLabels ?? ['autobuild'], state: readyState }
   if (config.tickets.source === 'linear') {
     return {
       labels: readyLabels ?? ['autobuild'],
@@ -991,7 +994,7 @@ export class Dispatcher {
   private get doneState(): string {
     return (
       this.deps.opts?.doneState ??
-      (this.deps.config.tickets.source === 'hosted'
+      (this.deps.config.tickets.source === 'hosted' || this.deps.config.tickets.source === 'github'
         ? ticketLifecycle(this.deps.config.tickets).done
         : undefined) ??
       'Done'

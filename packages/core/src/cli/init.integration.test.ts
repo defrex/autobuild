@@ -208,6 +208,15 @@ describe('agent-driven ab init', () => {
     expect(config.policy.sessionBudgetSeconds).toBe(3600)
     expect(config.policy.maxReviewRounds).toBe(6)
     expect(cargoSource).not.toContain('bun install')
+
+    // Switching the fresh skeleton to the github source keeps both roles.
+    const github = parseConfig(cargoSource.replace('source = "file"', 'source = "github"'))
+    expect(github.tickets).toMatchObject({
+      source: 'github',
+      readyState: 'ready',
+      backlogState: 'backlog',
+      rejectedState: 'rejected',
+    })
   })
 
   test('reports every probe and still installs when none is usable', async () => {
