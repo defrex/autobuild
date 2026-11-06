@@ -41,6 +41,10 @@ export const githubIssueSchema = z
     state: z.enum(['open', 'closed']),
     state_reason: z.string().nullable().optional(),
     labels: z.array(labelRef),
+    assignees: z
+      .array(z.object({ login: z.string() }).passthrough())
+      .nullable()
+      .optional(),
     pull_request: z.unknown().optional(),
     repository_url: z.string().optional(),
     created_at: z.string().optional(),
