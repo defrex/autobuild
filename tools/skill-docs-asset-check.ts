@@ -12,11 +12,11 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * Scope is derived mechanically, never from a hand list: a tracked file is in
  * scope iff it is Markdown under `.agents/skills/<dir>/` and `<dir>` is
  * neither `.ab-pristine` nor a canonical install name from `readDistSkills` —
- * the same reader `tools/vendored-skills-sync.test.ts` uses. Canonical
+ * the same reader `tools/vendored-skills-sync.integration.test.ts` uses. Canonical
  * vendored copies (`ab-code-review` … `ab-tickets`) are deliberately out of
  * scope: they are byte-for-byte mirrors of `skills/<name>`, enforced by
- * `vendored-skills-sync.test.ts`, and the canonical content carries its own
- * reference guard, `packages/core/src/cli/skill-self-containment.test.ts`, so
+ * `vendored-skills-sync.integration.test.ts`, and the canonical content carries its own
+ * reference guard, `packages/core/src/cli/skill-self-containment.integration.test.ts`, so
  * guarding them here would be double coverage. Repo-local skills (today
  * readme-headline, impeccable, release, vercel-builds, verify-ui-app,
  * finalize-changelog, and verify-ui-tui) have no canonical copy to
