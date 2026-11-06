@@ -7,7 +7,9 @@
  * States are `autobuild:<state>` labels and closing reasons (see
  * `github-issues.ts`); blockers are GitHub's native issue dependencies;
  * assets stay in the BuildStore through the generic CLI path; there are no
- * guarded writes, comment history, integration tree, export or import.
+ * guarded writes or integration tree. `get` carries no comment history;
+ * export and import read it explicitly through `readComments`. Import remaps
+ * every id (`allocatesIds`) and adopts committed creates by creation key.
  *
  * Cost (CLAUDE.md "Store read cost is a correctness property", applied to
  * GitHub budget): the source holds no BuildStore handle. Recurring reads
@@ -15,8 +17,8 @@
  * reads, `get`, the label registry) are conditional through a durable
  * validator store, so an unchanged repository answers a tick with 304s.
  * Counts are one fresh, bounded GraphQL request per call and are never
- * cached. Explicit history reads, the keyed-create scan, the claim read and
- * every write store nothing.
+ * cached. Explicit history reads (export snapshots and comment history), the
+ * keyed-create scan, the claim read and every write store nothing.
  */
 import { z } from 'zod'
 import {
@@ -27,8 +29,10 @@ import {
 } from '../forge/github-transport'
 import type {
   DependencyState,
+  ExportSnapshotOptions,
   IssueLink,
   Ticket,
+  TicketComment,
   TicketCreateOptions,
   TicketCriteria,
   TicketDraft,
@@ -177,9 +181,18 @@ function blockerList(ids: string[]): string {
   return ids.length > 0 ? ids.map((id) => `"${id}"`).join(', ') : 'none'
 }
 
+const githubCommentSchema = z
+  .object({
+    body: z.string().nullable().optional(),
+    created_at: z.string(),
+    user: z.object({ login: z.string() }).passthrough().nullable().optional(),
+  })
+  .passthrough()
+
 export class GitHubTicketSource implements TicketSource {
   readonly name = 'github'
   readonly issueLinks = true
+  readonly allocatesIds = true
 
   private readonly transport: GitHubRequest
   private readonly owner: string
@@ -194,6 +207,9 @@ export class GitHubTicketSource implements TicketSource {
   private readonly pendingLabels = new Map<string, Promise<void>>()
   /** Labels this instance created or saw created, lowercased. */
   private readonly knownLabels = new Set<string>()
+  /** Creation markers seen by keyed creates: every issue created since
+   * `floor`, up to issue number `newest`, scanned once. Keys and numbers only. */
+  private creationScan?: { floor: number; newest: number; keys: Map<string, number> }
 
   constructor(opts: GitHubTicketSourceOptions) {
     for (const label of opts.readyLabels) {
@@ -721,6 +737,106 @@ export class GitHubTicketSource implements TicketSource {
     return (await this.hydrate(read.issue, { remember: true, ...etagOf(read) })).ticket
   }
 
+  // ── Export and import ─────────────────────────────────────────────────────
+
+  /** Comment history, oldest first, through GitHub's "List issue comments"
+   * route. An explicit history read for export and import only: stores
+   * nothing and never runs on a recurring path. */
+  async readComments(id: string): Promise<TicketComment[] | null> {
+    const number = parseIssueId(id)
+    if (number === null) return null
+    if ((await this.readIssue('comments', number, false)) === null) return null
+    return this.listComments(number)
+  }
+
+  /** One issue's comment pages; `null` when the issue is gone. */
+  private async listComments(number: number): Promise<TicketComment[] | null> {
+    const comments: TicketComment[] = []
+    let page: string | undefined = '1'
+    while (page !== undefined) {
+      const response = await this.request(
+        'comments',
+        'GET',
+        this.path(`/issues/${number}/comments`),
+        { query: { per_page: PAGE, page }, missing: true },
+      )
+      if (response === null) return null
+      for (const json of z.array(z.unknown()).parse(response.json)) {
+        const comment = githubCommentSchema.parse(json)
+        comments.push({
+          body: comment.body ?? '',
+          createdAt: comment.created_at,
+          ...(comment.user?.login ? { author: comment.user.login } : {}),
+        })
+      }
+      page = nextPage(response.link)
+    }
+    return comments
+  }
+
+  /** Every issue, closed included, with blockers, link labels and comment
+   * history. Unremembered; an issue that cannot be read as a ticket fails
+   * the export rather than leaving it out. */
+  async readExportSnapshot(opts: ExportSnapshotOptions = {}): Promise<Ticket[]> {
+    opts.signal?.throwIfAborted()
+    const issues = await this.listIssues('export', { state: 'all' }, false)
+    const tickets: Ticket[] = []
+    const diagnostics: string[] = []
+    for (const issue of issues) {
+      opts.signal?.throwIfAborted()
+      const hydrated = await this.hydrate(issue, { remember: false })
+      diagnostics.push(...hydrated.diagnostics)
+      if (!hydrated.listed && hydrated.diagnostics.length === 0)
+        diagnostics.push(`github #${issue.number}: has no readable state`)
+      if (diagnostics.length > 0) continue
+      opts.signal?.throwIfAborted()
+      const comments =
+        (issue as { comments?: unknown }).comments === 0
+          ? []
+          : await this.listComments(issue.number)
+      if (comments === null) throw new Error(`ticket disappeared: ${issue.number}`)
+      tickets.push({ ...hydrated.ticket, comments })
+      opts.progress?.({ completed: tickets.length, total: issues.length })
+    }
+    if (diagnostics.length > 0)
+      throw new Error(`incomplete ticket scan:\n${[...new Set(diagnostics)].join('\n')}`)
+    return tickets
+  }
+
+  /** What an import would refuse, all at once and before any write: states
+   * GitHub cannot hold as `autobuild:` labels or a closing reason, labels
+   * that collide with the managed prefixes, and creation keys the marker
+   * cannot carry. */
+  async importProblems(input: {
+    states: string[]
+    labels: string[]
+    creationKeys: string[]
+  }): Promise<string[]> {
+    const problems: string[] = []
+    const configured = lifecycleNames(this.lifecycle)
+    for (const state of input.states) {
+      if (this.lifecycle.rejected === undefined && holdsState(state, NOT_PLANNED_STATE))
+        problems.push(
+          `state "${state}": closed-as-not-planned holds no movable state on GitHub; configure [tickets].rejectedState`,
+        )
+      else if (!configured.some((name) => holdsState(name, state)) && !representableState(state))
+        problems.push(
+          `state "${state}" cannot be a GitHub state: "${stateLabel(state)}" must be a lowercase state name of at most 40 characters that Autobuild does not apply itself`,
+        )
+    }
+    for (const label of input.labels)
+      if (isStateLabel(label) || isLinkLabel(label))
+        problems.push(
+          `label "${label}" would collide with an ${isStateLabel(label) ? `${STATE_LABEL_PREFIX} state` : 'autobuild-link: issue link'} label`,
+        )
+    for (const key of input.creationKeys)
+      if (!validCreationKey(key))
+        problems.push(
+          `creation key "${key}" must be 1-200 letters, digits, dots, colons, underscores or hyphens`,
+        )
+    return [...new Set(problems)].sort()
+  }
+
   async listAll(): Promise<TicketListing> {
     return this.listing(
       await this.listIssues('listAll', { state: 'all' }, false),
@@ -984,15 +1100,29 @@ export class GitHubTicketSource implements TicketSource {
     return this.finishCreate(issue, intent, key, false)
   }
 
-  /** Issues created since the key's reservation (less clock skew), newest
-   * first, through the consistent list endpoint; search lags writes. */
+  /**
+   * The issue a creation key opened, among issues created since the key's
+   * reservation (less clock skew), through the consistent list endpoint
+   * newest first; search lags writes. The first call scans back to the floor
+   * and indexes every marker it sees. Later calls with the same or a later
+   * floor page newest first only down to the newest issue already indexed:
+   * issue numbers increase with creation, so nothing is missed, whoever
+   * created it. An import of N tickets therefore costs one scan plus one list
+   * page per create, not N full scans. A hit is re-read, because a follow-up
+   * may have rewritten its marker since it was indexed.
+   */
   private async findByCreationKey(
     key: string,
     reservedAt: number,
   ): Promise<GitHubIssue | undefined> {
     const floor = reservedAt - CREATION_SCAN_SKEW_MS
+    const scan =
+      this.creationScan !== undefined && this.creationScan.floor <= floor
+        ? this.creationScan
+        : { floor, newest: 0, keys: new Map<string, number>() }
+    let newest = scan.newest
     let page: string | undefined = '1'
-    while (page !== undefined) {
+    scanning: while (page !== undefined) {
       const response = await this.must('create', 'GET', this.path('/issues'), {
         query: {
           state: 'all',
@@ -1004,13 +1134,26 @@ export class GitHubTicketSource implements TicketSource {
       })
       for (const json of z.array(z.unknown()).parse(response.json)) {
         const issue = this.parseIssue('create', json)
+        if (issue.number <= scan.newest) break scanning
+        newest = Math.max(newest, issue.number)
         if (issue.pull_request !== undefined) continue
-        if (issue.created_at !== undefined && Date.parse(issue.created_at) < floor) return undefined
-        if (splitCreationMarker(issue.body).marker?.key === key) return issue
+        if (issue.created_at !== undefined && Date.parse(issue.created_at) < scan.floor)
+          break scanning
+        const marker = splitCreationMarker(issue.body).marker?.key
+        if (marker !== undefined && !scan.keys.has(marker)) scan.keys.set(marker, issue.number)
       }
       page = nextPage(response.link)
     }
-    return undefined
+    scan.newest = newest
+    this.creationScan = scan
+    const number = scan.keys.get(key)
+    if (number === undefined) return undefined
+    const read = await this.readIssue('create', number, false)
+    if (read === null || splitCreationMarker(read.issue.body).marker?.key !== key) {
+      scan.keys.delete(key)
+      return undefined
+    }
+    return read.issue
   }
 
   /** A retry found the issue its key opened. A pending marker finishes the
