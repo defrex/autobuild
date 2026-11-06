@@ -730,6 +730,22 @@ issue UUID and file/fake preserve their idempotency metadata through create,
 adoption, get, and list paths. Legacy/plugin tickets may omit it and dispatch
 unchanged. The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
 
+The `github` source spans four modules. `ports/tickets/github.ts` is the
+adapter: REST over the forge's `GitHubRequest` transport and credential order,
+plus display-only state counts (one GraphQL request, and one more per
+further page of 100 `autobuild:` labels) and the bounded
+`last: 100` timeline read that decides whether a reopened issue's state label
+is stale. `ports/tickets/github-issues.ts` holds the pure mapping: issue to
+state through `autobuild:` labels and closing reasons, state to write, issue
+ids, the creation-key body marker and `autobuild-link:` link labels.
+`ports/tickets/github-validators.ts` keeps conditional-request validators and
+reopen verdicts, one atomically written file per entry under
+`<localStateRoot>/github-tickets/<owner>/<repo>/validators/`, evicted after 7
+days unused; without a local state root it uses the in-memory store.
+`ports/tickets/github-fake.ts` is the in-memory GitHub API that the shared
+contract suite and the budget tests run against. The source holds no BuildStore
+handle; assets use the generic BuildStore path.
+
 **Workspace, execution, and review base selection.**
 `packages/core/src/ports/workspace/create.ts` resolves `[workspace].provider` against the
 builtin-plus-plugin registry once during production wiring and pairs it with a
@@ -1015,15 +1031,20 @@ intervals. In local execution mode the header's triage count comes from the
 reduced `DispatchStatus` (`status.triage`), exactly like the queue depth, so a
 frontend refresh reads neither the ticket source nor any extra store value for
 it; viewer mode differs, as described below. The supervised
-kernel child (`frontendStatus`) samples `TicketSource.listStates()` once per
-tick, after the Dispatcher tick and before publication, and carries the last
-successful count on `dispatcher.tick-completed`; a changed count is a
+kernel child (`frontendStatus`) samples the count through
+`TriageCountSampler` (`packages/core/src/cli/triage-count-sampler.ts`): the
+watch loop pokes it at startup and after each tick returns, so it reads at
+most once per 60 s (`TRIAGE_COUNT_REFRESH_MS`), outside dispatcher ticks, with
+one read in flight. It prefers the source's `countStates([triage])` and falls
+back to `listStates()` for a source without it. Each tick carries the last
+successful count on `dispatcher.tick-completed`, and the tick itself never
+reads the ticket source for counts; a changed count is a
 standing-state change for publication suppression. Hosted, plain and
 non-TTY dispatchers never sample it. An unsupported source, failed read or
 unmatched state keeps the previous value (initially unknown, shown as `–`).
 A viewer (`opts.viewer`) whose repository is dispatched elsewhere ignores
 `status.triage` and shows only its own count: on a refreshed frame it asks
-the source's optional `countStates([triage])` at most once per 10 s, in the
+the source's optional `countStates([triage])` at most once per 60 s, in the
 background with one request in flight, while presentation is live and not in
 `--once`. It keeps the last good value through failures and shows `–` until
 the first success or for a source without `countStates`. The hosted
@@ -1454,19 +1475,23 @@ Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
 `move`, `block` and `unblock`. A stale write fails without changing anything and
 reports the current revision. Omission preserves unguarded behavior. Blocker
 checks cover the entire batch. Dispatcher moves remain unguarded and change the
-revision. Sources without guarded writes, including Linear, refuse supplied
-revisions rather than ignoring them.
+revision. Sources without guarded writes, including Linear and GitHub, refuse
+supplied revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
 kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
-changed fields with the opening revision. Unchanged or formatting-only edits
+changed fields with the opening revision. Sources without guarded writes,
+including Linear and GitHub, re-read the ticket immediately before an
+unguarded write and refuse a changed revision, with the no-lock race window of file checks. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links. Reverting identical
+and state; file revisions also cover nonempty issue links. GitHub revisions
+fingerprint title, body, canonical label/blocker sets, state and issue links,
+including the ticket's own issue; GitHub tickets carry no comments. Reverting identical
 content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File comments

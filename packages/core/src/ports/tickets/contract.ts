@@ -1,5 +1,5 @@
 import { createTicket, updateTicket, moveTicket, changeBlockers } from './operations'
-import { TicketIssueLinksUnsupported } from './issue-links'
+import { normalizeIssueLinks, TicketIssueLinksUnsupported } from './issue-links'
 import { describe, expect, test } from 'bun:test'
 import type {
   DependencyState,
@@ -58,6 +58,10 @@ export interface TicketSourceContractHarness {
    * explicitly configured scratch project. */
   afterCreate?: (ticket: Ticket, idempotencyKey: string) => Promise<void> | void
   cleanup?: () => Promise<void>
+  /** Links a source reports on every ticket without being asked, such as a
+   * GitHub issue's own `closes` link. They are expected beside the written
+   * links and stay when the written links are cleared. */
+  intrinsicIssueLinks?: (ticket: Ticket) => IssueLink[]
 }
 
 export type TicketSourceContractFactory = () => Promise<TicketSourceContractHarness>
@@ -131,6 +135,10 @@ async function withTicketSource(
   if (failure !== undefined) throw failure
 }
 
+/** First-use time per contract creation key, so a retry passes the same
+ * `idempotencyKeyReservedAt` as the attempt that first used the key. */
+const contractKeyReservations = new Map<string, string>()
+
 /** Every contract-created ticket carries a UUID-v4 reservation. Linear uses
  * it as the issue id; file and fake adapters treat the same value opaquely. */
 async function createTracked(
@@ -139,10 +147,16 @@ async function createTracked(
   opts: TicketCreateOptions = {},
 ): Promise<Ticket> {
   const idempotencyKey = opts.idempotencyKey ?? contractIdempotencyKey()
+  let idempotencyKeyReservedAt = contractKeyReservations.get(idempotencyKey)
+  if (idempotencyKeyReservedAt === undefined) {
+    idempotencyKeyReservedAt = new Date().toISOString()
+    contractKeyReservations.set(idempotencyKey, idempotencyKeyReservedAt)
+  }
   await harness.beforeCreate?.(idempotencyKey)
   const created = await harness.source.create(draft, {
     ...opts,
     idempotencyKey,
+    idempotencyKeyReservedAt,
   })
   await harness.afterCreate?.(created, idempotencyKey)
   return created
@@ -312,10 +326,17 @@ export function describeTicketSourceContract(
           { state: ready },
         )
         const id = created.ref.id
-        const sorted: IssueLink[] = [
+        const intrinsic = harness.intrinsicIssueLinks?.(created) ?? []
+        // Written links beside the source's own; none at all reads as absent.
+        const expected = (written: IssueLink[]): IssueLink[] | undefined => {
+          const all = normalizeIssueLinks([...written, ...intrinsic])
+          return all.length > 0 ? all : undefined
+        }
+        const given: IssueLink[] = [
           { issue: 1, intent: 'closes' },
           { issue: 2, intent: 'refs' },
         ]
+        const sorted = expected(given)
         expect(created.issueLinks).toEqual(sorted)
         expect((await source.get(id))?.issueLinks).toEqual(sorted)
         expect(
@@ -329,27 +350,32 @@ export function describeTicketSourceContract(
 
         await source.update(id, { issueLinks: [{ issue: 7, intent: 'refs' }] })
         const replaced = await source.get(id)
-        expect(replaced?.issueLinks).toEqual([{ issue: 7, intent: 'refs' }])
+        expect(replaced?.issueLinks).toEqual(expected([{ issue: 7, intent: 'refs' }]))
         expect(replaced?.revision).not.toBe(created.revision)
 
         await source.update(id, { title: `${created.title} renamed` })
-        expect((await source.get(id))?.issueLinks).toEqual([{ issue: 7, intent: 'refs' }])
-        await source.update(id, { title: created.title, issueLinks: sorted })
+        expect((await source.get(id))?.issueLinks).toEqual(expected([{ issue: 7, intent: 'refs' }]))
+        await source.update(id, { title: created.title, issueLinks: given })
         const restored = (await source.get(id))?.revision
-        await source.update(id, { issueLinks: sorted })
+        await source.update(id, { issueLinks: given })
         expect((await source.get(id))?.revision).toBe(restored)
 
         await source.update(id, { issueLinks: [] })
         const cleared = await source.get(id)
-        expect(cleared?.issueLinks).toBeUndefined()
-        expect(cleared && 'issueLinks' in cleared).toBe(false)
+        if (intrinsic.length > 0) expect(cleared?.issueLinks).toEqual(expected([]))
+        else {
+          expect(cleared?.issueLinks).toBeUndefined()
+          expect(cleared && 'issueLinks' in cleared).toBe(false)
+        }
 
         if (source.mutateIfRevision) {
           await source.mutateIfRevision(id, cleared!.revision, {
             kind: 'update',
             patch: { issueLinks: [{ issue: 3, intent: 'closes' }] },
           })
-          expect((await source.get(id))?.issueLinks).toEqual([{ issue: 3, intent: 'closes' }])
+          expect((await source.get(id))?.issueLinks).toEqual(
+            expected([{ issue: 3, intent: 'closes' }]),
+          )
         }
       })
     })

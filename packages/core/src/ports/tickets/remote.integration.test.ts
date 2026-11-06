@@ -224,6 +224,22 @@ describe('HostedTicketSource (client half)', () => {
     })
   })
 
+  test('create keeps the reservation time off the wire', async () => {
+    const { source, calls } = makeSource([{ body: TICKET }])
+    await source.create(
+      { title: 'X', body: 'y' },
+      {
+        state: 'Triage',
+        idempotencyKey: 'creation-1',
+        idempotencyKeyReservedAt: '2026-11-06T00:00:00.000Z',
+      },
+    )
+    expect(calls[0]?.body.input).toEqual({
+      draft: { title: 'X', body: 'y' },
+      options: { state: 'Triage', idempotencyKey: 'creation-1' },
+    })
+  })
+
   test('listReady/get/create project the ticket ref onto the hosted source', async () => {
     const { source } = makeSource([
       {
