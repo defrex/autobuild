@@ -1108,6 +1108,7 @@ describe('github tick budget', () => {
       await tick(source)
       requests.push(github.requests.length)
       expect(github.graphqlRequests()).toEqual([])
+      expect(github.count('comments-list')).toBe(0)
     }
     expect(requests[0]).toBe(requests[1])
   })
@@ -1362,5 +1363,73 @@ describe('github kernel marker labels', () => {
     expect((await source.countStates(['triage']))[0]?.tickets).toBe(2)
     expect((await source.listStates()).map((s) => s.name)).not.toContain('aborted')
     await expect(source.addState('aborted')).rejects.toThrow('cannot be a state')
+  })
+})
+
+describe('github export and import support', () => {
+  test('readComments pages the full history oldest first and maps authors', async () => {
+    const { github, source } = setup()
+    const id = await created(source, 'ready')
+    for (let i = 0; i < 105; i++) github.uiComment(Number(id), `c${i}`, 1, i === 0 ? null : 'mona')
+    github.resetRequests()
+    const comments = await source.readComments(id)
+    expect(comments).toHaveLength(105)
+    expect(comments?.[0]).toEqual({ body: 'c0', createdAt: expect.any(String) })
+    expect(comments?.[104]).toMatchObject({ body: 'c104', author: 'mona' })
+    expect(github.count('comments-list')).toBe(2)
+    expect(await source.readComments('9999')).toBeNull()
+    expect(await source.readComments('not-an-issue')).toBeNull()
+  })
+
+  test('importProblems reports unrepresentable states, managed labels and bad keys together', async () => {
+    const { github, source } = setup()
+    expect(
+      await source.importProblems({
+        states: ['ready', 'review', 'not-planned', 'proposal', 'Bad State'],
+        labels: ['bug', 'autobuild:foo', 'autobuild-link:refs #1'],
+        creationKeys: ['migration:ok:1', 'has space'],
+      }),
+    ).toEqual([
+      'creation key "has space" must be 1-200 letters, digits, dots, colons, underscores or hyphens',
+      'label "autobuild-link:refs #1" would collide with an autobuild-link: issue link label',
+      'label "autobuild:foo" would collide with an autobuild: state label',
+      'state "Bad State" cannot be a GitHub state: "autobuild:Bad State" must be a lowercase state name of at most 40 characters that Autobuild does not apply itself',
+      'state "not-planned": closed-as-not-planned holds no movable state on GitHub; configure [tickets].rejectedState',
+      'state "proposal" cannot be a GitHub state: "autobuild:proposal" must be a lowercase state name of at most 40 characters that Autobuild does not apply itself',
+    ])
+    expect(github.requests).toEqual([])
+  })
+
+  test('readExportSnapshot fails on an issue it cannot read as a ticket', async () => {
+    const { github, source } = setup()
+    const id = await created(source, 'ready')
+    github.uiAddLabel(Number(id), 'autobuild:doing')
+    await expect(source.readExportSnapshot()).rejects.toThrow('incomplete ticket scan')
+  })
+
+  test('keyed creates index markers once, then read one list page each', async () => {
+    const { github, source } = clocked()
+    github.seedIssues(250)
+    const key = (n: number) => ({
+      idempotencyKey: `k-${n}`,
+      idempotencyKeyReservedAt: new Date(CLOCK_START).toISOString(),
+    })
+    const ids: string[] = []
+    for (let n = 0; n < 5; n++) {
+      github.resetRequests()
+      ids.push((await source.create({ title: `T${n}`, body: 'b' }, key(n))).ref.id)
+      if (n > 0) expect(github.count('list-issues')).toBe(1)
+    }
+    const fresh = new GitHubTicketSource({
+      transport: github.transport,
+      repository: github.repository,
+      lifecycle: LIFECYCLE,
+      readyLabels: [],
+    })
+    github.resetRequests()
+    for (let n = 0; n < 5; n++)
+      expect((await fresh.create({ title: `T${n}`, body: 'b' }, key(n))).ref.id).toBe(ids[n]!)
+    expect(github.count('create-issue')).toBe(0)
+    expect(github.issueCount()).toBe(255)
   })
 })
