@@ -620,7 +620,9 @@ build. An implement round with no commits over its base escalates at
 
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
-Skipped polls preserve the episode across restart. After
+A classified forge rate limit is repository cooldown, not a janitor failure:
+neither the first limited response nor the cooldown that follows starts or ages
+an episode. Skipped polls preserve the episode across restart. After
 `policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
 notifies default watchers and appears on the build row. A successful attempt
 clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
