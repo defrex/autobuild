@@ -627,7 +627,7 @@ describe('reducer registry', () => {
         "executionNoProgress": 6,
         "forgeHealthValue": 1,
         "frozenPrImageHost": 1,
-        "harvest": 3,
+        "harvest": 4,
         "harvestDelegation": 2,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,

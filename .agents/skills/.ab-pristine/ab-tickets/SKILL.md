@@ -109,7 +109,7 @@ the dispatcher claim it before normal ready work; omit it for normal.
 
 For dependencies on any source, follow the
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
-Direct Linear record blockers after creating the issue, so a ready
+Direct Linear and GitHub record blockers after creating the issue, so a ready
 issue can be claimed before `create --blocked-by` returns. Stage dependents in a
 known non-ready state, verify all blockers with `ab ticket show --json`, then use
 `ab ticket move` to publish the intended ready destination. Do not use the local
@@ -303,6 +303,18 @@ guidance: state and labels live in Linear. The source-agnostic `ab ticket block`
 and `ab ticket unblock` commands still edit blocker relationships through the
 configured source.
 
+No GitHub lifecycle UI either. When `[tickets] source = "github"`, tickets are
+the repository's issues and ids are issue numbers (`123` or `#123`). State
+lives on GitHub as one `autobuild:<state>` label on an open issue (none means
+triage) and as the closing reason (completed is done, not planned is the
+rejected role). Issue links to other issues are `autobuild-link:<intent> #<n>`
+labels, and blockers are native issue dependencies. Use `ab ticket move` and
+`--issues` rather than editing those labels on GitHub, and never leave two state
+labels on one issue: it drops out of listings until one is removed.
+`ab ticket state create` makes the `autobuild:<state>` label, with the purpose
+as its description, and refuses an existing name as hosted creation does. GitHub
+tickets carry no comment history, so `ab ticket show` lists none.
+
 ## Hosted ticket states
 
 For `[tickets].source = "hosted"`, states are project-owned service data.
@@ -336,20 +348,24 @@ Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
 `move`, `block` and `unblock`. A stale write fails without changing anything and
 reports the current revision. Omission preserves unguarded behavior. Blocker
 checks cover the entire batch. Dispatcher moves remain unguarded and change the
-revision. Sources without guarded writes, including Linear, refuse supplied
-revisions rather than ignoring them.
+revision. Sources without guarded writes, including Linear and GitHub, refuse
+supplied revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
 kind, target, id, blockers, issue links, priority, creation key and reference comments are read-only. It saves only
-changed fields with the opening revision. Unchanged or formatting-only edits
+changed fields with the opening revision. Sources without guarded writes,
+including Linear and GitHub, re-read the ticket immediately before an
+unguarded write and refuse a changed revision, with the no-lock race window of file checks. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links and urgent priority.
-Reverting identical content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links and urgent priority. GitHub revisions
+fingerprint title, body, canonical label/blocker sets, state and issue links,
+including the ticket's own issue; GitHub tickets carry no comments. Reverting identical
+content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File comments
 change the body and revision; separate hosted comments do not. Hosted revisions

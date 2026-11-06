@@ -3,6 +3,7 @@
 Export and import use the ordinary file ticket layout. They operate on tickets
 and current attachments through the ticket source; neither command contacts the
 forge. File and hosted sources support import. Linear supports export only.
+GitHub supports neither.
 
 1. Pause intake and quiesce build-related ticket writes and other ticket writers
    for the cutover. In-flight builds need not be aborted. Import preflight does
@@ -52,7 +53,8 @@ Content similarity and stale mapping files never establish identity.
 
 Creation keys establish identity. Exports retain existing keys and assign keys to
 legacy tickets. Importing an ordinary file layout first saves a hidden migration
-identity and keys in that input directory. Preserve this file and the input across
+identity and keys in that input directory. The identity also records when it was
+first saved, and that time is passed as the creation keys' reservation time. Preserve this file and the input across
 retries. After interruption, rerun the same command: committed creates are adopted
 by key even if their mapping write failed. Adopted bodies and other fields are not
 overwritten. Missing blockers and comments are replayed, and unchanged attachments
