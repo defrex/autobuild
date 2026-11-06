@@ -16,6 +16,7 @@ import {
   changeBlockers,
   createTicket,
   moveTicket,
+  moveTicketToRole,
   requireTicket,
   updateTicket,
 } from '../ports/tickets/operations'
@@ -28,7 +29,7 @@ import type {
   TicketPageListing,
 } from '../ports/types'
 import type { BuildStore } from '../store/types'
-import { ticketLifecycle } from '../ports/tickets/lifecycle'
+import { ticketLifecycle, type TicketMoveRole } from '../ports/tickets/lifecycle'
 import { effectiveConfig } from './query'
 
 export interface OperatorTicketContext {
@@ -98,6 +99,30 @@ export async function openOperatorTickets(opts: {
     ? await opts.backend.contextFor(opts.repo)
     : contextFor((await effectiveConfig(opts.store, opts.repo)).config, opts.repo)
   return { context, source: compatibleTicketSource(await opts.backend.sourceFor(context)) }
+}
+
+/** Lazily open a repository's operator tickets once for a build control:
+ * node merge completeness needs the source and the configured rejected role,
+ * and only the land path reaches either. */
+export function operatorControlTickets(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend | undefined
+}): {
+  ticketSource: () => Promise<TicketSource>
+  rejectedState: () => Promise<string | undefined>
+} {
+  let opened: ReturnType<typeof openOperatorTickets> | undefined
+  const tickets = () => {
+    const backend = opts.backend
+    if (!backend) throw new Error('ticket source unavailable')
+    opened ??= openOperatorTickets({ store: opts.store, repo: opts.repo, backend })
+    return opened
+  }
+  return {
+    ticketSource: async () => (await tickets()).source,
+    rejectedState: async () => ticketLifecycle((await tickets()).context.tickets).rejected,
+  }
 }
 
 export async function listOperatorTickets(opts: {
@@ -255,7 +280,10 @@ export async function mutateOperatorTicket(opts: {
         patch: OperatorTicketPatch
         expectedRevision?: string
       }
-    | { kind: 'move'; id: string; state: string; expectedRevision?: string }
+    | ({ kind: 'move'; id: string; expectedRevision?: string } & (
+        | { state: string; role?: undefined }
+        | { role: TicketMoveRole; state?: undefined }
+      ))
     | { kind: 'block' | 'unblock'; id: string; blockerIds: string[]; expectedRevision?: string }
 }): Promise<OperatorTicketDetail> {
   const { source, context } = await openOperatorTickets(opts)
@@ -296,7 +324,15 @@ export async function mutateOperatorTicket(opts: {
                 operation.expectedRevision,
               )))!
         : operation.kind === 'move'
-          ? await moveTicket(source, operation.id, operation.state, operation.expectedRevision)
+          ? operation.role !== undefined
+            ? await moveTicketToRole(
+                source,
+                context.tickets,
+                operation.id,
+                operation.role,
+                operation.expectedRevision,
+              )
+            : await moveTicket(source, operation.id, operation.state, operation.expectedRevision)
           : await changeBlockers(
               source,
               operation.id,

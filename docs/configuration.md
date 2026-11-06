@@ -386,6 +386,7 @@ These fields hot-reload:
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
+| `tickets.backlogState`, `tickets.rejectedState` | Next role move, ready-ticket scan, or node completeness observation. |
 
 Adapter selectors and factory inputs are constructed once and require a
 restart. A valid save may still apply its hot fields, but these changed paths
@@ -2864,6 +2865,32 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Constraints:** minimum length 1; state must be nonblank; Omission uses the resolved triageState.
 
+#### `tickets.backlogState`
+
+**TOML key:** `tickets.backlogState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** State that holds deliberately deferred work (the backlog role). Optional and recommended; unset means the role does not exist.
+
+**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).
+
+#### `tickets.rejectedState`
+
+**TOML key:** `tickets.rejectedState`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended.
+
+**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
+
 #### `tickets.dir`
 
 **TOML key:** `tickets.dir`
@@ -2898,7 +2925,7 @@ mandatory regardless of labels (hosted defaults to `ready`). Linear compares sta
 and case-sensitively. The file source matches state names case-insensitively against the directories
 under the tracker root: the four lifecycle directories (`triage/`, `ready/`,
 `doing/`, `done/`, always present) plus any directory the repository adds, such
-as `icebox/`. A name matching no directory is an error listing those that
+as `needs-design/`. A name matching no directory is an error listing those that
 exist, so creating a state stays an explicit act: `ab ticket state create <name>
 [--about <text>]` makes one, and `ab ticket states` lists every state with its
 roles, ticket count, and purpose. A purpose is stored as a one-line `.about` file
@@ -2907,18 +2934,39 @@ read as a ticket. `createState`, `readyState`,
 `triageState`, and `proposalState` may each name any existing directory;
 `ab ticket list` with no filter still lists only `readyState`.
 
+`backlogState` and `rejectedState` map the optional backlog and rejected
+lifecycle roles: deliberately deferred work, and work that was considered and
+declined. Both are recommended, and `ab init` writes `backlogState = "backlog"`
+and `rejectedState = "rejected"` into new file configurations. Neither has a
+default: an unset key means the role does not exist, and a state that only
+shares its name is an ordinary custom state. `ab ticket move <id> --role
+backlog` (or `rejected`, `triage`, `ready`) moves a ticket by role; a role the
+repository has not configured is refused with the key to set, and a source that
+creates states creates the role state on first use. The dispatcher never claims
+from, moves into, or files proposals into either state. A rejected ticket never
+resolves a blocker, even where the source natively counts it complete (a Linear
+`Canceled` state mapped to rejected), and a rejected node child no longer keeps
+its node incomplete. Moving the ticket out of the state restores ordinary
+behavior.
+
 Source-specific validation is strict:
 
 - Linear and hosted require `teamKey` and reject `dir`.
 - File rejects `teamKey` and `claimedState`; `dir` is optional.
 - `createState`, `triageState`, and `proposalState` are valid for every source,
   but the named state must exist in that provider when used.
+- `backlogState` and `rejectedState` are valid for every source. Neither may
+  name the same state, case-insensitively, as the ready, claimed, done, triage
+  or proposal role, or as each other; startup, reload and `ab init --validate`
+  refuse such a configuration, naming both roles. `ab init --validate` prints a
+  note when either is unset, and warns when a configured one names no state in
+  a source that cannot create it.
 - Plugin sources receive the existing fields in this table unchanged and own
   any additional semantic validation. No untyped plugin-options table exists.
 
 Hosted states are durable service data scoped to a project. `ab ticket states`
-lists configured lifecycle roles first, then custom states alphabetically, with
-counts and optional purposes. `ab ticket state create <name> [--about <text>]`
+lists role-holding states in workflow order (triage, create, proposal, backlog,
+ready, claimed, done, rejected), then the rest, with counts and optional purposes. `ab ticket state create <name> [--about <text>]`
 adds a state using the file source's lowercase name grammar. Hosted duplicates
 in any letter case are refused; file creation remains idempotent. Configured
 names always exist, preserve their spelling, and remain custom states after

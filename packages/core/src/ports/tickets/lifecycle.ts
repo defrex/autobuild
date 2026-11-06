@@ -1,7 +1,20 @@
 import type { TicketsConfig } from '../../config/schema'
 
-/** Resolve names without changing persisted ticket states or their spelling. */
-export function ticketLifecycle(tickets: TicketsConfig, legacyHosted = false) {
+/** Resolve names without changing persisted ticket states or their spelling.
+ * `backlog` and `rejected` are optional roles: undefined when unset, with no
+ * default, so an unconfigured role never matches a state of the same name. */
+export interface TicketLifecycle {
+  triage: string
+  ready: string
+  doing: string
+  done: string
+  create: string
+  proposal: string
+  backlog?: string
+  rejected?: string
+}
+
+export function ticketLifecycle(tickets: TicketsConfig, legacyHosted = false): TicketLifecycle {
   const hosted = tickets.source === 'hosted'
   const old = tickets.source === 'linear' || (hosted && legacyHosted)
   const triage = tickets.triageState ?? (old ? 'Backlog' : hosted ? 'triage' : 'Triage')
@@ -14,5 +27,22 @@ export function ticketLifecycle(tickets: TicketsConfig, legacyHosted = false) {
     done: tickets.doneState ?? (old ? 'Done' : hosted ? 'done' : 'Done'),
     create: tickets.createState ?? triage,
     proposal: tickets.proposalState ?? triage,
+    ...(tickets.backlogState === undefined ? {} : { backlog: tickets.backlogState }),
+    ...(tickets.rejectedState === undefined ? {} : { rejected: tickets.rejectedState }),
   }
 }
+
+/** Whether a native state is the one a role names. Case-insensitive, as
+ * `ab ticket states` and the file source already match state names; false
+ * when either side is absent, so an unset role holds nothing. */
+export function holdsState(state: string | undefined, name: string | undefined): boolean {
+  return (
+    state !== undefined &&
+    name !== undefined &&
+    state.trim().toLowerCase() === name.trim().toLowerCase()
+  )
+}
+
+/** Roles a ticket can be moved into by role rather than by native name. */
+export const TICKET_MOVE_ROLES = ['triage', 'ready', 'backlog', 'rejected'] as const
+export type TicketMoveRole = (typeof TICKET_MOVE_ROLES)[number]

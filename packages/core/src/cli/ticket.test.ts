@@ -881,7 +881,13 @@ describe('abTicketShow', () => {
           return source
         },
       })
-      if (json) expect(JSON.parse(out[0]!)).toEqual({ ...ticket, kind: 'work', assets: [] })
+      if (json)
+        expect(JSON.parse(out[0]!)).toEqual({
+          ...ticket,
+          kind: 'work',
+          assets: [],
+          blockers: [{ id: 'AUT-0', exists: false, resolved: false, rejected: false }],
+        })
       else
         expect(out.slice(-5)).toEqual([
           ticket.body,
@@ -929,6 +935,7 @@ describe('abTicketShow', () => {
       kind: 'work',
       revision: expect.any(String),
       assets: [],
+      blockers: [{ id: 'AUT-0', exists: false, resolved: false, rejected: false }],
     })
 
     await expect(
@@ -1442,7 +1449,17 @@ describe('runCli — ticket routing', () => {
     const blocked = JSON.parse(out.at(-1)!) as Ticket
     expect(blocked.blockedBy).toEqual(['file-2', 'file-1'])
     expect(await runCli(['ticket', 'show', 'file-3', '--json'], deps)).toBe(0)
-    expect(JSON.parse(out.at(-1)!)).toEqual({ ...blocked, assets: [] })
+    expect(JSON.parse(out.at(-1)!)).toEqual({
+      ...blocked,
+      assets: [],
+      blockers: ['file-2', 'file-1'].map((id) => ({
+        id,
+        exists: true,
+        resolved: false,
+        state: 'triage',
+        rejected: false,
+      })),
+    })
 
     expect(await runCli(['ticket', 'unblock', 'file-3', 'file-1,file-2', '--json'], deps)).toBe(0)
     const unblocked = JSON.parse(out.at(-1)!) as Ticket
@@ -1706,7 +1723,7 @@ describe('ab ticket states / state create', () => {
   test('stateRoles uses the defaults, case-insensitive matching, and fixed doing for claimed', () => {
     const names = ['triage', 'ready', 'doing', 'done', 'icebox']
     expect([...stateRoles(tickets(), names)]).toEqual([
-      ['triage', ['create', 'triage', 'proposal']],
+      ['triage', ['triage', 'create', 'proposal']],
       ['ready', ['ready']],
       ['doing', ['claimed']],
       ['done', ['done']],
@@ -1721,7 +1738,7 @@ describe('ab ticket states / state create', () => {
       }),
       names,
     )
-    expect(custom.get('icebox')).toEqual(['ready', 'triage'])
+    expect(custom.get('icebox')).toEqual(['triage', 'ready'])
     expect(custom.get('ready')).toEqual(['create'])
     expect(custom.get('triage')).toEqual(['proposal'])
   })
@@ -1732,7 +1749,7 @@ describe('ab ticket states / state create', () => {
     const human: string[] = []
     await abTicket(['states'], cliOpts(tmp, human))
     expect(human).toEqual([
-      'triage  create,triage,proposal  0 tickets',
+      'triage  triage,create,proposal  0 tickets',
       'ready   ready                   0 tickets',
       'doing   claimed                 0 tickets',
       'done    done                    0 tickets',
@@ -1741,13 +1758,81 @@ describe('ab ticket states / state create', () => {
     const json: string[] = []
     await abTicket(['states', '--json'], cliOpts(tmp, json))
     expect(JSON.parse(json.join('\n'))).toEqual([
-      { name: 'triage', roles: ['create', 'triage', 'proposal'], tickets: 0 },
+      { name: 'triage', roles: ['triage', 'create', 'proposal'], tickets: 0 },
       { name: 'ready', roles: ['ready'], tickets: 0 },
       { name: 'doing', roles: ['claimed'], tickets: 0 },
       { name: 'done', roles: ['done'], tickets: 0 },
       { name: 'icebox', roles: [], tickets: 0, about: 'Worth doing, not now' },
     ])
     expect(json).toHaveLength(1)
+  })
+
+  test('backlog and rejected appear in the roles column, rows in workflow order', async () => {
+    await writeRepo(`${FILE_TICKETS_TOML}backlogState = "backlog"\nrejectedState = "rejected"\n`)
+    await abTicket(['state', 'create', 'rejected'], cliOpts(tmp))
+    await abTicket(['state', 'create', 'icebox'], cliOpts(tmp))
+    await abTicket(['state', 'create', 'backlog'], cliOpts(tmp))
+    const json: string[] = []
+    await abTicket(['states', '--json'], cliOpts(tmp, json))
+    expect(
+      (JSON.parse(json.join('\n')) as Array<{ name: string; roles: string[] }>).map(
+        ({ name, roles }) => [name, roles],
+      ),
+    ).toEqual([
+      ['triage', ['triage', 'create', 'proposal']],
+      ['backlog', ['backlog']],
+      ['ready', ['ready']],
+      ['doing', ['claimed']],
+      ['done', ['done']],
+      ['rejected', ['rejected']],
+      ['icebox', []],
+    ])
+    expect(stateRoles(tickets({ backlogState: 'Icebox' }), ['icebox']).get('icebox')).toEqual([
+      'backlog',
+    ])
+    // A state merely named backlog holds no role while the key is unset.
+    expect(stateRoles(tickets(), ['backlog']).get('backlog')).toEqual([])
+  })
+
+  test('move --role resolves the configured state; an unset role names the key', async () => {
+    await writeRepo(`${FILE_TICKETS_TOML}backlogState = "icebox"\n`)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    await abTicketCreate({ targetRepo: tmp, title: 'Later', bodyFile, env: {}, stdout: () => {} })
+    const out: string[] = []
+    await abTicket(['move', 'file-1', '--role', 'backlog'], cliOpts(tmp, out))
+    expect(out.at(-1)).toContain('ticket moved: file:file-1 (icebox)')
+    await expect(abTicket(['move', 'file-1', '--role', 'rejected'], cliOpts(tmp))).rejects.toThrow(
+      'set [tickets].rejectedState',
+    )
+    await expect(abTicket(['move', 'file-1', '--role', 'doing'], cliOpts(tmp))).rejects.toThrow(
+      'unknown --role "doing"',
+    )
+    await expect(
+      abTicket(['move', 'file-1', 'ready', '--role', 'backlog'], cliOpts(tmp)),
+    ).rejects.toThrow('ab ticket move <id> (<state> | --role')
+    await expect(abTicket(['move', 'file-1'], cliOpts(tmp))).rejects.toThrow('usage')
+    await abTicket(['move', 'file-1', '--role', 'ready', '--json'], cliOpts(tmp, out))
+    expect(JSON.parse(out.at(-1)!).state).toBe('ready')
+  })
+
+  test('show names a rejected blocker in text and JSON', async () => {
+    await writeRepo(`${FILE_TICKETS_TOML}rejectedState = "rejected"\n`)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    for (const title of ['One', 'Two', 'Three'])
+      await abTicketCreate({ targetRepo: tmp, title, bodyFile, env: {}, stdout: () => {} })
+    await abTicket(['block', 'file-3', 'file-1,file-2'], cliOpts(tmp))
+    await abTicket(['move', 'file-1', '--role', 'rejected'], cliOpts(tmp))
+    const text: string[] = []
+    await abTicket(['show', 'file-3'], cliOpts(tmp, text))
+    expect(text).toContain('  blocked by: file-1 (rejected), file-2')
+    const json: string[] = []
+    await abTicket(['show', 'file-3', '--json'], cliOpts(tmp, json))
+    expect(JSON.parse(json.join('\n')).blockers).toEqual([
+      { id: 'file-1', exists: true, resolved: false, state: 'rejected', rejected: true },
+      { id: 'file-2', exists: true, resolved: false, state: 'triage', rejected: false },
+    ])
   })
 
   test('state create is idempotent, reports purpose updates, and feeds ticket move', async () => {

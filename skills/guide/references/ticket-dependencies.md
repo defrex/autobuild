@@ -19,6 +19,8 @@ before publishing it. Use the repository's triage state when it differs from its
 ready state. This temporary staging does not require another placement approval.
 If no non-ready state can be established, resolve that before creating the
 dependent; never guess that a name such as "Backlog" is safe in every repository.
+A configured backlog role is a known non-ready state: `ab ticket move <id>
+--role backlog` reaches it without knowing its native name.
 
 1. Create prerequisites in dependency order and extract each new `.ref.id` from
    the complete `--json` response, never the human confirmation line.
@@ -28,7 +30,12 @@ dependent; never guess that a name such as "Backlog" is safe in every repository
    non-ready and every expected blocker is present. Repair missing relationships
    through `ab ticket block`, then read back again.
 4. Only after verification, move it to the intended final state with
-   `ab ticket move <id> <state> --json`. Verify the final state and blockers.
+   `ab ticket move <id> <state> --json`, or by role with
+   `ab ticket move <id> --role ready --json`. Verify the final state and blockers.
+
+A blocker in the configured rejected state never resolves: its dependents stay
+unclaimed until the blocker leaves that state or is removed with
+`ab ticket unblock`.
 
 For a repository whose configured triage and ready states are `Triage` and
 `Ready`, respectively, and whose human requested ready placement:

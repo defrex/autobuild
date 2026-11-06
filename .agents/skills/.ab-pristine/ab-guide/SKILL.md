@@ -1272,6 +1272,8 @@ state eligible.
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
 | `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; hosted: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
+| `backlogState` | — | optional nonblank string; every source | State that holds deliberately deferred work: the backlog role. Recommended (`ab init` writes `"backlog"` for file); unset means the role does not exist. Must differ, case-insensitively, from the ready, claimed, done, triage and proposal states and from `rejectedState`. |
+| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file). A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. Same distinctness rule. |
 | `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
@@ -1309,7 +1311,8 @@ Cross-field rules, each an **error**:
 The file tracker is **directory-per-state**: `<dir>/<state>/<id>.md`, where
 every directory directly under the root is a state: the four lifecycle
 directories `triage/ ready/ doing/ done/` (always present, created on first use)
-plus any others the repository adds, such as `icebox/`. A state exists when its
+plus the configured backlog and rejected role states (created on the first role
+move) and any others the repository adds. A state exists when its
 directory exists; state names match directories case-insensitively, and a name
 with no directory is an error listing those that exist. The directory *is* the
 state, so a transition or
@@ -1716,16 +1719,19 @@ with Linear and the file tracker, without provider-specific API/MCP calls:
   criteria apply; every requested label must match.
 - `ab ticket show <id> [--json]` reads one complete ticket. Human output includes
   labeled metadata and the body verbatim, so it can read a stored spec back.
-- `ab ticket move <id> <state> [--json]` transitions one ticket and reports its
-  post-transition value.
+- `ab ticket move <id> (<state> | --role triage|ready|backlog|rejected) [--json]`
+  transitions one ticket and reports its post-transition value. `--role`
+  resolves the configured native name; an unconfigured backlog or rejected role
+  is refused naming its key, never mapped to a same-named state, and a source
+  that creates states creates the role state on first use.
 - `ab ticket states [--json]` lists every state of the configured source:
-  lifecycle states first (triage, ready, doing, done), then custom states
-  alphabetically. Each row has the state name, the roles it plays under the
-  current config (create, ready, claimed, triage, proposal, done, or none), its
-  ticket count, and its purpose when set. `--json` emits one bare array of
+  role-holding states in workflow order (triage, create, proposal, backlog,
+  ready, claimed, done, rejected), then the rest. Each row has the state name,
+  the roles it plays under the current config (or none), its ticket count, and
+  its purpose when set. `--json` emits one bare array of
   `{name, roles, tickets, about?}`.
 - `ab ticket state create <name> [--about <text>] [--json]` makes a state, for
-  example `icebox`. It is idempotent: an existing state is reported as already
+  example `needs-design`. It is idempotent: an existing state is reported as already
   existing, and `--about` (one line) records or replaces its purpose. A name is
   one to forty lowercase letters, digits, and hyphens starting with a letter,
   and may not match an existing state case-insensitively. There is no rename or
@@ -2821,7 +2827,7 @@ default, when you need to know what this repo's version says).
 | Skill | Place in the lifecycle | Purpose |
 |---|---|---|
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
-| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between the lifecycle directories (`triage/ ready/ doing/ done/`) and any repository-defined states, including the icebox. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
+| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between the lifecycle directories (`triage/ ready/ doing/ done/`) and any repository-defined states, and move work by role (`--role backlog` for the icebox, `--role rejected` for declined work). The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. Its editable `references/setup.md` guides the init handoff. **Model-invocable.** |
 | `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
 | `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |
