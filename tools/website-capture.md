@@ -12,9 +12,21 @@ The four existing landing filenames and reference mappings remain stable.
 All baseline frames use actual reduced-motion media preference. The report
 records stylesheet readiness, stillness and phone overflow for every page.
 Landing seam and spacing assertions apply only to landing pages.
-`inventory.json` lists successful nonempty PNGs with descriptors and probes;
+`inventory.json` lists successful nonempty PNGs with descriptors and probes,
+and the ordered tiles of any tiled frame;
 `verify-report.md` includes the same evidence and records failures plus the
 expected inventory if capture aborts. Never interpret a partial inventory as a pass.
+
+## Frame size ceiling
+
+Every PNG is at most the store's decoded artifact ceiling (2,621,440 bytes), so
+each one can be attached with `ab artifact put`. A full-page frame that would be
+larger is cut losslessly into ordered full-width row tiles named
+`<frame-id>-tile-<i>-of-<n>.png`, and its single `<frame-id>.png` is not
+written. Its inventory entry keeps the frame and probe and adds `tiles`: each
+tile's `id`, `frame`, `index` (1-based), `count`, `top`, `height` and `png`
+path. Tiles are contiguous and together cover every row of the page. Frames
+that fit are unchanged.
 
 ## Animated figures
 
