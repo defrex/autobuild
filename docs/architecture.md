@@ -1499,7 +1499,10 @@ HTTP clients opt in with `x-autobuild-ticket-comments: 1` so historical strict
 decoders retain compatible responses. File comments remain embedded in the body;
 Linear comment reads are unchanged. Issue links follow the same pattern with
 `x-autobuild-ticket-issue-links: 1`, stored in the `ab_tickets.issue_links` jsonb
-column that every listing already selects.
+column that every listing already selects. Dependency states carry each blocker's
+native `state` for clients that send `x-autobuild-ticket-dependency-state: 1`,
+read from the row each lookup already loads; the dispatcher applies the
+configured rejected role on top (`markRejected` in `processes/dispatcher.ts`).
 
 Ticket integration metadata lives in `ports/tickets/tree.ts`: source compatibility
 normalization, capability refusal, graph validation and the pure tree projection.

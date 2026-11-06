@@ -342,11 +342,11 @@ describe('FileTicketSource', () => {
       await seedTicket('file-1', { state: 'icebox' })
       const tickets = source()
       expect(await tickets.dependencyStates(['file-1'])).toEqual([
-        { id: 'file-1', exists: true, resolved: false, blockedBy: [] },
+        { id: 'file-1', exists: true, resolved: false, state: 'icebox', blockedBy: [] },
       ])
       await tickets.transition('file-1', 'done')
       expect(await tickets.dependencyStates(['file-1'])).toEqual([
-        { id: 'file-1', exists: true, resolved: true, blockedBy: [] },
+        { id: 'file-1', exists: true, resolved: true, state: 'done', blockedBy: [] },
       ])
     })
 
@@ -836,7 +836,7 @@ describe('FileTicketSource', () => {
 
     expect(ticket?.blockedBy).toBeUndefined()
     expect(await tickets.dependencyStates(['file-1'])).toEqual([
-      { id: 'file-1', exists: true, resolved: false, blockedBy: [] },
+      { id: 'file-1', exists: true, resolved: false, state: 'ready', blockedBy: [] },
     ])
   })
 
@@ -910,7 +910,7 @@ describe('FileTicketSource', () => {
 
     expect(states).toEqual([
       { id: 'file-404', exists: false, resolved: false, blockedBy: [] },
-      { id: 'file-2', exists: true, resolved: true, blockedBy: ['file-7'] },
+      { id: 'file-2', exists: true, resolved: true, state: 'done', blockedBy: ['file-7'] },
     ])
   })
 

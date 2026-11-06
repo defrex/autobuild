@@ -21,11 +21,16 @@ import type { BuildStore } from '../store/types'
 import {
   createReadinessRedactor,
   runGuestReadinessProbe,
+  ticketRoleReadiness,
   validateInitReadiness,
   type GuestProbeReport,
   type InitValidationReport,
 } from './init-validation'
 import { runCli } from './main'
+import { ticketsSchema } from '../config/schema'
+import { FileTicketSource } from '../ports/tickets/file'
+import { LinearTicketSource } from '../ports/tickets/linear'
+import type { TicketSource } from '../ports/types'
 
 // The test file lives at packages/core/src/cli/, so four levels up is the
 // repository root — resolving the real probe from here keeps the suite
@@ -2612,4 +2617,69 @@ test('missing local ChatGPT credential names the account and local login destina
   expect(report.checks[0]!.detail).toBe(
     'Credential absent; run ab accounts login "personal" --local',
   )
+})
+
+describe('optional ticket role readiness', () => {
+  const linear = (states: string[]) =>
+    Object.assign(Object.create(LinearTicketSource.prototype), {
+      name: 'linear',
+      workflowStateNames: async () => states,
+    }) as TicketSource
+
+  test('unset roles are notes, never failures, and read nothing', async () => {
+    const tickets = ticketsSchema.parse({ source: 'file', readyState: 'ready' })
+    let opened = false
+    const result = await ticketRoleReadiness(tickets, async () => {
+      opened = true
+      throw new Error('no source needed')
+    })
+    expect(opened).toBe(false)
+    expect(result.checks).toEqual([])
+    expect(result.notes).toEqual([
+      'Note: [tickets].backlogState is not set; the backlog role is unavailable (recommended: backlogState = "backlog")',
+      'Note: [tickets].rejectedState is not set; the rejected role is unavailable (recommended: rejectedState = "rejected")',
+    ])
+  })
+
+  test('a configured role naming no source state is a warning', async () => {
+    const tickets = ticketsSchema.parse({
+      source: 'linear',
+      teamKey: 'ENG',
+      readyState: 'Todo',
+      triageState: 'Triage',
+      backlogState: 'Icebox',
+      rejectedState: 'canceled',
+    })
+    const result = await ticketRoleReadiness(tickets, async () =>
+      linear(['Triage', 'Todo', 'In Progress', 'Done', 'Canceled']),
+    )
+    expect(result.notes).toEqual([])
+    expect(result.checks).toEqual([
+      {
+        name: 'ticket-role-backlog',
+        status: 'warning',
+        detail:
+          '[tickets].backlogState "Icebox" names no state in the linear source (known: Triage, Todo, In Progress, Done, Canceled)',
+      },
+    ])
+  })
+
+  test('a source that creates states reports creation on first use', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-role-readiness-'))
+    try {
+      const tickets = ticketsSchema.parse({
+        source: 'file',
+        readyState: 'ready',
+        backlogState: 'backlog',
+        rejectedState: 'rejected',
+      })
+      const source = new FileTicketSource({ dir })
+      await source.addState('rejected')
+      const result = await ticketRoleReadiness(tickets, async () => source)
+      expect(result.checks).toEqual([])
+      expect(result.notes).toEqual(['Note: backlog role state "backlog" is created on first use'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

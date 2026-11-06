@@ -437,6 +437,7 @@ export class FileTicketSource implements TicketSource {
         id,
         exists: true,
         resolved: found.state === this.doneState,
+        state: found.state,
         blockedBy: [...(loaded.front.blockedBy ?? [])],
       })
     }

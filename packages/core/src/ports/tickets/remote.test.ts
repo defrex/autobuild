@@ -174,6 +174,7 @@ describe('HostedTicketSource (client half)', () => {
         'x-autobuild-ticket-tree': '1',
         'x-autobuild-ticket-comments': '1',
         'x-autobuild-ticket-issue-links': '1',
+        'x-autobuild-ticket-dependency-state': '1',
         authorization: 'Bearer t0k',
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -294,6 +295,17 @@ describe('HostedTicketSource (client half)', () => {
     await expect(invalid.source.countStates(['Triage'])).rejects.toThrow()
     const rows = makeSource([{ body: [{ name: 'Triage', tickets: 1, about: 'x' }] }])
     await expect(rows.source.countStates(['Triage'])).rejects.toThrow()
+  })
+
+  test('dependencyStates decodes an opted-in blocker state', async () => {
+    const { source } = makeSource([
+      {
+        body: [{ id: 'ENG-8', exists: true, resolved: false, state: 'rejected', blockedBy: [] }],
+      },
+    ])
+    expect(await source.dependencyStates(['ENG-8'])).toEqual([
+      { id: 'ENG-8', exists: true, resolved: false, state: 'rejected', blockedBy: [] },
+    ])
   })
 
   // ── Error rehydration ────────────────────────────────────────────────────

@@ -336,6 +336,13 @@ of the client version. Without it, links are projected away for historical stric
 decoders, and stored links survive their writes. Every `/tickets/*` response,
 including errors, carries `x-autobuild-ticket-issue-links: 1`.
 
+`dependency-states` entries for existing tickets include `state`, the blocker's
+native state name, only with `x-autobuild-ticket-dependency-state: 1`. Without
+it the field is projected away for historical strict decoders. A service that
+predates the capability ignores the header and omits the field, which is
+optional. Clients apply the configured rejected role to it; the service never
+interprets it.
+
 A service whose backing source cannot store links refuses a write naming them,
 including `[]`, with `409 { "kind": "conflict", "code": "issue-links-unsupported" }`
 before anything is written. A service predating issue links refuses the unknown

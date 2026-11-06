@@ -143,8 +143,9 @@ Each leaf runs the normal spec, plan/review, implement/review, verify and finali
 pipeline against its frozen destination.
 
 A node collects until every ticket targeting it is natively done or cancelled,
-all frozen child claims have settled, and at least one contribution has merged.
-Triage, backlog and ready children keep it incomplete. Exhaustive enumeration
+or sits in the configured rejected state, all frozen child claims have settled,
+and at least one contribution has merged. Triage, backlog and ready children
+keep it incomplete; a rejected child does not. Exhaustive enumeration
 failures fail closed. Completeness is sampled again before verification and
 publication; tracker edits cannot be transactional with a forge write.
 
@@ -207,7 +208,7 @@ An open node supports three ways to iterate:
   restrictions.
 
 Open children keep the node incomplete, including triage, backlog and ready
-children. Completion remains finite: merged or otherwise ended nodes close
+children. A child in the configured rejected state is not open. Completion remains finite: merged or otherwise ended nodes close
 admission. Iteration does not relax verification of the exact head and parent,
 or the configured readiness, consent and merge gates described above.
 

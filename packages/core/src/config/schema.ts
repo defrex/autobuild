@@ -18,6 +18,7 @@ import { documentSchema, documentFields } from './reference-metadata'
 import { landingRuleSchema } from './landing'
 export { landingRuleSchema, type LandingRule } from './landing'
 import { normalizeServiceURL } from '../connection'
+import { holdsState, ticketLifecycle } from '../ports/tickets/lifecycle'
 import { prImageHostSchema } from '../ontology'
 import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
 import {
@@ -875,6 +876,22 @@ export const ticketsInputSchema = z.strictObject({
     .min(1)
     .refine((value) => value.trim().length > 0, 'state must be nonblank')
     .optional(),
+  /** State that holds deliberately deferred work — the backlog role. Optional
+   * with no default: unset means the role does not exist. Never dispatched
+   * from, moved into, or harvested into by the dispatcher. */
+  backlogState: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'state must be nonblank')
+    .optional(),
+  /** State that holds considered-and-declined work — the rejected role.
+   * Optional with no default. A ticket in it never resolves a blocker and
+   * never keeps a node incomplete. */
+  rejectedState: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'state must be nonblank')
+    .optional(),
   /** Directory of state dirs (`triage/ ready/ doing/ done/`) holding `<id>.md`
    * ticket files; optional — defaults to `.autobuild/tickets`, resolved
    * relative to the repo. Kept schema-optional (not `.default()`) so the
@@ -897,6 +914,10 @@ documentFields(ticketsInputSchema, {
   triageState: 'State used for spec-gate bounces, aborts, and closed-unmerged PRs.',
   proposalState:
     'State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility.',
+  backlogState:
+    'State that holds deliberately deferred work (the backlog role). Optional and recommended; unset means the role does not exist.',
+  rejectedState:
+    'State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended.',
   dir: 'Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.',
 })
 documentSchema(ticketsInputSchema, {
@@ -937,10 +958,66 @@ documentSchema(ticketsInputSchema.shape.triageState, {
 documentSchema(ticketsInputSchema.shape.proposalState, {
   constraints: 'Omission uses the resolved triageState.',
 })
+documentSchema(ticketsInputSchema.shape.backlogState, {
+  constraints:
+    'Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).',
+})
+documentSchema(ticketsInputSchema.shape.rejectedState, {
+  constraints:
+    'Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).',
+})
 documentSchema(ticketsInputSchema.shape.dir, {
   constraints:
     'Forbidden for linear and hosted. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.',
 })
+const FILE_CLAIMED_STATE = 'doing'
+const FILE_DONE_STATE = 'Done'
+const OPTIONAL_ROLES = [
+  ['backlog', 'backlogState'],
+  ['rejected', 'rejectedState'],
+] as const
+const DISPATCHER_ROLES = [
+  ['ready', 'readyState'],
+  ['claimed', 'claimedState'],
+  ['done', 'doneState'],
+  ['triage', 'triageState'],
+  ['proposal', 'proposalState'],
+] as const
+
+/** The backlog and rejected roles must hold their own states: the dispatcher
+ * never claims from, moves into, or files proposals into them, whatever the
+ * other lifecycle names say, and the two may not share a state. */
+function refuseOptionalRoleOverlap(tickets: TicketsConfig, ctx: z.RefinementCtx): void {
+  const names = ticketLifecycle({ ...tickets, readyState: tickets.readyState ?? 'ready' })
+  // The file source ignores claimedState and doneState: claims always move
+  // into doing and completion is Done. Check the states it actually uses as
+  // well as the configured spellings.
+  const file = tickets.source === 'file'
+  const resolved: Record<string, (string | undefined)[]> = {
+    ready: [names.ready],
+    claimed: file ? [FILE_CLAIMED_STATE, tickets.claimedState] : [names.doing],
+    done: file ? [FILE_DONE_STATE, tickets.doneState] : [names.done],
+    triage: [names.triage],
+    proposal: [names.proposal],
+    backlog: [names.backlog],
+    rejected: [names.rejected],
+  }
+  for (const [index, [role, key]] of OPTIONAL_ROLES.entries()) {
+    const name = tickets[key]
+    if (name === undefined) continue
+    const others = [...DISPATCHER_ROLES, ...OPTIONAL_ROLES.slice(index + 1)]
+    for (const [other, otherKey] of others) {
+      const held = resolved[other]?.find((state) => holdsState(name, state))
+      if (held === undefined) continue
+      ctx.addIssue({
+        code: 'custom',
+        path: [key],
+        message: `[tickets].${key} "${name}" names the same state as the ${other} role ([tickets].${otherKey} resolves to "${held}"); the ${role} and ${other} roles must name different states`,
+      })
+    }
+  }
+}
+
 export const ticketsSchema = ticketsInputSchema
   .superRefine((tickets, ctx) => {
     if (tickets.source === 'hosted' && tickets.url !== undefined) {
@@ -963,6 +1040,7 @@ export const ticketsSchema = ticketsInputSchema
         path: ['url'],
         message: '[tickets].url applies only to source = "hosted"',
       })
+    refuseOptionalRoleOverlap(tickets as TicketsConfig, ctx)
   })
   .transform((tickets) => ({
     ...tickets,

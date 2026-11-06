@@ -533,6 +533,7 @@ export class PostgresTicketSource implements TicketSource {
             id,
             exists: true,
             resolved: String(row.state) === this.lifecycle.done,
+            state: String(row.state),
             blockedBy: await this.blockers(q, String(row.id)),
           }
         }),
