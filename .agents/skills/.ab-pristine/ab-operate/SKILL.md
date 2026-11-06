@@ -11,7 +11,9 @@ work to merge. Any external agent can take the role through the CLI or MCP.
 Filing sessions check presence before taking the role; with a live operator,
 they leave operating context in the ticket and stop. Explicit human instructions
 always override that default. Presence is advisory, permits concurrent operators,
-and grants no exclusive authority. MCP presence registration is deferred.
+and grants no exclusive authority. MCP presence registration is deferred, and MCP
+`repository.status` reports `operator.presence: "unavailable"`, which never means
+no operator is present.
 
 The operator agent is not a build phase: it never runs pipeline steps, never
 edits the repository, and never touches a build's checkout. Its reach is the
@@ -81,7 +83,9 @@ the same resolved working directory.
 
 ### Check presence before registering
 
-Run `ab repository status --json` and inspect `operator.registrations`. If another
+Run `ab repository status --json` and inspect `operator.registrations`, which the
+CLI loads (`operator.presence: "loaded"`); only a loaded empty list means no live
+operator. If another
 live operator is present, tell the human and do not become a second operator
 unless directed. Otherwise arm a repository-wide `ab watch --operator --json`.
 A flagged watch writes only mutable liveness, never events or a lease.
@@ -261,7 +265,8 @@ that appear after you arm. Finishing the initially queued set is no reason to st
 
 Use `ab wait` and named unflagged watches only as separate diagnostics. They
 cannot replace the registered monitor or its cursor. In MCP, use the existing
-registry monitoring tools; operator presence is not exposed there.
+registry monitoring tools; operator presence is not exposed there, and its
+`repository.status` marks presence `unavailable` rather than absent.
 
 ### Inspect
 
@@ -369,7 +374,8 @@ Your tools are the operator registry. The read-only ones are always safe:
 - `builds.events` — one build's event log from a cursor (use a cursor; logs
   are long).
 - `builds.artifact` — one artifact's bytes, base64-encoded.
-- `repository.status` — the repository's derived status.
+- `repository.status` — the repository's derived status. Its `operator.presence`
+  is `unavailable`: it does not load presence, so it is not evidence of absence.
 - `harvest.status` — the observation workflow's current state.
 
 The mutating ones carry the human's authority — prefer the narrowest
