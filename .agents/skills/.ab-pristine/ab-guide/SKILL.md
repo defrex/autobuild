@@ -1144,9 +1144,15 @@ outcome.
 Each attempt starts from the primary. Overload, rate-limit, 5xx, timeout,
 transport, unknown provider failures, and quota/usage/billing exhaustion try
 alternates in order without consuming extra phase attempts. Authentication,
-permission, and local runtime-configuration failures do not. Every target has
-its own session/transcript; a continuation fallback starts fresh from durable
-context. Selection is not sticky, so the next phase, continuation, or retry
+permission, and local runtime-configuration failures do not, with one
+exception: a target whose runtime CLI executable is not installed falls through
+to the next declared alternate, so the phase runs on the first declared target
+whose CLI is present. An installed CLI with an unsupported version still stops
+the chain, as does every other local runtime-configuration failure. When no
+declared target has its CLI installed, the phase ends in one non-retried
+`configuration` failure carrying the last target's missing-CLI message. Every
+target has its own session/transcript; a continuation fallback starts fresh
+from durable context. Selection is not sticky, so the next phase, continuation, or retry
 starts from the primary. A suspended Harvest turn first retries its recorded
 route, then tries the remaining configured targets in order. Its substitution
 and failure evidence retain configured indexes even when that order starts at
