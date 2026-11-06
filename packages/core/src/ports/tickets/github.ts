@@ -157,6 +157,12 @@ function nextPage(link: string | undefined): string | undefined {
   return undefined
 }
 
+/** The issue read's ETag as a hydration option, so a reopen check keys its
+ * verdict by this read instead of reading the issue again. */
+function etagOf(read: { etag?: string }): { etag?: string } {
+  return read.etag !== undefined ? { etag: read.etag } : {}
+}
+
 function blockerList(ids: string[]): string {
   return ids.length > 0 ? ids.map((id) => `"${id}"`).join(', ') : 'none'
 }
@@ -635,7 +641,7 @@ export class GitHubTicketSource implements TicketSource {
     if (number === null) return null
     const read = await this.readIssue('get', number, true)
     if (read === null) return null
-    return (await this.hydrate(read.issue, { remember: true })).ticket
+    return (await this.hydrate(read.issue, { remember: true, ...etagOf(read) })).ticket
   }
 
   async listAll(): Promise<TicketListing> {
@@ -729,7 +735,7 @@ export class GitHubTicketSource implements TicketSource {
         results.push({ id, exists: false, resolved: false, blockedBy: [] })
         continue
       }
-      const { ticket } = await this.hydrate(read.issue, { remember: true })
+      const { ticket } = await this.hydrate(read.issue, { remember: true, ...etagOf(read) })
       results.push({
         id,
         exists: true,

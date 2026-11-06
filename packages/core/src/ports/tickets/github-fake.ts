@@ -204,7 +204,8 @@ export class FakeGitHubIssues {
   ): number {
     const issue = this.insert(opts.title ?? 'Filed in the UI', opts.body ?? 'From the UI.', [])
     for (const label of opts.labels ?? []) this.uiAddLabel(issue.number, label)
-    if (opts.state === 'closed') this.uiClose(issue.number, opts.state_reason ?? 'completed')
+    if (opts.state === 'closed')
+      this.uiClose(issue.number, opts.state_reason === undefined ? 'completed' : opts.state_reason)
     return issue.number
   }
 
