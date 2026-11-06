@@ -235,6 +235,8 @@ triageState = "triage"          # bounced, aborted, and closed-unmerged tickets 
 proposalState = "triage"        # harvest proposals wait for a human to groom them to ready.
                                 # Auto-dispatching them (proposalState = readyState) ran away:
                                 # each proposal build's observations filed more proposals.
+backlogState = "icebox"         # deferred on purpose; `--role backlog` moves here
+rejectedState = "rejected"      # considered and declined; `--role rejected` moves here
 
 [store]
 url = "https://app.autobuild.run"
