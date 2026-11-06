@@ -990,3 +990,41 @@ test('github → github import rewrites links between exported issues and refuse
     state_reason: 'not_planned',
   })
 })
+
+test('github migration round-trip preserves nested nodes and remaps sub-issue targets', async () => {
+  const original = github()
+  const outer = await original.source.create({ title: 'Outer', body: 'B', kind: 'node' })
+  const inner = await original.source.create({
+    title: 'Inner',
+    body: 'B',
+    kind: 'node',
+    target: outer.ref.id,
+  })
+  const child = await original.source.create({ title: 'Child', body: 'B', target: inner.ref.id })
+  const dir = join(root, 'tree-export')
+  await exportTickets({ source: original.source, dir, repo: 'repo', lifecycle: original.lifecycle })
+  const destination = github()
+  destination.fake.fileIssue({ title: 'Existing issue' })
+  const { mapping } = await importTickets({
+    source: destination.source,
+    dir,
+    repo: 'repo',
+    lifecycle: destination.lifecycle,
+  })
+  expect(mapping[outer.ref.id]).not.toBe(outer.ref.id)
+  expect(await destination.source.get(mapping[outer.ref.id]!)).toMatchObject({ kind: 'node' })
+  expect(await destination.source.get(mapping[inner.ref.id]!)).toMatchObject({
+    kind: 'node',
+    target: mapping[outer.ref.id],
+  })
+  expect(await destination.source.get(mapping[child.ref.id]!)).toMatchObject({
+    kind: 'work',
+    target: mapping[inner.ref.id],
+  })
+  expect(destination.fake.subIssues(Number(mapping[outer.ref.id]))).toEqual([
+    Number(mapping[inner.ref.id]),
+  ])
+  expect(destination.fake.subIssues(Number(mapping[inner.ref.id]))).toEqual([
+    Number(mapping[child.ref.id]),
+  ])
+})
