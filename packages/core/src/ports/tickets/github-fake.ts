@@ -5,11 +5,13 @@
  *
  * It serves the REST routes and the GraphQL queries the adapter sends, with
  * ETags (a hash of the response) and `If-None-Match` → 304, and counts every
- * request by route so budget tests can assert exact costs. It serves the
- * comment-history route (`comments-list`) for export and import, which
- * recurring-read tests assert is never sent. It deliberately serves no REST
- * issue-events or REST search route: any adapter read of those fails a test
- * with a 404.
+ * request by route so budget tests can assert exact costs. Sub-issues are
+ * served as GitHub does: `parent_issue_url` and `sub_issues_summary` on
+ * every issue, the paginated `GET /issues/{n}/sub_issues`, `POST` to add one
+ * and `DELETE /issues/{n}/sub_issue` to remove one. It deliberately
+ * serves the comment-history route (`comments-list`) for explicit migration reads,
+ * but no REST issue-events or REST search route: any
+ * adapter read of those fails a test with a 404.
  *
  * UI-style mutators simulate what people do on GitHub outside the adapter.
  */
@@ -39,6 +41,8 @@ interface FakeIssue {
   events: FakeEvent[]
   /** Blockers as `owner/repo#number` keys. */
   blockedBy: string[]
+  /** The parent issue as an `owner/repo#number` key. */
+  parent?: string
   /** State changes for the lagging search index: newest last. */
   history: Array<{ at: number; state: 'open' | 'closed'; state_reason: string | null }>
 }
@@ -67,6 +71,9 @@ export type FakeGitHubRequestKind =
   | 'blocked-by-list'
   | 'blocked-by-add'
   | 'blocked-by-remove'
+  | 'sub-issues-list'
+  | 'sub-issue-add'
+  | 'sub-issue-remove'
   | 'labels-list'
   | 'label-get'
   | 'label-create'
@@ -95,7 +102,12 @@ export interface FakeGitHubOptions {
   searchLagMs?: number
   /** First issue number; 1001 keeps the contract's link numbers free. */
   firstNumber?: number
+  /** Clamp `per_page` on sub-issue lists, so tests can prove `Link` is followed. */
+  subIssuePageCap?: number
 }
+
+/** GitHub's documented limit on a parent's direct sub-issues. */
+const SUB_ISSUE_LIMIT = 100
 
 const API = 'https://api.github.com'
 
@@ -123,10 +135,13 @@ export class FakeGitHubIssues {
   /** When false, UI labelling leaves `updated_at` untouched. */
   labelsBumpUpdatedAt = true
   searchLagMs: number
+  subIssuePageCap: number | undefined
 
   private readonly issues = new Map<number, FakeIssue>()
   private readonly foreign = new Map<string, FakeIssue & { repo: string }>()
   private readonly labels = new Map<string, FakeLabel>()
+  /** Children by parent key, rebuilt lazily after any change. */
+  private childIndex: Map<string, FakeIssue[]> | undefined
   private readonly clock: () => number
   private nextNumber: number
   private nextId = 900_000
@@ -143,6 +158,7 @@ export class FakeGitHubIssues {
     this.clock = opts.now ?? Date.now
     this.searchLagMs = opts.searchLagMs ?? 0
     this.nextNumber = opts.firstNumber ?? 1001
+    this.subIssuePageCap = opts.subIssuePageCap
   }
 
   get repository(): { owner: string; name: string } {
@@ -333,8 +349,64 @@ export class FakeGitHubIssues {
     return key
   }
 
+  /** Make `child` a sub-issue of `parent` in the UI, replacing any parent. */
+  uiAddSubIssue(parent: number, child: number): void {
+    this.require(parent)
+    const issue = this.require(child)
+    issue.parent = `${this.fullName}#${parent}`
+    this.changed(issue, true)
+  }
+
+  uiRemoveSubIssue(child: number): void {
+    const issue = this.require(child)
+    delete issue.parent
+    this.changed(issue, true)
+  }
+
+  /** Give `child` a parent in another repository. */
+  setForeignParent(child: number, repo: string, parent: number): void {
+    const issue = this.require(child)
+    issue.parent = `${repo}#${parent}`
+    this.changed(issue, true)
+  }
+
+  /** A sub-issue of `parent` that lives in another repository; returns its key. */
+  addForeignSubIssue(parent: number, repo: string, number: number): string {
+    this.require(parent)
+    const key = `${repo}#${number}`
+    const at = new Date(this.clock()).toISOString()
+    this.foreign.set(key, {
+      repo,
+      id: this.nextId++,
+      number,
+      title: `Foreign ${key}`,
+      body: '',
+      state: 'open',
+      state_reason: null,
+      labels: [],
+      created_at: at,
+      updated_at: at,
+      pull_request: false,
+      comments: 0,
+      events: [],
+      blockedBy: [],
+      history: [],
+      parent: `${this.fullName}#${parent}`,
+    })
+    this.childIndex = undefined
+    return key
+  }
+
+  /** The local sub-issues of `parent`, in insertion order. */
+  subIssues(parent: number): number[] {
+    return this.childrenOf(`${this.fullName}#${parent}`)
+      .filter((issue) => (issue as { repo?: string }).repo === undefined)
+      .map((issue) => issue.number)
+  }
+
   deleteIssue(number: number): void {
     this.require(number).gone = 'deleted'
+    this.childIndex = undefined
   }
 
   /**
@@ -347,6 +419,7 @@ export class FakeGitHubIssues {
     const [repo, moved] = to.split('#')
     issue.gone = 'transferred'
     issue.movedTo = to
+    this.childIndex = undefined
     const { gone: _gone, movedTo: _movedTo, ...copy } = issue
     this.foreign.set(to, {
       ...copy,
@@ -399,6 +472,7 @@ export class FakeGitHubIssues {
     const path = rawPath.replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '')
     const record: FakeGitHubRequestRecord = { method, path, kind: 'unknown', status: 0 }
     this.requests.push(record)
+    this.childIndex = undefined
     const failure = this.failures.findIndex((f) => f.match?.(method, path) ?? true)
     if (failure >= 0) {
       const [hit] = this.failures.splice(failure, 1)
@@ -452,6 +526,9 @@ export class FakeGitHubIssues {
     if (/^\/issues\/\d+\/dependencies\/blocked_by$/.test(rest))
       return method === 'POST' ? 'blocked-by-add' : 'blocked-by-list'
     if (/^\/issues\/\d+\/dependencies\/blocked_by\/\d+$/.test(rest)) return 'blocked-by-remove'
+    if (/^\/issues\/\d+\/sub_issues$/.test(rest))
+      return method === 'POST' ? 'sub-issue-add' : 'sub-issues-list'
+    if (/^\/issues\/\d+\/sub_issue$/.test(rest)) return 'sub-issue-remove'
     if (rest === '/labels') return method === 'POST' ? 'label-create' : 'labels-list'
     if (/^\/labels\/[^/]+$/.test(rest)) return 'label-get'
     return 'unknown'
@@ -550,7 +627,70 @@ export class FakeGitHubIssues {
       this.changed(issue, true)
       return { json: this.json(blocker) }
     }
+    match = /^\/issues\/(\d+)\/sub_issues$/.exec(rest)
+    if (match) {
+      const parent = this.live(Number(match[1]))
+      const key = this.keyOf(parent)
+      if (method === 'GET') {
+        const cap = this.subIssuePageCap
+        const capped =
+          cap === undefined
+            ? query
+            : { ...query, per_page: String(Math.min(Number(query.per_page ?? 30), cap)) }
+        return this.page(
+          this.childrenOf(key).map((child) => this.json(child)),
+          capped,
+          rest,
+        )
+      }
+      if (method === 'POST') {
+        const input = body as { sub_issue_id?: number; replace_parent?: boolean }
+        const child = this.byId(input?.sub_issue_id)
+        if (!child) throw this.notFound()
+        const invalid = (message: string) =>
+          new GitHubApiError(422, 'Validation Failed', {
+            message: 'Validation Failed',
+            errors: [{ message }],
+          })
+        if (child.parent === key) throw invalid('Issue is already a sub-issue of this issue')
+        if (child.parent !== undefined && input.replace_parent !== true)
+          throw invalid('Issue may not have more than one parent')
+        if (this.childrenOf(key).length >= SUB_ISSUE_LIMIT)
+          throw invalid(`Parent may not have more than ${SUB_ISSUE_LIMIT} sub-issues`)
+        const childKey = this.keyOf(child)
+        for (let up: FakeIssue | undefined = parent; up !== undefined; ) {
+          if (this.keyOf(up) === childKey) throw invalid('Sub-issue would create a cycle')
+          up = up.parent === undefined ? undefined : this.byKey(up.parent)
+        }
+        child.parent = key
+        this.changed(child, true)
+        this.changed(parent, true)
+        return { json: this.json(child), status: 201 }
+      }
+    }
+    match = /^\/issues\/(\d+)\/sub_issue$/.exec(rest)
+    if (match && method === 'DELETE') {
+      const parent = this.live(Number(match[1]))
+      const child = this.byId((body as { sub_issue_id?: number })?.sub_issue_id)
+      if (!child || child.parent !== this.keyOf(parent)) throw this.notFound()
+      delete child.parent
+      this.changed(child, true)
+      this.changed(parent, true)
+      return { json: this.json(child) }
+    }
     throw this.notFound()
+  }
+
+  /** Live issues (local first, then foreign) whose parent is `key`. */
+  private childrenOf(key: string): FakeIssue[] {
+    if (this.childIndex === undefined) {
+      this.childIndex = new Map()
+      for (const issue of [...this.issues.values(), ...this.foreign.values()]) {
+        if (issue.parent === undefined || issue.gone || issue.pull_request) continue
+        this.childIndex.set(issue.parent, [...(this.childIndex.get(issue.parent) ?? []), issue])
+      }
+    }
+    return this.childIndex.get(key) ?? []
   }
 
   // ── REST helpers ──────────────────────────────────────────────────────────
@@ -818,6 +958,7 @@ export class FakeGitHubIssues {
   }
 
   private changed(issue: FakeIssue, bump: boolean, stateChanged = true): void {
+    this.childIndex = undefined
     if (bump) issue.updated_at = new Date(this.clock()).toISOString()
     if (stateChanged) {
       const last = issue.history.at(-1)
@@ -878,12 +1019,32 @@ export class FakeGitHubIssues {
       ...(issue.pull_request
         ? { pull_request: { url: `${API}/repos/${repo}/pulls/${issue.number}` } }
         : {}),
+      parent_issue_url:
+        issue.parent === undefined
+          ? null
+          : `${API}/repos/${issue.parent.split('#')[0]}/issues/${issue.parent.split('#')[1]}`,
+      sub_issues_summary: this.subIssueSummary(this.keyOf(issue)),
       issue_dependencies_summary: {
         blocked_by: issue.blockedBy.length,
         blocking: 0,
         total_blocked_by: issue.blockedBy.length,
         total_blocking: 0,
       },
+    }
+  }
+
+  private subIssueSummary(key: string): {
+    total: number
+    completed: number
+    percent_completed: number
+  } {
+    const children = this.childrenOf(key)
+    const completed = children.filter((child) => child.state === 'closed').length
+    return {
+      total: children.length,
+      completed,
+      percent_completed:
+        children.length === 0 ? 0 : Math.floor((completed * 100) / children.length),
     }
   }
 

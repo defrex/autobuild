@@ -175,3 +175,15 @@ test('a build in flight across an import into github closes the remapped issue',
     await rm(dir, { recursive: true, force: true })
   }
 }, 30_000)
+
+test('a ready sub-issue of a non-node grouping issue dispatches as an ordinary root leaf', async () => {
+  const { h, github, issue } = await githubHarness()
+  const group = github.fileIssue({ title: 'Grouping epic', labels: ['autobuild'] })
+  github.uiAddSubIssue(group, issue)
+  await openPr(h, github, issue)
+  const state = reduceBuild(await h.events(SLUG))
+  expect(state.target).toBeUndefined()
+  expect(github.issue(issue)?.parent).toBe(`${github.owner}/${github.name}#${group}`)
+  expect(github.issue(group)?.labels).toEqual(['autobuild'])
+  expectNoCounts(github)
+}, 30_000)
