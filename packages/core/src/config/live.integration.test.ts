@@ -14,6 +14,9 @@ import {
   restartRequiredChanges,
 } from './live'
 import { TOP_LEVEL_KEYS } from './schema'
+import { assertReadyAssigneeAccepted } from './ready-assignee'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
+import { GitHubTicketSource } from '../ports/tickets/github'
 
 const base = `
 capacity = 1
@@ -457,4 +460,72 @@ test('renaming policy spelling keeps effective policy and reload classification 
   ])
   expect(live.current().config).toEqual(initial)
   expect(await live.refresh(modern)).toEqual({ kind: 'unchanged' })
+})
+
+describe('live readyAssignee', () => {
+  const github = base.replace('source = "file"\nreadyState = "ready"', 'source = "github"')
+
+  async function preparedSource(identity: string | null) {
+    const fake = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: fake.transportAs(identity),
+      repository: fake.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    await source.prepareReadyAssignee()
+    fake.resetRequests()
+    return { fake, source }
+  }
+
+  test('a reload the running source refuses keeps the previous snapshot unpublished', async () => {
+    const { fake, source } = await preparedSource(null)
+    let publishes = 0
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {
+        publishes += 1
+      },
+      [],
+      (next) => assertReadyAssigneeAccepted(next.tickets, source),
+    )
+    const outcome = await live.refresh(
+      github.replace('source = "github"', 'source = "github"\nreadyAssignee = "me"'),
+    )
+    expect(outcome).toMatchObject({ kind: 'rejected', notify: true })
+    if (outcome.kind === 'rejected') expect(outcome.error).toContain('has no user')
+    expect(live.current().config.tickets.readyAssignee).toBeUndefined()
+    expect(live.current().revision).toBe(0)
+    expect(publishes).toBe(0)
+    expect(fake.requests).toHaveLength(0)
+  })
+
+  test('an accepted readyAssignee change is adopted for the next scan, with no request', async () => {
+    const { fake, source } = await preparedSource('alice')
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+      [],
+      (next) => assertReadyAssigneeAccepted(next.tickets, source),
+    )
+    const outcome = await live.refresh(
+      github.replace('source = "github"', 'source = "github"\nreadyAssignee = "me"'),
+    )
+    expect(outcome.kind).toBe('adopted')
+    expect(live.current().config.tickets.readyAssignee).toBe('me')
+    expect(fake.requests).toHaveLength(0)
+  })
 })
