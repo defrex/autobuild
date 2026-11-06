@@ -11074,6 +11074,307 @@ test('dispatcher settles remote summary-only boundaries before launch and after 
   }
 }, 30_000)
 
+/** Seeds a remote build with an open PR, a completed verify occurrence and a
+ * reconcile trigger, then runs one dispatch whose fake guest models `guest`.
+ * `holdPrelaunch` makes pre-launch summary settlement fail so an older
+ * request outlives the launch fence unsettled. */
+async function runRemoteSummaryExit(opts: {
+  slug: string
+  preexisting?: 'eligible' | 'cooldown'
+  holdPrelaunch?: boolean
+  guest: (ctx: {
+    fx: Fixture
+    occurrence: { occurrence: number; boundary: number }
+    inStart: boolean
+  }) => Promise<void>
+  guestBeforeHandle?: boolean
+}) {
+  const fx = await makeFixture([], happyHandlers())
+  const { slug } = opts
+  const branch = `ab/${slug}`
+  const ticket = { source: 'fake', id: 'HANDOFF', title: 'Summary handoff' }
+  const stdout: string[] = []
+  const stderr: string[] = []
+  await fx.store.createBuild({ slug, repo: fx.origin, branch, ticket })
+  await fx.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket, repo: fx.origin, baseBranch: 'main' },
+  })
+  await fx.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'git-worktree',
+      remote: true,
+      ref: 'handoff-workspace',
+      path: '/guest',
+      branch,
+      base: { source: 'existing', sha: 'base' },
+    },
+  })
+  const spec = await fx.store.putArtifact(slug, { kind: 'spec', content: CONFORMING_BODY })
+  await fx.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'spec.imported',
+    payload: { ticket, artifact: { kind: spec.kind, rev: spec.revision } },
+  })
+  await fx.store.append(slug, { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+  const pr = await fx.forge.openPr({
+    workspacePath: fx.checkout,
+    head: branch,
+    base: 'main',
+    title: 'Handoff',
+    body: '',
+  })
+  await fx.store.append(slug, { actor: KERNEL, type: 'finalize.completed', payload: { pr } })
+  const prior = await fx.store.append(slug, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'prior', attempt: 1 },
+  })
+  const completed = await fx.store.append(slug, {
+    actor: KERNEL,
+    type: 'verify.completed',
+    payload: { step: 'prior', attempt: 1, outcome: 'pass' },
+  })
+  const occurrence = { occurrence: prior.seq, boundary: completed.seq }
+  if (opts.preexisting === 'cooldown') {
+    // An earlier occurrence's rate limit keeps every publication deferred.
+    const attempt = await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'pr-summary.attempted',
+      payload: { occurrence: prior.seq - 1, boundary: prior.seq - 1, pr: pr.number },
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'pr-summary.result',
+      payload: {
+        attempt: attempt.seq,
+        outcome: 'rate-limited',
+        eligibleAfter: '2999-01-01T00:00:00.000Z',
+      },
+    })
+  }
+  if (opts.preexisting !== undefined)
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'pr-summary.requested',
+      payload: occurrence,
+    })
+  fx.forge.setPrState(pr.number, { state: 'open', mergeable: false })
+  await fx.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'pr.conflicted',
+    payload: { baseSha: 'upstream' },
+  })
+  // Pre-launch settlement cannot record anything summary-related.
+  let held = opts.holdPrelaunch === true
+  const append = fx.store.append.bind(fx.store)
+  const appendIfCurrent = fx.store.appendIfCurrent.bind(fx.store)
+  const refuse = (type: string) => {
+    if (held && type.startsWith('pr-summary.')) throw new Error('summary store unavailable')
+  }
+  fx.store.append = (async (s: string, event: { type: string }) => {
+    refuse(event.type)
+    return append(s, event as never)
+  }) as typeof fx.store.append
+  fx.store.appendIfCurrent = (async (s: string, seq: number, event: { type: string }) => {
+    refuse(event.type)
+    return appendIfCurrent(s, seq, event as never)
+  }) as typeof fx.store.appendIfCurrent
+  let starts = 0
+  const execution: BuildExecution = {
+    async start() {
+      starts++
+      held = false
+      if (opts.guestBeforeHandle) await opts.guest({ fx, occurrence, inStart: true })
+      const completion = (async () => {
+        if (!opts.guestBeforeHandle) {
+          // Model a guest that runs after the launch is recorded.
+          while (!(await fx.store.getEvents(slug)).some((e) => e.type === 'execution.started'))
+            await Bun.sleep(1)
+          await opts.guest({ fx, occurrence, inStart: false })
+        }
+        return { exitCode: 0 }
+      })()
+      return {
+        supervision: 'local-parent',
+        identity: { provider: 'git-worktree', workspaceRef: 'handoff-workspace' },
+        completion,
+        stop: async () => ({ outcome: 'confirmed' }),
+        detach: async () => {},
+      }
+    },
+  }
+  await abDispatch({
+    targetRepo: fx.checkout,
+    env: {},
+    exec: spawnExec,
+    stdout: (line) => stdout.push(line),
+    stderr: (line) => stderr.push(line),
+    once: true,
+    plain: true,
+    wire: () => ({ ...fx.wire(), buildExecution: execution }),
+  })
+  expect(starts).toBe(1)
+  const repo = await fx.store.getRepoEvents(fx.origin)
+  const events = await fx.store.getEvents(slug)
+  return {
+    fx,
+    stdout,
+    stderr,
+    handoffs: repo.filter(
+      (event) => event.type === 'dispatcher.summary-handoff' && event.payload.slug === slug,
+    ),
+    parked: repo.filter(
+      (event) =>
+        event.type === 'dispatcher.runner-settled' &&
+        event.payload.slug === slug &&
+        event.payload.outcome === 'parked',
+    ),
+    requests: events.filter((event) => event.type === 'pr-summary.requested'),
+    settled: events.filter((event) => event.type === 'pr-summary.settled'),
+  }
+}
+
+/** The guest completes a new verify occurrence and requests its summary. */
+async function guestRequestsNewOccurrence({ fx }: { fx: Fixture }, slug: string) {
+  const started = await fx.store.append(slug, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'guest', attempt: 1 },
+  })
+  const boundary = await fx.store.append(slug, {
+    actor: KERNEL,
+    type: 'verify.completed',
+    payload: { step: 'guest', attempt: 1, outcome: 'pass' },
+  })
+  await fx.store.append(slug, {
+    actor: KERNEL,
+    type: 'pr-summary.requested',
+    payload: { occurrence: started.seq, boundary: boundary.seq },
+  })
+}
+
+describe('remote summary handoff classification', () => {
+  test('a guest that wrote a summary request records a routine handoff, not parked', async () => {
+    const slug = 'handoff-new'
+    const run = await runRemoteSummaryExit({
+      slug,
+      guest: (ctx) => guestRequestsNewOccurrence(ctx, slug),
+    })
+    try {
+      expect(run.handoffs).toHaveLength(1)
+      expect(run.handoffs[0]!.payload).toMatchObject({ status: expect.any(String) })
+      expect(run.parked).toHaveLength(0)
+      expect(run.stdout.join('\n')).not.toContain('parked')
+      expect(run.stderr).toContain(`build ${slug} handed off its PR summary`)
+      // The finally still settles the guest's request.
+      expect(run.settled.map((event) => event.payload.request)).toContain(run.requests.at(-1)!.seq)
+    } finally {
+      await run.fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a guest request written before execution.started under cooldown is still a handoff', async () => {
+    const slug = 'handoff-race'
+    const run = await runRemoteSummaryExit({
+      slug,
+      preexisting: 'cooldown',
+      guestBeforeHandle: true,
+      guest: (ctx) => guestRequestsNewOccurrence(ctx, slug),
+    })
+    try {
+      const guestRequest = run.requests.at(-1)!
+      const executionStarted = (await run.fx.store.getEvents(slug)).find(
+        (event) => event.type === 'execution.started',
+      )!
+      expect(guestRequest.seq).toBeLessThan(executionStarted.seq)
+      expect(run.handoffs).toHaveLength(1)
+      expect(run.parked).toHaveLength(0)
+      expect(run.fx.forge.comments).toHaveLength(0)
+    } finally {
+      await run.fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a guest that re-asserts an eligible outstanding request hands off and publishes once', async () => {
+    const slug = 'handoff-reassert'
+    const run = await runRemoteSummaryExit({
+      slug,
+      preexisting: 'eligible',
+      holdPrelaunch: true,
+      guest: async ({ fx, occurrence }) => {
+        await fx.store.append(slug, {
+          actor: KERNEL,
+          type: 'pr-summary.requested',
+          payload: occurrence,
+        })
+      },
+    })
+    try {
+      expect(run.requests).toHaveLength(2)
+      expect(run.handoffs).toHaveLength(1)
+      expect(run.parked).toHaveLength(0)
+      expect(run.settled.map((event) => event.payload.request).sort()).toEqual(
+        run.requests.map((event) => event.seq).sort(),
+      )
+      expect(run.fx.forge.comments.length).toBeLessThanOrEqual(1)
+    } finally {
+      await run.fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a clean exit with no outstanding request stays parked with its warning', async () => {
+    const slug = 'handoff-none'
+    const run = await runRemoteSummaryExit({ slug, guest: async () => {} })
+    try {
+      expect(run.handoffs).toHaveLength(0)
+      expect(run.parked).toHaveLength(1)
+      expect(run.stdout.join('\n')).toContain(`build ${slug} parked (`)
+    } finally {
+      await run.fx.cleanup()
+    }
+  }, 30_000)
+
+  test('an older request inside cooldown does not make an unrelated exit a handoff', async () => {
+    const slug = 'handoff-cooldown-old'
+    const run = await runRemoteSummaryExit({
+      slug,
+      preexisting: 'cooldown',
+      holdPrelaunch: true,
+      guest: async () => {},
+    })
+    try {
+      expect(run.handoffs).toHaveLength(0)
+      expect(run.parked).toHaveLength(1)
+      expect(run.stdout.join('\n')).toContain(`build ${slug} parked (`)
+    } finally {
+      await run.fx.cleanup()
+    }
+  }, 30_000)
+
+  test('an older eligible request does not make an unrelated exit a handoff', async () => {
+    const slug = 'handoff-eligible-old'
+    const run = await runRemoteSummaryExit({
+      slug,
+      preexisting: 'eligible',
+      holdPrelaunch: true,
+      // Shutdown, relaunch, mixed-version or control acknowledgement: no write.
+      guest: async () => {},
+    })
+    try {
+      expect(run.requests).toHaveLength(1)
+      expect(run.handoffs).toHaveLength(0)
+      expect(run.parked).toHaveLength(1)
+      expect(run.stdout.join('\n')).toContain(`build ${slug} parked (`)
+    } finally {
+      await run.fx.cleanup()
+    }
+  }, 30_000)
+})
+
 test('dispatch repository config deposits preserve the post-reconcile opt-out across invocations', async () => {
   const fx = await makeFixture(
     [],
