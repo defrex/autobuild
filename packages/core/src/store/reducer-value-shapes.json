@@ -9399,6 +9399,10 @@
         "seq": {
           "type": "30",
           "optional": false
+        },
+        "reservedAt": {
+          "type": "2",
+          "optional": false
         }
       }
     },

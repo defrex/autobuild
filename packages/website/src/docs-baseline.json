@@ -86,7 +86,7 @@
     "title": "Tickets and specs",
     "group": "concepts",
     "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-    "textHash": "31ecec79656044b7386246dfc273867b37f498413aa3adee86b7f8c32325f8d4",
+    "textHash": "8580f86a9a92a15c652717476a79ebbdebdf0eb7859cbf6857d68fa4271a936f",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
@@ -189,7 +189,7 @@
     "title": "Infrastructure seams",
     "group": "reference",
     "description": "Choose stores, agent runtimes, forges, workspaces, and ticket sources, and understand where local and remote execution run.",
-    "textHash": "1512e2a00e4b24d9f75dc91405a06cf3660c6f81f58c942564160630e5f23682",
+    "textHash": "64d3f47a6f6b24010b6ba82704bbd5f67e61e779d91e20a719e6f131f4f69f87",
     "headings": [
       "Storage and tickets",
       "Agents, code, and workspaces",
