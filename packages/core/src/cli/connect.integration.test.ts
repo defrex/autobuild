@@ -321,3 +321,72 @@ test('failed ticket policy publication restores configuration and retains the pr
   expect(new ProjectCredentials(f.env).load(service, repo)).toBeUndefined()
   expect(f.calls.some((call) => call.path.endsWith('/cancel'))).toBe(true)
 })
+
+function boundedExec(exec: Exec): Exec {
+  let count = 0
+  return async (command, options) => {
+    if (++count > 20) throw new Error('disconnect recursed')
+    return exec(command, options)
+  }
+}
+const savedCredential = {
+  service,
+  repo,
+  id: 'e'.repeat(32),
+  token: `abp_1_${'e'.repeat(32)}_${'f'.repeat(64)}`,
+}
+
+test('disconnect fails promptly when hosted tickets have no url and the store is local', async () => {
+  const f = await fixture()
+  const path = join(f.cwd, 'autobuild.toml')
+  const before = '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n'
+  await writeFile(path, before)
+  const env = { ...f.env, AB_STORE: join(f.cwd, 'local-store') }
+  const storage = new ProjectCredentials(env)
+  storage.save(savedCredential)
+  for (const tickets of [undefined, true]) {
+    await expect(abDisconnect({ ...f, env, exec: boundedExec(f.exec), tickets })).rejects.toThrow(
+      '[tickets] url',
+    )
+  }
+  expect(f.calls).toHaveLength(0)
+  expect(storage.load(service, repo)?.token).toBe(savedCredential.token)
+  expect(await readFile(path, 'utf8')).toBe(before)
+})
+
+test('disconnect with an explicit hosted ticket url and a local store revokes the ticket credential', async () => {
+  const f = await fixture()
+  await writeFile(
+    join(f.cwd, 'autobuild.toml'),
+    `[tickets]\nsource = "hosted"\nteamKey = "ENG"\nurl = "${service}"\n`,
+  )
+  const env = { ...f.env, AB_STORE: join(f.cwd, 'local-store') }
+  const storage = new ProjectCredentials(env)
+  for (const tickets of [undefined, true]) {
+    storage.save(savedCredential)
+    f.calls.length = 0
+    await abDisconnect({ ...f, env, exec: boundedExec(f.exec), tickets })
+    expect(storage.load(service, repo)).toBeUndefined()
+    expect(f.calls.map((call) => [call.path, call.authorization])).toEqual([
+      ['/connect/v1/revoke', `Bearer ${savedCredential.token}`],
+    ])
+  }
+})
+
+test('disconnect with hosted tickets falling back to an HTTP build store revokes the shared credential', async () => {
+  const f = await fixture()
+  await writeFile(join(f.cwd, 'autobuild.toml'), '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n')
+  const env = { ...f.env, AB_STORE: service }
+  const storage = new ProjectCredentials(env)
+  for (const tickets of [undefined, true]) {
+    storage.save(savedCredential)
+    f.calls.length = 0
+    f.output.length = 0
+    await abDisconnect({ ...f, env, exec: boundedExec(f.exec), tickets })
+    expect(storage.load(service, repo)).toBeUndefined()
+    expect(f.output.join('\n')).toContain('share this credential')
+    expect(f.calls.map((call) => [call.path, call.authorization])).toEqual([
+      ['/connect/v1/revoke', `Bearer ${savedCredential.token}`],
+    ])
+  }
+})
