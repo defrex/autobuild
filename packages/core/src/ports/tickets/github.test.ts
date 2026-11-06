@@ -616,8 +616,11 @@ describe('github claim', () => {
 
 describe('github reopen check is bounded', () => {
   test('history beyond the window fails closed with a diagnostic, and a re-added label decides', async () => {
-    const { github, source } = setup()
+    // A fixed clock advanced before each UI change: a re-add within the same
+    // millisecond would otherwise leave `updated_at`, and so the ETag, unchanged.
+    const { clock, github, source } = clocked()
     const id = await created(source, 'ready')
+    clock.advance(1000)
     github.uiClose(Number(id))
     github.uiReopen(Number(id))
     github.uiRemoveLabel(Number(id), 'autobuild:ready')
@@ -628,6 +631,7 @@ describe('github reopen check is bounded', () => {
     expect(github.count('timeline-reopen')).toBe(1)
     expect(github.graphqlRequests()[0]?.query).toContain('last: 100')
 
+    clock.advance(1000)
     github.uiComment(Number(id), 'noise', 5000)
     github.addLabelEvents(Number(id), 2000)
     github.resetRequests()
@@ -642,6 +646,7 @@ describe('github reopen check is bounded', () => {
     expect(github.count('get-issue')).toBeLessThanOrEqual(3)
     expect(github.count('timeline-reopen')).toBeLessThanOrEqual(3)
 
+    clock.advance(1000)
     github.uiRemoveLabel(Number(id), 'autobuild:ready')
     github.uiAddLabel(Number(id), 'autobuild:ready')
     expect((await source.get(id))?.state).toBe('ready')
