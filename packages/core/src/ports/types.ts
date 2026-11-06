@@ -2,6 +2,7 @@ import type { SelectedAccount } from '../config/accounts'
 export type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { ForgeReadinessCheck, ForgeReadinessInput } from './forge/readiness'
 import type { BuildStore } from '../store/types'
+import { ForgeRejection } from './forge-failure'
 /**
  * Ports (SPEC §3.2): interfaces to the world, each with swappable adapters.
  * The kernel and processes depend only on these types; adapters live in
@@ -591,9 +592,18 @@ export interface BuildLandingOptions {
   issueLinks?: readonly IssueLink[]
 }
 
-export class NoCommitsBetweenBranchesError extends Error {
-  constructor(message: string) {
-    super(message)
+/** GitHub's "No commits between" 422: a forge rejection the empty-node path
+ * recognizes by class. */
+export class NoCommitsBetweenBranchesError extends ForgeRejection {
+  constructor(
+    message: string,
+    rejection: { forge?: string; status?: number; forgeMessage?: string } = {},
+  ) {
+    super(message, {
+      forge: rejection.forge ?? 'GitHub',
+      status: rejection.status ?? 422,
+      forgeMessage: rejection.forgeMessage || message,
+    })
     this.name = 'NoCommitsBetweenBranchesError'
   }
 }
@@ -636,9 +646,10 @@ export type LandingGateInspection =
   | { kind: 'gated'; reason: string }
   | { kind: 'unproven'; reason: string }
 
-export { ForgeFailure, isForgeFailure } from './forge-failure'
+export { ForgeFailure, ForgeRejection, isForgeFailure, isForgeRejection } from './forge-failure'
 export type {
   ForgeFailureDetails,
+  ForgeRejectionDetails,
   ForgeRequestContext,
   ForgeRequestObserver,
 } from './forge-failure'

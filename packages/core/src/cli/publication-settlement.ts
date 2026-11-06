@@ -12,6 +12,8 @@ import type { Forge, WorkspacePublication } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { completeFinalizePr } from './terminals'
+import { finalizePrRejectionGate, raiseFinalizePrRejection } from '../kernel/finalize-pr-rejection'
+import { isForgeRejection } from '../ports/forge-failure'
 
 export interface PublicationSettlementDeps {
   store: BuildStore
@@ -275,6 +277,10 @@ export async function settlePendingPublication(
     return
   }
 
+  // A forge-rejected finalize PR create parks here until its escalation is
+  // answered: no provider probe, artifact read or forge request per tick.
+  const finalizeAnchor =
+    request.payload.operation === 'finalize' ? finalizePrRejectionGate(events, request) : 0
   const abandoned = events.publication.requestSettled(request)
   // Consulted for every uncompleted request, not only abandoned ones: a guest
   // that pushed its branch before dying is owed its completion fact, not a
@@ -403,29 +409,35 @@ export async function settlePendingPublication(
   const created = events.lastCreated
   if (created?.type !== 'build.created') throw new Error(`missing build.created for ${slug}`)
 
-  await completeFinalizePr(
-    {
-      store: deps.store,
-      env: {
-        store: deps.storeRef,
-        build: slug,
-        phase: 'finalize',
-        round: 1,
-        session: `dispatcher-${deps.runId}`,
+  const baseBranch = events.state.baseBranch ?? created.payload.baseBranch
+  try {
+    await completeFinalizePr(
+      {
+        store: deps.store,
+        env: {
+          store: deps.storeRef,
+          build: slug,
+          phase: 'finalize',
+          round: 1,
+          session: `dispatcher-${deps.runId}`,
+        },
+        workspacePath: deps.workspacePath,
+        forge: deps.forge,
+        exec: deps.exec,
+        ids: deps.ids,
       },
-      workspacePath: deps.workspacePath,
-      forge: deps.forge,
-      exec: deps.exec,
-      ids: deps.ids,
-    },
-    events,
-    {
-      branch: request.payload.branch,
-      baseBranch: events.state.baseBranch ?? created.payload.baseBranch,
-      title,
-      body: newline === -1 ? '' : text.slice(newline + 1).replace(/^\n+/, ''),
-      mergeMessage: text,
-      expectedHeadSha: request.payload.sha,
-    },
-  )
+      events,
+      {
+        branch: request.payload.branch,
+        baseBranch,
+        title,
+        body: newline === -1 ? '' : text.slice(newline + 1).replace(/^\n+/, ''),
+        mergeMessage: text,
+        expectedHeadSha: request.payload.sha,
+      },
+    )
+  } catch (error) {
+    if (!isForgeRejection(error)) throw error
+    await raiseFinalizePrRejection(deps, slug, request, baseBranch, finalizeAnchor, error)
+  }
 }
