@@ -1865,9 +1865,16 @@ dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
 pause off; the query does not create that stream,
 append an event, claim a ticket, attach a runner, or start dispatcher work.
-The CLI additionally loads mutable advisory `operator.registrations`, with each
-live registration's ID, host, PID, original startedAt, heartbeatAt and heartbeatAgeMs.
-Human output includes one `operator: absent` or `operator: present (N registrations)` line.
+The CLI additionally loads mutable advisory presence and reports
+`operator.presence: "loaded"` with `operator.registrations`, each live
+registration's ID, host, PID, original startedAt, heartbeatAt and heartbeatAgeMs.
+Other surfaces sharing the projection — the operator registry's
+`repository.status` over MCP and HTTP `GET …/status` — do not load presence and
+report `operator.presence: "unavailable"` with a `reason` and no `registrations`.
+Unavailable is not evidence of absence; only a loaded empty list is. Human
+output includes exactly one of `operator: absent`,
+`operator: present (N registrations)` or
+`operator: unavailable (presence not loaded)`.
 
 `ab watch --operator` opts into repository-wide advisory presence. Named slugs
 and ambient build/scoped sessions are usage errors. Unflagged watches remain

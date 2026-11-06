@@ -1,4 +1,5 @@
 import { OperatorApiClient } from './operator-api'
+import { OPERATOR_PRESENCE_UNAVAILABLE } from '@defrex/autobuild/operator'
 import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
 import { ticketProject } from './testing/ticket-project'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
@@ -128,7 +129,7 @@ describe('hosted store service', () => {
       intake: true,
       paused: false,
       defaultAutoMerge: false,
-      operator: { registrations: [] },
+      operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],

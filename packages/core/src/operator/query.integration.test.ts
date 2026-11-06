@@ -1,3 +1,4 @@
+import { OPERATOR_PRESENCE_UNAVAILABLE } from '../cli/repository-status'
 import { historicalEffectiveConfig } from '../config/effective-artifact.fixture'
 import { decodeEffectiveConfig, orchestratorConfig } from './query'
 import { describe, expect, test } from 'bun:test'
@@ -300,7 +301,7 @@ describe('operator query wiring', () => {
         latestRun: null,
         latestStoppedRun: null,
       },
-      operator: { registrations: [] },
+      operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],

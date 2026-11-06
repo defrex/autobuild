@@ -2671,8 +2671,11 @@ after cancelling and draining pending heartbeats. Failures report on stderr and
 fall back to TTL expiry; an unsupported remote route falls back silently. SIGKILL
 still relies on TTL expiry. Timeout/count completion keeps presence for re-arming. Reusing its flagged watch cursor preserves the registration
 ID and original start time across re-arms, re-registering after withdrawal. Unflagged resumes remain read-only.
-Repository status lists live registrations with ID, host, PID, start, heartbeat
-and heartbeat age, or an empty list. Human status prints one operator summary.
+CLI repository status reports `operator.presence: "loaded"` and lists live
+registrations with ID, host, PID, start, heartbeat and heartbeat age, or an empty
+list. MCP `repository.status` and HTTP status do not load presence and report
+`operator.presence: "unavailable"` with no registrations; that is not evidence of
+absence. Human status prints one operator summary.
 MCP registration and dashboard presence are deferred.
 
 **`ab wait [<slug>...] (--for <condition> | --event <glob>)... [--since <cursor>]
