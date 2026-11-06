@@ -59,7 +59,7 @@ For example: `steps = ["types", ["unit", "integration"], ["acceptance", "docs"]]
 | `agent` | the exact `skill` you configure ([repository-local](skills.md#add-a-repository-local-skill), no prefix inferred) | `ab verdict` records pass, fail or skip |
 
 - **Pass** satisfies the member; the next stage waits for its siblings.
-- **Fail**, after its stage settles, sends all failed reports back through implement and code review, then verification, up to `[policy].maxVerifyAttempts`; then the build escalates.
+- **Fail**, after its stage settles, sends all failed reports back through implement and code review, then verification, up to `[policy].maxVerifyAttempts`; then the build escalates. That budget is build-wide, so the escalation lists every counted failed attempt and its failed steps, and says a step failed in every counted cycle only when it did.
 - **Skip** satisfies its member without counting as a pass or spending retries. Plan exclusions and path misses skip deterministically. An agent may skip only when the whole step doesn't apply, with a reason; an applicable behavior it can't exercise is a failure.
 
 ## Select what a build needs
