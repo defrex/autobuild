@@ -40,7 +40,8 @@
  * | bun:sqlite      | Database                              | constructor and `open` denied    |
  * |                 |                                       | for files; in-memory allowed     |
  * | bun:sqlite      | Database#loadExtension, SQL that      | denied                           |
- * |                 | ATTACHes or VACUUMs INTO a file       |                                  |
+ * |                 | ATTACHes or VACUUMs INTO anything but |                                  |
+ * |                 | a literal in-memory name              |                                  |
  * | bun:sqlite      | Statement, SQLiteError, constants     | data, passes through             |
  */
 import { afterAll, afterEach, beforeEach, mock } from 'bun:test'
@@ -180,13 +181,18 @@ export function isInMemorySqlite(filename: unknown): boolean {
 }
 
 const SQLITE_FILE_TARGET =
-  /\b(?:ATTACH\s+(?:DATABASE\s+)?|VACUUM\s+(?:\w+\s+)?INTO\s+)(['"])(.*?)\1/gi
+  /\b(?:ATTACH(?:\s+DATABASE)?|VACUUM(?:\s+\w+)?\s+INTO)\s+([\s\S]*?)(?=\s+AS\b|\s*;|\s*$)/gi
+const SQLITE_MEMORY_LITERAL = /^(['"])(?::memory:)?\1$/
 
-/** Names the first file an SQL text ATTACHes or VACUUMs INTO, if any. */
+/**
+ * Names the first target an SQL text ATTACHes or VACUUMs INTO, unless it is a
+ * literal in-memory name. A bound parameter or any expression counts as a file,
+ * because its value is only known when the statement executes.
+ */
 export function sqliteFileTarget(sql: unknown): string | undefined {
   if (typeof sql !== 'string') return undefined
   for (const match of sql.matchAll(SQLITE_FILE_TARGET))
-    if (!isInMemorySqlite(match[2])) return match[2]
+    if (!SQLITE_MEMORY_LITERAL.test(match[1])) return match[1]
   return undefined
 }
 

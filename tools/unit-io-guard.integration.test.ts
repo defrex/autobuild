@@ -32,6 +32,7 @@ describe('unit IO guard enforcement', () => {
       'Atomics.wait',
       'net.Server#listen',
       'bun:sqlite.Database',
+      'bun:sqlite.Database#query',
     ])
       expect(output).toContain(`Unit tests must not do IO: ${name} (`)
     for (const name of [
@@ -44,10 +45,11 @@ describe('unit IO guard enforcement', () => {
       'swallowed Atomics.wait',
       'Server#listen',
       'swallowed file-backed SQLite',
+      'swallowed parameter-bound SQLite ATTACH',
     ])
       expect(output).toContain(`(fail) unit IO offender > ${name}`)
     expect(output).toContain(' 0 pass')
-    expect(output).toContain(' 9 fail')
+    expect(output).toContain(' 10 fail')
     expect(output).toContain('*.integration.test.ts')
   }, 30_000)
 

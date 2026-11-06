@@ -63,6 +63,10 @@ describe('unit IO guard', () => {
     expectThrows('bun:sqlite.Database#exec', () =>
       db.exec("VACUUM INTO '.ab/unit-io-guard.sqlite'"),
     )
+    expectThrows('bun:sqlite.Database#query', () => db.query('ATTACH DATABASE ? AS probe'))
+    expectThrows('bun:sqlite.Database#prepare', () => db.prepare('attach $file as probe'))
+    expectThrows('bun:sqlite.Database#run', () => db.run("ATTACH ':mem' || 'ory:' AS probe"))
+    expectThrows('bun:sqlite.Database#exec', () => db.exec('VACUUM main INTO :file'))
     expectThrows('bun:sqlite.Database#loadExtension', () => db.loadExtension('.ab/probe'))
     db.exec("ATTACH ':memory:' AS scratch")
     db.exec('CREATE TABLE probe (value TEXT)')

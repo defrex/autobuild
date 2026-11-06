@@ -52,4 +52,12 @@ describe('unit IO offender', () => {
       new Database('.ab/unit-io-offender.sqlite').close()
     } catch {}
   })
+
+  test('swallowed parameter-bound SQLite ATTACH', () => {
+    const db = new Database(':memory:')
+    try {
+      db.query('ATTACH DATABASE ? AS disk').run('.ab/unit-io-offender-attach.sqlite')
+    } catch {}
+    db.close()
+  })
 })
