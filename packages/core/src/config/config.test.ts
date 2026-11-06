@@ -1069,12 +1069,55 @@ describe('parseConfig — [tickets]', () => {
     for (const bad of ['""', '"   "', '"ME"', '"someone"', '"a@b"', '" me"', '" a@b.co"']) {
       expect(parseError(linear(bad)).message).toContain('readyAssignee')
     }
-    for (const source of ['file', 'hosted', 'jira-cloud']) {
+    for (const source of ['file', 'hosted']) {
       const message = parseError(
         `[tickets]\nsource = "${source}"\nteamKey = "ENG"\nreadyState = "Todo"\nreadyAssignee = "me"\n`,
       ).message
       expect(message).toContain('tickets.readyAssignee')
       expect(message).toContain(`selected source: "${source}"`)
+      expect(message).toContain('cannot filter ready tickets by assignee')
+    }
+    // A plugin source's capability is unknown until it is constructed, so it
+    // parses here and createTicketSource checks the declaration.
+    expect(
+      parseConfig(
+        '[tickets]\nsource = "jira-cloud"\nteamKey = "ENG"\nreadyState = "Todo"\nreadyAssignee = "me"\n',
+      ).tickets.readyAssignee,
+    ).toBe('me')
+  })
+
+  test('readyAssignee accepts "me" or a GitHub username on github and rejects everything else', () => {
+    const github = (value: string) => `[tickets]\nsource = "github"\nreadyAssignee = ${value}\n`
+    for (const good of [
+      'me',
+      'octocat',
+      'Mona-Cat',
+      'mona_acme',
+      'mona-cat_octo',
+      'a'.repeat(31) + '_shortco', // 39 characters
+    ]) {
+      expect(parseConfig(github(JSON.stringify(good))).tickets.readyAssignee).toBe(good)
+    }
+    for (const bad of [
+      '',
+      ' me',
+      'a@b.co',
+      '-bad',
+      'x'.repeat(40),
+      'a'.repeat(32) + '_shortco', // 40 characters
+      'bot[bot]',
+      'mona_ac',
+      'mona_acmeacme1',
+      'mona_acme_x',
+      '_acme',
+      'mona_ac-me',
+    ]) {
+      const message = parseError(github(JSON.stringify(bad))).message
+      expect(message).toContain('tickets.readyAssignee')
+      if (bad.trim().length > 0 && bad === bad.trim())
+        expect(message).toContain(
+          'or a GitHub username (e.g. "octocat", or a managed user\'s "mona_acme") for source = "github"',
+        )
     }
   })
 
@@ -1085,7 +1128,6 @@ describe('parseConfig — [tickets]', () => {
     for (const [line, key, applies] of [
       ['teamKey = "ENG"', 'teamKey', '"linear" or "hosted"'],
       ['dir = "tickets"', 'dir', '"file"'],
-      ['readyAssignee = "me"', 'readyAssignee', '"linear"'],
     ] as const) {
       const message = parseError(`[tickets]\nsource = "github"\n${line}\n`).message
       expect(message).toContain(`tickets.${key}`)
