@@ -2138,6 +2138,76 @@ describe('ticket metadata CLI', () => {
     expect((await source.get(node.ref.id))!.kind).toBe('work')
   })
 
+  test('kind and target commands and tree JSON work against the github source', async () => {
+    await writeRepo('baseBranch = "trunk"\n[tickets]\nsource = "github"\n')
+    const body = join(tmp, 'spec.md')
+    await writeFile(body, 'spec')
+    const issues = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: issues.transport,
+      repository: issues.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    const out: string[] = []
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      stdout: (line: string) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+    }
+    await abTicket(['create', 'Node', '--body', body, '--kind', 'node', '--json'], opts)
+    const node = JSON.parse(out.pop()!)
+    expect(node.kind).toBe('node')
+    expect(issues.issue(Number(node.ref.id))?.labels).toEqual(['node'])
+    await abTicket(['create', 'Other node', '--body', body, '--kind', 'node', '--json'], opts)
+    const other = JSON.parse(out.pop()!)
+    await abTicket(['create', 'Child', '--body', body, '--target', node.ref.id, '--json'], opts)
+    const child = JSON.parse(out.pop()!)
+    expect(child.target).toBe(node.ref.id)
+    expect(issues.subIssues(Number(node.ref.id))).toEqual([Number(child.ref.id)])
+    const group = issues.fileIssue({ title: 'Grouping' })
+    await abTicket(['create', 'Grouped', '--body', body, '--json'], opts)
+    const grouped = JSON.parse(out.pop()!)
+    issues.uiAddSubIssue(group, Number(grouped.ref.id))
+
+    await abTicket(['tree', '--json'], opts)
+    const tree = JSON.parse(out.pop()!)
+    expect(tree.root).toBe('trunk')
+    const roots = tree.children.map(
+      (entry: { ticket: { ref: { id: string } } }) => entry.ticket.ref.id,
+    )
+    expect(roots).toEqual([node.ref.id, other.ref.id, String(group), grouped.ref.id].sort())
+    const nodeEntry = tree.children.find(
+      (entry: { ticket: { ref: { id: string } } }) => entry.ticket.ref.id === node.ref.id,
+    )
+    expect(nodeEntry.ticket.kind).toBe('node')
+    expect(
+      nodeEntry.children.map((entry: { ticket: { ref: { id: string } } }) => entry.ticket.ref.id),
+    ).toEqual([child.ref.id])
+
+    await abTicket(['update', child.ref.id, '--target', other.ref.id, '--json'], opts)
+    expect(JSON.parse(out.pop()!).target).toBe(other.ref.id)
+    expect(issues.subIssues(Number(other.ref.id))).toEqual([Number(child.ref.id)])
+    await expect(abTicket(['update', other.ref.id, '--kind', 'work'], opts)).rejects.toThrow(
+      `cannot change node ${other.ref.id} to work: ticket ${child.ref.id} targets it`,
+    )
+    await abTicket(['update', child.ref.id, '--no-target', '--json'], opts)
+    expect(JSON.parse(out.pop()!).target).toBeUndefined()
+    expect(issues.subIssues(Number(other.ref.id))).toEqual([])
+    await abTicket(['update', other.ref.id, '--kind', 'work'], opts)
+    expect((await source.get(other.ref.id))!.kind).toBe('work')
+    expect(issues.issue(Number(other.ref.id))?.labels).toEqual([])
+  })
+
   test('invalid kind, blank ids and conflicting flags fail before writes', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const source = new FakeTicketSource()

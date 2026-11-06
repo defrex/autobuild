@@ -1,10 +1,12 @@
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { openLocalStore } from '../store/local/store'
 import { humanActor } from '../events/envelope'
+import { temporaryDirectories } from '../testing/temp-directories'
+
+const temporaryDirectory = temporaryDirectories(afterEach)
 
 const entry = resolve(import.meta.dir, '../../../..', 'bin/ab.ts')
 async function waitFor(check: () => Promise<boolean>): Promise<void> {
@@ -26,7 +28,7 @@ async function fixture(
   }) => Promise<void>,
   timeout = '0',
 ): Promise<void> {
-  const repo = await mkdtemp(join(tmpdir(), 'ab-watch-termination-'))
+  const repo = await temporaryDirectory(join(tmpdir(), 'ab-watch-termination-'))
   const state = join(repo, 'state')
   const git = Bun.spawnSync(['git', 'init', '--quiet', repo])
   expect(git.exitCode).toBe(0)
@@ -81,7 +83,6 @@ async function fixture(
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
     await exited
     await store.close()
-    await rm(repo, { recursive: true, force: true })
   }
 }
 
