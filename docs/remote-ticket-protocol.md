@@ -314,8 +314,11 @@ BuildStore protocol version.
 
 Create options accept optional `requestedId: string` alongside `state` and
 `idempotencyKey`. Older clients omit it and responses are unchanged. Unsupported
-sources reject supplied ids; Linear and GitHub are not import targets. File sources keep
-filesystem-safe ids exactly and never overwrite an occupied id.
+sources reject supplied ids. Linear is not an import target. GitHub rejects
+supplied ids but is an import target: it allocates every issue number itself and
+import remaps each ticket to the number GitHub returns, as described in the
+migration procedure's GitHub section. File sources keep filesystem-safe ids
+exactly and never overwrite an occupied id.
 
 Hosted sources preserve only literal own-team `<teamKey>-<n>` ids, where `n` is a
 positive canonical decimal within PostgreSQL bigint bounds. For example,
