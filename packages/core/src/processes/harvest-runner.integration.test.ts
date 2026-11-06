@@ -2355,10 +2355,12 @@ harvestThreshold = 1
     roots.push(workspace)
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const createKeys: Array<string | undefined> = []
+    const reservedAts: Array<string | undefined> = []
     class CreateThenCrashTickets extends FakeTicketSource {
       crashed = false
       override async create(...args: Parameters<FakeTicketSource['create']>) {
         createKeys.push(args[1]?.idempotencyKey)
+        reservedAts.push(args[1]?.idempotencyKeyReservedAt)
         const ticket = await super.create(...args)
         if (!this.crashed) {
           this.crashed = true
@@ -2433,6 +2435,11 @@ harvestThreshold = 1
     expect(reviewerCalls).toBe(1)
     expect(uuids.allocated).toHaveLength(1)
     expect(createKeys).toEqual([uuids.allocated[0], uuids.allocated[0]])
+    // Both attempts pass the reservation fact's time, never a later clock.
+    const reserved = (await store.getRepoEvents('/repo')).find(
+      (event) => event.type === 'harvest.proposal.id-reserved',
+    )!
+    expect(reservedAts).toEqual([reserved.ts, reserved.ts])
     expect(reduceHarvest(await store.getRepoEvents('/repo')).ledger).toHaveLength(1)
   })
 
