@@ -29,6 +29,11 @@ import {
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
 import { effectiveRuntimeReferences } from './roles'
+import {
+  GITHUB_READY_ASSIGNEE,
+  LINEAR_READY_ASSIGNEE,
+  readyAssigneeUnsupported,
+} from './ready-assignee'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
 
@@ -820,17 +825,20 @@ export const ticketsInputSchema = z.strictObject({
     )
     .optional(),
   /**
-   * Narrows readiness to tickets assigned to one Linear user — a third
-   * conjunctive gate beside readyState and readyLabels. `"me"` is the owner of
-   * the dispatcher's LINEAR_API_KEY; an email names a specific user (for a
-   * shared or bot key). Unassigned tickets are never ready while it is set.
-   * Linear only; absent leaves readiness unchanged.
+   * Narrows readiness to tickets assigned to one user — a third conjunctive
+   * gate beside readyState and readyLabels. A ticket-source capability: the
+   * source must declare `readyAssignee`, and it defines the value's forms.
+   * `"me"` is the owner of the source's credential (linear: LINEAR_API_KEY;
+   * github: the GitHub token); linear also takes an email, github a username.
+   * Unassigned tickets are never ready while it is set. Builtin forms are
+   * checked below; plugin declarations at the registry-aware seams
+   * (`config/ready-assignee.ts`). Absent leaves readiness unchanged.
    */
   readyAssignee: z
     .string()
     .refine(
-      (s) => s === 'me' || (s === s.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)),
-      '[tickets].readyAssignee must be "me" (the owner of the API key) or a user email address (e.g. "person@example.com")',
+      (s) => s.trim().length > 0 && s === s.trim(),
+      '[tickets].readyAssignee must be a nonblank value with no surrounding whitespace',
     )
     .optional(),
   /** Backend team key (e.g. "ENG") — required for linear and hosted;
@@ -907,7 +915,7 @@ documentFields(ticketsInputSchema, {
   readyLabels: 'Require every listed label in addition to the state gate.',
   readyState: 'The one workflow state eligible for dispatch.',
   readyAssignee:
-    'Require the ticket to be assigned to one Linear user, in addition to the state and label gates.',
+    'Require the ticket to be assigned to one user, in addition to the state and label gates.',
   teamKey: 'Backend team key such as `"ENG"`, or an existing plugin config field.',
   claimedState: 'Workflow state entered when a ticket is claimed.',
   doneState: 'Project completion state and merged-ticket transition.',
@@ -936,7 +944,10 @@ documentSchema(ticketsInputSchema.shape.claimedState, { constraints: 'Forbidden 
 documentSchema(ticketsInputSchema.shape.dir, {
   constraints: 'Forbidden for linear, hosted and github.',
 })
-documentSchema(ticketsInputSchema.shape.readyAssignee, { constraints: 'Allowed only for linear.' })
+documentSchema(ticketsInputSchema.shape.readyAssignee, {
+  constraints:
+    'Allowed for sources that can filter by assignee: linear ("me" or an email), github ("me" or a GitHub username, including managed-user logins such as mona_acme), and plugin sources that declare readyAssignee. Refused for file and hosted.',
+})
 documentSchema(ticketsInputSchema.shape.readyLabels, {
   constraints:
     'Omission uses source readiness defaults (Linear and GitHub: autobuild label; file: none). Explicit [] disables label gating.',
@@ -1482,12 +1493,31 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
       }
     }
   }
-  if (tickets.source !== 'linear' && tickets.readyAssignee !== undefined) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['tickets', 'readyAssignee'],
-      message: `[tickets].readyAssignee applies only to source = "linear" — remove it or select that source (selected source: "${tickets.source}")`,
-    })
+  // readyAssignee is a source capability. Builtins are known here; a plugin
+  // source passes parse and is checked against its declaration once
+  // constructed (createTicketSource, LiveConfig reloads).
+  const assignee = tickets.readyAssignee
+  if (assignee !== undefined) {
+    const form =
+      tickets.source === 'linear'
+        ? LINEAR_READY_ASSIGNEE
+        : tickets.source === 'github'
+          ? GITHUB_READY_ASSIGNEE
+          : undefined
+    if (tickets.source === 'file' || tickets.source === 'hosted') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tickets', 'readyAssignee'],
+        message: readyAssigneeUnsupported(tickets.source),
+      })
+    } else if (
+      form !== undefined &&
+      assignee.trim().length > 0 &&
+      assignee === assignee.trim() &&
+      !form.accepts(assignee)
+    ) {
+      ctx.addIssue({ code: 'custom', path: ['tickets', 'readyAssignee'], message: form.message })
+    }
   }
   // Plugin sources receive the existing ticket lifecycle/configuration fields
   // unchanged; adapter-specific validation belongs to their factory.
