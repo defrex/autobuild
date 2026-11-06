@@ -303,7 +303,8 @@ labels, and blockers are native issue dependencies. Use `ab ticket move` and
 labels on one issue: it drops out of listings until one is removed.
 `ab ticket state create` makes the `autobuild:<state>` label, with the purpose
 as its description, and refuses an existing name as hosted creation does. GitHub
-tickets carry no comment history, so `ab ticket show` lists none.
+tickets carry no comment history, so `ab ticket show` lists none; only
+`ab ticket export` and `import` read it.
 
 ## Hosted ticket states
 
