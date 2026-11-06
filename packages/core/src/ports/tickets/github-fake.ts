@@ -102,11 +102,12 @@ export class FakeGitHubIssues {
   /** Issue comments posted through the API or the UI, by issue number. */
   readonly comments = new Map<number, string[]>()
   hasIssues = true
-  permissions = { pull: true, push: true }
+  permissions: Record<string, boolean> = { pull: true, push: true }
   /** When false, the token lacks Issues write: every REST write is refused. */
   issueWrites = true
-  /** Simulates a token without push access: GitHub silently drops labels. */
-  dropLabelsOnCreate = false
+  /** Simulates a token without push access: GitHub silently drops label
+   * changes on issue create and edit. */
+  dropLabels = false
   /** When false, UI labelling leaves `updated_at` untouched. */
   labelsBumpUpdatedAt = true
   searchLagMs: number
@@ -586,7 +587,7 @@ export class FakeGitHubIssues {
     const input = body as { title?: string; body?: string; labels?: string[] }
     if (!input?.title) throw new GitHubApiError(422, 'Validation Failed', { message: 'title' })
     const issue = this.insert(input.title, input.body ?? null, [])
-    if (!this.dropLabelsOnCreate)
+    if (!this.dropLabels)
       for (const name of input.labels ?? []) {
         const label = this.ensureLabel(name)
         if (!issue.labels.includes(label.name)) {
@@ -607,7 +608,7 @@ export class FakeGitHubIssues {
     }
     if (input.title !== undefined) issue.title = input.title
     if (input.body !== undefined) issue.body = input.body
-    if (input.labels !== undefined) {
+    if (input.labels !== undefined && !this.dropLabels) {
       const next = input.labels.map((name) => this.ensureLabel(name).name)
       for (const name of issue.labels)
         if (!next.includes(name)) issue.events.push({ type: 'unlabeled', label: name })

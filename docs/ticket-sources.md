@@ -112,7 +112,7 @@ rejectedState = "rejected"
 
 ### GitHub (`github`)
 
-Tickets are the issues of the forge repository, the GitHub repository that `origin` names, so a team grooms and tracks work where it already looks. The source authenticates as the `github` forge does: `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's `gh auth login`. A fine-grained token needs Issues read and write, and Metadata read, on the repository. `ab init --validate` names a missing token, a token that can't read and write issues, disabled issues, an `origin` that isn't a GitHub repository, and a state that can't be a label.
+Tickets are the issues of the forge repository, the GitHub repository that `origin` names, so a team grooms and tracks work where it already looks. The source authenticates as the `github` forge does: `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's `gh auth login`. A fine-grained token needs Issues read and write, and Metadata read, on the repository, and a user token's user needs triage or write access: GitHub silently drops label changes from anyone below that, so a label write that doesn't come back fails with a permission error instead of reporting success. `ab init --validate` names a missing token, a token that can't read and write issues, a user who can't set labels, disabled issues, an `origin` that isn't a GitHub repository, and a state that can't be a label.
 
 <!-- seam-config:start -->
 ```toml

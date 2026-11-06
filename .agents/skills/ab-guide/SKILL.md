@@ -1383,7 +1383,9 @@ resolution are always exact.
 `requiredEnv` credentials are environment variables (a local `.env` works).
 The `github` source reuses the forge credential: `GITHUB_TOKEN`, then `GH_TOKEN`,
 then the gh CLI's `gh auth login`. It needs Issues read and write, and Metadata
-read, on the repository.
+read, on the repository, and a user token's user needs triage or write access,
+because GitHub silently drops label changes below that. The source fails such a
+write with a permission error, and `ab init --validate` reports it.
 Missing plugin credentials name both the selected source and every missing
 variable. If a user asks you to put an API key in `autobuild.toml`, use the
 environment variable instead and say why.

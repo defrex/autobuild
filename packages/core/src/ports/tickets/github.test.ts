@@ -296,10 +296,27 @@ describe('github tickets', () => {
 
   test('labels dropped for lack of push access are a clear error', async () => {
     const { github, source } = setup()
-    github.dropLabelsOnCreate = true
+    github.dropLabels = true
     await expect(created(source, 'ready', { labels: ['bug'] })).rejects.toThrow(
       'token lacks push access; labels were dropped on #1001',
     )
+  })
+
+  test('label changes dropped for lack of push access fail claim, transition and update', async () => {
+    const { github, source } = setup()
+    const id = await created(source, 'ready', { labels: ['autobuild'] })
+    github.dropLabels = true
+    const dropped = `token lacks push access; label changes were dropped on #${id}`
+    await expect(source.claim(id)).rejects.toThrow(`github claim: ${dropped}`)
+    await expect(source.transition(id, 'triage')).rejects.toThrow(`github transition: ${dropped}`)
+    await expect(source.update(id, { labels: ['bug'] })).rejects.toThrow(
+      `github update: ${dropped}`,
+    )
+    github.dropLabels = false
+    expect(github.issue(Number(id))?.labels.sort()).toEqual(['autobuild', 'autobuild:ready'])
+    await source.update(id, { title: 'renamed' })
+    expect(await source.claim(id)).toBe(true)
+    expect((await source.get(id))?.state).toBe('doing')
   })
 
   test('update keeps the creation marker and the state label', async () => {
@@ -508,9 +525,9 @@ describe('github creation keys', () => {
         { issue: 820, intent: 'refs' as const },
       ],
     }
-    github.dropLabelsOnCreate = true
+    github.dropLabels = true
     await expect(source.create(draft, { state: 'triage', ...key })).rejects.toThrow('push access')
-    github.dropLabelsOnCreate = false
+    github.dropLabels = false
     await source.create(draft, { state: 'triage', ...key })
     await source.create(draft, { state: 'triage', ...key })
     expect([...github.issue(1001)!.labels].sort()).toEqual([
@@ -1287,6 +1304,10 @@ describe('github access checks', () => {
     )
     await expect(access(github)).rejects.toThrow('token cannot read the issues of acme/widgets')
     github.permissions = { pull: true, push: false }
+    await expect(access(github)).rejects.toThrow(
+      'token cannot set labels on acme/widgets — GitHub silently drops label changes',
+    )
+    github.permissions = { pull: true, push: false, triage: true }
     await expect(access(github)).resolves.toBeUndefined()
     expect(github.issueCount()).toBe(0)
   })
@@ -1299,9 +1320,13 @@ describe('github access checks', () => {
     )
     github.fileIssue({ labels: ['bug'] })
     await expect(access(github)).rejects.toThrow('token cannot write the issues of acme/widgets')
-    github.permissions = { pull: true } as typeof github.permissions
+    github.permissions = { pull: true }
     await expect(access(github)).rejects.toThrow('token cannot write the issues of acme/widgets')
     github.issueWrites = true
+    await expect(access(github)).rejects.toThrow('token cannot set labels on acme/widgets')
+    github.permissions = {}
+    await expect(access(github)).rejects.toThrow('token cannot set labels on acme/widgets')
+    github.permissions = undefined as unknown as Record<string, boolean>
     await expect(access(github)).resolves.toBeUndefined()
     expect(github.issueCount()).toBe(1)
   })

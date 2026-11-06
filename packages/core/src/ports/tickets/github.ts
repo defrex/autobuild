@@ -92,6 +92,8 @@ export const CREATION_SCAN_SKEW_MS = 10 * 60 * 1000
 /** Timeline window of the reopen check; GitHub's connection maximum. */
 export const REOPEN_WINDOW = 100
 const LABEL_COLOR = 'ededed'
+/** Repository roles GitHub lets set issue labels. */
+const LABEL_ROLES = ['triage', 'push', 'maintain', 'admin']
 const STATE_LABEL_DESCRIPTION = 'Autobuild ticket state'
 const LINK_LABEL_DESCRIPTION = 'Autobuild issue link'
 /** GitHub limits a label description to 100 characters. */
@@ -388,7 +390,18 @@ export class GitHubTicketSource implements TicketSource {
       missing: true,
     })
     if (response === null) throw new Error(`github ${operation}: unknown ticket "${number}"`)
-    return this.parseIssue(operation, response.json)
+    const issue = this.parseIssue(operation, response.json)
+    // Without push access GitHub answers a label change with success and
+    // keeps the old labels, so a write is applied only if they came back.
+    if (Array.isArray(body.labels)) {
+      const wanted = new Set((body.labels as string[]).map((name) => name.toLowerCase()))
+      const held = new Set(labelNames(issue).map((name) => name.toLowerCase()))
+      if (wanted.size !== held.size || [...wanted].some((name) => !held.has(name)))
+        throw new Error(
+          `github ${operation}: token lacks push access; label changes were dropped on #${number} (${issue.html_url})`,
+        )
+    }
+    return issue
   }
 
   // ── Labels ────────────────────────────────────────────────────────────────
@@ -1380,7 +1393,10 @@ export class GitHubTicketSource implements TicketSource {
     }
     if (repository === null) throw new Error(`github tickets: token cannot read ${this.fullName}`)
     const info = z
-      .object({ has_issues: z.boolean().optional() })
+      .object({
+        has_issues: z.boolean().optional(),
+        permissions: z.record(z.string(), z.unknown()).optional(),
+      })
       .passthrough()
       .parse(repository.json)
     if (info.has_issues === false)
@@ -1407,7 +1423,10 @@ export class GitHubTicketSource implements TicketSource {
     } catch (error) {
       const status = statusOf(error)
       if (status === 403 || status === 404) throw readOnly
-      if (status === 422 && /title/i.test(apiDetail(error))) return
+      if (status === 422 && /title/i.test(apiDetail(error))) {
+        this.assertLabelRole(info.permissions)
+        return
+      }
       throw new Error(
         `github tickets: could not confirm the token can write the issues of ${this.fullName} — ${message(error)}`,
         { cause: error },
@@ -1416,5 +1435,15 @@ export class GitHubTicketSource implements TicketSource {
     throw new Error(
       `github tickets: could not confirm the token can write the issues of ${this.fullName} — GitHub accepted an issue without a title`,
     )
+  }
+
+  // GitHub silently drops label changes from a user below triage, and ticket
+  // states are labels. App tokens report no user permissions; their Issues
+  // permission alone governs labels, which the write probe checks.
+  private assertLabelRole(roles: Record<string, unknown> | undefined): void {
+    if (roles !== undefined && !LABEL_ROLES.some((role) => roles[role] === true))
+      throw new Error(
+        `github tickets: token cannot set labels on ${this.fullName} — GitHub silently drops label changes without triage or push access; grant the token's user write (or triage) access`,
+      )
   }
 }
