@@ -873,7 +873,10 @@ masks another step's failure. For leaves, failures return the build to `implemen
 consume `[policy].maxVerifyAttempts` once per distinct failed cycle since the
 latest spec revision. Passing target-movement cycles cost zero; cycle identifiers
 remain monotonic across restacks and reconciles. Skips retain the cycle's attempt number
-without consuming that budget.
+without consuming that budget. The budget is build-wide, not per step: its policy
+escalation lists each counted failed attempt with its failed steps, says a step
+failed in every counted cycle only when it did, and otherwise names the latest
+failed cycle's steps. The escalation targets the last failed `verify:<step>`.
 
 
 Classified session deferrals consume no phase failures. Unsupported decisive
