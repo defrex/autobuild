@@ -34,7 +34,8 @@ const identify = () =>
       : { type: 'thread.started', thread_id: state.id },
   )
 async function prompt(message: string, env: Record<string, string | undefined>): Promise<string> {
-  if (!resuming) state.memory = message.split(' ').at(-1)
+  // The start prompt carries the invocation as a quoted, labelled identifier.
+  if (!resuming) state.memory = /"([^"]*)"/.exec(message)?.[1] ?? message.split(' ').at(-1)
   await save()
   if (env.AB_NATIVE_FIXTURE_RELEASE !== undefined) {
     while (!(await Bun.file(env.AB_NATIVE_FIXTURE_RELEASE).exists())) await Bun.sleep(5)
