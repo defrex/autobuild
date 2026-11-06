@@ -56,6 +56,7 @@ export type FakeGitHubRequestKind =
   | 'blocked-by-add'
   | 'blocked-by-remove'
   | 'labels-list'
+  | 'label-get'
   | 'label-create'
   | 'count'
   | 'timeline-reopen'
@@ -422,6 +423,7 @@ export class FakeGitHubIssues {
       return method === 'POST' ? 'blocked-by-add' : 'blocked-by-list'
     if (/^\/issues\/\d+\/dependencies\/blocked_by\/\d+$/.test(rest)) return 'blocked-by-remove'
     if (rest === '/labels') return method === 'POST' ? 'label-create' : 'labels-list'
+    if (/^\/labels\/[^/]+$/.test(rest)) return 'label-get'
     return 'unknown'
   }
 
@@ -456,6 +458,13 @@ export class FakeGitHubIssues {
     if (rest === '/labels' && method === 'GET')
       return this.page([...this.labels.values()], query, rest)
     if (rest === '/labels' && method === 'POST') return this.createLabel(body)
+    const labelPath = /^\/labels\/([^/]+)$/.exec(rest)
+    if (labelPath && method === 'GET') {
+      // GitHub matches the name case-insensitively.
+      const label = this.labels.get(decodeURIComponent(labelPath[1]!).toLowerCase())
+      if (label === undefined) throw this.notFound()
+      return { json: label }
+    }
     let match = /^\/issues\/(\d+)$/.exec(rest)
     if (match) {
       const issue = this.live(Number(match[1]))

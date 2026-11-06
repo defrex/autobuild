@@ -390,7 +390,8 @@ export class GitHubTicketSource implements TicketSource {
   // ── Labels ────────────────────────────────────────────────────────────────
 
   /** The repository's labels through the remembered conditional read. Grows
-   * with label count, never with issue count. */
+   * with label count, so only explicit state discovery and the unknown-state
+   * refusal call it; recurring writes look labels up by exact name. */
   private async labelRegistry(): Promise<Array<{ name: string; description?: string }>> {
     const labels: Array<{ name: string; description?: string }> = []
     let page: string | undefined = '1'
@@ -412,13 +413,36 @@ export class GitHubTicketSource implements TicketSource {
     return labels
   }
 
-  /** Create every missing label; an `already_exists` answer is success. */
+  /** One label by exact name (GitHub matches it ignoring case), or `null`. */
+  private async readLabel(
+    operation: string,
+    name: string,
+    remember: boolean,
+  ): Promise<{ name: string } | null> {
+    const response = await this.request(
+      operation,
+      'GET',
+      this.path(`/labels/${encodeURIComponent(name)}`),
+      { remember, missing: true },
+    )
+    if (response === null) return null
+    const label = githubLabelSchema.parse(response.json)
+    this.knownLabels.add(label.name.toLowerCase())
+    return { name: label.name }
+  }
+
+  /** Create every missing label, one exact lookup each; the registry is never
+   * listed, so the cost follows the names asked for, not the label count. */
   private async ensureLabels(operation: string, names: readonly string[]): Promise<void> {
-    let missing = names.filter((name) => !this.knownLabels.has(name.toLowerCase()))
-    if (missing.length === 0) return
-    await this.labelRegistry()
-    missing = missing.filter((name) => !this.knownLabels.has(name.toLowerCase()))
-    await Promise.all(missing.map((name) => this.createLabel(operation, name)))
+    const missing = [...new Set(names.map((name) => name.toLowerCase()))]
+      .filter((key) => !this.knownLabels.has(key))
+      .map((key) => names.find((name) => name.toLowerCase() === key)!)
+    await Promise.all(
+      missing.map(async (name) => {
+        if ((await this.readLabel(operation, name, true)) === null)
+          await this.createLabel(operation, name)
+      }),
+    )
   }
 
   private createLabel(operation: string, name: string, description?: string): Promise<void> {
@@ -441,7 +465,10 @@ export class GitHubTicketSource implements TicketSource {
           },
         })
       } catch (error) {
-        if (statusOf(error) !== 422) throw error
+        // A 422 is success only when the label now reads back: someone else
+        // created it between the lookup and the write.
+        if (statusOf(error) !== 422 || (await this.readLabel(operation, name, false)) === null)
+          throw error
       }
       this.knownLabels.add(key)
     })()
@@ -463,14 +490,32 @@ export class GitHubTicketSource implements TicketSource {
    * a rejected role, then every `autobuild:` label from the remembered label
    * registry. Never sends GraphQL or search. */
   private async stateNames(): Promise<string[]> {
-    const names = lifecycleNames(this.lifecycle)
-    if (this.lifecycle.rejected === undefined) names.push(NOT_PLANNED_STATE)
+    const names = this.configuredStates()
     for (const label of await this.labelRegistry()) {
       if (!isStateLabel(label.name)) continue
       const name = label.name.slice(STATE_LABEL_PREFIX.length)
       if (!names.some((known) => holdsState(known, name))) names.push(name)
     }
     return names
+  }
+
+  private configuredStates(): string[] {
+    const names = lifecycleNames(this.lifecycle)
+    if (this.lifecycle.rejected === undefined) names.push(NOT_PLANNED_STATE)
+    return names
+  }
+
+  /** Resolve a write's target state without listing the label registry: a
+   * configured state matches by name, any other by one exact label lookup.
+   * Only an unknown state lists the registry, to name the known states. */
+  private async resolveTarget(operation: string, state: string): Promise<string> {
+    const configured = this.configuredStates()
+    if (configured.some((known) => holdsState(known, state)))
+      return resolveState(state, configured, SOURCE)
+    const label = state === '' ? null : await this.readLabel(operation, stateLabel(state), true)
+    if (label !== null && isStateLabel(label.name))
+      return label.name.slice(STATE_LABEL_PREFIX.length)
+    return resolveState(state, await this.stateNames(), SOURCE)
   }
 
   private lifecycleOrder(): string[] {
@@ -804,7 +849,7 @@ export class GitHubTicketSource implements TicketSource {
   async transition(id: string, state: string): Promise<void> {
     const number = parseIssueId(id)
     if (number === null) throw new Error(`github transition: unknown ticket "${id}"`)
-    const target = resolveState(state, await this.stateNames(), SOURCE)
+    const target = await this.resolveTarget('transition', state)
     const read = await this.readIssue('transition', number, false)
     if (read === null) throw new Error(`github transition: unknown ticket "${id}"`)
     await this.applyState('transition', read.issue, target)
@@ -880,7 +925,7 @@ export class GitHubTicketSource implements TicketSource {
           : Date.parse(opts.idempotencyKeyReservedAt)
       if (!Number.isFinite(reservedAt)) throw new TicketCreationKeyReservationRequired()
     }
-    const state = resolveState(opts.state ?? this.lifecycle.create, await this.stateNames(), SOURCE)
+    const state = await this.resolveTarget('create', opts.state ?? this.lifecycle.create)
     const write = writeForState(state, this.lifecycle, [...labels, ...links.map(linkLabel)])
     if (key !== undefined && reservedAt !== undefined) {
       const adopted = await this.findByCreationKey(key, reservedAt)

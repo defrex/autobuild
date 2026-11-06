@@ -985,9 +985,10 @@ describe('github writes never count', () => {
     github.resetRequests()
     await source.transition(id, 'doing')
     await source.transition(id, 'DONE')
+    // Lifecycle moves look labels up by name; only explicit discovery lists.
+    expect(github.count('labels-list')).toBe(0)
     await source.addState('icebox')
     expect(github.graphqlRequests()).toEqual([])
-    expect(github.count('labels-list', (r) => r.status === 304)).toBeGreaterThan(0)
     github.uiAddLabel(Number(id), 'autobuild:shelved')
     await source.transition(id, 'shelved')
     expect((await source.get(id))?.state).toBe('shelved')
@@ -1047,6 +1048,50 @@ describe('github tick budget', () => {
       expect(github.graphqlRequests()).toEqual([])
     }
     expect(requests[0]).toBe(requests[1])
+  })
+
+  test('(a2) claim and lifecycle moves cost the same with 0 or 1,000 unrelated link labels', async () => {
+    const requests: number[] = []
+    for (const others of [0, 1000]) {
+      const { github, make } = world()
+      const id = github.fileIssue({ title: 'candidate', labels: ['autobuild', 'autobuild:ready'] })
+      for (let i = 1; i <= others; i++)
+        github.fileIssue({
+          title: 'unrelated',
+          labels: [`autobuild-link:refs #${i}`, 'autobuild:done'],
+          state: 'closed',
+        })
+      github.resetRequests()
+      const source = make()
+      expect(await source.claim(String(id))).toBe(true)
+      await source.transition(String(id), 'done')
+      requests.push(github.requests.length)
+      expect(github.count('labels-list')).toBe(0)
+      expect(github.graphqlRequests()).toEqual([])
+    }
+    expect(requests[0]).toBe(requests[1])
+  })
+
+  test('(a3) a label create answered 422 succeeds only when the label reads back', async () => {
+    const { github, make } = world()
+    const raced = github.fileIssue({ title: 'raced', labels: ['autobuild', 'autobuild:ready'] })
+    const other = github.fileIssue({ title: 'other' })
+    const createsLabel = (method: string, path: string) =>
+      method === 'POST' && path.endsWith('/labels')
+    github.failNext(422, {}, { message: 'Validation Failed' }, (method, path) => {
+      if (!createsLabel(method, path)) return false
+      github.uiAddLabel(other, 'autobuild:doing')
+      return true
+    })
+    expect(await make().claim(String(raced))).toBe(true)
+    expect(github.issue(raced)?.labels).toContain('autobuild:doing')
+
+    const refused = github.fileIssue({ title: 'refused', labels: ['autobuild', 'autobuild:ready'] })
+    github.failNext(422, {}, { message: 'Validation Failed' }, createsLabel)
+    await expect(
+      make().update(String(refused), { labels: ['autobuild', 'fresh'] }),
+    ).rejects.toThrow('Validation Failed')
+    expect(github.issue(refused)?.labels).not.toContain('fresh')
   })
 
   test('(b) an unchanged second tick is all 304s, and (b2) so is a fresh process', async () => {
