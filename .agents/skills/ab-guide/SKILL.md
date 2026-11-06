@@ -1360,8 +1360,11 @@ labels, and writes naming them are refused. The `autobuild:proposal` and
 `autobuild:aborted` labels that harvest and abort apply are ordinary labels,
 so `proposal` and `aborted` cannot be states. Dispatcher notices post as issue
 comments, but tickets carry no comment history, so `ab ticket show` lists none.
-Assets live in the BuildStore. There are no guarded writes, no ticket tree and
-no export or import. Dispatcher reads are conditional requests whose validators
+Assets live in the BuildStore. A node is an issue with the exact `node` label,
+and a ticket targets a node by being a sub-issue of the node's issue; a parent
+without that label, or in another repository, is grouping that gives no target
+and is left untouched (see [integration trees](references/integration-tree.md)).
+There are no guarded writes and no export or import. Dispatcher reads are conditional requests whose validators
 live under the local state root and are evicted after 7 days unused, so an
 unchanged repository costs a tick no primary rate-limit budget. Rate limits
 surface as the ticket-source rate-limit error. A keyed create needs
