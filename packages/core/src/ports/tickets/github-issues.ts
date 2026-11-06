@@ -89,8 +89,18 @@ function hasPrefix(name: string, prefix: string): boolean {
   return name.toLowerCase().startsWith(prefix)
 }
 
+/** Kernel-owned marker labels that share the state prefix but are ordinary
+ * ticket labels: the dispatcher marks an aborted build's ticket with
+ * `autobuild:aborted`, and harvest files proposals with `autobuild:proposal`.
+ * Their names can never be states. */
+export const MARKER_LABELS: readonly string[] = ['autobuild:aborted', 'autobuild:proposal']
+
+function isMarkerLabel(name: string): boolean {
+  return MARKER_LABELS.includes(name.toLowerCase())
+}
+
 export function isStateLabel(name: string): boolean {
-  return hasPrefix(name, STATE_LABEL_PREFIX)
+  return hasPrefix(name, STATE_LABEL_PREFIX) && !isMarkerLabel(name)
 }
 
 export function isLinkLabel(name: string): boolean {
@@ -234,10 +244,10 @@ export function writeForState(
 export function representableState(name: string): boolean {
   try {
     validateStateName(name, 'github ticket source')
-    return true
   } catch {
     return false
   }
+  return !isMarkerLabel(stateLabel(name))
 }
 
 // ── Issue links ──────────────────────────────────────────────────────────────

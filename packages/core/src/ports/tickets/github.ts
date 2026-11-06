@@ -62,6 +62,7 @@ import {
   type ReopenVerdict,
   rejectedStateOf,
   reopenVerdict,
+  representableState,
   splitCreationMarker,
   STATE_LABEL_PREFIX,
   stateLabel,
@@ -1245,6 +1246,10 @@ export class GitHubTicketSource implements TicketSource {
     opts: { about?: string } = {},
   ): Promise<{ state: TicketStateInfo; created: boolean }> {
     validateStateName(name, SOURCE)
+    if (!representableState(name))
+      throw new Error(
+        `${SOURCE}: "${stateLabel(name)}" is a label Autobuild itself applies, so "${name}" cannot be a state`,
+      )
     const about = validateStatePurpose(opts.about, SOURCE)
     if (about !== undefined && about.length > LABEL_DESCRIPTION_MAX)
       throw new Error(

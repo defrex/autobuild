@@ -1163,3 +1163,23 @@ describe('github access checks', () => {
     await expect(access(github)).rejects.toThrow('token cannot write the issues of acme/widgets')
   })
 })
+
+describe('github kernel marker labels', () => {
+  test('autobuild:proposal and autobuild:aborted are ordinary labels, never states', async () => {
+    const { github, source } = setup()
+    const proposal = await source.create(
+      { title: 'Harvested', body: 'b', labels: ['autobuild:proposal'] },
+      { state: 'triage' },
+    )
+    expect(proposal).toMatchObject({ state: 'triage', labels: ['autobuild:proposal'] })
+    const id = await created(source, 'doing')
+    await source.update(id, { labels: ['autobuild:aborted'] })
+    expect(await source.get(id)).toMatchObject({ state: 'doing', labels: ['autobuild:aborted'] })
+    await source.transition(id, 'triage')
+    expect(github.issue(Number(id))?.labels).toEqual(['autobuild:aborted'])
+    expect(await source.get(id)).toMatchObject({ state: 'triage', labels: ['autobuild:aborted'] })
+    expect((await source.countStates(['triage']))[0]?.tickets).toBe(2)
+    expect((await source.listStates()).map((s) => s.name)).not.toContain('aborted')
+    await expect(source.addState('aborted')).rejects.toThrow('cannot be a state')
+  })
+})
