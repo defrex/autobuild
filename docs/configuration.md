@@ -2705,7 +2705,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Ticket source and lifecycle vocabulary. Omitting the table supplies source=file but still requires readyState.
 
-**Constraints:** readyState is required except for hosted, whose omitted value resolves to ready. url is forbidden for file and linear; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.
+**Constraints:** readyState is required except for hosted and github, whose omitted value resolves to ready. url is forbidden for file, linear and github; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.
 
 #### `tickets.url`
 
@@ -2718,7 +2718,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Ticket service independent of [store] url and AB_STORE. Required with local builds.
 
-**Constraints:** Forbidden for file and linear. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.
+**Constraints:** Forbidden for file, linear and github. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.
 
 #### `tickets.source`
 
@@ -2744,7 +2744,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Require every listed label in addition to the state gate.
 
-**Constraints:** Omission uses source readiness defaults (Linear: autobuild label; file: none). Explicit [] disables label gating.; Each item: minimum length 1
+**Constraints:** Omission uses source readiness defaults (Linear and GitHub: autobuild label; file: none). Explicit [] disables label gating.; Each item: minimum length 1
 
 #### `tickets.readyState`
 
@@ -2752,7 +2752,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 - **Type:** `string`
 - **Default:** `omitted`
-- **Required:** Required unless source = "hosted"; hosted omission resolves to "ready".
+- **Required:** Required unless source = "hosted" or "github"; omission there resolves to "ready". GitHub states are `autobuild:<state>` labels.
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
 **Description:** The one workflow state eligible for dispatch.
@@ -2778,7 +2778,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 - **Type:** `string`
 - **Default:** `omitted`
-- **Required:** Required for linear and hosted; forbidden for file; optional for plugins.
+- **Required:** Required for linear and hosted; forbidden for file and github; optional for plugins.
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
 
 **Description:** Backend team key such as `"ENG"`, or an existing plugin config field.
@@ -2796,7 +2796,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Workflow state entered when a ticket is claimed.
 
-**Constraints:** minimum length 1; state must be nonblank; Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted.
+**Constraints:** minimum length 1; state must be nonblank; Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted and github.
 
 #### `tickets.doneState`
 
@@ -2809,7 +2809,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Project completion state and merged-ticket transition.
 
-**Constraints:** minimum length 1; state must be nonblank; Hosted resolution uses done when omitted.
+**Constraints:** minimum length 1; state must be nonblank; Hosted and github resolution uses done when omitted. A github ticket is done when its issue is closed as completed.
 
 #### `tickets.createState`
 
@@ -2822,7 +2822,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Default state for newly created tickets when `ab ticket create` omits `--state`.
 
-**Constraints:** minimum length 1; state must be nonblank; Omission uses the source creation state (Linear team default; file Triage).
+**Constraints:** minimum length 1; state must be nonblank; Omission uses the source creation state (Linear team default; file Triage; github triage).
 
 #### `tickets.triageState`
 
@@ -2835,7 +2835,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** State used for spec-gate bounces, aborts, and closed-unmerged PRs.
 
-**Constraints:** minimum length 1; state must be nonblank; Omission resolves to Backlog for Linear, triage for hosted, Triage for file/plugin sources.
+**Constraints:** minimum length 1; state must be nonblank; Omission resolves to Backlog for Linear, triage for hosted and github, Triage for file/plugin sources.
 
 #### `tickets.proposalState`
 
@@ -2861,7 +2861,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** State that holds deliberately deferred work (the backlog role). Optional and recommended; unset means the role does not exist.
 
-**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).
+**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default; `ab init` writes it for new configurations. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).
 
 #### `tickets.rejectedState`
 
@@ -2874,7 +2874,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended.
 
-**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
+**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
 
 #### `tickets.dir`
 
@@ -2887,7 +2887,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.
 
-**Constraints:** minimum length 1; Forbidden for linear and hosted. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.
+**Constraints:** minimum length 1; Forbidden for linear, hosted and github. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.
 
 <!-- configuration-reference:/tickets -->
 

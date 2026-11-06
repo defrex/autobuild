@@ -74,6 +74,7 @@ import {
 import type { TicketSource } from '../ports/types'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { triageStateCount } from '../ports/tickets/states'
+import { TRIAGE_COUNT_REFRESH_MS } from './triage-count-sampler'
 import type { ControlTickets } from './ticket'
 
 const PAINT_MS = 250
@@ -375,15 +376,17 @@ export class DispatchFrontend {
   }>()
 
   /** A viewer's display-only triage count: at most one bounded `countStates`
-   * request per 10 s while presenting, in the background so a stalled ticket
-   * service never holds a frame. Failures keep the last good value. */
+   * request per 60 s (`TRIAGE_COUNT_REFRESH_MS`) while presenting, in the
+   * background so a stalled ticket service never holds a frame. Failures keep
+   * the last good value. */
   private pollViewerTriage(config: Config): void {
     const open = this.opts.ticketSource ?? this.opts.controlTickets?.().ticketSource
     // A one-shot frame paints before any background read could land.
     if (!this.opts.viewer || this.opts.once || open === undefined || this.presentationRestored)
       return
     const now = this.clock().getTime()
-    if (this.viewerTriageRead !== undefined || now - this.viewerTriageAt < 10_000) return
+    if (this.viewerTriageRead !== undefined || now - this.viewerTriageAt < TRIAGE_COUNT_REFRESH_MS)
+      return
     this.viewerTriageAt = now
     const name = ticketLifecycle(config.tickets).triage
     this.viewerTriageRead = (async () => {
