@@ -5462,8 +5462,14 @@ describe('durable forge failure scheduling', () => {
     }
     const report = await h.dispatcher.tick({ acceptNewWork: false })
     expect(calls).toBe(1)
-    expect(report.janitorFailed, report.janitorDiagnostics.join('\n')).toBe(1)
-    expect(reduceBuild(await h.store.getEvents(first)).janitor?.attempt).toBe(1)
+    expect(report.janitorFailed, report.janitorDiagnostics.join('\n')).toBe(0)
+    expect(reduceBuild(await h.store.getEvents(first)).janitor).toBeUndefined()
+    expect(
+      (await h.store.getEvents(first)).some((e) => e.type === 'build.janitor-attempt-failed'),
+    ).toBe(false)
+    expect(
+      (await h.store.getRepoEvents(REPO)).some((e) => e.type === 'dispatcher.forge-degraded'),
+    ).toBe(true)
     expect(reduceBuild(await h.store.getEvents(second)).janitor).toBeUndefined()
     expect((await h.store.getEvents(cleanup)).some((e) => e.type === 'workspace.released')).toBe(
       true,
@@ -5472,6 +5478,124 @@ describe('durable forge failure scheduling', () => {
     await restarted.dispatcher.tick({ acceptNewWork: false })
     expect(calls).toBe(1)
     expect(reduceBuild(await h.store.getEvents(second)).janitor).toBeUndefined()
+  })
+
+  const rateLimit = (resetAt: string) => ({
+    forgeFailure: 'autobuild.forge-failure.v1',
+    message: 'secondary limit',
+    details: { kind: 'rate-limited', resetAt },
+  })
+  const ofType = async (h: ReturnType<typeof harness>, slug: string, type: string) =>
+    (await h.store.getEvents(slug)).filter((e) => e.type === type)
+
+  test('a first classified rate limit defers like cooldown, then a genuine post-reset failure starts a fresh episode', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    let calls = 0
+    // Longer than the default 600-second attention threshold.
+    const resetAt = new Date(h.clock().getTime() + 15 * 60_000).toISOString()
+    let failure: unknown = rateLimit(resetAt)
+    h.forge.getPrState = async () => {
+      calls++
+      throw failure
+    }
+    const limited = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(1)
+    expect(limited.janitorFailed, limited.janitorDiagnostics.join('\n')).toBe(0)
+    expect(await ofType(h, slug, 'build.janitor-attempt-failed')).toEqual([])
+    expect(await ofType(h, slug, 'build.janitor-failing')).toEqual([])
+    expect(reduceBuild(await h.store.getEvents(slug)).janitor).toBeUndefined()
+    const degraded = (await h.store.getRepoEvents(REPO)).filter(
+      (e) => e.type === 'dispatcher.forge-degraded',
+    )
+    expect(degraded).toHaveLength(1)
+    expect((degraded[0]!.payload as { resetAt: string }).resetAt).toBe(resetAt)
+
+    const events = await h.store.getEvents(slug)
+    for (let tick = 0; tick < 4; tick++) {
+      h.clock.advance(3 * 60_000)
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    }
+    expect(calls).toBe(1)
+    expect(await h.store.getEvents(slug)).toEqual(events)
+
+    h.clock.set(new Date(Date.parse(resetAt) + 1000).toISOString())
+    failure = new Error('provider unavailable')
+    const postReset = h.clock().toISOString()
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+    const attempts = await ofType(h, slug, 'build.janitor-attempt-failed')
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]!.payload).toMatchObject({ attempt: 1, firstFailureAt: postReset })
+    expect(Date.parse((attempts[0]!.payload as { nextAttemptAt: string }).nextAttemptAt)).toBe(
+      h.clock().getTime() + 30_000,
+    )
+    expect(await ofType(h, slug, 'build.janitor-failing')).toEqual([])
+    expect(
+      (await h.store.getRepoEvents(REPO)).some((e) => e.type === 'dispatcher.forge-degraded'),
+    ).toBe(true)
+
+    // Genuine failures still back off and raise attention after the threshold.
+    for (;;) {
+      const state = reduceBuild(await h.store.getEvents(slug))
+      h.clock.set(state.janitor!.nextAttemptAt)
+      const crossed = h.clock().getTime() - Date.parse(postReset) >= 600_000
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+      expect(await ofType(h, slug, 'build.janitor-failing')).toHaveLength(crossed ? 1 : 0)
+      if (crossed) break
+    }
+  })
+
+  test('successful recovery after a rate limit leaves no janitor episode', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const resetAt = new Date(h.clock().getTime() + 15 * 60_000).toISOString()
+    const poll = h.forge.getPrState.bind(h.forge)
+    h.forge.setPrState(1, { state: 'open', mergeable: null })
+    let limited = true
+    let calls = 0
+    h.forge.getPrState = async (...args) => {
+      calls++
+      if (limited) throw rateLimit(resetAt)
+      return poll(...args)
+    }
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    expect(calls).toBe(1)
+    h.clock.set(new Date(Date.parse(resetAt) + 1000).toISOString())
+    limited = false
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    expect(calls).toBe(2)
+    expect(
+      (await h.store.getRepoEvents(REPO)).some((e) => e.type === 'dispatcher.forge-recovered'),
+    ).toBe(true)
+    for (const type of [
+      'build.janitor-attempt-failed',
+      'build.janitor-failing',
+      'build.janitor-recovered',
+    ])
+      expect(await ofType(h, slug, type)).toEqual([])
+    expect(reduceBuild(await h.store.getEvents(slug)).janitor).toBeUndefined()
+  })
+
+  test('a rate limit during an existing genuine episode preserves the episode unchanged', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    let failure: unknown = new Error('provider unavailable')
+    h.forge.getPrState = async () => {
+      throw failure
+    }
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+    const episode = reduceBuild(await h.store.getEvents(slug)).janitor!
+    expect(episode.attempt).toBe(1)
+    h.clock.set(episode.nextAttemptAt)
+    failure = rateLimit(new Date(h.clock().getTime() + 15 * 60_000).toISOString())
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    expect(await ofType(h, slug, 'build.janitor-attempt-failed')).toHaveLength(1)
+    expect(await ofType(h, slug, 'build.janitor-recovered')).toEqual([])
+    const after = reduceBuild(await h.store.getEvents(slug)).janitor!
+    expect(after.attempt).toBe(1)
+    expect(after.firstFailureAt).toBe(episode.firstFailureAt)
   })
 })
 
