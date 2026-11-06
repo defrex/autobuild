@@ -95,6 +95,7 @@ Interfaces to the world, each with swappable adapters:
 | `BuildStore` | per-build streams plus repository journals: events, artifacts, transcripts, leases (see §7) | local; remote HTTP |
 
 Ticket sources may optionally provide native `listPage(criteria, page)` windows with a matching total. Paged operator reads use it when present, otherwise slice the exhaustive listing; unpaged and dispatcher reads remain exhaustive.
+Integration-tree sources may optionally provide `listTargeting(nodeId)`, every ticket targeting one node in every state, equal to the exhaustive listing filtered by target. Integration observation uses it when present, otherwise `listAll`.
 
 #### 3.2.1 In-process adapter plugins
 
@@ -2494,9 +2495,9 @@ returns it to triage, and the adapter strips a stale pre-reopen state label the
 first time it reads the issue. Blockers are GitHub's native issue dependencies,
 and a blocker in another repository never resolves. Assets live in the
 BuildStore, with notes posted as issue comments, and `get` carries no comment
-history; export and import read it explicitly. A ticket's own issue is an
-implicit `closes` link. The source has no guarded writes and no ticket tree.
-Export and import are supported (see
+history; export and import read it explicitly. A ticket's own issue is an implicit `closes` link. A node is an issue
+with the exact `node` label, and a ticket targets a node by being a sub-issue
+of the node's issue (§13.1). The source has no guarded writes. Export and import are supported (see
 [Ticket source migration](#ticket-source-migration)). Dispatcher reads are
 conditional requests whose validators live only under the local state root, so
 an unchanged repository costs a tick no primary rate-limit budget; display-only
@@ -2762,8 +2763,8 @@ metadata changes. Missing, unopened, merged, closed or aborted targets remain
 queued with a diagnostic. The newest generation wins; a closed generation never
 falls back to an older open one. Blockers remain a separate graph.
 
-A node is complete when exhaustive native ticket enumeration finds no unresolved
-ticket targeting it, no unsettled frozen child claim remains, and a merged
+A node is complete when exhaustive native enumeration of the tickets targeting
+it (the optional `listTargeting`, else `listAll`) finds no unresolved one, no unsettled frozen child claim remains, and a merged
 contribution is durably known. Triage, backlog and ready children keep it open;
 done and cancelled children do not. Listing diagnostics fail closed. Completeness
 is sampled again before verification and publication. Source edits cannot be
@@ -2969,12 +2970,23 @@ the parent relation. Label replacements can demote nodes and receive the same
 guards; explicit kind and label instructions must agree about `node`. Label
 and parent connections are fully paginated. Linear still refuses guarded writes.
 
+GitHub uses the exact `node` issue label for kind and the sub-issue relation for
+target, only when the parent issue carries that label and is in the same
+repository. Any other parent is grouping: it imposes no target, never blocks
+dispatch and is never removed or replaced. A target write on a sub-issue of a
+grouping parent is refused, naming the parent; a target clear leaves grouping
+alone; setting a target replaces a node parent. Sub-issue and label changes
+made on GitHub read back the same as `ab ticket` writes. Demotion checks the
+node's fully paginated sub-issue list. A repository label that differs from
+`node` only by case is refused before any write. Integration observation reads
+the node issue and its sub-issues conditionally, so its cost follows the
+node's children, not the repository. GitHub refuses guarded writes.
+
 Hosted sources support kind and target with project-scoped transactional validation.
 Existing tickets default to work with no target. Metadata changes increment the
 revision once; equivalent aliases and unchanged values do not. Node demotion
 checks all targeting tickets, including completed work. Legacy plugins without
 integrationTree support read as work with no target and refuse metadata writes.
-The GitHub source declares no tree capability and behaves the same way.
 
 
 
@@ -4559,7 +4571,7 @@ reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
 and state; file revisions also cover nonempty issue links and urgent priority. GitHub revisions
-fingerprint title, body, canonical label/blocker sets, state and issue links,
+fingerprint kind, target, title, body, canonical label/blocker sets, state and issue links,
 including the ticket's own issue; GitHub tickets carry no comments. Reverting
 identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
