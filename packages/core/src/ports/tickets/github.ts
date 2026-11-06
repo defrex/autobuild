@@ -349,6 +349,10 @@ export class GitHubTicketSource implements TicketSource {
     if (response === null) return null
     const issue = this.parseIssue(operation, response.json)
     if (issue.pull_request !== undefined) return null
+    // A transferred issue answers 301 and the transport follows it, so the
+    // body can be another repository's issue under another number. It is no
+    // longer a ticket here: callers see an unknown ticket and write nothing.
+    if (!this.isLocalIssue(issue, number)) return null
     return { issue, ...(response.etag !== undefined ? { etag: response.etag } : {}) }
   }
 
@@ -610,6 +614,13 @@ export class GitHubTicketSource implements TicketSource {
       if (!local || !isClosedCompleted(blocker)) resolved = false
     }
     return { ids: [...new Set(ids)], resolved, issues }
+  }
+
+  /** Whether `issue` is issue `number` of the configured repository. */
+  private isLocalIssue(issue: GitHubIssue, number: number): boolean {
+    if (issue.number !== number) return false
+    const repo = this.repositoryOf(issue)
+    return repo === undefined || repo.toLowerCase() === this.fullName.toLowerCase()
   }
 
   private repositoryOf(issue: GitHubIssue): string | undefined {

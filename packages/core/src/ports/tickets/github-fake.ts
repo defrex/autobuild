@@ -31,6 +31,8 @@ interface FakeIssue {
   updated_at: string
   pull_request: boolean
   gone?: 'deleted' | 'transferred'
+  /** Where a transferred issue went, as an `owner/repo#number` key. */
+  movedTo?: string
   comments: number
   events: FakeEvent[]
   /** Blockers as `owner/repo#number` keys. */
@@ -325,8 +327,25 @@ export class FakeGitHubIssues {
     this.require(number).gone = 'deleted'
   }
 
-  transferIssue(number: number): void {
-    this.require(number).gone = 'transferred'
+  /**
+   * Transfer issue `number` to `to` (an `owner/repo#number` key). GitHub
+   * answers a GET of the old number with a 301 the transport follows, so
+   * the fake serves the moved issue's body there; every other route 404s.
+   */
+  transferIssue(number: number, to = `${this.owner}/elsewhere#${number + 500}`): string {
+    const issue = this.require(number)
+    const [repo, moved] = to.split('#')
+    issue.gone = 'transferred'
+    issue.movedTo = to
+    const { gone: _gone, movedTo: _movedTo, ...copy } = issue
+    this.foreign.set(to, {
+      ...copy,
+      labels: [...issue.labels],
+      blockedBy: [...issue.blockedBy],
+      repo: repo!,
+      number: Number(moved),
+    })
+    return to
   }
 
   deleteLabel(name: string): void {
@@ -467,6 +486,9 @@ export class FakeGitHubIssues {
     }
     let match = /^\/issues\/(\d+)$/.exec(rest)
     if (match) {
+      const moved = this.issues.get(Number(match[1]))?.movedTo
+      if (moved !== undefined && method === 'GET')
+        return { json: this.json(this.foreign.get(moved)!) }
       const issue = this.live(Number(match[1]))
       if (method === 'GET') return { json: this.json(issue) }
       if (method === 'PATCH') return { json: this.patchIssue(issue, body) }

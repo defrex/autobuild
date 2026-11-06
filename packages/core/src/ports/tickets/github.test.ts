@@ -839,6 +839,28 @@ describe('github blockers', () => {
     await source.removeBlocker(a, foreign)
     expect((await source.get(a))?.blockedBy).toBeUndefined()
   })
+
+  test('a transferred issue is no ticket or blocker here, and nothing is written', async () => {
+    const { github, source } = setup()
+    const moved = await created(source, 'done')
+    const ready = await created(source, 'ready')
+    const victim = await created(source, 'ready')
+    // GitHub's 301 is followed, so the old number reads as the moved issue,
+    // closed as completed, under a number this repository also uses.
+    github.transferIssue(Number(moved), `other/repo#${victim}`)
+    github.resetRequests()
+    expect(await source.dependencyStates([moved])).toEqual([
+      { id: moved, exists: false, resolved: false, blockedBy: [] },
+    ])
+    expect(await source.get(moved)).toBeNull()
+    expect(await source.claim(moved)).toBe(false)
+    await expect(source.transition(moved, 'ready')).rejects.toThrow('unknown ticket')
+    await expect(source.update(moved, { title: 'x' })).rejects.toThrow('unknown ticket')
+    await expect(source.addBlocker(moved, ready)).rejects.toThrow('unknown ticket')
+    await expect(source.addBlocker(ready, moved)).rejects.toThrow('unknown blocker')
+    expect(github.writes()).toEqual([])
+    expect((await source.get(victim))?.state).toBe('ready')
+  })
 })
 
 describe('github state counts', () => {
