@@ -67,7 +67,7 @@ bun ab harvest status
 | Component | Check |
 |---|---|
 | Linear | `LINEAR_API_KEY`, team and workflow states, in the actual process environment or supported `.env` |
-| GitHub | `gh auth status` and repository permissions; test Git fetch and push separately |
+| GitHub | `gh auth status` and repository permissions; test Git fetch and push separately. With `source = "github"` tickets, the same token needs Issues read and write |
 | Agent providers | The effective role's runtime: `codex login` when the Codex diagnostic asks; for Pi, provider login and the provider-qualified model |
 | Hosted store | `bun ab connect` for service, project and credential status |
 

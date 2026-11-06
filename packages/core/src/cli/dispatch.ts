@@ -208,7 +208,6 @@ import {
   type TickReport,
 } from '../processes/dispatcher'
 import { RepoViewStore } from '../processes/repo-view'
-import { triageStateCount } from '../ports/tickets/states'
 import {
   BuildControlError,
   buildControlUser,
@@ -232,6 +231,7 @@ import {
   type RepoTickFinish,
 } from '../store/types'
 import { availableRelease } from './self-update'
+import { TriageCountSampler, triageReader } from './triage-count-sampler'
 import {
   startUpgradeNotice,
   type AvailableReleaseProbe,
@@ -840,10 +840,10 @@ class DispatchLoop {
   private configWarnings: readonly string[] = []
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
-  /** Last successfully sampled triage-state ticket count. Undefined until a
-   * sample succeeds; failures and unsupported sources retain the last value
-   * rather than inventing a zero. */
-  private triageCount: number | undefined
+  /** Display-only triage count, sampled between ticks at most once per
+   * `TRIAGE_COUNT_REFRESH_MS`. Present only for interactive dashboards and
+   * frontend-status kernels; its value is undefined until a read succeeds. */
+  private readonly triageSampler: TriageCountSampler | undefined
   /** A slug/id-bound blocked-resume field. The model receives only slug/value;
    * captured escalation ids stay controller-private. */
   private resumePrompt: ResumePrompt | undefined
@@ -907,6 +907,13 @@ class DispatchLoop {
     // DispatchLoop constructions (tests).
     this.runId = opts.runId ?? opts.kernelRunId ?? `${this.host}-dispatch-${wiring.ids('inst')}`
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
+    this.triageSampler =
+      this.dashboard || opts.frontendStatus === true
+        ? new TriageCountSampler(
+            triageReader(wiring.tickets, () => defaultTriageState(this.currentConfig().config)),
+            wiring.clock,
+          )
+        : undefined
     this.keyboard =
       this.dashboard && opts.terminal !== undefined && opts.input !== undefined
         ? createKeyboardProtocol((chunk) => opts.terminal!.write(chunk), opts.terminal.modes)
@@ -1350,10 +1357,10 @@ class DispatchLoop {
         ticketDiagnostics: readyObservation?.ticketDiagnostics ?? report.ticketDiagnostics,
       }
       this.queuedCount = publishedReport.queued
-      if (this.dashboard || this.opts.frontendStatus === true) await this.sampleTriageCount()
+      const triage = this.triageSampler?.value
       this.lastTickStatus = {
         queued: publishedReport.queued,
-        ...(this.triageCount !== undefined ? { triage: this.triageCount } : {}),
+        ...(triage !== undefined ? { triage } : {}),
         blockedDiagnostics: [...publishedReport.blockedDiagnostics],
         janitorDiagnostics: [...publishedReport.janitorDiagnostics],
         ticketDiagnostics: [...publishedReport.ticketDiagnostics],
@@ -1362,23 +1369,6 @@ class DispatchLoop {
       }
       return (await this.publishTickReport(publishedReport))!
     })
-  }
-
-  /** Display-only triage count for interactive dashboards: one bounded
-   * ticket-source state-count read, never an event read. Sources without
-   * state discovery, failed reads and unmatched states retain the last value. */
-  private async sampleTriageCount(): Promise<void> {
-    const tickets = this.wiring.tickets
-    if (!tickets.listStates) return
-    try {
-      const count = triageStateCount(
-        await tickets.listStates(),
-        defaultTriageState(this.currentConfig().config),
-      )
-      if (count !== undefined) this.triageCount = count
-    } catch {
-      // Retry on the next tick without fabricating a zero or failing the tick.
-    }
   }
 
   /** Overlay process-local presentation controls and normalize the exact model
@@ -3961,7 +3951,7 @@ class DispatchLoop {
             configSnapshot.config.tickets.source,
           ),
         ),
-        ...(this.triageCount !== undefined ? { triage: this.triageCount } : {}),
+        ...(this.triageSampler?.value !== undefined ? { triage: this.triageSampler.value } : {}),
       },
       repositoryEvents,
     )
@@ -4799,6 +4789,8 @@ class DispatchLoop {
         // lease and any provisioning state are released for the next
         // invocation.
         if (this.pastDeadline()) return
+        // One background triage read before the single tick, never inside it.
+        this.triageSampler?.poke()
         const initial = await this.dispatcherTick(true).catch(async (error: unknown) => {
           await this.reportTickFailure(error)
           throw error
@@ -4842,6 +4834,9 @@ class DispatchLoop {
       this.startRendering()
       this.startUpgradeChecks()
       let startup = true
+      // Triage counts are sampled between ticks, never inside one: the read
+      // runs in the background and the next publication carries its value.
+      this.triageSampler?.poke()
       while (!this.watchStopped && !this.superseded) {
         let failed = false
         try {
@@ -4853,6 +4848,7 @@ class DispatchLoop {
           failed = true
           await this.reportTickFailure(error)
         }
+        this.triageSampler?.poke()
         if (this.watchStopped || this.superseded) break
         await sleep(failed || this.pendingTickFailure ? Math.max(intervalMs, 1000) : intervalMs)
       }
