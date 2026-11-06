@@ -3971,10 +3971,11 @@ describe('abDispatch watch build-runner coordination', () => {
         })
         expect(events.filter((event) => event.type === 'infrastructure.failed')).toHaveLength(0)
         expect(
-          events.filter(
+          (await fx.store.getRepoEvents(fx.origin)).filter(
             (event) =>
               event.type === 'dispatcher.runner-settled' &&
-              (event.payload as { outcome?: string }).outcome === 'launch-failed',
+              event.payload.slug === slug &&
+              event.payload.outcome === 'launch-failed',
           ),
         ).toHaveLength(0)
         expect(events.filter((event) => event.type === 'finalize.completed')).toHaveLength(0)

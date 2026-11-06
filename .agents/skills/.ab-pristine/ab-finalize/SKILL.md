@@ -51,7 +51,8 @@ Guidance is an external operator answer, from the operator agent or a human.
    ab done
    ```
 
-   `ab done` validates the deposit; the kernel opens the PR from it. One
+   `ab done` validates the deposit; the kernel opens the PR from it, and a
+   forge refusal reaches the operator as a finalize escalation. One
    terminal command; if validation fails, fix what it names and rerun.
 
 `$AB_CONTEXT_DIR/guidance.json`, when present, is an operator's answer to the
