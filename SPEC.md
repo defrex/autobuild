@@ -3390,7 +3390,11 @@ Passed or skipped target-movement, restack and reconcile cycles consume zero.
 Cycle identifiers remain monotonic independently of this budget. The history
 pass, pass, pass, fail uses one failure even when the failing cycle is attempt 4.
 The third distinct failed cycle at the default limit escalates. Budget
-exhausted → `escalation.raised {source: "policy"}`. Guidance answering that
+exhausted → `escalation.raised {source: "policy"}`. The budget is build-wide, so
+its question lists each counted failed attempt with that attempt's failed steps.
+It says a step failed in every counted cycle only when it did; otherwise it names
+the latest failed cycle and its steps. The escalation still targets the last failed
+`verify:<step>`. Guidance answering that
 policy escalation routes to `implement` and outranks the pending report. By
 contrast, when the agent verifier itself uses `ab escalate`, guidance answering
 it reruns that same step with `verify.started {feedback: {guidance}}`; `ab context`

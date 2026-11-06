@@ -1,5 +1,6 @@
 import { resolveApprovedVerifySelection } from './plan-verify-selection'
 import { activeVerifyStage } from './verify-stages'
+import { verifyBudgetExhaustedQuestion } from './verify-budget'
 import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
 import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
@@ -575,13 +576,14 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   ) {
     // Exhaustion escalates once per failure: an exact policy raise for this
     // verify target after the last failure (answered or not) suppresses replay;
-    // a NEW failure re-arms it.
+    // a NEW failure re-arms it. The question lists the counted failed attempts
+    // and their steps; the target stays the last failed step.
     return {
       kind: 'raise-escalation',
       source: 'policy',
       policyCause: 'verify-failure-limit',
       phase: verifyPhase(lastFail.step),
-      question: `maxVerifyAttempts (${config.policy.maxVerifyAttempts}) exhausted: verify:${lastFail.step} is still failing`,
+      question: verifyBudgetExhaustedQuestion(config.policy.maxVerifyAttempts, fails),
     }
   }
   if (pendingFail !== undefined && (stage === undefined || stage.settled)) {
