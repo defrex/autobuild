@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { observeIntegration } from '../../kernel/integration-completeness'
+import { MemoryBuildStore } from '../../store/memory'
 import type { GitHubRequest } from '../forge/github-transport'
 import { type TicketDraft, TicketSourceRateLimitError } from '../types'
 import { describeTicketSourceContract } from './contract'
@@ -1219,6 +1221,115 @@ describe('github tick budget', () => {
     }
   }, 60_000)
 
+  /** A node with five children (two blocked), unrelated open and closed
+   * issues, and fifty sub-issues grouped under a non-node parent. */
+  async function nodeWorld(source: GitHubTicketSource, github: FakeGitHubIssues, others: number) {
+    const parent = (await source.create({ title: 'Node', body: 'B', kind: 'node' })).ref.id
+    const blocker = await created(source, 'done')
+    const children: string[] = []
+    for (let i = 0; i < 5; i++)
+      children.push(
+        await created(source, 'ready', {
+          target: parent,
+          ...(i < 2 ? { blockedBy: [blocker] } : {}),
+        }),
+      )
+    github.seedIssues(others, { labels: ['autobuild'] })
+    github.seedIssues(others, { state: 'closed' })
+    const group = github.fileIssue({ title: 'Grouping' })
+    for (const id of github.seedIssues(50)) github.uiAddSubIssue(group, id)
+    const store = new MemoryBuildStore()
+    const ticket = { source: 'github', id: parent }
+    await store.createBuild({
+      slug: 'node',
+      repo: 'repo',
+      ticket,
+      created: {
+        actor: { kind: 'dispatcher' },
+        type: 'build.created',
+        payload: { repo: 'repo', ticket, kind: 'node', baseBranch: 'main' },
+      },
+    })
+    return { children: children.sort(), store }
+  }
+
+  test('(d) integration observation costs the same with 10 or 1,000 unrelated issues', async () => {
+    const requests: number[] = []
+    for (const others of [10, 1000]) {
+      const { github, make } = world()
+      const source = make()
+      const { children, store } = await nodeWorld(source, github, others)
+      github.resetRequests()
+      const observed = await observeIntegration(store, source, 'node')
+      expect(observed.diagnostics).toEqual([])
+      expect(observed.openChildren).toEqual(children)
+      expect(github.count('list-issues')).toBe(0)
+      expect(github.graphqlRequests()).toEqual([])
+      requests.push(github.requests.length)
+    }
+    expect(requests[0]).toBe(requests[1])
+  })
+
+  test('(d2) an unchanged observation is all 304s, in this and a fresh adapter; (d3) a change is seen', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-github-observe-'))
+    try {
+      const { github, make } = world()
+      const source = make(new FileGitHubValidatorStore(root))
+      const { children, store } = await nodeWorld(source, github, 10)
+      github.resetRequests()
+      await observeIntegration(store, source, 'node')
+      const cold = github.requests.length
+      github.resetRequests()
+      await observeIntegration(store, source, 'node')
+      expect(github.primary).toBe(0)
+      expect(github.requests.length).toBe(cold)
+      github.resetRequests()
+      await observeIntegration(store, make(new FileGitHubValidatorStore(root)), 'node')
+      expect(github.primary).toBe(0)
+
+      github.uiClose(Number(children[0]), 'completed')
+      const changed = await observeIntegration(store, source, 'node')
+      expect(changed.openChildren).toEqual(children.slice(1))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('(e) ready node children cost one parent read per node, then 304s, at any repository size', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-github-parents-'))
+    try {
+      const requests: number[] = []
+      for (const others of [10, 1000]) {
+        const { github, make } = world()
+        const seeding = make()
+        const parents = [
+          (await seeding.create({ title: 'N1', body: 'B', kind: 'node' })).ref.id,
+          (await seeding.create({ title: 'N2', body: 'B', kind: 'node' })).ref.id,
+        ]
+        for (let i = 0; i < 4; i++)
+          await created(seeding, 'ready', { labels: ['autobuild'], target: parents[i % 2]! })
+        github.seedIssues(others, { labels: ['autobuild'] })
+        const dir = join(root, String(others))
+        const source = make(new FileGitHubValidatorStore(dir))
+        github.resetRequests()
+        await tick(source)
+        expect(github.count('get-issue')).toBe(2)
+        requests.push(github.requests.length)
+        github.resetRequests()
+        await tick(source)
+        expect(github.primary).toBe(0)
+        github.resetRequests()
+        await tick(make(new FileGitHubValidatorStore(dir)))
+        expect(github.primary).toBe(0)
+        const listing = await source.listReady({ state: 'ready', labels: ['autobuild'] })
+        expect(listing.tickets.map((t) => t.target)).toEqual([...parents, ...parents])
+      }
+      expect(requests[0]).toBe(requests[1])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test('(c) primary and secondary limits become the rate-limit error and a cooldown', async () => {
     let now = CLOCK_START
     const github = new FakeGitHubIssues()
@@ -1362,5 +1473,353 @@ describe('github kernel marker labels', () => {
     expect((await source.countStates(['triage']))[0]?.tickets).toBe(2)
     expect((await source.listStates()).map((s) => s.name)).not.toContain('aborted')
     await expect(source.addState('aborted')).rejects.toThrow('cannot be a state')
+  })
+})
+
+describe('github integration tree', () => {
+  function tree(opts: { subIssuePageCap?: number } = {}) {
+    const github = new FakeGitHubIssues(opts)
+    const source = new GitHubTicketSource({
+      transport: github.transport,
+      repository: github.repository,
+      lifecycle: LIFECYCLE,
+      readyLabels: [],
+    })
+    return { github, source }
+  }
+
+  async function node(source: GitHubTicketSource, draft: Partial<TicketDraft> = {}) {
+    return (await source.create({ title: 'Node', body: 'Body.', kind: 'node', ...draft })).ref.id
+  }
+
+  test('create --kind node adds the exact node label, creating it; conflicts write nothing', async () => {
+    const { github, source } = tree()
+    const created = await source.create({ title: 'Node', body: 'Body.', kind: 'node' })
+    expect(created.kind).toBe('node')
+    expect(created.labels).toEqual(['node'])
+    expect(github.label('node')).toMatchObject({
+      name: 'node',
+      description: 'Autobuild integration node',
+    })
+    expect((await source.get(created.ref.id))?.kind).toBe('node')
+    github.resetRequests()
+    for (const draft of [
+      { kind: 'work' as const, labels: ['node'] },
+      { kind: 'node' as const, labels: ['other'] },
+    ])
+      await expect(source.create({ title: 'Conflict', body: 'Body.', ...draft })).rejects.toThrow(
+        'github create: ticket "Conflict": conflicting kind and node label instructions — nothing was written',
+      )
+    expect(github.writes()).toEqual([])
+  })
+
+  test('a repository label cased otherwise refuses node writes with nothing written', async () => {
+    const { github, source } = tree()
+    github.fileIssue({ title: 'Other', labels: ['Node'] })
+    const plain = await created(source, 'ready')
+    github.resetRequests()
+    await expect(source.create({ title: 'N', body: 'Body.', kind: 'node' })).rejects.toThrow(
+      'repository label "Node" stands in for the node label; rename it to "node" on GitHub — nothing was written',
+    )
+    await expect(source.update(plain, { kind: 'node' })).rejects.toThrow('stands in for')
+    expect(github.writes()).toEqual([])
+  })
+
+  test('create --target makes the new issue a sub-issue of the node', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const child = await source.create({ title: 'Child', body: 'Body.', target: `#${parent}` })
+    expect(child.target).toBe(parent)
+    expect(github.subIssues(Number(parent))).toEqual([Number(child.ref.id)])
+    expect((await source.get(child.ref.id))?.target).toBe(parent)
+  })
+
+  test('a keyed create whose sub-issue write fails is finished by a retry with the key', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const key = { idempotencyKey: 'k-target', idempotencyKeyReservedAt: new Date().toISOString() }
+    github.failNext(
+      500,
+      {},
+      { message: 'lost' },
+      (method, path) => path.endsWith('/sub_issues') && method === 'POST',
+    )
+    await expect(
+      source.create({ title: 'Child', body: 'Body.', target: parent }, key),
+    ).rejects.toThrow(
+      /already exists at .*, but its target #\d+ was not recorded\. Retry with the same creation key/,
+    )
+    const id = String(Number(parent) + 1)
+    expect(github.subIssues(Number(parent))).toEqual([])
+    const retry = await source.create({ title: 'Retry', body: 'Other.' }, key)
+    expect(retry).toMatchObject({ ref: { id }, title: 'Child', target: parent })
+    expect(github.subIssues(Number(parent))).toEqual([Number(id)])
+    expect(github.issueCount()).toBe(2)
+    expect(github.issue(Number(id))?.body).toBe('Body.\n<!-- autobuild:creation-key k-target -->')
+  })
+
+  test('a keyed retry revalidates its recorded target and refuses one demoted since', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const key = { idempotencyKey: 'k-demoted', idempotencyKeyReservedAt: new Date().toISOString() }
+    github.failNext(
+      500,
+      {},
+      { message: 'lost' },
+      (method, path) => path.endsWith('/sub_issues') && method === 'POST',
+    )
+    await expect(
+      source.create({ title: 'Child', body: 'Body.', target: parent }, key),
+    ).rejects.toThrow(/but its target #\d+ was not recorded/)
+    const id = String(Number(parent) + 1)
+    await source.update(parent, { kind: 'work' })
+    github.resetRequests()
+    await expect(source.create({ title: 'Retry', body: 'Other.' }, key)).rejects.toThrow(
+      `github create: ticket "${id}" already exists at https://github.com/acme/widgets/issues/${id}, but its recorded target #${parent} is no longer valid, so it was not recorded: target ${parent} is not a node.`,
+    )
+    expect(github.writes()).toEqual([])
+    expect(github.subIssues(Number(parent))).toEqual([])
+    expect(github.issueCount()).toBe(2)
+    await source.update(parent, { kind: 'node' })
+    const retry = await source.create({ title: 'Retry', body: 'Other.' }, key)
+    expect(retry).toMatchObject({ ref: { id }, title: 'Child', target: parent })
+    expect(github.subIssues(Number(parent))).toEqual([Number(id)])
+  })
+
+  test('an unkeyed create whose sub-issue write fails names the issue and the repair', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    github.failNext(
+      500,
+      {},
+      { message: 'lost' },
+      (method, path) => path.endsWith('/sub_issues') && method === 'POST',
+    )
+    const id = String(Number(parent) + 1)
+    await expect(source.create({ title: 'Child', body: 'Body.', target: parent })).rejects.toThrow(
+      `Do not rerun ticket creation; set it with \`ab ticket update ${id} --target ${parent}\``,
+    )
+  })
+
+  test('invalid targets are refused, naming the ticket, with nothing written', async () => {
+    const { github, source } = tree()
+    const work = await created(source, 'ready')
+    const outer = await node(source)
+    const inner = await node(source, { target: outer })
+    github.resetRequests()
+    await expect(source.create({ title: 'C', body: 'B', target: work })).rejects.toThrow(
+      `github create: ticket "C": target ${work} is not a node — nothing was written`,
+    )
+    await expect(source.create({ title: 'C', body: 'B', target: '99999' })).rejects.toThrow(
+      'github create: ticket "C": target 99999 does not exist in the configured github source — nothing was written',
+    )
+    await expect(source.update(outer, { target: outer })).rejects.toThrow(
+      `github update: ticket "${outer}": target ${outer} would create a cycle`,
+    )
+    await expect(source.update(outer, { target: inner })).rejects.toThrow(
+      new RegExp(`^github update: ticket "${outer}": target \\d+ would create a cycle`),
+    )
+    await expect(source.update(work, { target: work })).rejects.toThrow(
+      `github update: ticket "${work}": target ${work} is not a node`,
+    )
+    expect(github.writes()).toEqual([])
+  })
+
+  test('a node with a sub-issue cannot become work, by kind or by labels', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const child = (await source.create({ title: 'C', body: 'B', target: parent })).ref.id
+    github.resetRequests()
+    for (const patch of [{ kind: 'work' as const }, { labels: ['other'] }])
+      await expect(source.update(parent, patch)).rejects.toThrow(
+        `github update: cannot change node ${parent} to work: ticket ${child} targets it — nothing was written`,
+      )
+    expect(github.writes()).toEqual([])
+    await source.update(child, { target: null })
+    await source.update(parent, { kind: 'work' })
+    expect(github.issue(Number(parent))?.labels).toEqual([])
+    expect((await source.get(parent))?.kind).toBe('work')
+  })
+
+  test('update --target moves, keeps, and clears the sub-issue relation', async () => {
+    const { github, source } = tree()
+    const first = await node(source)
+    const second = await node(source)
+    const child = (await source.create({ title: 'C', body: 'B', target: first })).ref.id
+    github.resetRequests()
+    await source.update(child, { target: second })
+    expect(github.subIssues(Number(first))).toEqual([])
+    expect(github.subIssues(Number(second))).toEqual([Number(child)])
+    expect(github.writes().map((write) => write.kind)).toEqual(['sub-issue-add'])
+    github.resetRequests()
+    await source.update(child, { target: second })
+    expect(github.writes()).toEqual([])
+    await source.update(child, { target: null })
+    expect(github.writes().map((write) => write.kind)).toEqual(['sub-issue-remove'])
+    expect((await source.get(child))?.target).toBeUndefined()
+    github.resetRequests()
+    await source.update(child, { title: 'Renamed', target: first })
+    expect(github.writes().map((write) => write.kind)).toEqual(['patch-issue', 'sub-issue-add'])
+    expect(await source.get(child)).toMatchObject({ title: 'Renamed', target: first })
+  })
+
+  test('a grouping parent gives no target, never blocks dispatch and is left untouched', async () => {
+    const { github, source } = tree()
+    const target = await node(source)
+    const group = github.fileIssue({ title: 'Grouping' })
+    const child = await created(source, 'ready')
+    github.uiAddSubIssue(group, Number(child))
+    expect((await source.get(child))?.target).toBeUndefined()
+    expect((await source.listReady({ state: 'ready' })).tickets.map((t) => t.ref.id)).toEqual([
+      child,
+    ])
+    await expect(source.update(child, { target })).rejects.toThrow(
+      `github update: ticket "${child}" is a sub-issue of #${group}, which is not a node; remove it from #${group} or label #${group} node on GitHub — nothing was written`,
+    )
+    github.resetRequests()
+    await source.update(child, { target: null })
+    expect(github.writes()).toEqual([])
+    await source.update(child, { title: 'Renamed', labels: ['x'] })
+    expect(github.issue(Number(child))?.parent).toBe(`acme/widgets#${group}`)
+  })
+
+  test('foreign, deleted and transferred parents give no target', async () => {
+    const { github, source } = tree()
+    const target = await node(source)
+    const foreign = await created(source, 'ready')
+    github.setForeignParent(Number(foreign), 'acme/other', 7)
+    expect((await source.get(foreign))?.target).toBeUndefined()
+    await expect(source.update(foreign, { target })).rejects.toThrow(
+      'is a sub-issue of acme/other#7, which is not a node',
+    )
+    for (const gone of ['deleted', 'transferred'] as const) {
+      const parent = await node(source)
+      const child = (await source.create({ title: 'C', body: 'B', target: parent })).ref.id
+      expect((await source.get(child))?.target).toBe(parent)
+      if (gone === 'deleted') github.deleteIssue(Number(parent))
+      else github.transferIssue(Number(parent))
+      expect((await source.get(child))?.target).toBeUndefined()
+      expect(
+        (await source.listAll()).tickets.find((t) => t.ref.id === child)?.target,
+      ).toBeUndefined()
+    }
+  })
+
+  test('sub-issue and node label changes made in the UI read back like ab ticket writes', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const child = await created(source, 'ready')
+    const ids = async (id: string) => (await source.listTargeting(id)).tickets.map((t) => t.ref.id)
+    github.uiAddSubIssue(Number(parent), Number(child))
+    expect((await source.get(child))?.target).toBe(parent)
+    expect(await ids(parent)).toEqual([child])
+    github.uiRemoveSubIssue(Number(child))
+    expect((await source.get(child))?.target).toBeUndefined()
+    expect(await ids(parent)).toEqual([])
+
+    const group = github.fileIssue({ title: 'Grouping' })
+    github.uiAddSubIssue(group, Number(child))
+    expect((await source.get(child))?.target).toBeUndefined()
+    github.uiAddLabel(group, 'node')
+    github.resetRequests()
+    expect((await source.get(child))?.target).toBe(String(group))
+    // The parent's own conditional read saw the relabel the child's could not.
+    expect(github.count('get-issue', (r) => r.path.endsWith(`/issues/${group}`))).toBe(1)
+    expect((await source.get(String(group)))?.kind).toBe('node')
+    expect(await ids(String(group))).toEqual([child])
+    github.uiRemoveLabel(group, 'node')
+    expect((await source.get(child))?.target).toBeUndefined()
+    expect((await source.get(String(group)))?.kind).toBe('work')
+    expect(await ids(String(group))).toEqual([])
+  })
+
+  test('sub-issue lists are fully paginated for demotion and listTargeting', async () => {
+    const { github, source } = tree({ subIssuePageCap: 2 })
+    const parent = await node(source)
+    const children: string[] = []
+    for (let i = 0; i < 5; i++) {
+      const child = await created(source, 'ready')
+      github.uiAddSubIssue(Number(parent), Number(child))
+      children.push(child)
+    }
+    github.resetRequests()
+    await expect(source.update(parent, { kind: 'work' })).rejects.toThrow('cannot change node')
+    expect(github.count('sub-issues-list')).toBe(3)
+    github.resetRequests()
+    const listing = await source.listTargeting(parent)
+    expect(listing.tickets.map((t) => t.ref.id)).toEqual(children)
+    expect(github.count('sub-issues-list')).toBe(3)
+  })
+
+  test('listTargeting: foreign, unlabelled, childless, resolved and malformed edges', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const ids = async (id: string) => (await source.listTargeting(id)).tickets.map((t) => t.ref.id)
+    github.resetRequests()
+    expect(await ids(parent)).toEqual([])
+    expect(github.count('get-issue')).toBe(1)
+    expect(github.count('sub-issues-list')).toBe(0)
+
+    github.addForeignSubIssue(Number(parent), 'acme/other', 3)
+    expect(await ids(parent)).toEqual([])
+    const done = (
+      await source.create({ title: 'Done', body: 'B', target: parent }, { state: 'done' })
+    ).ref.id
+    const malformed = await created(source, 'ready', { target: parent })
+    github.uiAddLabel(Number(malformed), 'autobuild:doing')
+    const listing = await source.listTargeting(parent)
+    expect(listing.tickets).toMatchObject([{ ref: { id: done }, resolved: true, target: parent }])
+    expect(listing.diagnostics).toEqual([
+      `github #${malformed}: has 2 state labels (autobuild:ready, autobuild:doing); a ticket holds one state — remove all but one`,
+    ])
+    expect((await source.listAll()).diagnostics).toEqual(listing.diagnostics)
+
+    github.uiRemoveLabel(Number(parent), 'node')
+    expect(await source.listTargeting(parent)).toEqual({ tickets: [], diagnostics: [] })
+    expect(await source.listTargeting('not-an-issue')).toEqual({ tickets: [], diagnostics: [] })
+  })
+
+  test('the revision covers kind and target and returns after a revert', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const child = await created(source, 'ready')
+    const revision = async () => (await source.get(child))!.revision
+    const before = await revision()
+    github.uiAddSubIssue(Number(parent), Number(child))
+    const targeted = await revision()
+    expect(targeted).not.toBe(before)
+    github.uiRemoveSubIssue(Number(child))
+    expect(await revision()).toBe(before)
+    await source.update(child, { kind: 'node' })
+    expect(await revision()).not.toBe(before)
+    await source.update(child, { kind: 'work' })
+    expect(await revision()).toBe(before)
+  })
+
+  test('the import replay preserves kind and target', async () => {
+    const { source } = tree()
+    // migration.ts creates every ticket plainly, then replays the tree.
+    const parent = await created(source, 'ready')
+    const child = await created(source, 'ready')
+    const root = await created(source, 'ready')
+    await source.update(parent, { kind: 'node' })
+    await source.update(child, { kind: 'work', target: parent })
+    await source.update(root, { kind: 'work', target: null })
+    expect(await source.get(parent)).toMatchObject({ kind: 'node' })
+    expect(await source.get(child)).toMatchObject({ kind: 'work', target: parent })
+    const imported = await source.get(root)
+    expect(imported?.kind).toBe('work')
+    expect(imported?.target).toBeUndefined()
+  })
+
+  test('an exhaustive listing reads parents from its own batch', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    await source.create({ title: 'C', body: 'B', target: parent })
+    await source.create({ title: 'D', body: 'B', target: parent })
+    github.resetRequests()
+    const listing = await source.listAll()
+    expect(listing.tickets.filter((t) => t.target === parent)).toHaveLength(2)
+    expect(github.count('get-issue')).toBe(0)
   })
 })
