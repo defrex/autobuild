@@ -627,7 +627,8 @@ start no agent. Keep runtime installation out of `commands.setup`. Pi over
 `vercel-ai-gateway/...` uses `AI_GATEWAY_API_KEY`; never copy Pi state or Pi OAuth refresh tokens. Claude Code can select named [accounts](references/accounts.md): subscription tokens or region-bound Kimi Code keys stay on the dispatcher, with placeholders in the guest and exact-host/header egress transforms. Use the unmodified runtime, your own subscription and ordinary individual usage. Provision Claude/Kimi credentials manually; Autobuild never invokes `claude setup-token`. Codex can explicitly select a ChatGPT Plus/Pro account authorized with `bun ab accounts login NAME [--local|--project]`; exactly one dispatcher or hosted refreshing secret owns its renewal. The clone identity is upload-pack-only and
 scrubbed from Git config before an agent starts. Agents cannot push. Remote phase terminals deposit a durable
 publication request and park; that successful `ab done` is the one terminal and
-must not be repeated. After VM stop and lease release, the local kernel
+must not be repeated. An implement round with no commits over its contribution
+base escalates at `implement` instead of requesting publication. After VM stop and lease release, the local kernel
 publishes the exact SHA/branch through a temporary narrow firewall transform,
 verifies it, and performs PR work locally. Ordinary completion deletes the VM.
 Branch config, installed skills, relative/package plugins, setup, and phase CLI

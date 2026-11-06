@@ -743,6 +743,9 @@ its proven contribution boundary verbatim: the projected implementation/replay
 base, falling back to the latest fresh cut. Branch-cut target sampling remains
 separate from review provenance. The immutable boundary must belong to HEAD's
 history; missing or invalid provenance fails before publication or notes deposit.
+A HEAD equal to that base is an empty contribution: the terminal records an
+agent `implement` escalation naming both SHAs as the session's terminal, with no
+push, notes deposit, completion or publication request.
 There is no review-time target fetch or destination merge-base. Successful leaf
 rewrite facts project `targetBase..headSha` for context, review and agent verify
 steps without changing historical ranges. Node cycles retain separate semantics.
@@ -1851,6 +1854,19 @@ publication keeps its workspace through backoff and unresolved exhaustion.
 Classified rate limits retain repository cooldown and consume no publication
 retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
+
+A forge that refuses a dispatcher-side finalize PR create with a client error
+throws `ForgeRejection` (`ports/forge-failure.ts`), carrying the forge name, HTTP
+status and the forge's message; GitHub's "No commits between" 422 is its
+`NoCommitsBetweenBranchesError` subclass. Rate limits and transient failures
+stay `ForgeFailure`s on their existing paths. `kernel/finalize-pr-rejection.ts`
+raises one `finalize` escalation (`policy`, `non-retryable-phase-failure`) per
+rejection, keyed by the publication request and the answer that authorized the
+attempt, and throws `ForgeRequestDeferred`. Launch, ended-execution and release
+settlement therefore record no `infrastructure.failed`. While the escalation is
+open, `cli/publication-settlement.ts` defers on the facts it already read, with
+no provider probe, description read or forge request. Each answer authorizes
+one more PR create; an abort answer stops retrying so release can proceed.
 
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).

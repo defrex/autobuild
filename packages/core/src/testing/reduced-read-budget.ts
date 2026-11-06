@@ -42,6 +42,8 @@ import {
   readOpenTick,
 } from '../store/reduced-reads'
 import { RepoViewStore } from '../processes/repo-view'
+import { settlePendingPublication } from '../cli/publication-settlement'
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { abWatch, decodeCursor } from '../cli/watch'
 import { abWait } from '../cli/wait'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -732,6 +734,117 @@ export async function targetLineageReadBudget(opts: {
 /** Exercise the real outer DispatchLoop with a new invocation identity, either
  * once or for cold and warmed interactive ticks. Only shared values are warmed:
  * no parameterized run value may hide a cold replay. */
+/** A finalize request parked behind its forge-rejection escalation costs the
+ * same at every journal length and reads no event rows while nothing changes:
+ * no provider probe, description read or forge request per tick. */
+export async function finalizePrRejectionReadBudget(opts: {
+  store: BuildStore
+  costs: ReducedReadCosts
+  fresh: () => Promise<BuildStore>
+}) {
+  const { store, costs } = opts
+  const build = 'finalize-rejection-budget'
+  const branch = `ab/${build}`
+  const sha = 'f'.repeat(40)
+  await store.createBuild({ slug: build, repo, branch })
+  await store.append(build, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket: { source: 'file', id: 'BUDGET-PR' }, repo, baseBranch: 'main' },
+  })
+  await store.append(build, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'vercel-sandbox',
+      remote: true,
+      ref: 'sandbox-budget',
+      branch,
+      base: { source: 'remote', sha: 'e'.repeat(40) },
+    },
+  })
+  const description = await store.putArtifact(build, {
+    kind: 'pr-description',
+    content: '# Budget\n\nBody.\n',
+  })
+  await store.append(build, {
+    actor: { kind: 'agent', role: 'finalize', session: 'budget-finalize' },
+    type: 'publication.requested',
+    payload: {
+      operation: 'finalize',
+      branch,
+      sha,
+      description: { kind: description.kind, rev: description.revision },
+    },
+  })
+  const forge = new FakeForge()
+  forge.setHeadSha(sha)
+  forge.rejectNextOpenPr(422, 'Validation Failed: No commits between main and ab/x', 'GitHub')
+  let probes = 0
+  const settle = (reader: BuildStore) =>
+    settlePendingPublication(
+      {
+        store: reader,
+        storeRef: 'budget',
+        publication: {
+          isPublished: async () => {
+            probes++
+            return true
+          },
+          publish: async () => {},
+        },
+        forge,
+        workspacePath: '/budget',
+        checkoutless: true,
+        exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+        ids: sequentialIds(),
+        runId: 'budget',
+      },
+      build,
+    )
+  await expect(settle(store)).rejects.toBeInstanceOf(ForgeRequestDeferred)
+  const raised = async () =>
+    (await store.getEvents(build)).filter((event) => event.type === 'escalation.raised').length
+  expect(await raised()).toBe(1)
+  const bytes = new Map<string, number>()
+  let metadata: number | undefined
+  let seeded = (await store.getEvents(build)).length
+  for (const length of [100, 10_000]) {
+    for (; seeded < length; seeded++)
+      await store.append(build, {
+        actor: humanActor('budget'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+    for (const [name, reader] of [
+      ['live', store],
+      ['fresh', await opts.fresh()],
+    ] as const) {
+      // Catching up to the padded tail is allowed once per reader.
+      await expect(settle(reader)).rejects.toBeInstanceOf(ForgeRequestDeferred)
+      costs.events = costs.metadata = costs.bytes = 0
+      probes = 0
+      const attempts = forge.openPrAttempts
+      for (let tick = 0; tick < 3; tick++)
+        await expect(settle(reader)).rejects.toBeInstanceOf(ForgeRequestDeferred)
+      expect(costs.events).toBe(0)
+      expect(probes).toBe(0)
+      expect(forge.openPrAttempts).toBe(attempts)
+      if (length === 100) {
+        metadata ??= costs.metadata
+        expect(costs.metadata).toBeLessThan(20)
+        bytes.set(name, costs.bytes)
+      } else {
+        // Seq digits grow in the saved value; allow 100 bytes per measured call.
+        expect(costs.bytes).toBeLessThanOrEqual(bytes.get(name)! + 300)
+      }
+      expect(costs.metadata).toBe(metadata!)
+    }
+  }
+  expect(forge.openPrAttempts).toBe(1)
+  expect(await raised()).toBe(1)
+}
+
 async function coldDispatchOnceBudget(
   store: BuildStore,
   cold: BuildStore,

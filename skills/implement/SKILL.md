@@ -72,6 +72,13 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
    terminal command besides `ab escalate`. If it reports a validation error,
    fix what it names and run it again.
 
+   An empty contribution is refused: when HEAD has no commits over the
+   recorded contribution base, `ab done` publishes nothing and instead records
+   an implement escalation naming both SHAs. That escalation is this session's
+   terminal; stop and run no further terminal. Commit intended changes before
+   running `ab done`. If you conclude the spec needs no code change, that is a
+   question for the operator: run `ab escalate` with the reason instead.
+
 ## Ground rules for this phase
 
 - **The spec bounds your work.** When you spot something outside its scope —

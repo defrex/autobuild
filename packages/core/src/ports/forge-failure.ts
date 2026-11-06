@@ -33,6 +33,49 @@ export function isForgeFailure(error: unknown): error is ForgeFailure {
   )
 }
 
+export interface ForgeRejectionDetails {
+  /** Human-readable forge name, e.g. `GitHub`. */
+  forge: string
+  /** The forge's 4xx HTTP status. */
+  status: number
+  /** The forge's own answer, verbatim. */
+  forgeMessage: string
+}
+
+/** A non-transient, non-rate-limit client-error answer from the forge. Unlike a
+ * `ForgeFailure`, retrying the same request cannot succeed without a change. */
+export class ForgeRejection extends Error {
+  readonly forgeRejection = 'autobuild.forge-rejection.v1' as const
+  readonly forge: string
+  readonly status: number
+  readonly forgeMessage: string
+  constructor(message: string, details: ForgeRejectionDetails) {
+    super(message)
+    this.name = 'ForgeRejection'
+    this.forge = details.forge
+    this.status = details.status
+    this.forgeMessage = details.forgeMessage
+    if (!isForgeRejection(this)) throw new TypeError('Invalid forge rejection details')
+  }
+}
+
+export function isForgeRejection(error: unknown): error is ForgeRejection {
+  if (!error || typeof error !== 'object') return false
+  const value = error as ForgeRejection
+  return (
+    value.forgeRejection === 'autobuild.forge-rejection.v1' &&
+    typeof value.message === 'string' &&
+    value.message.length > 0 &&
+    typeof value.forge === 'string' &&
+    value.forge.length > 0 &&
+    Number.isInteger(value.status) &&
+    value.status >= 400 &&
+    value.status <= 499 &&
+    typeof value.forgeMessage === 'string' &&
+    value.forgeMessage.length > 0
+  )
+}
+
 export interface ForgeRequestContext {
   outcome?: 'restPrimary' | 'restNotModified' | 'graphql'
   build?: string
