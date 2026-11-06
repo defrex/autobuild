@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +9,7 @@ import {
   locateShippedGit,
   materializeShippedGit,
   shippedGitExec,
+  shippedGitShim,
   type ShippedGitManifest,
 } from './shipped-git'
 
@@ -129,6 +131,29 @@ describe('materializeShippedGit', () => {
     expect(await readFile(join(shipped.target, 'bin', 'git'), 'utf8')).toBe('#!/bin/sh\n')
   })
 
+  test('the tree carries an executable git launcher for shells', async () => {
+    const shipped = await project()
+    await materializeShippedGit(shipped.tree, shipped.manifest, shipped.raw)
+    const launcher = join(shipped.target, 'shim', 'git')
+    expect(await readFile(launcher, 'utf8')).toBe(
+      shippedGitShim({ root: shipped.target, manifest: shipped.manifest }),
+    )
+    expect((await stat(launcher)).mode & 0o777).toBe(0o755)
+  })
+
+  test('a tree an older deployment unpacked without the launcher is replaced', async () => {
+    const shipped = await project()
+    await mkdir(join(shipped.target, 'bin'), { recursive: true })
+    await writeFile(join(shipped.target, 'bin', 'git'), 'stale')
+    await writeFile(
+      join(shipped.target, '.complete'),
+      createHash('sha256').update(shipped.raw).digest('hex'),
+    )
+    await materializeShippedGit(shipped.tree, shipped.manifest, shipped.raw)
+    expect(await readFile(join(shipped.target, 'bin', 'git'), 'utf8')).toBe('#!/bin/sh\n')
+    expect((await stat(join(shipped.target, 'shim', 'git'))).isFile()).toBe(true)
+  })
+
   test('concurrent unpackers both end with one valid tree', async () => {
     const shipped = await project()
     await Promise.all(
@@ -205,9 +230,40 @@ describe('shippedGitExec', () => {
     })
   })
 
-  test('passes other commands through untouched', async () => {
+  test('non-git commands keep their own libraries and find the launcher', async () => {
     const { calls, base } = recording()
-    await shippedGitExec(base, git, { PATH: '/usr/bin' })(['gh', 'auth', 'token'], {})
-    expect(calls).toEqual([{ cmd: ['gh', 'auth', 'token'] }])
+    const exec = shippedGitExec(base, git, { PATH: '/usr/bin' })
+    await exec(['gh', 'auth', 'token'], {})
+    await exec(['sh', '-c', 'git status'], {
+      env: { PATH: '/caller/bin', LD_LIBRARY_PATH: '/host/lib', GIT_CONFIG_COUNT: '1' },
+    })
+    expect(calls).toEqual([
+      { cmd: ['gh', 'auth', 'token'], env: { PATH: '/tmp/abg01234567/shim:/usr/bin' } },
+      {
+        cmd: ['sh', '-c', 'git status'],
+        env: {
+          PATH: '/tmp/abg01234567/shim:/caller/bin',
+          LD_LIBRARY_PATH: '/host/lib',
+          GIT_CONFIG_COUNT: '1',
+        },
+      },
+    ])
+  })
+
+  test('the launcher confines only Git and keeps caller overrides', () => {
+    expect(shippedGitShim(git)).toBe(
+      [
+        '#!/bin/sh',
+        "export GIT_EXEC_PATH='/tmp/abg01234567/libexec/git-core'",
+        "export LD_LIBRARY_PATH='/tmp/abg01234567/lib'",
+        `[ -n "\${GIT_SSL_CAINFO+set}" ] || GIT_SSL_CAINFO='/tmp/abg01234567/ssl/ca-bundle.crt'; export GIT_SSL_CAINFO`,
+        "export GIT_TEMPLATE_DIR='/tmp/abg01234567/share/git-core/templates'",
+        `[ -n "\${GIT_CONFIG_NOSYSTEM+set}" ] || GIT_CONFIG_NOSYSTEM='1'; export GIT_CONFIG_NOSYSTEM`,
+        `[ -n "\${GIT_CONFIG_GLOBAL+set}" ] || GIT_CONFIG_GLOBAL='/dev/null'; export GIT_CONFIG_GLOBAL`,
+        `[ -n "\${GIT_ALLOW_PROTOCOL+set}" ] || GIT_ALLOW_PROTOCOL='https'; export GIT_ALLOW_PROTOCOL`,
+        `exec '/tmp/abg01234567/bin/git' "$@"`,
+        '',
+      ].join('\n'),
+    )
   })
 })
