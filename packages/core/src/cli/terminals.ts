@@ -315,6 +315,14 @@ export async function completeFinalizePr(
   return event
 }
 
+function emptyContributionQuestion(build: string, round: number, head: string, base: string) {
+  return (
+    `build ${build} implement round ${round} produced no commits over its base: ` +
+    `HEAD ${head} equals contribution base ${base}. Answer with guidance describing the ` +
+    'change to make, revise the spec, or abort the build if no code change is intended.'
+  )
+}
+
 export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<EventEnvelope> {
   const { env, store } = deps
   const spec = phaseSpecFor(env.phase)
@@ -380,6 +388,23 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       // Resolve the current target and focused divergence BEFORE publication
       // or deposit. A misleading range is worse than rejecting this terminal.
       const { branch, base, head } = await implementationReviewBoundary(deps, events)
+      // An empty contribution has nothing to review or publish, and a forge
+      // would refuse its PR. Stop here with a question instead (the
+      // escalation is this session's terminal).
+      if (head === base) {
+        const { event } = await terminalDeposit(deps, [], () => ({
+          actor,
+          type: 'escalation.raised',
+          payload: {
+            id: deps.ids('esc'),
+            phase: 'implement',
+            round: env.round,
+            source: 'agent',
+            question: emptyContributionQuestion(env.build, env.round, head, base),
+          },
+        }))
+        return event
+      }
       const scratchPaths = await scratchPathsTouchedInRange(
         deps.exec,
         deps.workspacePath,

@@ -1025,6 +1025,51 @@ describe('ab done — implement', () => {
     expect(branchBase).toBe(head)
   })
 
+  test.each(['local', 'remote'] as const)(
+    'an empty %s contribution escalates instead of completing or requesting publication',
+    async (path) => {
+      await runGit(['reset', '-q', '--hard', implementationBase], workspace)
+      if (path === 'remote')
+        await store.append(BUILD, {
+          actor: KERNEL,
+          type: 'workspace.provisioned',
+          payload: {
+            provider: 'vercel-sandbox',
+            remote: true,
+            ref: 'sandbox',
+            branch: BRANCH,
+            base: { source: 'remote', sha: implementationBase },
+          },
+        })
+      const forge = new FakeForge()
+      const deps = implementDeps(forge)
+      const event = await done(deps, { notes: await stash('empty-notes', 'nothing\n') })
+
+      expect(event.type).toBe('escalation.raised')
+      expect(event.actor).toEqual(agentActor('implement', 's_test'))
+      expect(event.payload).toMatchObject({
+        phase: 'implement',
+        round: 1,
+        source: 'agent',
+      })
+      const question = (event.payload as { question: string }).question
+      expect(question).toContain(BUILD)
+      expect(question).toContain(`HEAD ${implementationBase}`)
+      expect(question).toContain(`base ${implementationBase}`)
+      expect(question).toContain('no commits')
+      expect(await eventTypes()).not.toContain('implement.completed')
+      expect(await eventTypes()).not.toContain('publication.requested')
+      expect(await store.getArtifact(BUILD, 'implement-notes')).toBeNull()
+      expect(forge.pushes).toEqual([])
+      const state = reduceBuild(await store.getEvents(BUILD))
+      expect(state.openEscalations.map((e) => e.phase)).toEqual(['implement'])
+      // The escalation is this session's terminal.
+      await expect(done(deps, { notes: await stash('again', 'again\n') })).rejects.toThrow(
+        /already escalated/,
+      )
+    },
+  )
+
   test('push failure leaves NO event and NO notes artifact (push happens first)', async () => {
     class ExplodingForge extends FakeForge {
       override async pushBranch(): Promise<void> {

@@ -6,6 +6,7 @@ import {
   withIssueKeywords,
 } from '../../kernel/issue-keywords'
 import type { BuildLandingOptions } from '../types'
+import { ForgeRejection } from '../forge-failure'
 import { findSummaryMarker } from './summary-marker'
 /**
  * FakeForge (SPEC §3.2): in-memory Forge for seam tests. Gate existence and
@@ -210,6 +211,9 @@ export class FakeForge implements Forge {
   private readonly attachmentAssets = new Map<string, HostedPrAttachmentAsset>()
   private readonly attachmentUploadErrors: string[] = []
   private readonly attachmentReclaimErrors: string[] = []
+  private readonly openPrRejections: { status: number; forgeMessage: string; forge: string }[] = []
+  /** PR creates that reached the forge (adoptions of an open PR excluded). */
+  openPrAttempts = 0
   private readonly closePrErrors: string[] = []
   private readonly deleteBranchErrors: string[] = []
   private readonly publishedBranches = new Set<string>()
@@ -437,6 +441,11 @@ export class FakeForge implements Forge {
     // Missing means it was already deleted: cleanup is idempotent.
   }
 
+  /** Rejects the next PR create that is not adopted from an open PR. */
+  rejectNextOpenPr(status: number, forgeMessage: string, forge = 'Fake'): void {
+    this.openPrRejections.push({ status, forgeMessage, forge })
+  }
+
   failNextClosePr(message: string): void {
     this.closePrErrors.push(message)
   }
@@ -569,6 +578,14 @@ export class FakeForge implements Forge {
         headSha: this.headShas.get(number)!,
       }
     }
+    this.openPrAttempts += 1
+    const rejection = this.openPrRejections.shift()
+    if (rejection !== undefined)
+      throw new ForgeRejection(rejection.forgeMessage, {
+        forge: rejection.forge,
+        status: rejection.status,
+        forgeMessage: rejection.forgeMessage,
+      })
     const number = this.nextNumber++
     const { issueLinks, ...record } = opts
     const links = this.closesIssues === true ? (issueLinks ?? []) : []

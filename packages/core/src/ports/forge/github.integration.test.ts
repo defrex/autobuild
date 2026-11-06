@@ -12,6 +12,8 @@ import {
   type GitHubRequestOpts,
   type GitHubResponse,
 } from './github-transport'
+import { isForgeFailure, isForgeRejection } from '../forge-failure'
+import { NoCommitsBetweenBranchesError } from '../types'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -2002,9 +2004,16 @@ test('GitHub no-commits classification reads nested validation messages only', a
     ],
   }
   const empty = makeForge([{ json: [] }, { status: 422, json: body }, { json: [] }])
-  await expect(empty.forge.openPr(opts)).rejects.toMatchObject({
+  const noCommits = await empty.forge.openPr(opts).catch((error: unknown) => error)
+  expect(noCommits).toBeInstanceOf(NoCommitsBetweenBranchesError)
+  expect(noCommits).toMatchObject({
     name: 'NoCommitsBetweenBranchesError',
+    message: 'No commits between main and ab-node/x',
+    forge: 'GitHub',
+    status: 422,
+    forgeMessage: 'Validation Failed: No commits between main and ab-node/x',
   })
+  expect(isForgeRejection(noCommits)).toBe(true)
   const unrelated = makeForge([
     { json: [] },
     {
@@ -2016,7 +2025,62 @@ test('GitHub no-commits classification reads nested validation messages only', a
     },
     { json: [] },
   ])
-  await expect(unrelated.forge.openPr(opts)).rejects.toBeInstanceOf(GitHubApiError)
+  await expect(unrelated.forge.openPr(opts)).rejects.toMatchObject({
+    name: 'ForgeRejection',
+    forge: 'GitHub',
+    status: 422,
+    forgeMessage: 'Validation Failed: base is invalid',
+  })
+})
+
+test('GitHub PR-create client errors are forge rejections; transient and rate limits are not', async () => {
+  const opts = {
+    workspacePath: '/ws',
+    head: 'ab/x',
+    base: 'main',
+    title: 'Leaf',
+    body: 'Body',
+  }
+  const forbidden = makeForge([
+    { json: [] },
+    { status: 403, json: { message: 'Resource not accessible by integration' } },
+  ])
+  const rejected = await forbidden.forge.openPr(opts).catch((error: unknown) => error)
+  expect(isForgeRejection(rejected)).toBe(true)
+  expect(isForgeFailure(rejected)).toBe(false)
+  expect(rejected).toMatchObject({
+    status: 403,
+    forgeMessage: 'Resource not accessible by integration',
+  })
+  // A non-422 rejection makes no adoption probe after the create.
+  expect(forbidden.calls.map((call) => call.method)).toEqual(['GET', 'POST'])
+
+  const unavailable = makeForge([{ json: [] }, { status: 502, json: { message: 'Bad Gateway' } }])
+  const transient = await unavailable.forge.openPr(opts).catch((error: unknown) => error)
+  expect(isForgeRejection(transient)).toBe(false)
+  expect(transient).toMatchObject({ details: { kind: 'transient' } })
+
+  const limited = makeForge([
+    { json: [] },
+    {
+      status: 403,
+      json: { message: 'API rate limit exceeded' },
+      headers: {
+        'x-ratelimit-remaining': '0',
+        'x-ratelimit-reset': String(Math.ceil(Date.now() / 1000) + 600),
+      },
+    },
+  ])
+  const rateLimited = await limited.forge.openPr(opts).catch((error: unknown) => error)
+  expect(isForgeRejection(rateLimited)).toBe(false)
+  expect(rateLimited).toMatchObject({ details: { kind: 'rate-limited' } })
+
+  const raced = makeForge([
+    { json: [] },
+    { status: 422, json: { message: 'Validation Failed' } },
+    { json: [{ ...PR_REF, head: { sha: 'abc123def', ref: 'ab/x' } }] },
+  ])
+  expect(await raced.forge.openPr(opts)).toMatchObject({ number: 123 })
 })
 
 describe('GitHubForge.inspectLandingGate', () => {
