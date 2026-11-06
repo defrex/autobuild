@@ -87,7 +87,7 @@ describe('plugin SDK package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.9.0')
+    expect(PLUGIN_API_VERSION).toBe('1.10.0')
     for (const symbol of [
       describeAgentRunnerContract,
       describeTicketSourceContract,
@@ -314,12 +314,25 @@ describe('plugin SDK package surface', () => {
         const listing: TicketPageListing = { tickets: [], diagnostics: [], total: 5 }
         const native: NonNullable<TicketSource['listPage']> = async (_criteria, _page) => listing
         if ((await native(criteria, page)).total !== 5) throw new Error('page types')
+        const assigned: TicketCriteria = { state: 'Ready', assignee: 'me' }
+        const capable: Pick<
+          TicketSource,
+          'readyAssignee' | 'prepareReadyAssignee' | 'readyAssigneeRefusal' | 'describeReadyAssignee'
+        > = {
+          readyAssignee: true,
+          prepareReadyAssignee: async () => {},
+          readyAssigneeRefusal: (value) => (value === assigned.assignee ? undefined : 'only me'),
+          describeReadyAssignee: async (value) => \`\${value} → @fixture\`,
+        }
+        await capable.prepareReadyAssignee?.()
+        if (capable.readyAssigneeRefusal?.('me') !== undefined) throw new Error('assignee types')
+        if ((await capable.describeReadyAssignee?.('me')) !== 'me → @fixture') throw new Error('assignee types')
         const details: ForgeFailureDetails = { kind: 'rate-limited', resetAt: '2026-10-20T00:00:00.000Z' }
         const context: ForgeRequestContext = { build: 'fixture' }
         const observer: ForgeRequestObserver = (request) => { if (request.build !== context.build) throw new Error('context') }
         observer(context)
         if (!isForgeFailure(new ForgeFailure('limit', details))) throw new Error('missing runtime failure export')
-        if (PLUGIN_API_VERSION !== '1.9.0') {
+        if (PLUGIN_API_VERSION !== '1.10.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
         }
         if (typeof FakeTicketSource !== 'function') {
