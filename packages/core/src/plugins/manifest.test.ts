@@ -29,7 +29,7 @@ describe('plugin manifest', () => {
       factory,
       requiredEnv: ['JIRA_TOKEN', 'JIRA_SITE'],
     })
-    expect(PLUGIN_API_VERSION).toBe('1.9.0')
+    expect(PLUGIN_API_VERSION).toBe('1.10.0')
   })
 
   test('ticket descriptor validation is strict and environment names are nonblank and unique', () => {
@@ -111,12 +111,12 @@ describe('plugin manifest', () => {
 
   test('returns structured compatibility status', () => {
     expect(pluginApiCompatibility('^1.0.0')).toMatchObject({
-      hostVersion: '1.9.0',
+      hostVersion: '1.10.0',
       status: 'compatible',
     })
-    for (const range of ['^1.0.0', '^1.2.0', '^1.7.0', '^1.8.0', '^1.9.0'])
+    for (const range of ['^1.0.0', '^1.2.0', '^1.7.0', '^1.8.0', '^1.9.0', '^1.10.0'])
       expect(pluginApiCompatibility(range).status).toBe('compatible')
-    expect(pluginApiCompatibility('^1.10.0').status).toBe('incompatible')
+    expect(pluginApiCompatibility('^1.11.0').status).toBe('incompatible')
     expect(pluginApiCompatibility('not-semver').status).toBe('invalid')
     try {
       parsePluginManifest({ name: 'future', apiVersion: '^2.0.0' })

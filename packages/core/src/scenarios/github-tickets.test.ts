@@ -12,8 +12,9 @@ import { reduceBuild } from '../kernel/reducer'
 import { FakeGitHubIssues } from '../ports/tickets/github-fake'
 import { GitHubTicketSource } from '../ports/tickets/github'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
+import { parseConfig } from '../config/load'
 import { ticketsSchema } from '../config/schema'
-import { emptyTickReport } from '../processes/dispatcher'
+import { emptyTickReport, readyCriteria } from '../processes/dispatcher'
 import {
   CONFIG_TOML,
   CONFORMING_BODY,
@@ -121,4 +122,122 @@ test('a spec bounce leaves the issue open in triage', async () => {
   expect(github.issue(issue)).toMatchObject({ state: 'open', labels: ['autobuild'] })
   expect(github.comments.get(issue)).toHaveLength(1)
   expectNoCounts(github)
+}, 30_000)
+
+// ── readyAssignee: each dispatcher claims only its credential owner's issues ──
+
+const ME_TOML = GITHUB_TOML.replace(
+  'source = "github"\n',
+  'source = "github"\nreadyAssignee = "me"\n',
+)
+
+function sourceAs(github: FakeGitHubIssues, login: string | null): GitHubTicketSource {
+  return new GitHubTicketSource({
+    transport: github.transportAs(login),
+    repository: github.repository,
+    lifecycle: ticketLifecycle(ticketsSchema.parse({ source: 'github' })),
+    readyLabels: ['autobuild'],
+  })
+}
+
+function fileReady(github: FakeGitHubIssues, title: string, ...assignees: string[]): number {
+  return github.fileIssue({
+    title,
+    body: CONFORMING_BODY,
+    labels: ['autobuild', 'autobuild:ready'],
+    assignees,
+  })
+}
+
+test('two dispatchers with readyAssignee = "me" list disjoint ready sets', async () => {
+  const github = new FakeGitHubIssues()
+  const alice = fileReady(github, 'For alice', 'alice')
+  const bob = fileReady(github, 'For bob', 'bob')
+  fileReady(github, 'For nobody')
+  const shared = fileReady(github, 'For alice and carol', 'alice', 'carol')
+  const criteria = readyCriteria(parseConfig(ME_TOML))
+  expect(criteria.assignee).toBe('me')
+  const ready = async (login: string) =>
+    (await sourceAs(github, login).listReady(criteria)).tickets.map((t) => Number(t.ref.id))
+  expect(await ready('alice')).toEqual([alice, shared])
+  expect(await ready('bob')).toEqual([bob])
+})
+
+test('an assignee gate adds no GitHub request to any dispatcher tick', async () => {
+  const userRequests = (github: FakeGitHubIssues) => github.count('user')
+  // X: no gate. Y: "me" from the start. Z: "me" enabled by a reload. Y and Z
+  // also hold issues their user must never claim (Z's arrives with the
+  // reload); the gate narrows the one ready read, so those cost nothing.
+  const x = new FakeGitHubIssues()
+  fileReady(x, 'Add rate limiting', 'alice')
+  const y = new FakeGitHubIssues()
+  fileReady(y, 'Add rate limiting', 'alice')
+  fileReady(y, 'For bob', 'bob')
+  fileReady(y, 'For nobody')
+  const z = new FakeGitHubIssues()
+  fileReady(z, 'Add rate limiting', 'alice')
+
+  const xSource = sourceAs(x, 'alice')
+  const ySource = sourceAs(y, 'alice')
+  const zSource = sourceAs(z, 'alice')
+  // Dispatch startup prepares every source before its first tick.
+  for (const source of [xSource, ySource, zSource]) await source.prepareReadyAssignee()
+  for (const github of [x, y, z]) github.resetRequests()
+
+  const xConfig = { current: parseConfig(GITHUB_TOML) }
+  const zConfig = { current: parseConfig(GITHUB_TOML) }
+  const hx = await makeHarness({
+    handlers: happyHandlers(),
+    ticketSource: xSource,
+    configToml: GITHUB_TOML,
+    getConfig: () => xConfig.current,
+  })
+  const hy = await makeHarness({
+    handlers: happyHandlers(),
+    ticketSource: ySource,
+    configToml: ME_TOML,
+  })
+  const hz = await makeHarness({
+    handlers: happyHandlers(),
+    ticketSource: zSource,
+    configToml: GITHUB_TOML,
+    getConfig: () => zConfig.current,
+  })
+  harnesses.push(hx, hy, hz)
+
+  const tick = async (h: E2eHarness, github: FakeGitHubIssues) => {
+    const before = github.requests.length
+    const report = await h.dispatcher.tick()
+    return { report, requests: github.requests.length - before }
+  }
+
+  // First tick: Y's gate costs what X's ungated tick costs, and Y claims only alice's issue.
+  const [x1, y1] = [await tick(hx, x), await tick(hy, y)]
+  expect(x1.report).toEqual({ ...emptyTickReport(), dispatched: 1 })
+  expect(y1.report).toEqual({ ...emptyTickReport(), dispatched: 1 })
+  expect(y1.requests).toBe(x1.requests)
+  expect(y.issue(1002)?.labels).toEqual(['autobuild', 'autobuild:ready'])
+  expect(y.issue(1003)?.labels).toEqual(['autobuild', 'autobuild:ready'])
+
+  // Z's first tick dispatches like X's (no gate yet). Then a reload enables
+  // "me" on Z while X reloads another ready-query change: each changed
+  // ready query costs the same one fresh read, and "me" costs nothing more.
+  const z1 = await tick(hz, z)
+  expect(z1.requests).toBe(x1.requests)
+  zConfig.current = parseConfig(ME_TOML)
+  xConfig.current = parseConfig(
+    GITHUB_TOML.replace('source = "github"\n', 'source = "github"\nreadyLabels = []\n'),
+  )
+  fileReady(z, 'For bob', 'bob')
+  const [x2, z2] = [await tick(hx, x), await tick(hz, z)]
+  expect(z2.requests).toBe(x2.requests)
+  expect(z.requests.findLast((r) => r.kind === 'list-issues')?.params?.assignee).toBe('alice')
+  expect(z.issue(1002)?.labels).toEqual(['autobuild', 'autobuild:ready'])
+
+  // Warm ticks keep matching.
+  const [x3, y3, z3] = [await tick(hx, x), await tick(hy, y), await tick(hz, z)]
+  expect(y3.requests).toBe(x3.requests)
+  expect(z3.requests).toBe(x3.requests)
+  for (const github of [x, y, z]) expect(userRequests(github)).toBe(0)
+  expectNoCounts(y)
 }, 30_000)
