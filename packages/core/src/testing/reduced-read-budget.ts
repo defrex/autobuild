@@ -1494,6 +1494,130 @@ export async function nodePollingReadBudget(opts: {
   }
 }
 
+/** Node child discovery (AUT-1129) reads only the digest batch plus facts for
+ * builds whose digest names the node. Fresh dispatchers (one per hosted
+ * invocation) observing an open node spend the same store reads at 10 and at
+ * 1,000 unrelated builds, never read an unrelated build outside the digest
+ * batch, and read zero event rows on an unchanged tick. */
+export async function nodeChildDiscoveryReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  repo: string
+  /** One tick on a fresh dispatcher. */
+  tick: () => Promise<unknown>
+  advance: (ms: number) => void
+  /** Exhaustive ticket listings so far: proves observation actually ran. */
+  observed: () => number
+}) {
+  const { store, repo } = opts
+  const ticket = { source: 'fake', id: 'UNRELATED' }
+  const created = (target?: string, kind?: 'node') => ({
+    actor: DISPATCHER,
+    type: 'build.created' as const,
+    payload: {
+      ticket,
+      repo,
+      baseBranch: 'main',
+      ...(kind ? { kind } : {}),
+      ...(target ? { target: { ticket, build: target } } : {}),
+    },
+  })
+  const terminal = async (slug: string, target?: string, kind?: 'node') => {
+    await store.createBuild({ slug, repo, ticket, created: created(target, kind) })
+    await store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+  }
+  // Half the unrelated builds target a different, finished node: the filter
+  // is per node, not "has any target".
+  await terminal('unrelated-node', undefined, 'node')
+  const unrelated = new Set(['unrelated-node'])
+  const methods = [
+    'getReducerValue',
+    'getEvents',
+    'getBuild',
+    'getArtifact',
+    'getLatestArtifactMeta',
+    'listArtifacts',
+    'getRepoBuildDigests',
+  ] as const
+  let baseline: Record<string, number> | undefined
+  for (const count of [10, 1000]) {
+    while (unrelated.size <= count) {
+      const slug = `unrelated-${unrelated.size}`
+      await terminal(slug, unrelated.size % 2 ? 'unrelated-node' : undefined)
+      unrelated.add(slug)
+    }
+    // Saved reduced values for the new builds settle once.
+    await opts.tick()
+    const calls: Record<string, number> = {}
+    let strays = 0
+    const originals = new Map<string, unknown>()
+    for (const method of methods) {
+      const original = Reflect.get(store, method) as (...args: unknown[]) => Promise<unknown>
+      originals.set(method, original)
+      Reflect.set(store, method, (...args: unknown[]) => {
+        const [first, second] = args as [unknown, { reducer?: string } | undefined]
+        // The per-key reads behind the digest batch are the listing every
+        // tick already pays; they are not per-build discovery reads.
+        if (method !== 'getReducerValue' || second?.reducer !== 'buildDigest') {
+          calls[method] = (calls[method] ?? 0) + 1
+          const slug =
+            typeof first === 'string'
+              ? first
+              : first && typeof first === 'object' && 'slug' in first
+                ? first.slug
+                : undefined
+          if (typeof slug === 'string' && unrelated.has(slug)) strays++
+        }
+        return original.apply(store, args)
+      })
+    }
+    const logs = [
+      ...(
+        Reflect.get(store, 'builds') as Map<
+          string,
+          { events: import('../events/catalog').AbEvent[] }
+        >
+      ).values(),
+    ]
+    let rows = 0
+    for (const { events } of logs) {
+      const slice = events.slice.bind(events)
+      events.slice = (start, end) => {
+        const selected = slice(start, end)
+        rows += selected.length
+        return selected
+      }
+    }
+    try {
+      const listings = opts.observed()
+      // Past the integration poll window, so the node observes its children.
+      opts.advance(301_000)
+      await opts.tick()
+      expect(opts.observed()).toBeGreaterThan(listings)
+      expect(strays).toBe(0)
+      const costs = { ...calls }
+      // Nothing changes: a fresh process reads no event rows.
+      opts.advance(10_000)
+      await opts.tick()
+      rows = 0
+      opts.advance(10_000)
+      await opts.tick()
+      expect(rows).toBe(0)
+      expect(strays).toBe(0)
+      if (baseline) expect(costs).toEqual(baseline)
+      baseline = costs
+    } finally {
+      for (const { events } of logs) Reflect.deleteProperty(events, 'slice')
+      for (const method of methods) Reflect.deleteProperty(store, method)
+      for (const [method, original] of originals)
+        if (Reflect.get(store, method) !== original) Reflect.set(store, method, original)
+    }
+  }
+}
+
 /** A kernel Git outage is one durable repository condition. Fresh
  * dispatchers (one per hosted invocation) read it from the saved repository
  * value: while nothing changes each tick spends at most one failed Git spawn

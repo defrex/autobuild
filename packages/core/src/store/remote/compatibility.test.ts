@@ -188,6 +188,37 @@ const matrixReleases = [
     catalogIdentity: 'frozen-published-1.4-catalog',
   },
 ]
+test('released clients receive build digests without the additive node targets', async () => {
+  const { buildDigestReducer } = await import('../digest')
+  const value = buildDigestReducer.finish({
+    ...buildDigestReducer.initial(),
+    nodeTargets: ['node-a'],
+  })
+  const answer = { version: buildDigestReducer.version, cursor: 3, value }
+  let projected = 0
+  for (const release of matrixReleases) {
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]
+    if (!catalog || !Object.hasOwn(catalog.versions, 'buildDigest')) continue
+    const adapted = reducerValueForClient(
+      {
+        version: release.version,
+        projects: release.projects ?? false,
+        catalogIdentity: release.catalogIdentity,
+      },
+      'buildDigest',
+      answer,
+      matrixReleases,
+    )
+    expect(adapted.version).toBe(catalog.versions.buildDigest!)
+    expect(adapted.value).not.toHaveProperty('nodeTargets')
+    expect(projectReducerValue('buildDigest', adapted.value, catalog)).toEqual({
+      value: adapted.value,
+    })
+    projected++
+  }
+  expect(projected).toBeGreaterThan(0)
+})
+
 for (const release of matrixReleases) {
   test(`published ${release.version}: every named reducer fits its frozen acceptance contract`, () => {
     expect(release.protocol).toBeDefined()

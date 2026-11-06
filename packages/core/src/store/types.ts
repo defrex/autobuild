@@ -117,6 +117,11 @@ export interface BuildDigest {
   mergedSha?: string
   nodeContribution?: EventPayload<'node.contribution-recorded'>
   kind?: 'work' | 'node'
+  /** Sorted node build slugs the build's target or parent moves have ever
+   * named; a monotone superset of its node relationships. Current adapters
+   * always present it, possibly empty; it is absent only in an older peer's
+   * answer, so read it through `digestNodeTargets`. */
+  nodeTargets?: string[]
   nodeOpened?: true
   prClosed?: true
   /** Latest landing, contribution, completion or abort fact sequence. */

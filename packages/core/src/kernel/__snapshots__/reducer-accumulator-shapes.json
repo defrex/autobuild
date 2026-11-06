@@ -7071,6 +7071,7 @@
     "$.merged: string",
     "$.mergedSha: undefined",
     "$.nodeOpened: boolean",
+    "$.nodeTargets: array",
     "$.observations: array",
     "$.observations[].seq: number",
     "$.observations[].ts: string",

@@ -267,6 +267,35 @@ const parameterized: Record<string, Pick<ValueCatalogEntry, 'args' | 'create'>> 
     create: ({ phase, round }) => phaseFailuresReducer(phase, round),
   },
 }
+/** The node slugs one digest row names: a `build.created` target, or either
+ * side of a node parent move. Undecodable payloads name none. */
+function digestNodeTargetsOf(event: { type: string; payload: unknown }): {
+  nodeTargets?: string[]
+} {
+  const build = (target: unknown) =>
+    target !== null &&
+    typeof target === 'object' &&
+    'build' in target &&
+    typeof target.build === 'string'
+      ? [target.build]
+      : []
+  const targetOf = (value: unknown) =>
+    value !== null && typeof value === 'object' && 'target' in value ? build(value.target) : []
+  const payload = event.payload
+  const nodeTargets =
+    event.type === 'build.created'
+      ? targetOf(payload)
+      : (event.type === 'node.parent-requested' || event.type === 'node.parent-accepted') &&
+          payload !== null &&
+          typeof payload === 'object'
+        ? [
+            ...('old' in payload ? targetOf(payload.old) : []),
+            ...('next' in payload ? targetOf(payload.next) : []),
+          ]
+        : []
+  return nodeTargets.length ? { nodeTargets } : {}
+}
+
 export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
   Object.entries(REGISTERED).map(([name, entry]) => [
     name,
@@ -299,6 +328,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = Object.fromEntries(
                       ? { nodeContribution: event.payload }
                       : {}),
                     ...(event.type === 'build.created' ? { kind: event.payload.kind } : {}),
+                    ...digestNodeTargetsOf(event),
                     ...(event.payload !== null &&
                     typeof event.payload === 'object' &&
                     'instance' in event.payload

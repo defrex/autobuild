@@ -288,7 +288,12 @@ for (const version of frozenBaseline) {
       await call('/builds/demo/events', {
         actor: { kind: 'dispatcher' },
         type: 'build.created',
-        payload: { ticket: { source: 'file', id: 'T-1' }, repo: 'repo', baseBranch: 'main' },
+        payload: {
+          ticket: { source: 'file', id: 'T-1' },
+          repo: 'repo',
+          baseBranch: 'main',
+          target: { ticket: { source: 'file', id: 'N-1' }, build: 'demo-node' },
+        },
       }),
     )
     expect(storeWire.eventListSchema.parse(await call('/builds/demo/events?since=0'))).toHaveLength(
@@ -336,6 +341,8 @@ for (const version of frozenBaseline) {
     })
     const digests = await call('/repos/repo/build-digests')
     expect(digests[0]).not.toHaveProperty('integrationAuditPending')
+    // The additive node targets reach every client; frozen schemas ignore them.
+    expect(digests[0]).toHaveProperty('nodeTargets', ['demo-node'])
     storeWire.buildDigestListSchema.parse(digests)
     const session = storeWire.sessionRecordWireSchema.parse(
       await call('/repos/repo/sessions', { repo: 'repo', operator: 'old' }),

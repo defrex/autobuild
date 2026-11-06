@@ -13,7 +13,10 @@ import { reduceBuild } from '../kernel/reducer'
 import { checkIncremental } from '../kernel/incremental-contract'
 import { openExecution } from '../processes/execution-settlement'
 import {
+  BUILD_DIGEST_REDUCER_VERSION,
+  BuildDigestCapabilityError,
   buildDigestReducer,
+  digestNodeTargets,
   type DigestEvent,
   type DigestEventRow,
   reduceBuildDigest as reduceBuildDigestWhole,
@@ -76,7 +79,7 @@ function reduceBuildDigest(events: DigestEvent[]): ReturnType<typeof reduceBuild
 
 describe('reduceBuildDigest', () => {
   test('an empty log derives an empty, terminal-less digest', () => {
-    expect(reduceBuildDigest([])).toEqual({ observations: [] })
+    expect(reduceBuildDigest([])).toEqual({ observations: [], nodeTargets: [] })
   })
 
   test('terminal is the latest terminal fact, in-order overwrite, exactly reduceBuild', () => {
@@ -107,21 +110,25 @@ describe('reduceBuildDigest', () => {
     }
     // Explicit shape pins for the nontrivial orderings.
     expect(reduceBuildDigest(logs[0]!)).toEqual({
+      nodeTargets: [],
       observations: [],
       terminal: 'done',
       readinessChangeSeq: 3,
     })
     expect(reduceBuildDigest(logs[1]!)).toEqual({
+      nodeTargets: [],
       observations: [],
       terminal: 'done',
       readinessChangeSeq: 2,
     })
     expect(reduceBuildDigest(logs[2]!)).toEqual({
+      nodeTargets: [],
       observations: [],
       terminal: 'aborted',
       readinessChangeSeq: 2,
     })
     expect(reduceBuildDigest(logs[5]!)).toEqual({
+      nodeTargets: [],
       observations: [
         { seq: 2, ts: event('observation.recorded', 2).ts },
         { seq: 4, ts: event('observation.recorded', 4).ts },
@@ -136,6 +143,7 @@ describe('reduceBuildDigest', () => {
     const second = event('observation.recorded', 7)
     const third = event('observation.recorded', 9)
     expect(reduceBuildDigest([first, event('build.completed', 4), second, third])).toEqual({
+      nodeTargets: [],
       observations: [
         { seq: 3, ts: first.ts },
         { seq: 7, ts: second.ts },
@@ -148,6 +156,7 @@ describe('reduceBuildDigest', () => {
 
   test('merged is the latest pr.merged ts, in-order overwrite, absent without one', () => {
     expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
+      nodeTargets: [],
       observations: [],
       terminal: 'done',
       readinessChangeSeq: 1,
@@ -157,12 +166,14 @@ describe('reduceBuildDigest', () => {
     // Multiple merges: the log's latest wins (in-order overwrite, the
     // terminal-fact pattern).
     expect(reduceBuildDigest([event('observation.recorded', 1), first, second])).toEqual({
+      nodeTargets: [],
       observations: [{ seq: 1, ts: event('observation.recorded', 1).ts }],
       merged: second.ts,
       readinessChangeSeq: 5,
     })
     // A single merge carries its own ts.
     expect(reduceBuildDigest([first])).toEqual({
+      nodeTargets: [],
       observations: [],
       merged: first.ts,
       readinessChangeSeq: 2,
@@ -176,6 +187,7 @@ describe('reduceBuildDigest', () => {
         event('build.completed', 4),
       ]),
     ).toEqual({
+      nodeTargets: [],
       observations: [],
       merged: '2026-07-15T12:00:03.000Z',
       terminal: 'done',
@@ -286,9 +298,37 @@ describe('reduceBuildDigest pending-work flags', () => {
 
   test('neither flag is present for a log without those facts', () => {
     expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
+      nodeTargets: [],
       observations: [],
       terminal: 'done',
       readinessChangeSeq: 1,
     })
+  })
+})
+
+describe('reduceBuildDigest node targets', () => {
+  const row = (type: AbEvent['type'], seq: number, nodeTargets?: string[]): DigestEventRow => ({
+    ...event(type, seq),
+    ...(nodeTargets ? { nodeTargets } : {}),
+  })
+
+  test('the version bump re-reduces saved digests that predate node targets', () => {
+    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(11)
+  })
+
+  test('collects every named node as a sorted unique set that only grows', () => {
+    const log = [
+      row('build.created', 1, ['n2']),
+      row('node.parent-requested', 2, ['n2', 'n1']),
+      row('node.parent-accepted', 3, ['n2', 'n1']),
+      row('node.parent-requested', 4, ['n1', 'n3']),
+    ]
+    expect(reduceBuildDigest(log).nodeTargets).toEqual(['n1', 'n2', 'n3'])
+    expect(reduceBuildDigest([row('build.created', 1)]).nodeTargets).toEqual([])
+  })
+
+  test('digestNodeTargets fails typed on an answer without the field', () => {
+    expect(digestNodeTargets({ slug: 'b', nodeTargets: ['n'] })).toEqual(['n'])
+    expect(() => digestNodeTargets({ slug: 'old' })).toThrow(BuildDigestCapabilityError)
   })
 })

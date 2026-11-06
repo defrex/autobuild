@@ -13173,6 +13173,129 @@ test('fresh node polling has bounded reads at 100 and 100000 events', async () =
   })
 }, 30_000)
 
+test('node child discovery against digests without node targets fails typed, never reading facts', async () => {
+  const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  const node = (await h.store.listBuilds())[0]!
+  for (let i = 0; i < 3; i++) {
+    await h.store.createBuild({
+      slug: `old-${i}`,
+      repo: REPO,
+      ticket: { source: 'fake', id: `OLD-${i}` },
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket: { source: 'fake', id: `OLD-${i}` }, repo: REPO, baseBranch: 'main' },
+      },
+    })
+    await h.store.append(`old-${i}`, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+  }
+  const store = h.store as MemoryBuildStore
+  const digests = store.getRepoBuildDigests.bind(store)
+  store.getRepoBuildDigests = async (repo) => {
+    const answer = await digests(repo)
+    for (const digest of answer.values()) delete digest.nodeTargets
+    return answer
+  }
+  const facts: string[] = []
+  const reduced = store.getReducerValue.bind(store)
+  store.getReducerValue = async (scope, request) => {
+    if (scope.kind === 'build' && scope.slug !== node.slug && request.reducer !== 'buildDigest')
+      facts.push(`${scope.slug}:${request.reducer}`)
+    return reduced(scope, request)
+  }
+  const { BuildDigestCapabilityError } = await import('../store/digest')
+  await harness({
+    store: h.store,
+    clock: h.clock,
+    wrapTickets: () => h.tickets,
+    dispatchForge: h.forge,
+  }).dispatcher.tick({ acceptNewWork: false })
+  // The node's sweep reports the typed failure and retries; it never falls
+  // back to reading each build's facts.
+  const reported = (await h.store.getEvents(node.slug)).findLast(
+    (event) => event.type === 'build.janitor-attempt-failed',
+  )
+  expect(reported?.type === 'build.janitor-attempt-failed' && reported.payload.message).toBe(
+    new BuildDigestCapabilityError('old-0').message,
+  )
+  expect(facts).toEqual([])
+})
+
+test('fresh node child discovery reads the same at 10 and 1000 unrelated builds', async () => {
+  const h = harness({
+    tickets: [
+      readyTicket('N', { kind: 'node' }),
+      { ...readyTicket('DISCOVERED-OPEN'), target: 'N', state: 'In Progress' },
+      { ...readyTicket('DISCOVERED-ABORTED'), target: 'N', state: 'In Progress' },
+    ],
+  })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  const node = (await h.store.listBuilds())[0]!
+  for (const [slug, aborted] of [
+    ['discovered-open', false],
+    ['discovered-aborted', true],
+  ] as const) {
+    const ticket = { source: 'fake', id: slug.toUpperCase() }
+    await h.store.createBuild({
+      slug,
+      repo: REPO,
+      ticket,
+      branch: `ab/${slug}`,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket,
+          repo: REPO,
+          baseBranch: node.branch!,
+          kind: 'work',
+          target: { ticket: node.ticket!, build: node.slug },
+        },
+      },
+    })
+    // A held child and a settled abort keep every tick after the first unchanged.
+    await h.store.append(
+      slug,
+      aborted
+        ? { actor: KERNEL, type: 'build.aborted', payload: {} }
+        : { actor: humanActor('test'), type: 'build.hold-requested', payload: {} },
+    )
+  }
+  let listings = 0
+  const listAll = h.tickets.listAll.bind(h.tickets)
+  h.tickets.listAll = async (...args) => {
+    listings++
+    return listAll(...args)
+  }
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const { nodeChildDiscoveryReadBudget } = await import('../testing/reduced-read-budget')
+  await nodeChildDiscoveryReadBudget({
+    store: h.store as MemoryBuildStore,
+    repo: REPO,
+    advance: (ms) => h.clock.advance(ms),
+    observed: () => listings,
+    tick: () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+  const { readBuildFacts } = await import('../store/reduced-reads')
+  const observation = (await readBuildFacts(h.store, node.slug)).value.state.integration
+    ?.observation
+  // The aborted child's ticket went back to Triage, so it stays open too.
+  expect(observation?.openChildren).toEqual(['DISCOVERED-ABORTED', 'DISCOVERED-OPEN'])
+}, 60_000)
+
 test('fresh node polling with many recorded child issue links has bounded reads', async () => {
   const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
   h.forge.remoteBranches.set('main', BASE_SHA)
