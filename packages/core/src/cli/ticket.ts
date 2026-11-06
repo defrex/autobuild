@@ -5,6 +5,7 @@ import { createForge } from '../ports/forge/create'
 import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/tree'
 import { formatIssueLinks, parseIssueLinkList } from '../ports/tickets/issue-links'
 import { parsePriorityFlag, ticketPriority } from '../ports/tickets/priority'
+import { parseIssueId } from '../ports/tickets/github-issues'
 import { readBuildFacts } from '../store/reduced-reads'
 import { exportTickets, importTickets, directMigration } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
@@ -520,7 +521,7 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
   const ticket = await requireTicket(source, opts.id)
   // An asset-listing failure fails the command rather than hiding the assets.
   const assets = await withTicketAssets(opts, source, ({ store, repo }) =>
-    store.listTicketAssets(repo, opts.id),
+    store.listTicketAssets(repo, assetTicketId(source.name, opts.id)),
   )
   // One batched read, only when the ticket declares blockers.
   const rejectedName = ticketLifecycle(config.tickets).rejected
@@ -583,6 +584,15 @@ function withTicketStore<T>(
   )
 }
 
+/** The id ticket assets are keyed by. GitHub accepts `123` and `#123` for one
+ * issue, and the dispatcher reads assets by `ref.id`, so both spellings key by
+ * the issue number. Other sources key by the id as given. */
+export function assetTicketId(source: string, id: string): string {
+  if (source !== 'github') return id
+  const number = parseIssueId(id)
+  return number === null ? id : String(number)
+}
+
 function withTicketAssets<T>(
   opts: TicketCommandOpts,
   source: TicketSource,
@@ -629,8 +639,9 @@ function warnActiveBuilds(
  * asset, then leave a note on the ticket in its source. Order matters: the
  * source is asked first, so an unknown id stores nothing; the note follows the
  * store write, so it never points at nothing. */
-export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
-  const { source } = await resolveTicketCommand(opts, 'attach')
+export async function abTicketAttach(given: TicketAttachOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(given, 'attach')
+  const opts = { ...given, id: assetTicketId(source.name, given.id) }
   await requireTicket(source, opts.id)
   const walk = await walkAssetPath(opts.path)
   const name = opts.name ?? walk.basename
@@ -673,8 +684,9 @@ export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
 
 /** `ab ticket asset get <id> <kind> <name> <dest>` — exact bytes at the
  * latest or a named revision. */
-export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> {
-  const resolved = await resolveTicketConfig(opts, 'ab ticket asset get')
+export async function abTicketAssetGet(given: TicketAssetGetOpts): Promise<void> {
+  const resolved = await resolveTicketConfig(given, 'ab ticket asset get')
+  const opts = { ...given, id: assetTicketId(resolved.config.tickets.source, given.id) }
   const readAsset = ({ store, repo }: { store: TicketAssetStore; repo: string }) =>
     store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev)
   const asset =
@@ -704,8 +716,9 @@ export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> 
 
 /** `ab ticket asset rm <id> <kind> <name>` — remove from the current assets
  * (earlier revisions stay retrievable) and note the removal on the ticket. */
-export async function abTicketAssetRm(opts: TicketAssetRmOpts): Promise<void> {
-  const { source } = await resolveTicketCommand(opts, 'asset rm')
+export async function abTicketAssetRm(given: TicketAssetRmOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(given, 'asset rm')
+  const opts = { ...given, id: assetTicketId(source.name, given.id) }
   const { removed, active } = await withTicketAssets(
     opts,
     source,
@@ -792,10 +805,20 @@ export function stateRoles(
   const named: Array<[TicketStateRole, string]> = [
     ['create', tickets.createState ?? 'triage'],
     ['ready', tickets.readyState],
-    ['claimed', tickets.source === 'hosted' ? (tickets.claimedState ?? 'doing') : 'doing'],
+    [
+      'claimed',
+      tickets.source === 'hosted' || tickets.source === 'github'
+        ? (tickets.claimedState ?? 'doing')
+        : 'doing',
+    ],
     ['triage', triage],
     ['proposal', tickets.proposalState ?? triage],
-    ['done', tickets.source === 'hosted' ? (tickets.doneState ?? 'done') : 'done'],
+    [
+      'done',
+      tickets.source === 'hosted' || tickets.source === 'github'
+        ? (tickets.doneState ?? 'done')
+        : 'done',
+    ],
   ]
   if (tickets.backlogState !== undefined) named.push(['backlog', tickets.backlogState])
   if (tickets.rejectedState !== undefined) named.push(['rejected', tickets.rejectedState])
