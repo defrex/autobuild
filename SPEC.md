@@ -1807,7 +1807,8 @@ implementer:  ab context   (findings.json now materialized) → …
 
 Human/pre-build ticket grooming uses one configured-source namespace
 (`ab ticket create|update|block|unblock|list|show|move`, plus the ticket-asset
-forms below). Migration adds `ab ticket export <dir>` and `ab ticket import <dir>`,
+forms below). Migration adds `ab ticket export <dir>` and
+`ab ticket import <dir> [--states <state,…>]`,
 plus `ab ticket migration record <dir>`
 (see [Ticket source migration](#ticket-source-migration)). These commands are
 sessionless, source-agnostic, and never available as a mid-build spec
@@ -2434,9 +2435,11 @@ blocker, when no rejected role is configured. Reopening an issue on GitHub
 returns it to triage, and the adapter strips a stale pre-reopen state label the
 first time it reads the issue. Blockers are GitHub's native issue dependencies,
 and a blocker in another repository never resolves. Assets live in the
-BuildStore, with notes posted as issue comments, and tickets carry no comment
-history. A ticket's own issue is an implicit `closes` link. The source has no
-guarded writes, no ticket tree and no export or import. Dispatcher reads are
+BuildStore, with notes posted as issue comments, and `get` carries no comment
+history; export and import read it explicitly. A ticket's own issue is an
+implicit `closes` link. The source has no guarded writes and no ticket tree.
+Export and import are supported (see
+[Ticket source migration](#ticket-source-migration)). Dispatcher reads are
 conditional requests whose validators live only under the local state root, so
 an unchanged repository costs a tick no primary rate-limit budget; display-only
 state counts are one fresh GraphQL request per call, plus one per further
@@ -4480,8 +4483,8 @@ journals remain exclusively in the selected BuildStore.
 portable file tracker atomically to an absent or empty destination.
 `ab ticket import <dir>` preflights the entire tracker and target inventory, then
 creates or adopts tickets, maps blockers, deduplicates comments by exact body and
-restores current attachments. Both run sessionless without forge access. The
-GitHub source supports neither.
+restores current attachments. Both run sessionless without forge access. File,
+hosted and GitHub sources support import; every built-in source supports export.
 
 TicketCreateOptions includes optional `requestedId`. Unsupported sources reject
 it. File keeps safe ids exactly; hosted preserves canonical own-team positive
@@ -4489,6 +4492,27 @@ numbers and advances its counter above every occupied number. Creation-key
 adoption precedes collision checks. Known kept-number clashes stop import before
 any target mutation. Stable migration identities and atomic mapping files make
 interrupted imports resumable without content-based adoption.
+
+A source whose ids cannot be chosen declares `allocatesIds`; GitHub does. Import
+then plans no requested ids and runs no target inventory: every ticket is created
+without `requestedId`, remapped to the id the source returns, and adopted on
+resume by its creation key inside `create`. Optional `readComments(id)` returns
+comment history for export and import only, never on a recurring path, so `get`
+may stay comment-free. Optional `importProblems` reports every destination
+refusal (unrepresentable states, colliding labels, unusable creation keys)
+before any write, together with import's own preflight problems. Issue links are
+rewritten through the mapping only for an export from GitHub, whose issue
+numbers are the exported tickets.
+
+The export manifest records `roles`: each state directory's lifecycle roles under
+the exporting configuration. Import lands a role-holding state in the
+destination's state for its first role in the order done, rejected, claimed,
+ready, backlog, triage, proposal, create, and refuses when the destination
+configures no state for that role. `ab ticket import <dir> --states <a,b>`
+imports only tickets in the named states. A blocker on an excluded ticket in the
+done role is dropped as resolved; any other blocker, target or GitHub issue link
+naming an excluded ticket, and any unfinished build whose ticket or target is
+excluded, is refused before any write.
 
 File frontmatter additionally supports optional structured `comments` (body,
 createdAt, optional author) and `attachments` (kind, name, layout, entries with
@@ -4499,8 +4523,9 @@ assets. Build claims and spec re-pins freeze native assets into durable snapshot
 
 State normalization and the complete operator procedure are documented in
 [Ticket migration](docs/ticket-migration.md). The same reference is delivered in
-the installed guide. Export keeps lifecycle membership without inferring roles;
-import reuses unique case-insensitive states and creates normalized missing ones.
+the installed guide. Export keeps each ticket's state and records the configured
+roles each state held; import maps role-holding states by role, reuses unique
+case-insensitive states for the rest and creates normalized missing ones.
 
 
 Completed `ab ticket import <dir> [--store <ref>]` records a durable repository
