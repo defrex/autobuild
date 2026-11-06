@@ -5947,23 +5947,43 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  /** Install a counting state-count read on the fixture's fake source, which
-   * otherwise cannot enumerate states. The file default triage name `Triage`
-   * resolves against the lowercase state case-insensitively. */
+  /** Install counting state-count reads on the fixture's fake source, which
+   * otherwise cannot enumerate states, and mark each dispatcher tick from
+   * `beginRepoTick` until `finishRepoTick` settles so a count read inside a
+   * tick is visible. The file default triage name `Triage` resolves against
+   * the lowercase state case-insensitively. */
   function countingTriageStates(
     tickets: object,
+    store: MemoryBuildStore,
     fail: (call: number) => boolean = () => false,
-  ): { calls: number; counts: number } {
-    const probe = { calls: 0, counts: 0 }
+  ): { counts: number; lists: number; inTick: number; ticks: number; tickOpen: boolean } {
+    const probe = { counts: 0, lists: 0, inTick: 0, ticks: 0, tickOpen: false }
+    const begin = store.beginRepoTick.bind(store)
+    const finish = store.finishRepoTick.bind(store)
+    Object.assign(store, {
+      beginRepoTick: async (...args: Parameters<typeof begin>) => {
+        probe.tickOpen = true
+        probe.ticks += 1
+        return await begin(...args)
+      },
+      finishRepoTick: async (...args: Parameters<typeof finish>) => {
+        try {
+          return await finish(...args)
+        } finally {
+          probe.tickOpen = false
+        }
+      },
+    })
     Object.assign(tickets, {
-      // Only a viewer reads bounded counts; a dispatcher's tick never does.
       countStates: async () => {
         probe.counts += 1
+        if (probe.tickOpen) probe.inTick += 1
+        if (fail(probe.counts)) throw new Error('ticket states unavailable')
         return [{ name: 'triage', tickets: 3 }]
       },
+      // Present so the sampler's preference for `countStates` is observable.
       listStates: async () => {
-        probe.calls += 1
-        if (fail(probe.calls)) throw new Error('ticket states unavailable')
+        probe.lists += 1
         return [
           { name: 'triage', tickets: 3 },
           { name: 'ready', tickets: 0 },
@@ -5973,11 +5993,13 @@ describe('abDispatch --once with an interactive terminal', () => {
     return probe
   }
 
-  test('watch samples the triage count once per tick and retains it when a later read fails', async () => {
-    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
+  test('watch samples the triage count between ticks at most once per 60 s and retains it when a later read fails', async () => {
+    // A 1 ms step keeps several ticks well under 60 s; the sleep jumps past it.
+    const clock = steppingClock(undefined, 1)
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
     const term = fakeTerminal()
     const stop = new AbortController()
-    const probe = countingTriageStates(fx.tickets, (call) => call === 2)
+    const probe = countingTriageStates(fx.tickets, fx.store, (call) => call === 2)
     let sleeps = 0
     let eventsAfterFirstTick = 0
     try {
@@ -5992,22 +6014,28 @@ describe('abDispatch --once with an interactive terminal', () => {
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
-            expect(probe.calls).toBe(1)
             await waitFor(() =>
               latestDashboardFrame(term).includes('triage 3 | queue 0 | active 0/1'),
             )
             eventsAfterFirstTick = (await fx.store.getRepoEvents(fx.origin)).length
-            return
           }
-          stop.abort()
+          // Only the startup poke has read while the ticks stay under 60 s.
+          if (sleeps <= 3) expect(probe.counts).toBe(1)
+          if (sleeps === 3) clock.advance(60_000)
+          // Past 60 s, the poke after the fourth tick returned read again.
+          if (sleeps === 4) expect(probe.counts).toBe(2)
+          if (sleeps === 5) stop.abort()
         },
         wire: fx.wire,
         terminal: term,
       })
 
-      // The second tick's read failed: the header keeps the last value, the
-      // tick does not fail, and the failure appends nothing.
-      expect(probe.calls).toBe(2)
+      expect(probe.ticks).toBeGreaterThanOrEqual(5)
+      expect(probe.counts).toBe(2)
+      expect(probe.inTick).toBe(0)
+      expect(probe.lists).toBe(0)
+      // The second read failed: the header keeps the last value, no tick
+      // fails, and the failure appends nothing.
       const frame = latestDashboardFrame(term)
       expect(frame).toContain('triage 3 | queue 0 | active 0/1')
       expect(frame).not.toContain('triage 0')
@@ -6026,7 +6054,9 @@ describe('abDispatch --once with an interactive terminal', () => {
   test('only interactive dispatchers sample the triage count or publish it', async () => {
     const run = async (opts: { kernelRunId?: string; frontendStatus?: boolean }) => {
       const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
-      const probe = countingTriageStates(fx.tickets)
+      const probe = countingTriageStates(fx.tickets, fx.store)
+      const stop = new AbortController()
+      let sleeps = 0
       try {
         await abDispatch({
           targetRepo: fx.checkout,
@@ -6034,7 +6064,12 @@ describe('abDispatch --once with an interactive terminal', () => {
           exec: spawnExec,
           stdout: () => {},
           stderr: (line) => fx.err.push(line),
-          once: true,
+          intervalMs: 1,
+          signal: stop.signal,
+          sleep: async () => {
+            sleeps += 1
+            if (sleeps === 2) stop.abort()
+          },
           wire: fx.wire,
           ...opts,
         })
@@ -6042,28 +6077,33 @@ describe('abDispatch --once with an interactive terminal', () => {
           (event) => event.type === 'dispatcher.tick-completed',
         )
         return {
-          calls: probe.calls,
           counts: probe.counts,
+          lists: probe.lists,
+          inTick: probe.inTick,
           payloads: completed.map((event) => event.payload),
         }
       } finally {
+        stop.abort()
         await fx.cleanup()
       }
     }
 
     // Plain and hosted-style kernels (kernelRunId alone) never read states.
     const plain = await run({})
-    expect(plain.calls).toBe(0)
+    expect(plain.counts).toBe(0)
     const hosted = await run({ kernelRunId: 'triage-hosted-kernel' })
-    expect(hosted.calls).toBe(0)
+    expect(hosted.counts).toBe(0)
     expect(hosted.payloads.length).toBeGreaterThan(0)
     for (const payload of hosted.payloads) expect(payload).not.toHaveProperty('triage')
 
     // The interactive frontend's kernel child publishes its sample.
     const frontend = await run({ kernelRunId: 'triage-frontend-kernel', frontendStatus: true })
-    expect(frontend.calls).toBe(1)
+    expect(frontend.counts).toBe(1)
     expect(frontend.payloads.at(-1)).toMatchObject({ triage: 3 })
-    for (const result of [plain, hosted, frontend]) expect(result.counts).toBe(0)
+    for (const result of [plain, hosted, frontend]) {
+      expect(result.lists).toBe(0)
+      expect(result.inTick).toBe(0)
+    }
   }, 30_000)
 
   test('--once ticks exactly ONCE — a ticket that turns Ready mid-drain is not claimed', async () => {
