@@ -13,6 +13,8 @@ export {
   TICKET_ISSUE_LINKS_CAPABILITY,
   TICKET_DEPENDENCY_STATE_HEADER,
   TICKET_DEPENDENCY_STATE_CAPABILITY,
+  TICKET_POLICY_ROLES_HEADER,
+  TICKET_POLICY_ROLES_CAPABILITY,
   hostedTicketContextSchema,
   hostedTicketRequestSchemas,
   TICKET_REVISIONS_HEADER,
@@ -27,7 +29,12 @@ export {
 } from './revision'
 export { TicketIssueLinksUnsupported, refuseUnsupportedIssueLinks } from './issue-links'
 
-export { hostedTicketPolicySchema, type HostedTicketPolicy } from './remote-protocol'
+export {
+  hostedTicketPolicySchema,
+  projectTicketPolicy,
+  publishedTicketPolicy,
+  type HostedTicketPolicy,
+} from './remote-protocol'
 export { ticketLifecycle } from './lifecycle'
 
 export {

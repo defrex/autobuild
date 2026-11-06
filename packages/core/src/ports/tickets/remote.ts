@@ -2,6 +2,8 @@ import { normalizeTicket } from './tree'
 import { hostedRequestedIds } from './requested-id'
 import { TicketRevisionConflict } from './revision'
 import { TicketIssueLinksUnsupported } from './issue-links'
+import { ticketLifecycle } from './lifecycle'
+import type { TicketsConfig } from '../../config/schema'
 import type {
   DependencyState,
   Ticket,
@@ -28,6 +30,8 @@ import {
   TICKET_ISSUE_LINKS_CAPABILITY,
   TICKET_DEPENDENCY_STATE_HEADER,
   TICKET_DEPENDENCY_STATE_CAPABILITY,
+  TICKET_POLICY_ROLES_HEADER,
+  TICKET_POLICY_ROLES_CAPABILITY,
   dependencyStatesWireSchema,
   type HostedTicketContext,
   successWireSchema,
@@ -53,6 +57,30 @@ export interface HostedTicketSourceOptions extends HostedTicketContext {
   url: string
   token: string
   fetchFn?: HostedTicketFetch
+}
+
+/** The project ticket policy a hosted `[tickets]` table publishes. The backlog
+ * and rejected roles appear only when configured, so a policy without them is
+ * exactly what services predating the roles accept. */
+export function hostedTicketPolicy(tickets: TicketsConfig): HostedTicketPolicy {
+  if (tickets.teamKey === undefined) throw new Error('[tickets].source = "hosted" requires teamKey')
+  const lifecycle = ticketLifecycle(tickets)
+  return {
+    version: 1,
+    tickets: {
+      source: 'hosted',
+      teamKey: tickets.teamKey,
+      readyState: lifecycle.ready,
+      triageState: lifecycle.triage,
+      claimedState: lifecycle.doing,
+      doneState: lifecycle.done,
+      createState: lifecycle.create,
+      proposalState: lifecycle.proposal,
+      ...(tickets.readyLabels !== undefined ? { readyLabels: tickets.readyLabels } : {}),
+      ...(lifecycle.backlog !== undefined ? { backlogState: lifecycle.backlog } : {}),
+      ...(lifecycle.rejected !== undefined ? { rejectedState: lifecycle.rejected } : {}),
+    },
+  }
 }
 
 /** Full TicketSource client for a hosted Autobuild service. */
@@ -93,7 +121,10 @@ export class HostedTicketSource implements TicketSource {
   }
 
   async synchronizePolicy(policy: HostedTicketPolicy): Promise<void> {
-    await this.request('policy', hostedTicketPolicySchema.parse(policy), successWireSchema)
+    const parsed = hostedTicketPolicySchema.parse(policy)
+    const namesRoles =
+      parsed.tickets.backlogState !== undefined || parsed.tickets.rejectedState !== undefined
+    await this.request('policy', parsed, successWireSchema, false, namesRoles)
   }
 
   private project(ticket: Ticket): Ticket {
@@ -105,6 +136,7 @@ export class HostedTicketSource implements TicketSource {
     input: unknown,
     schema: { parse(value: unknown): T },
     namesIssueLinks = false,
+    namesPolicyRoles = false,
   ): Promise<T> {
     const response = await this.fetchFn(`${this.base}/tickets/${operation}`, {
       method: 'POST',
@@ -116,12 +148,23 @@ export class HostedTicketSource implements TicketSource {
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [TICKET_ISSUE_LINKS_HEADER]: TICKET_ISSUE_LINKS_CAPABILITY,
         [TICKET_DEPENDENCY_STATE_HEADER]: TICKET_DEPENDENCY_STATE_CAPABILITY,
+        [TICKET_POLICY_ROLES_HEADER]: TICKET_POLICY_ROLES_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
       },
       body: JSON.stringify({ context: this.context, input }),
     })
     if (!response.ok) {
+      // A service predating the roles refuses them with its strict policy schema
+      // and never echoes the capability header.
+      if (
+        namesPolicyRoles &&
+        response.status === 400 &&
+        response.headers.get(TICKET_POLICY_ROLES_HEADER) !== TICKET_POLICY_ROLES_CAPABILITY
+      )
+        throw new Error(
+          'ticket service predates backlog/rejected roles in ticket policy; upgrade the service or unset [tickets].backlogState and rejectedState',
+        )
       let message = `ticket service responded ${response.status}`
       try {
         const body = (await response.json()) as Record<string, unknown>
