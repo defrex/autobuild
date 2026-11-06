@@ -7,7 +7,11 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ticketsSchema } from '../config/schema'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { GitHubTicketSource } from '../ports/tickets/github'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { FileTicketSource } from '../ports/tickets/file'
 import type { Ticket } from '../ports/types'
 import { MemoryBuildStore } from '../store/memory'
@@ -566,3 +570,44 @@ test.each(['file', 'linear'])(
     expect(new Uint8Array(await readFile(dest))).toEqual(new Uint8Array([7, 8]))
   },
 )
+
+describe('github asset keys', () => {
+  test('#N and N key one GitHub issue’s assets by its number', async () => {
+    await writeFile(join(tmp, 'autobuild.toml'), ['[tickets]', 'source = "github"', ''].join('\n'))
+    const github = new FakeGitHubIssues()
+    const issues = new GitHubTicketSource({
+      transport: github.transport,
+      repository: github.repository,
+      lifecycle: ticketLifecycle(ticketsSchema.parse({ source: 'github' })),
+      readyLabels: [],
+    })
+    const number = github.fileIssue({ title: 'Has assets' })
+    const file = join(tmp, 'notes.txt')
+    await writeFile(file, 'shared')
+    const run = (argv: string[]) =>
+      abTicket(argv, {
+        targetRepo: tmp,
+        env: {},
+        exec: async (cmd: string[]) =>
+          cmd.includes('remote')
+            ? { stdout: '', stderr: '', exitCode: 1 }
+            : {
+                stdout: `${join(tmp, '.git')}\n${join(tmp, '.git')}\n${tmp}\n`,
+                stderr: '',
+                exitCode: 0,
+              },
+        stdout: () => {},
+        stderr: () => {},
+        sourceFactory: () => issues,
+        openStore: () => store,
+      })
+    await run(['attach', `#${number}`, 'design', file])
+    const dest = join(tmp, 'out')
+    await run(['asset', 'get', String(number), 'design', 'notes.txt', dest])
+    expect(await readFile(dest, 'utf8')).toBe('shared')
+    // The note was left as one issue comment.
+    expect(github.comments.get(number)).toHaveLength(1)
+    await run(['asset', 'rm', `#${number}`, 'design', 'notes.txt'])
+    expect(github.comments.get(number)).toHaveLength(2)
+  })
+})
