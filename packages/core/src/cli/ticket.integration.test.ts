@@ -10,6 +10,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TicketsConfig } from '../config/schema'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { GitHubTicketSource } from '../ports/tickets/github'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
 import type {
   Ticket,
   TicketCreateOptions,
@@ -1986,5 +1988,40 @@ describe('ticket issue links on a source without support', () => {
       }),
     ).rejects.toThrow('fake ticket source cannot store issue links')
     expect(created.update).toBeUndefined()
+  })
+})
+
+describe('ab ticket edit', () => {
+  test('edits a github ticket, which has no guarded writes', async () => {
+    await writeRepo('[tickets]\nsource = "github"\n')
+    const issues = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: issues.transport,
+      repository: issues.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    const ticket = await source.create({ title: 'Original', body: 'spec\n' })
+    const out: string[] = []
+    await abTicket(['edit', ticket.ref.id], {
+      targetRepo: tmp,
+      env: { EDITOR: 'editor' },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+      editorRunner: async (_, path) => {
+        await writeFile(path, (await readFile(path, 'utf8')).replace('Original', 'Edited'))
+        return 0
+      },
+    })
+    expect(out).toEqual([`ticket edit complete: github:${ticket.ref.id}`])
+    expect(issues.issue(Number(ticket.ref.id))?.title).toBe('Edited')
   })
 })

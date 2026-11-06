@@ -244,10 +244,13 @@ export class HostedTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
+    // The hosted server keeps its own key index and its strict options schema
+    // predates the reservation time, so it never travels on the wire.
+    const { idempotencyKeyReservedAt: _reservedAt, ...wireOptions } = options
     return this.project(
       await this.request(
         'create',
-        { draft, options },
+        { draft, options: wireOptions },
         ticketWireSchema,
         draft.issueLinks !== undefined,
       ),
