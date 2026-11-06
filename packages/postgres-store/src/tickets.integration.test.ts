@@ -1213,8 +1213,8 @@ if (testUrl)
     const roles = { backlogState: 'ICEBOX', rejectedState: 'rejected' }
     const lifecycle = { triage: 'triage', ready: 'ready', doing: 'doing', done: 'done' }
     const states = async () =>
-      (await sql`SELECT name FROM ab_ticket_states WHERE repo = ${repo} ORDER BY name`).map((row) =>
-        String(row.name),
+      (await sql`SELECT name FROM ab_ticket_states WHERE repo = ${repo} ORDER BY name`).map(
+        (row: Record<string, unknown>) => String(row.name),
       )
     const row = async () =>
       (
