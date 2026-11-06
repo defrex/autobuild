@@ -6726,6 +6726,14 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
     expect(criteria(`${GITHUB}readyLabels = []\n`)).toEqual({ labels: [], state: 'ready' })
   })
 
+  test('github source: readyAssignee joins the criteria', () => {
+    expect(criteria('[tickets]\nsource = "github"\nreadyAssignee = "octocat"\n')).toEqual({
+      labels: ['autobuild'],
+      state: 'ready',
+      assignee: 'octocat',
+    })
+  })
+
   test('plugin sources have no host-imposed label convention', () => {
     expect(criteria(`${PLUGIN}readyState = "Open"\n`)).toEqual({
       labels: [],
