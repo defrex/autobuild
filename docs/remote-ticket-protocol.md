@@ -99,8 +99,9 @@ The strict request envelope is:
 loads the project's durable independent ticket policy. Project authority publishes
 version 1 policy through `POST /tickets/policy`, using the usual context/input
 envelope. The input contains only `version` and `tickets`: source, teamKey,
-readyState, triageState, claimedState, doneState, createState, proposalState and
-optional readyLabels. URL, secrets, and pipeline configuration are rejected.
+readyState, triageState, claimedState, doneState, createState, proposalState,
+optional readyLabels, and the optional backlogState and rejectedState roles. URL,
+secrets, and pipeline configuration are rejected.
 Only project or owner authority can publish. This does not append BuildStore
 history. Registration removal invalidates policy and grants from that registration.
 
@@ -113,6 +114,28 @@ custom states and keep their tickets. Explicit settings preserve state spelling.
 State lookup prefers an exact match, then a unique case-insensitive match;
 unknown or ambiguous names are refused. Lists order configured triage, ready,
 doing, done first (deduplicated), then other names alphabetically.
+
+`backlogState` and `rejectedState` have no defaults: an unset role holds no state,
+and a policy that names neither behaves exactly as before. Each must differ,
+case-insensitively, from the ready, claimed, done, triage and proposal states and
+from the other; a publish that overlaps is refused with `400` naming the keys.
+A named role's state is created when missing. Role names match existing states
+case-insensitively, so `backlogState = "icebox"` next to an existing `icebox` (or
+`Icebox`) state creates nothing: that state and its tickets now hold the role.
+Removing a role leaves its state in place as a custom state. Operator and MCP
+ticket tools resolve role moves through these policy names.
+
+Clients that understand the roles send `x-autobuild-ticket-policy-roles: 1`. With
+it, a publish is the complete policy, and omitting a role clears it. Without it,
+as from released 1.2–1.4 clients, each omitted role keeps its saved value for the
+same registration, so an older client never erases a newer client's mapping. If
+a kept role would then name the same state as a lifecycle name that publish
+sets, the service keeps the whole saved policy unchanged, answers
+`200 { "ok": true }`, and records a diagnostic naming the colliding keys. A
+policy read (`input: null`) includes the roles only with the header. Every
+`/tickets/*` response, including errors, carries
+`x-autobuild-ticket-policy-roles: 1`; a client publishing a role that receives
+`400` without it reports that the service predates policy roles.
 
 `[tickets] url` selects the ticket service independently of the build store;
 otherwise the selected remote build store is used. A local build store requires

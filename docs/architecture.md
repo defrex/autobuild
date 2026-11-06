@@ -1482,7 +1482,8 @@ explicit ticket URL. Project registration and ticket policy publication through
 record, outside BuildStore events/artifacts; legacy uploaded configuration remains
 a compatibility fallback. Hosted lifecycle defaults are triage/ready/doing/done.
 Hosted state initialization checks only the distinct configured role names through
-an indexed project/name lookup. Already-present names require no state mutation
+an indexed project/name lookup; the optional backlog and rejected names match
+case-insensitively within that same lookup. Already-present names require no state mutation
 lock or writes. Missing names are rechecked under the project advisory lock and
 inserted in the same transaction. Custom-state creation and policy publication
 always take that lock; publication reads the previous policy under it and retains

@@ -265,6 +265,40 @@ test('ticket-only connect publishes policy before dispatch and leaves the build 
   expect(new ProjectCredentials(f.env).load(service, repo)).toBeUndefined()
 })
 
+test('connect publishes configured backlog and rejected roles with the policy', async () => {
+  const f = await fixture()
+  await writeFile(
+    join(f.cwd, 'autobuild.toml'),
+    '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nbacklogState = "icebox"\nrejectedState = "rejected"\n',
+  )
+  const fetcher = f.fetch
+  const policies: { input: { tickets: Record<string, unknown> } }[] = []
+  await abConnect(service, {
+    ...f,
+    tickets: true,
+    fetch: async (url, init) => {
+      if (!url.endsWith('/tickets/policy')) return fetcher(url, init)
+      expect(new Headers(init?.headers).get('x-autobuild-ticket-policy-roles')).toBe('1')
+      policies.push(JSON.parse(String(init?.body)))
+      return Response.json({ ok: true })
+    },
+  })
+  expect(policies.map((policy) => policy.input.tickets)).toEqual([
+    {
+      source: 'hosted',
+      teamKey: 'ENG',
+      readyState: 'ready',
+      triageState: 'triage',
+      claimedState: 'doing',
+      doneState: 'done',
+      createState: 'triage',
+      proposalState: 'triage',
+      backlogState: 'icebox',
+      rejectedState: 'rejected',
+    },
+  ])
+})
+
 test('failed ticket policy publication restores configuration and retains the prior credential', async () => {
   const f = await fixture()
   const before = '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n'

@@ -465,6 +465,7 @@ Existing ticket rows are never renamed. Older combined-service clients continue
 using the uploaded dispatcher configuration until independent policy is published.
 Also set the recommended `backlogState` and `rejectedState` so agents can defer
 and decline work by role; role moves create a missing state on first use.
+Published policy carries both roles, and publishes from older clients keep them.
 
 ## Forge readiness
 
