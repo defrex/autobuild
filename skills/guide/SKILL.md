@@ -2740,11 +2740,12 @@ ab wait --for blocked --json my-build   # exit 0: record says why; 2: it ended; 
 Second, a plain blocking call — Codex, Pi, and the shell only expose "run a
 command and wait": run it in the turn and read the record when it returns.
 
-The same split governs `ab watch`, which streams and does not exit when it
-emits a record. Run an unbounded watch only under a monitor that wakes the
-agent on each output line. Under exit-only notification, bound it with
-`--count 1` so the first record ends the command, then re-arm from its
-trailing cursor.
+`ab watch` streams and does not exit when it emits a record, so an operator's
+standing watch must run under a line-streaming monitor (such as Claude Code's
+Monitor tool) whenever the harness has one, with `--timeout` below any monitor
+kill deadline so it exits with a resumable cursor; `--count 1` with re-arming
+is only the fallback for harnesses that wake the agent solely on exit. See
+`ab-operate` for the full procedure.
 
 The loop pattern ties the two together: wait, act on the record (answer the
 escalation, inspect the build, merge the PR), then wait again, passing the

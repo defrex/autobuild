@@ -162,22 +162,33 @@ satisfied only by new events. Conditions include `attention`,
 condition, 3 timeout, 4 interrupted. On 3 and 4 with `--json`, the output is a
 bare `{"cursor": …}` to resume from.
 
-An unbounded watch streams: it prints each record and keeps running, so it
-does not exit when a build blocks. Match how you run it to how your harness
-wakes you:
+A watch without `--count` streams: it prints each record the moment the
+attention arises and keeps running, so it does not exit when a build blocks.
+Reacting to events means reading that output as it is written, not when the
+command exits. Run it accordingly:
 
-- **Woken on each new output line** (a monitor that streams stdout, such as
-  Claude Code's Monitor tool): run the standing watch unbounded there and act
-  on every line as it arrives.
-- **Woken only when a command exits** (a background shell such as Claude
-  Code's background Bash, or a plain blocking call): never run an unbounded
-  watch this way, because its records sit unread until it exits. Add
-  `--count 1` so the watch exits on its first record:
+- **The harness offers a line-streaming monitor** (one that delivers each
+  stdout line as it arrives, such as Claude Code's Monitor tool): the standing
+  watch must run there, acting on every line as it arrives. Running it under
+  an exit-only facility instead, such as Claude Code's background Bash or a
+  blocking call, is wrong whenever such a monitor is available, even with
+  `--count 1`.
+- **The monitor kills its command at a hard deadline** (Claude Code's Monitor
+  allows at most 30 minutes): pass `--timeout` shorter than that deadline, for
+  example `ab watch --operator --json --timeout 29m [--since <watch-cursor>]`
+  under a 30-minute Monitor. The watch's own 30-minute default would race the
+  kill. A killed watch never prints its trailing `{"cursor": …}` line; a
+  timed-out one does, so re-arm at once with `--since <watch-cursor>` from it.
+- **Fallback: the harness has no line-streaming monitor at all** (for example
+  Codex, Pi, or a plain shell, which wake you only when a command exits):
+  never run the watch without `--count` there, because its records sit unread
+  until it exits. Add `--count 1` so the watch exits on its first record:
   `ab watch --operator --json --count 1 [--since <watch-cursor>]`. Act on the
   record, then re-arm at once from the trailing cursor line. Presence survives
   the re-arm gap.
 
-`ab wait` exits on its first match, so it suits either kind. Use precisely the
+`ab wait` exits on its first match, so it suits either kind of facility for
+one-off waits. Use precisely the
 same resolved invocation and working directory as foreground commands,
 including inside background shells and harness monitors. Do not rely on a
 shell alias or function that those facilities may lose. Never block a
@@ -229,8 +240,10 @@ Neither a loss observation nor a later retry authorizes dispatcher intervention.
 Operate the builds the repository's dispatcher dispatches, including new builds
 that appear after you arm. Finishing the initially queued set is no reason to stop.
 
-1. Check presence as above, then arm `ab watch --operator --json` with no slugs,
-   adding `--count 1` if your harness wakes you only on exit. Retain its own
+1. Check presence as above, then arm `ab watch --operator --json` with no slugs
+   under your harness's line-streaming monitor, with `--timeout` below that
+   monitor's kill deadline (see *Watch for attention events*); add `--count 1`
+   only in the no-monitor fallback. Retain its own
    cursor and re-arm with
    `ab watch --operator --json --since <watch-cursor>`. If it reports
    `cursor-too-old`, re-arm without `--since`, reconcile status and acknowledge
