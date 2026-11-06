@@ -696,7 +696,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'repository.status',
     'Report one repository’s durable dispatcher settings and journal state.',
     repositoryStatusInput,
-    'The repository status projection: ticket intake, repository-wide pause, claim-time auto-merge default, and the harvest/dispatch journal state the sessionless CLI and dashboard read.',
+    'The repository status projection: ticket intake, repository-wide pause, claim-time auto-merge default, and the harvest/dispatch journal state the sessionless CLI and dashboard read. operator.presence is "unavailable" here because this tool does not load presence registrations; that is not evidence that no operator is present.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof repositoryStatusInput>
       return getRepositoryStatus(ctx.store, input.repo)
