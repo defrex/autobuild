@@ -1078,6 +1078,24 @@ describe('parseConfig — [tickets]', () => {
     }
   })
 
+  test('github needs no other key and refuses Linear, file and hosted keys', () => {
+    const tickets = parseConfig('[tickets]\nsource = "github"\n').tickets
+    expect(tickets.readyState).toBe('ready')
+    expect(tickets.readyLabels).toBeUndefined()
+    for (const [line, key, applies] of [
+      ['teamKey = "ENG"', 'teamKey', '"linear" or "hosted"'],
+      ['dir = "tickets"', 'dir', '"file"'],
+      ['readyAssignee = "me"', 'readyAssignee', '"linear"'],
+    ] as const) {
+      const message = parseError(`[tickets]\nsource = "github"\n${line}\n`).message
+      expect(message).toContain(`tickets.${key}`)
+      expect(message).toContain(`[tickets].${key} applies only to source = ${applies}`)
+    }
+    expect(
+      parseError('[tickets]\nsource = "github"\nurl = "https://tickets.example"\n').message,
+    ).toContain('[tickets].url applies only to source = "hosted"')
+  })
+
   test('source-specific fields are cross-validated', () => {
     expect(parseError('[tickets]\nsource = "linear"\nreadyState = "Todo"\n').message).toContain(
       'tickets.teamKey',

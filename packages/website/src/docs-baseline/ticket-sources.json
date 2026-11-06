@@ -3,8 +3,8 @@
   "label": "Ticket sources",
   "title": "Tickets",
   "group": "reference",
-  "description": "Configure file, Linear, or hosted tickets and implement a ticket-source adapter.",
-  "textHash": "67bd97c34f72bb85926931df5c2018ac1a058b999216e1c677640ef7102f981e",
+  "description": "Configure file, Linear, hosted, or GitHub tickets and implement a ticket-source adapter.",
+  "textHash": "228f197244143b9d6309a5da670367d06ee90ffbc52c9cc0530b504caba0f9cd",
   "headings": [
     "Responsibility",
     "Shipped adapters",
@@ -15,6 +15,7 @@
     "[tickets]\nsource = \"linear\"\nteamKey = \"ENG\"\nreadyState = \"Todo\"\nreadyLabels = [\"autobuild\"]\nclaimedState = \"In Progress\"\ncreateState = \"Backlog\"\ntriageState = \"Backlog\"\nproposalState = \"Backlog\"\ndoneState = \"Done\"\nrejectedState = \"Canceled\"",
     "bun ab connect --tickets https://tickets.example.com",
     "[tickets]\nsource = \"hosted\"\nteamKey = \"ENG\"\nurl = \"https://tickets.example.com\"\nreadyState = \"ready\"\nreadyLabels = []\nclaimedState = \"doing\"\ncreateState = \"triage\"\ntriageState = \"triage\"\nproposalState = \"triage\"\ndoneState = \"done\"\nbacklogState = \"backlog\"\nrejectedState = \"rejected\"",
+    "[tickets]\nsource = \"github\"\nreadyState = \"ready\"\nreadyLabels = [\"autobuild\"]\nclaimedState = \"doing\"\ncreateState = \"triage\"\ntriageState = \"triage\"\nproposalState = \"triage\"\ndoneState = \"done\"\nbacklogState = \"backlog\"\nrejectedState = \"rejected\"",
     "bun ab plugin test ticket-source acme"
   ]
 }

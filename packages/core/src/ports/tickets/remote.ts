@@ -264,8 +264,9 @@ export class HostedTicketSource implements TicketSource {
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
     const { priority, ...rest } = draft
     const write = priority === 'urgent' ? { ...rest, priority } : rest
+    const { idempotencyKeyReservedAt: _reservedAt, ...wireOptions } = options
     return this.project(
-      await this.request('create', { draft: write, options }, ticketWireSchema, {
+      await this.request('create', { draft: write, options: wireOptions }, ticketWireSchema, {
         issueLinks: write.issueLinks !== undefined,
         priority: priority === 'urgent',
       }),
