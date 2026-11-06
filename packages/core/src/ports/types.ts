@@ -264,6 +264,12 @@ export interface TicketSource {
   readonly issueLinks?: boolean
   /** Every lifecycle state, including archived/completed tickets; no ready gate. */
   listAll?(): Promise<TicketListing>
+  /** Optional bounded integration read: every ticket in every lifecycle state
+   * whose target is `nodeId`, exhausting pagination — exactly
+   * `listAll().tickets.filter(t => t.target === nodeId)`. Diagnostics name only
+   * excluded records it read. Infrastructure failures reject; a failure never
+   * falls back to `listAll`. Sources declaring it must declare integrationTree. */
+  listTargeting?(nodeId: string): Promise<TicketListing>
   /** Import support: the same pure id policy used by create, for mutation-free preflight. */
   readonly requestedIds?: import('./tickets/requested-id').RequestedIdPolicy
   readonly assets?: TicketAssetStore

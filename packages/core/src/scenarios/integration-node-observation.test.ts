@@ -334,3 +334,70 @@ test('a rejected child no longer keeps its node incomplete; a backlog child does
     'DEFERRED',
   ])
 })
+
+test('a targeting source is observed per node, memoized per pass, and never scanned exhaustively', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { FakeTicketSource } = await import('../ports/tickets/fake')
+  const { observeIntegration, integrationObservationInputs } = await import(
+    '../kernel/integration-completeness'
+  )
+  const { integrationComplete } = await import('../kernel/integration-state')
+  const store = new MemoryBuildStore()
+  for (const id of ['A', 'B']) {
+    const ticket = { source: 'fake', id }
+    await store.createBuild({
+      slug: `node-${id.toLowerCase()}`,
+      repo: 'repo',
+      ticket,
+      created: {
+        actor: { kind: 'dispatcher' },
+        type: 'build.created',
+        payload: { repo: 'repo', ticket, kind: 'node', baseBranch: 'main' },
+      },
+    })
+  }
+  const source = new FakeTicketSource([
+    { ...readyTicket('A'), kind: 'node' },
+    { ...readyTicket('B'), kind: 'node' },
+    { ...readyTicket('A1'), target: 'A' },
+    { ...readyTicket('A2'), target: 'A', state: 'Done' },
+    { ...readyTicket('B1'), target: 'B' },
+  ])
+  const exhaustive = FakeTicketSource.prototype.listAll.bind(source)
+  const calls: string[] = []
+  let offline = false
+  const targeting = Object.assign(source, {
+    async listAll(): Promise<never> {
+      throw new Error('listAll must not be called')
+    },
+    async listTargeting(nodeId: string) {
+      calls.push(nodeId)
+      if (offline) throw new Error('offline')
+      const all = await exhaustive()
+      return { ...all, tickets: all.tickets.filter((ticket) => ticket.target === nodeId) }
+    },
+  })
+
+  expect((await observeIntegration(store, targeting, 'node-a')).openChildren).toEqual(['A1'])
+  expect(calls).toEqual(['A'])
+
+  calls.length = 0
+  const inputs = await integrationObservationInputs(store, targeting, 'repo')
+  const pass = async () => inputs
+  expect((await observeIntegration(store, targeting, 'node-a', pass)).openChildren).toEqual(['A1'])
+  expect((await observeIntegration(store, targeting, 'node-b', pass)).openChildren).toEqual(['B1'])
+  await observeIntegration(store, targeting, 'node-a', pass)
+  expect(calls).toEqual(['A', 'B'])
+
+  calls.length = 0
+  offline = true
+  const failing = await integrationObservationInputs(store, targeting, 'repo')
+  const failed = await observeIntegration(store, targeting, 'node-a', async () => failing)
+  expect(failed.diagnostics).toEqual(['offline'])
+  expect(integrationComplete(reduceBuild(await store.getEvents('node-a')))).toBe(false)
+  offline = false
+  const retried = await observeIntegration(store, targeting, 'node-a', async () => failing)
+  expect(retried.diagnostics).toEqual([])
+  expect(retried.openChildren).toEqual(['A1'])
+  expect(calls).toEqual(['A', 'A'])
+})
