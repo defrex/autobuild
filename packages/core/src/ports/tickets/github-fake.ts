@@ -129,6 +129,8 @@ export class FakeGitHubIssues {
   private readonly issues = new Map<number, FakeIssue>()
   private readonly foreign = new Map<string, FakeIssue & { repo: string }>()
   private readonly labels = new Map<string, FakeLabel>()
+  /** Children by parent key, rebuilt lazily after any change. */
+  private childIndex: Map<string, FakeIssue[]> | undefined
   private readonly clock: () => number
   private nextNumber: number
   private nextId = 900_000
@@ -383,6 +385,7 @@ export class FakeGitHubIssues {
       history: [],
       parent: `${this.fullName}#${parent}`,
     })
+    this.childIndex = undefined
     return key
   }
 
@@ -395,6 +398,7 @@ export class FakeGitHubIssues {
 
   deleteIssue(number: number): void {
     this.require(number).gone = 'deleted'
+    this.childIndex = undefined
   }
 
   /**
@@ -407,6 +411,7 @@ export class FakeGitHubIssues {
     const [repo, moved] = to.split('#')
     issue.gone = 'transferred'
     issue.movedTo = to
+    this.childIndex = undefined
     const { gone: _gone, movedTo: _movedTo, ...copy } = issue
     this.foreign.set(to, {
       ...copy,
@@ -459,6 +464,7 @@ export class FakeGitHubIssues {
     const path = rawPath.replace(/^https:\/\/api\.github\.com\//, '').replace(/^\/+/, '')
     const record: FakeGitHubRequestRecord = { method, path, kind: 'unknown', status: 0 }
     this.requests.push(record)
+    this.childIndex = undefined
     const failure = this.failures.findIndex((f) => f.match?.(method, path) ?? true)
     if (failure >= 0) {
       const [hit] = this.failures.splice(failure, 1)
@@ -665,9 +671,14 @@ export class FakeGitHubIssues {
 
   /** Live issues (local first, then foreign) whose parent is `key`. */
   private childrenOf(key: string): FakeIssue[] {
-    return [...this.issues.values(), ...this.foreign.values()].filter(
-      (issue) => issue.parent === key && !issue.gone && !issue.pull_request,
-    )
+    if (this.childIndex === undefined) {
+      this.childIndex = new Map()
+      for (const issue of [...this.issues.values(), ...this.foreign.values()]) {
+        if (issue.parent === undefined || issue.gone || issue.pull_request) continue
+        this.childIndex.set(issue.parent, [...(this.childIndex.get(issue.parent) ?? []), issue])
+      }
+    }
+    return this.childIndex.get(key) ?? []
   }
 
   // ── REST helpers ──────────────────────────────────────────────────────────
@@ -919,6 +930,7 @@ export class FakeGitHubIssues {
   }
 
   private changed(issue: FakeIssue, bump: boolean, stateChanged = true): void {
+    this.childIndex = undefined
     if (bump) issue.updated_at = new Date(this.clock()).toISOString()
     if (stateChanged) {
       const last = issue.history.at(-1)
