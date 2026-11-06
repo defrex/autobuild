@@ -1158,9 +1158,10 @@ export async function prepareScenario(): Promise<E2eHarness> {
     }
 
     // Capacity admission samples the stepping clock twice during the initial
-    // tick. Preserve the established reconcile/landing evidence timestamps;
-    // these frames exercise policy and layout rather than admission timing.
-    harness.clock.advance(-5000)
+    // tick, and the triage sampler's poke once before it. Preserve the
+    // established reconcile/landing evidence timestamps; these frames exercise
+    // policy and layout rather than admission timing.
+    harness.clock.advance(-6000)
 
     // Seed a completed reconcile cycle with explicit policy evidence on the open PR.
     const slug = 'complete-dashboard-evidence'
