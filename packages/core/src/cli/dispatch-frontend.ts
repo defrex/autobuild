@@ -71,6 +71,8 @@ import {
 } from './dispatch-process'
 
 import type { TicketSource } from '../ports/types'
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
+import { triageStateCount } from '../ports/tickets/states'
 
 const PAINT_MS = 250
 const ABORTABLE_STATUSES = new Set(['queued', 'running', 'collecting', 'paused', 'blocked'])
@@ -171,6 +173,11 @@ export class DispatchFrontend {
   private viewerFacts: RepositoryReadFacts | undefined
   private viewerPosition: string | undefined
   private viewerReadAt = -Infinity
+  /** The viewer's own last successful triage count; never published status. */
+  private viewerTriage: number | undefined
+  private viewerTriageAt = -Infinity
+  private viewerTriageRead: Promise<void> | undefined
+  private viewerTicketSource: Promise<TicketSource> | undefined
   private lastPlainFrame: string | undefined
 
   constructor(private readonly opts: DispatchFrontendOptions) {
@@ -361,6 +368,39 @@ export class DispatchFrontend {
     snapshot: DashboardPollSnapshot
   }>()
 
+  /** A viewer's display-only triage count: at most one bounded `countStates`
+   * request per 10 s while presenting, in the background so a stalled ticket
+   * service never holds a frame. Failures keep the last good value. */
+  private pollViewerTriage(config: Config): void {
+    const open = this.opts.ticketSource
+    // A one-shot frame paints before any background read could land.
+    if (!this.opts.viewer || this.opts.once || open === undefined || this.presentationRestored)
+      return
+    const now = this.clock().getTime()
+    if (this.viewerTriageRead !== undefined || now - this.viewerTriageAt < 10_000) return
+    this.viewerTriageAt = now
+    const name = ticketLifecycle(config.tickets).triage
+    this.viewerTriageRead = (async () => {
+      try {
+        this.viewerTicketSource ??= open()
+        let source: TicketSource
+        try {
+          source = await this.viewerTicketSource
+        } catch (error) {
+          this.viewerTicketSource = undefined
+          throw error
+        }
+        if (source.countStates === undefined) return
+        const count = triageStateCount(await source.countStates([name]), name)
+        if (count !== undefined) this.viewerTriage = count
+      } catch {
+        // Display only: the header keeps its last good count, or `–`.
+      } finally {
+        this.viewerTriageRead = undefined
+      }
+    })()
+  }
+
   private async readFrame(): Promise<void> {
     if (this.refresh !== undefined && !this.refresh.admitted) return
     let sampledPosition: string | undefined
@@ -427,6 +467,7 @@ export class DispatchFrontend {
     if (frame === undefined) return
     let { repositoryEvents, repositoryFacts, upgrades, status } = frame
     const { config, snapshot } = frame
+    this.pollViewerTriage(config)
     const standby =
       this.opts.once || this.opts.viewer
         ? undefined
@@ -484,7 +525,14 @@ export class DispatchFrontend {
             config.tickets.source,
           ),
         ),
-        ...(status.triage !== undefined ? { triage: status.triage } : {}),
+        // A viewer shows only its own read; headless ticks publish no count.
+        ...(this.opts.viewer
+          ? this.viewerTriage !== undefined
+            ? { triage: this.viewerTriage }
+            : {}
+          : status.triage !== undefined
+            ? { triage: status.triage }
+            : {}),
         ...(status.availableUpgrade !== undefined
           ? { availableUpgrade: status.availableUpgrade }
           : {}),

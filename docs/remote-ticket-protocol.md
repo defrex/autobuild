@@ -142,6 +142,7 @@ The operation names and `input` values are:
 |---|---|---|
 | `states` | `{}` | `{name, tickets, about?}[]`, including empty states |
 | `add-state` | `{name, about?: string}` | `{state: {name,tickets,about?}, created: boolean}` |
+| `state-counts` | `{names: string[]}` (1–16) | `{name, tickets}[]` for the names that resolve |
 | `list-ready` | `{labels?: string[], state?: string}` | `TicketListing` |
 | `get` | `{id}` | `Ticket \| null` |
 | `claim` | `{id}` | `{claimed: boolean}` |
@@ -222,6 +223,10 @@ Custom state creation uses `/^[a-z][a-z0-9-]{0,39}$/`; an optional purpose must
 be one nonblank line. A duplicate in any letter case is refused without
 changing purpose. `add-state` requires project or owner machine authority;
 ticket grants and harvest delegations can read states but cannot create them.
+`state-counts` returns bounded per-state totals only, never ticket rows, with
+each name resolved exactly or by one case-insensitive match. It requires project
+or owner authority, not ticket grants or harvest delegations. A source without
+state counts answers 409 conflict, with no listing fallback.
 Request context cannot supply lifecycle policy or insert another project's
 states. These operations use the existing wire version and strict envelopes.
 

@@ -167,6 +167,8 @@ export class PostgresProjectDeletion implements ProjectDeletion {
     await tx`DELETE FROM ab_tickets WHERE repo = ${repo}`
     await tx`DELETE FROM ticket_assets WHERE repo = ${repo}`
     await tx`DELETE FROM ab_ticket_states WHERE repo = ${repo}`
+    // The count trigger leaves zeroed rows behind once the tickets are gone.
+    await tx`DELETE FROM ab_ticket_state_counts WHERE repo = ${repo}`
     await tx`DELETE FROM ab_ticket_counters WHERE repo = ${repo}`
     await tx`UPDATE ticket_grants SET parent = NULL WHERE repo = ${repo}`
     await tx`DELETE FROM ticket_grants WHERE repo = ${repo}`

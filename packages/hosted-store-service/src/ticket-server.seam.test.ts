@@ -510,6 +510,90 @@ test('runner and phase grants can discover states but cannot create them', async
   }
 })
 
+test('state counts answer bounded per-state totals with no listing fallback', async () => {
+  let listed = 0
+  const fake = new FakeTicketSource([], { doneState: 'Done' })
+  const counting = Object.assign(Object.create(fake), {
+    countStates: async (names: readonly string[]) =>
+      names.includes('triage') ? [{ name: 'Triage', tickets: 4 }] : [],
+    listReady: async () => {
+      listed++
+      return { tickets: [], diagnostics: [] }
+    },
+  }) as FakeTicketSource
+  expect(await harness(counting).source.countStates(['triage', 'missing'])).toEqual([
+    { name: 'Triage', tickets: 4 },
+  ])
+  const plain = Object.assign(Object.create(fake), {
+    listReady: async () => {
+      listed++
+      return { tickets: [], diagnostics: [] }
+    },
+  }) as FakeTicketSource
+  const { server, source } = harness(plain)
+  await expect(source.countStates(['Triage'])).rejects.toThrow(
+    'ticket source does not support state counts',
+  )
+  const post = (input: unknown) =>
+    server.fetch(
+      new Request('https://tickets.example/tickets/state-counts', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          'content-type': 'application/json',
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+      }),
+    )
+  expect((await post({ names: ['Triage'] })).status).toBe(409)
+  for (const input of [{ names: ['Triage'], extra: true }, { names: [] }, {}])
+    expect((await post(input)).status).toBe(400)
+  expect((await post({ names: Array.from({ length: 17 }, (_, i) => `s${i}`) })).status).toBe(400)
+  expect(listed).toBe(0)
+})
+
+test('ticket grants cannot read state counts', async () => {
+  let counted = 0
+  const grant = {
+    id: 'runner',
+    repo: 'https://github.com/acme/grants',
+    execution: 'execution',
+    kind: 'runner' as const,
+    parent: null,
+    expiresAt: '2099-01-01T00:00:00Z',
+  }
+  const backend = Object.assign(new FakeTicketSource(), {
+    countStates: async () => {
+      counted++
+      return []
+    },
+  })
+  const server = createTicketServer({
+    secret,
+    clock: () => now,
+    sourceFor: () => backend,
+    grants: {
+      authenticate: async () => grant,
+      issue: async () => {
+        throw new Error('unused')
+      },
+      revoke: async () => {},
+      renew: async () => {},
+    },
+  })
+  const source = new HostedTicketSource({
+    url: 'https://tickets.example',
+    token: 'abt_restricted',
+    teamKey: 'ENG',
+    repo: grant.repo,
+    fetchFn: (input, init) => server.fetch(new Request(input, init)),
+  })
+  await expect(source.countStates(['Triage'])).rejects.toThrow('ticket grant cannot perform')
+  expect(counted).toBe(0)
+})
+
 test('tree, revision and comment response capabilities are independent', async () => {
   const { source, server } = harness()
   const parent = await source.create({ title: 'Parent', body: 'Body', kind: 'node' })
