@@ -325,7 +325,7 @@ test('independent ticket service uses its own credential and publishes policy be
     ).rejects.toThrow('does not match')
     expect(calls).toHaveLength(1)
     const published = (call: (typeof calls)[number] | undefined) =>
-      (call?.body as { input: { tickets: Record<string, unknown> } }).input.tickets
+      (call!.body as { input: { tickets: Record<string, unknown> } }).input.tickets
     expect(published(calls[0])).not.toHaveProperty('backlogState')
     expect(published(calls[0])).not.toHaveProperty('rejectedState')
     await createTicketSource(
