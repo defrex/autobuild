@@ -20,6 +20,10 @@ const manifestSchema = z.strictObject({
   source: z.string().regex(/^[a-z][a-z0-9-]*(?::[\s\S]*)?$/),
   keys: z.record(z.string(), z.string().min(1)),
   states: z.record(z.string(), z.string()),
+  /** When an import first saved this identity and its creation keys; every
+   * later keyed create from the input happens after it. Export never writes
+   * it, so export bytes stay unchanged. */
+  reservedAt: z.string().datetime().optional(),
 })
 export type Manifest = z.infer<typeof manifestSchema>
 export async function readMigrationManifest(dir: string): Promise<Manifest> {
@@ -352,7 +356,10 @@ export async function importTickets(opts: MigrationOptions): Promise<MigrationRe
     if ((ticket.comments?.length ?? 0) > 0 && adopted && adopted.comments === undefined)
       throw new Error(`target cannot read comment history: ${adopted.ref.id}`)
   }
-  // Persist identities before the first target write, including for ordinary layouts.
+  // Persist identities before the first target write, including for ordinary
+  // layouts. The first save's time is the keys' reservation time, and a retry
+  // reads it back unchanged.
+  manifest.reservedAt ??= new Date().toISOString()
   await atomicJson(join(dir, MANIFEST), manifest)
   const mapping: Record<string, string> = Object.create(null)
   const mappingPath = join(dir, IMPORT_MAP)
@@ -396,6 +403,7 @@ export async function importTickets(opts: MigrationOptions): Promise<MigrationRe
           {
             state: states[ticket.state!]!,
             idempotencyKey: key,
+            idempotencyKeyReservedAt: manifest.reservedAt,
             requestedId: planned.get(ticket.ref.id)!,
           },
         ))

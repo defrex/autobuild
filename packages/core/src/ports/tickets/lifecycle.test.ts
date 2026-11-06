@@ -133,3 +133,39 @@ test('backlog and rejected may not share a state with a dispatcher role or each 
     ticketsSchema.safeParse({ ...file, backlogState: 'backlog', createState: 'backlog' }).success,
   ).toBe(true)
 })
+
+test('github defaults to lowercase lifecycle names, each overridable', () => {
+  const tickets = ticketsSchema.parse({ source: 'github' })
+  expect(ticketLifecycle(tickets)).toEqual({
+    triage: 'triage',
+    ready: 'ready',
+    doing: 'doing',
+    done: 'done',
+    create: 'triage',
+    proposal: 'triage',
+  })
+  // The legacy hosted spelling never applies to github.
+  expect(ticketLifecycle(tickets, true).triage).toBe('triage')
+  expect(
+    ticketLifecycle(
+      ticketsSchema.parse({
+        source: 'github',
+        readyState: 'queued',
+        claimedState: 'building',
+        triageState: 'inbox',
+        doneState: 'shipped',
+        backlogState: 'backlog',
+        rejectedState: 'rejected',
+      }),
+    ),
+  ).toEqual({
+    triage: 'inbox',
+    ready: 'queued',
+    doing: 'building',
+    done: 'shipped',
+    create: 'inbox',
+    proposal: 'inbox',
+    backlog: 'backlog',
+    rejected: 'rejected',
+  })
+})
