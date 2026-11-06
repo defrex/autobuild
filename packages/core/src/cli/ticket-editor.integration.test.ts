@@ -263,4 +263,39 @@ describe('ticket editor on a source without guarded writes', () => {
       if (kept) await rm(dirname(kept), { recursive: true, force: true })
     }
   })
+
+  test.each(['kind', 'target'])(
+    'shows a github %s read-only and refuses editing it',
+    async (field) => {
+      const { issues, source } = github()
+      const node = await source.create({ title: 'Node', body: 'spec', kind: 'node' })
+      const child = await source.create({ title: 'Child', body: 'spec', target: node.ref.id })
+      const before = structuredClone(issues.issue(Number(child.ref.id)))
+      let kept = ''
+      try {
+        await expect(
+          editTicket(
+            source,
+            child.ref.id,
+            { EDITOR: 'editor' },
+            () => {},
+            async (_, path) => {
+              kept = path
+              let raw = await readFile(path, 'utf8')
+              expect(raw).toContain('kind = "work"')
+              expect(raw).toContain(`target = "${node.ref.id}"`)
+              if (field === 'kind') raw = raw.replace('kind = "work"', 'kind = "node"')
+              else raw = raw.replace(`target = "${node.ref.id}"`, 'target = "elsewhere"')
+              await writeFile(path, raw)
+              return 0
+            },
+          ),
+        ).rejects.toThrow('read-only')
+        expect(issues.issue(Number(child.ref.id))).toEqual(before)
+        expect(issues.subIssues(Number(node.ref.id))).toEqual([Number(child.ref.id)])
+      } finally {
+        if (kept) await rm(dirname(kept), { recursive: true })
+      }
+    },
+  )
 })
