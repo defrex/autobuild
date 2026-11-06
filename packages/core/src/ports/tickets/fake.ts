@@ -264,6 +264,7 @@ export class FakeTicketSource implements TicketSource {
         id,
         exists: true,
         resolved: ticket.state === this.doneState,
+        state: ticket.state,
         blockedBy: [...(ticket.blockedBy ?? [])],
       }
     })

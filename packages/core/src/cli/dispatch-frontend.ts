@@ -73,6 +73,7 @@ import {
 import type { TicketSource } from '../ports/types'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { triageStateCount } from '../ports/tickets/states'
+import type { ControlTickets } from './ticket'
 
 const PAINT_MS = 250
 const ABORTABLE_STATUSES = new Set(['queued', 'running', 'collecting', 'paused', 'blocked'])
@@ -111,6 +112,10 @@ export interface DispatchFrontendOptions {
   checkout?: string
   storeRef: string
   store: BuildStore
+  /** Opens the tickets one control reads, fresh for every control so node
+   * completeness sees the current configured rejected role. */
+  controlTickets?: () => ControlTickets
+  /** Optional display-only source for viewer triage counts. */
   ticketSource?: () => Promise<TicketSource>
   env: Record<string, string | undefined>
   terminal: TerminalOut
@@ -372,7 +377,7 @@ export class DispatchFrontend {
    * request per 10 s while presenting, in the background so a stalled ticket
    * service never holds a frame. Failures keep the last good value. */
   private pollViewerTriage(config: Config): void {
-    const open = this.opts.ticketSource
+    const open = this.opts.ticketSource ?? this.opts.controlTickets?.().ticketSource
     // A one-shot frame paints before any background read could land.
     if (!this.opts.viewer || this.opts.once || open === undefined || this.presentationRestored)
       return
@@ -835,7 +840,7 @@ export class DispatchFrontend {
   ): Promise<void> {
     const result = await controlBuild({
       store: this.opts.store,
-      ticketSource: this.opts.ticketSource,
+      ...this.opts.controlTickets?.(),
       repo: this.opts.repo,
       slug,
       env: this.opts.env,

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { issueLinksInputSchema } from '../ports/tickets/issue-links'
+import { TICKET_MOVE_ROLES } from '../ports/tickets/lifecycle'
 
 const issueLinksField = issueLinksInputSchema
   .optional()
@@ -95,10 +96,25 @@ export const ticketPageSchema = z.strictObject({
   offset: z.number().int().min(0).optional(),
   order: z.enum(['oldest', 'newest']).optional(),
 })
-export const ticketMoveRequestSchema = z.strictObject({
+/** The unrefined move shape, so tool inputs can extend it; validate requests
+ * with `ticketMoveRequestSchema`, which requires exactly one target. */
+export const ticketMoveRequestShape = z.strictObject({
   expectedRevision: expectedRevisionSchema,
-  state: z.string().min(1),
+  state: z.string().min(1).optional(),
+  role: z
+    .enum(TICKET_MOVE_ROLES)
+    .optional()
+    .describe(
+      "Lifecycle role to move the ticket into, resolved through this repository's [tickets] configuration. Destructive for `ready`.",
+    ),
 })
+export const exactlyOneMoveTarget = (value: { state?: string; role?: string }): boolean =>
+  (value.state === undefined) !== (value.role === undefined)
+export const MOVE_TARGET_MESSAGE = 'move must name exactly one of state or role'
+export const ticketMoveRequestSchema = ticketMoveRequestShape.refine(
+  exactlyOneMoveTarget,
+  MOVE_TARGET_MESSAGE,
+)
 export const ticketBlockerRequestSchema = z.strictObject({
   expectedRevision: expectedRevisionSchema,
   blockerIds: z.array(z.string().min(1)).min(1),

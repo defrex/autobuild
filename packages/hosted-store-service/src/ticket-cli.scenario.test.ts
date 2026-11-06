@@ -38,7 +38,7 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       join(repo, 'autobuild.toml'),
       `[tickets]\nsource = "${source}"\n${
         mode === 'hosted' ? 'teamKey = "ENG"\n' : ''
-      }readyState = "Ready"\nreadyLabels = []\n`,
+      }readyState = "Ready"\nreadyLabels = []\nrejectedState = "Rejected"\n`,
     )
     const bodyPath = join(repo, 'body.md')
     const updatedBodyPath = join(repo, 'updated.md')
@@ -146,7 +146,12 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
     await invoke(['block', 'fake-1', 'B', '--json'])
     await invoke(['list', '--json'])
     await backend.comment('fake-1', commentBody)
+    await backend.transition('B', 'Rejected')
     await invoke(['show', 'fake-1', '--json'])
+    // Hosted blocker state arrives through the opted-in dependency wire.
+    expect((output.at(-1) as { blockers: unknown }).blockers).toEqual([
+      { id: 'B', exists: true, resolved: false, state: 'Rejected', rejected: true },
+    ])
     expect((output.at(-1) as { comments: unknown }).comments).toEqual([
       { body: commentBody, createdAt: '2026-01-01T00:00:00.000Z' },
     ])

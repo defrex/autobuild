@@ -294,3 +294,43 @@ test('recorded remaps join frozen children to current membership and isolate unr
   const missing = await observeIntegration(store, source, 'node', inputs)
   expect(missing.diagnostics.join()).toContain('build child ticket linear:UNCOVERED')
 })
+
+test('a rejected child no longer keeps its node incomplete; a backlog child does', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { FakeTicketSource } = await import('../ports/tickets/fake')
+  const { observeIntegration } = await import('../kernel/integration-completeness')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  const node = { source: 'fake', id: 'NODE' }
+  await store.createBuild({
+    slug: 'node',
+    repo: 'repo',
+    ticket: node,
+    created: {
+      actor: { kind: 'dispatcher' },
+      type: 'build.created',
+      payload: { repo: 'repo', ticket: node, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  const source = new FakeTicketSource([
+    { ...readyTicket('NODE'), kind: 'node' },
+    { ...readyTicket('DECLINED'), target: 'NODE', state: 'Rejected' },
+    { ...readyTicket('DEFERRED'), target: 'NODE', state: 'backlog' },
+  ])
+  const inputs = async () => ({ listing: await source.listAll(), builds: [] })
+  const roles = { rejectedState: 'rejected' }
+  expect((await observeIntegration(store, source, 'node', inputs, roles)).openChildren).toEqual([
+    'DEFERRED',
+  ])
+  // With the role unset, a state named rejected is just another open state.
+  expect((await observeIntegration(store, source, 'node', inputs)).openChildren).toEqual([
+    'DECLINED',
+    'DEFERRED',
+  ])
+  // Moving it back restores ordinary behavior with no other step.
+  await source.transition('DECLINED', 'Ready')
+  expect((await observeIntegration(store, source, 'node', inputs, roles)).openChildren).toEqual([
+    'DECLINED',
+    'DEFERRED',
+  ])
+})

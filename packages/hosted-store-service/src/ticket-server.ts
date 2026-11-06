@@ -35,6 +35,8 @@ import {
   TICKET_COMMENTS_CAPABILITY,
   TICKET_ISSUE_LINKS_HEADER,
   TICKET_ISSUE_LINKS_CAPABILITY,
+  TICKET_DEPENDENCY_STATE_HEADER,
+  TICKET_DEPENDENCY_STATE_CAPABILITY,
   TicketIssueLinksUnsupported,
   refuseUnsupportedIssueLinks,
   type HostedTicketContext,
@@ -324,7 +326,14 @@ export function createTicketServer(options: TicketServerOptions): {
       }
       case 'dependency-states': {
         const request = hostedTicketRequestSchemas['dependency-states'].parse(raw)
-        return json(200, await source.dependencyStates(request.input.ids))
+        const states = await source.dependencyStates(request.input.ids)
+        // Released strict decoders reject `state`; only opted-in clients get it.
+        if (req.headers.get(TICKET_DEPENDENCY_STATE_HEADER) === TICKET_DEPENDENCY_STATE_CAPABILITY)
+          return json(200, states)
+        return json(
+          200,
+          states.map(({ state: _state, ...rest }) => rest),
+        )
       }
     }
   }

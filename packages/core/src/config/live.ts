@@ -42,6 +42,8 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
     createState: 'restart',
     triageState: 'hot',
     proposalState: 'hot',
+    backlogState: 'hot',
+    rejectedState: 'hot',
     dir: 'restart',
   },
 } as const satisfies {

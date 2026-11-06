@@ -125,15 +125,21 @@ describe('ticket grooming skill guidance', () => {
   })
 })
 
-describe('ticket skill icebox and custom state guidance', () => {
-  test('describes states, icebox, triage, and category rules', () => {
+describe('ticket skill backlog, rejected and custom state guidance', () => {
+  test('describes states, role moves, triage, and category rules', () => {
     for (const guide of ticketGuides) {
       expect(guide).not.toMatch(/exactly four/i)
       expect(guide).toContain('ab ticket states')
-      expect(guide).toContain('ab ticket state create icebox --about')
-      expect(guide).toContain('ab ticket move')
-      expect(guide).toContain('rejected')
-      expect(guide).toContain('never dispatches')
+      expect(guide).toContain('ab ticket state create needs-design --about')
+      expect(guide).not.toContain('ab ticket state create icebox')
+      expect(guide).not.toContain('ab ticket state create rejected')
+      expect(guide).toContain('ab ticket move file-3 --role backlog')
+      expect(guide).toContain('ab ticket move file-3 --role rejected')
+      expect(guide).toMatch(/"Ice it", "icebox" and "backlog"/)
+      expect(guide).toMatch(/"Reject" and\s+"won't do"/)
+      expect(guide).toContain('[tickets].backlogState')
+      expect(guide).toContain('"Building" is the claimed role')
+      expect(guide).toContain('nothing\ndispatches from')
       expect(guide).not.toContain('SPEC.md')
     }
   })
