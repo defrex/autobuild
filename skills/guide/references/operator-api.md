@@ -85,7 +85,7 @@ raw session-event append. External operator harnesses own agent execution.
 | `GET …/builds?scope=active\|queued\|all` | Build summaries, newest update first. `queued` means active plus queued, matching `ab builds --queued`. |
 | `GET …/builds/{slug}` | `{detail, dashboardRow}`; `detail.runnerAttaches` records chronological attach boundaries and their runtime identity (version, commit, source kind/location), with null runtime for unrecorded historical attaches; `dashboardRow` remains a `CLEANING` row after `build.aborted` and becomes `null` only when the dashboard stops listing it (after cleanup's `build.completed`). |
 | `GET …/dashboard` | `{generatedAt, model, settingsHeader}`. `model` is the dashboard's rows, steps, elapsed timing inputs, harvest row, triage (when the dispatcher published one)/queue/capacity and settings projection. Optional `rollback` contains `correlation`, `lineage`, full `failed` and `restored` runtime identities and rollback event `ts` for the authoritative dispatcher lineage’s unresolved hold. Both dashboards name failed, restored and held runtime plus timestamp. Matching durable different-target hold clearance removes it; a fresh operator lineage hides it only after a committed operational tick or accepted takeover. Run-started and yielded ticks alone cannot replace authority; same-lineage generations retain the notice. Historical rollback records are not fallback notices. Optional `handoffs` lists all accepted unfinished handoffs with predecessor `run`, optional `successor`, `correlation`, full `from`/`to` runtimes, `mode` and optional `deadline`. Outstanding drain-mode builds carry `draining: true`, also on build-detail `dashboardRow`; matching settlement removes it. Accepted completion removes the handoff; neither takeover nor the clock does. Missing historical mode means cutover and missing deadline displays unknown. |
-| `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
+| `GET …/status` | Repository intake, pause, and default-auto-merge projection. Its `operator` is `{presence: "unavailable", reason}`: this route does not load presence registrations, so it is not evidence that no operator is present. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
 | `GET …/tickets?state=S&label=L&limit=N&offset=K&order=O` | `{states,tickets,diagnostics,criteria,triageState,readyState,doneState,total}`. The three lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. `limit` (0–200) returns one page, after skipping `offset`, in `order` `oldest` (the source order, the default) or `newest`; `total` counts every match before paging. |
@@ -103,7 +103,9 @@ repository artifact. Missing, corrupt, or invalid configuration returns a typed
 Clients poll these reads — the operator HTTP API exposes no push or long-poll
 event transport. Streaming is provided by `ab watch`; unflagged watches are read-only.
 Only CLI `--operator` watches write advisory liveness, never events or authority;
-MCP presence registration is deferred. `ab watch`
+MCP presence registration is deferred. Repository status over this API and MCP
+marks operator presence `unavailable` rather than reporting an empty registration
+list; use `ab repository status --json` for presence. `ab watch`
 streams build and repository events by polling the same event logs client-side
 (the store protocol's `GET /builds/{slug}/events` and `GET /repos/{repo}/events`
 reads), not as a transport on this API. `triageState`, `readyState`,
