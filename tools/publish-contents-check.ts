@@ -50,7 +50,7 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   each `files` allowlist negates every `*.test.ts`, `*.test.tsx`, `*.spec.ts`,
  *   and `*.spec.tsx` file under `src/` (manifest entries `!src/**` + `*.test.ts`,
  *   `!src/**` + `*.test.tsx`, `!src/**` + `*.spec.ts`, and `!src/**` + `*.spec.tsx`;
- *   under the matcher's within-segment `*`, this also denies the `*.live.test.*`
+ *   under the matcher's within-segment `*`, this also denies the `*.live.integration.test.*`
  *   suites). This is a deliberate ruling, not a leak: the root package takes the same
  *   stance (its `packages/core/src` test files are negated the same way), the tests
  *   are written for `bun test`
@@ -84,7 +84,7 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   dependency is a root devDependency only; and `src/markdown.ts`, approximate link-target
  *   extraction written for the repo's own doc checks) are excluded by per-file negations: each
  *   ships with no packed importer and no exports/bin target, and its sole consumers are the
- *   pack-denied `*.test.ts` / `*.live.test.ts` files (for `frame-image.ts` and `markdown.ts`
+ *   pack-denied `*.test.ts` / `*.live.integration.test.ts` files (for `frame-image.ts` and `markdown.ts`
  *   also the unpacked repo tooling, which reads the working tree by relative path).
  *
  * Every ruling is read out of its package's declared `files` allowlist, so
@@ -171,7 +171,7 @@ export interface TarballRuling {
 const HOSTED_STORE_SERVICE_RULING =
   'Ruling (AUT-463, extended by AUT-490, extended by AUT-502): the @defrex/autobuild-hosted-store-service npm tarball ships ' +
   'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, src/**/*.spec.ts, and src/**/*.spec.tsx files (the within-segment * ' +
-  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
+  'covers the *.live.integration.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
   'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
   'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. It also ships SELF-HOSTING.md, ' +
   'the self-hosting guide every deployment installs, and the deployment surface: the Next.js app/ tree (minus its tests), server.ts, next.config.ts, ' +
@@ -182,7 +182,7 @@ const HOSTED_STORE_SERVICE_RULING =
 const POSTGRES_STORE_RULING =
   'Ruling (AUT-473, extended by AUT-490, extended by AUT-500, extended by AUT-502): the @defrex/autobuild-postgres-store npm tarball ships exactly ' +
   'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, src/**/*.spec.ts, and src/**/*.spec.tsx files (the within-segment * ' +
-  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
+  'covers the *.live.integration.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
   'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
   'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. By AUT-500 the src/testing/ tree is also ' +
   'test-only dev surface (its helpers are consumed only by the live suites, e.g. ' +
@@ -196,7 +196,7 @@ const POSTGRES_STORE_RULING =
 const DISPATCHER_RULING =
   'Ruling (AUT-490, extended by AUT-502): the @defrex/autobuild-hosted-dispatcher npm tarball ships exactly ' +
   'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, src/**/*.spec.ts, and src/**/*.spec.tsx files (the within-segment * ' +
-  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
+  'covers the *.live.integration.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
   'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
   'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. They are ' +
   'written for `bun test` and are dead weight for consumers; the root package takes the same ' +
@@ -208,7 +208,7 @@ const ROOT_RULING =
   'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506, extended by AUT-513, extended by AUT-552): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
   'skills, templates, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
   'packages/core/src (the !packages/core/src/**/*.test.ts, !packages/core/src/**/*.test.tsx, !packages/core/src/**/*.spec.ts, and ' +
-  '!packages/core/src/**/*.spec.tsx negations; the within-segment * covers the *.live.test.* suites too): test files are dev-only surface and do ' +
+  '!packages/core/src/**/*.spec.tsx negations; the within-segment * covers the *.live.integration.test.* suites too): test files are dev-only surface and do ' +
   'not publish. The denial covers the TypeScript test spellings only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of ' +
   'scope (this workspace writes its tests in TypeScript only), so a future JS/JSX test file would publish unless the ruling is widened here and ' +
   'in the manifests together. By AUT-503 the test-only src/testing/store-failures.ts and src/testing/packed-install.ts ' +
@@ -224,7 +224,7 @@ const ROOT_RULING =
   'src/cli/store-opening.contract.ts (a shared bun:test contract suite), src/ports/runner/live-contract-fixture.ts (a live-suite fixture), ' +
   'src/cli/dashboard/frame-image.ts (a PNG renderer whose @resvg/resvg-js dependency is a root devDependency only), and ' +
   "src/markdown.ts (approximate link-target extraction written for the repo's own doc checks) are excluded by per-file negations: " +
-  'each ships with no packed importer and no exports/bin target, and its sole consumers are the pack-denied *.test.ts and *.live.test.ts ' +
+  'each ships with no packed importer and no exports/bin target, and its sole consumers are the pack-denied *.test.ts and *.live.integration.test.ts ' +
   'files — for frame-image.ts and markdown.ts also the unpacked repo tooling tools/dashboard-capture.ts, tools/docs-asset-check.ts, and ' +
   'tools/skill-docs-asset-check.ts, which read the working tree by relative path — so dropping them from the tarball changes nothing for ' +
   "any consumer; no packed source imports any of them. By AUT-552 the repo's patches/ directory is excluded from the tarball — the workspace install reads the patch from the repo tree, not from the tarball, and the packed manifest strips patchedDependencies (packedManifestOmittedFields in packages/core/src/ports/workspace/distribution-archive.ts), so the packed artifact never consumes the patch file and shipping it was dead weight. Warning: " +

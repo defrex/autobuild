@@ -37,12 +37,12 @@ import {
   assertSchema,
   migratePostgres,
 } from './schema'
-import { FROZEN } from './schema-guard.test.js'
+import { FROZEN } from './schema-guard.integration.test.js'
 // Mandatory, not optional: importing the guard module runs its pure pin and
 // contiguity tests inside this file's `postgres` verify invocation too (bun
 // dedupes the module instance, so nothing double-executes), and it keeps one
 // definition of the frozen maps. The `.js` spelling maps to
-// `schema-guard.test.ts` under the repository's bundler module resolution.
+// `schema-guard.integration.test.ts` under the repository's bundler module resolution.
 import { openPostgresBuildStore } from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
@@ -540,11 +540,11 @@ if (testUrl) {
 
     // The retention baseline (AUT-547): instead of one hand-written fixture
     // per schema version accumulating forever, a loop iterates every entry of
-    // the frozen-family map (schema-guard.test.ts) — for each frozen version,
+    // the frozen-family map (schema-guard.integration.test.ts) — for each frozen version,
     // seed that version's frozen DDL and its genuine marker plus the legacy
     // rows a deployed database of that version carries, run migratePostgres,
     // and assert the shared upgrade properties. The loop never retires: a
-    // new schema bump adds a frozen entry (schema-guard.test.ts's contiguity
+    // new schema bump adds a frozen entry (schema-guard.integration.test.ts's contiguity
     // test fails a bump without a freeze) and the loop covers it
     // automatically. The hand-written fixtures above retain only the two
     // most recent versions per family, for deltas the loop cannot assert
