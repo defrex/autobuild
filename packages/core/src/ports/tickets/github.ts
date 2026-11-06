@@ -16,7 +16,10 @@
  * validator store, so an unchanged repository answers a tick with 304s.
  * Counts are one fresh, bounded GraphQL request per call and are never
  * cached. Explicit history reads, the keyed-create scan, the claim read and
- * every write store nothing.
+ * every write store nothing. A `readyAssignee` narrows the ready read itself
+ * (its `assignee` query parameter); `"me"` costs one `GET /user` per
+ * dispatcher start, sent by `prepareReadyAssignee` before the loop and never
+ * during a tick.
  */
 import { z } from 'zod'
 import {
@@ -71,6 +74,7 @@ import {
   validCreationKey,
   writeForState,
 } from './github-issues'
+import { GITHUB_READY_ASSIGNEE } from '../../config/ready-assignee'
 import { type GitHubValidatorStore, MemoryGitHubValidatorStore } from './github-validators'
 import { normalizeIssueLinks } from './issue-links'
 import { holdsState, type TicketLifecycle } from './lifecycle'
@@ -177,9 +181,16 @@ function blockerList(ids: string[]): string {
   return ids.length > 0 ? ids.map((id) => `"${id}"`).join(', ') : 'none'
 }
 
+/** Who the credential belongs to, as `prepareReadyAssignee` found it. */
+type Viewer = { login: string } | { noUser: true } | { failed: string }
+
+const NO_USER_ASSIGNEE =
+  'github tickets: [tickets].readyAssignee = "me" but the GitHub credential has no user (a GitHub App installation token has none) — set readyAssignee to a GitHub username'
+
 export class GitHubTicketSource implements TicketSource {
   readonly name = 'github'
   readonly issueLinks = true
+  readonly readyAssignee = true
 
   private readonly transport: GitHubRequest
   private readonly owner: string
@@ -194,6 +205,8 @@ export class GitHubTicketSource implements TicketSource {
   private readonly pendingLabels = new Map<string, Promise<void>>()
   /** Labels this instance created or saw created, lowercased. */
   private readonly knownLabels = new Set<string>()
+  /** The credential's owner, memoized for the instance's lifetime. */
+  private viewer?: Viewer
 
   constructor(opts: GitHubTicketSourceOptions) {
     for (const label of opts.readyLabels) {
@@ -730,18 +743,36 @@ export class GitHubTicketSource implements TicketSource {
   }
 
   async listReady(criteria: TicketCriteria): Promise<TicketListing> {
-    if (criteria.assignee !== undefined)
-      throw new Error(`${SOURCE}: readyAssignee is not supported for GitHub issues`)
     const labels = criteria.labels ?? []
     for (const label of labels)
       if (label.includes(',')) throw new Error(`${SOURCE}: label "${label}" contains a comma`)
+    const login =
+      criteria.assignee !== undefined ? await this.assigneeLogin(criteria.assignee) : undefined
     const labelQuery = (extra: string[] = []): Record<string, string> => {
       const all = [...extra, ...labels]
-      return all.length > 0 ? { labels: all.join(',') } : {}
+      return {
+        ...(all.length > 0 ? { labels: all.join(',') } : {}),
+        ...(login !== undefined ? { assignee: login } : {}),
+      }
+    }
+    // GitHub narrows the read server-side; the explicit membership check
+    // keeps "ready when the user is one of several assignees" independent of
+    // that, and drops issues before hydration reads their blockers.
+    const listIssues = async (
+      operation: string,
+      query: Record<string, string>,
+      remember: boolean,
+    ): Promise<GitHubIssue[]> => {
+      const issues = await this.listIssues(operation, query, remember)
+      if (login === undefined) return issues
+      const wanted = login.toLowerCase()
+      return issues.filter((issue) =>
+        (issue.assignees ?? []).some((assignee) => assignee.login.toLowerCase() === wanted),
+      )
     }
     if (criteria.state === undefined)
       return this.listing(
-        await this.listIssues('list', { state: 'all', ...labelQuery() }, false),
+        await listIssues('list', { state: 'all', ...labelQuery() }, false),
         () => true,
         false,
       )
@@ -752,13 +783,13 @@ export class GitHubTicketSource implements TicketSource {
       holdsState(wanted, rejectedStateOf(this.lifecycle))
     )
       return this.listing(
-        await this.listIssues('list', { state: 'closed', ...labelQuery() }, false),
+        await listIssues('list', { state: 'closed', ...labelQuery() }, false),
         holds,
         false,
       )
     if (holdsState(wanted, this.lifecycle.triage))
       return this.listing(
-        await this.listIssues('list', { state: 'open', ...labelQuery() }, false),
+        await listIssues('list', { state: 'open', ...labelQuery() }, false),
         holds,
         false,
       )
@@ -766,7 +797,7 @@ export class GitHubTicketSource implements TicketSource {
     // it alone is remembered, oldest first for a stable order.
     const recurring = holdsState(wanted, this.lifecycle.ready)
     return this.listing(
-      await this.listIssues(
+      await listIssues(
         'listReady',
         {
           state: 'open',
@@ -1375,6 +1406,72 @@ export class GitHubTicketSource implements TicketSource {
     }
     this.knownLabels.add(stateLabel(name).toLowerCase())
     return { state: { name, tickets: 0, ...(about !== undefined ? { about } : {}) }, created: true }
+  }
+
+  // ── Ready assignee ────────────────────────────────────────────────────────
+
+  /** The credential's owner: one `GET /user`. A credential with no user
+   * (an App installation token) answers 401, 403 or 404. */
+  private async readViewer(): Promise<Viewer> {
+    let response: Response | null
+    try {
+      response = await this.request('readyAssignee', 'GET', 'user', { missing: true })
+    } catch (error) {
+      const status = statusOf(error)
+      if (status === 401 || status === 403) return { noUser: true }
+      throw error
+    }
+    if (response === null) return { noUser: true }
+    return { login: z.object({ login: z.string() }).passthrough().parse(response.json).login }
+  }
+
+  /** Dispatcher startup, before the loop: resolve the credential's owner once,
+   * so neither a tick nor a reload ever sends `GET /user`. */
+  async prepareReadyAssignee(): Promise<void> {
+    if (this.viewer !== undefined && !('failed' in this.viewer)) return
+    try {
+      this.viewer = await this.readViewer()
+    } catch (error) {
+      this.viewer = { failed: message(error) }
+      throw error
+    }
+  }
+
+  readyAssigneeRefusal(value: string): string | undefined {
+    if (!GITHUB_READY_ASSIGNEE.accepts(value)) return GITHUB_READY_ASSIGNEE.message
+    if (value !== 'me') return undefined
+    if (this.viewer === undefined || 'failed' in this.viewer)
+      return `github tickets: [tickets].readyAssignee = "me" but the GitHub credential owner could not be resolved at dispatcher startup (${
+        this.viewer === undefined ? 'not prepared' : this.viewer.failed
+      }); restart dispatch to enable readyAssignee = "me"`
+    return 'noUser' in this.viewer ? NO_USER_ASSIGNEE : undefined
+  }
+
+  /** The login a `readyAssignee` value names. An unprepared one-shot surface
+   * (`ab ticket list`, init validation) resolves `"me"` once, lazily. */
+  private async assigneeLogin(value: string): Promise<string> {
+    if (value !== 'me') return value
+    if (this.viewer === undefined || 'failed' in this.viewer) this.viewer = await this.readViewer()
+    if ('noUser' in this.viewer) throw new Error(NO_USER_ASSIGNEE)
+    return (this.viewer as { login: string }).login
+  }
+
+  async describeReadyAssignee(value: string): Promise<string> {
+    if (value === 'me') await this.prepareReadyAssignee()
+    const refusal = this.readyAssigneeRefusal(value)
+    if (refusal !== undefined) throw new Error(refusal)
+    const login = await this.assigneeLogin(value)
+    const check = await this.request(
+      'readyAssignee',
+      'GET',
+      this.path(`/assignees/${encodeURIComponent(login)}`),
+      { missing: true },
+    )
+    if (check === null)
+      throw new Error(
+        `github tickets: [tickets].readyAssignee "${login}" cannot be assigned issues in ${this.fullName} — use a GitHub username with access to the repository, or "me"`,
+      )
+    return `${value} → @${login}`
   }
 
   // ── Init validation ───────────────────────────────────────────────────────
