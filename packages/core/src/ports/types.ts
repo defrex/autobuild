@@ -266,6 +266,20 @@ export interface TicketSource {
   listAll?(): Promise<TicketListing>
   /** Import support: the same pure id policy used by create, for mutation-free preflight. */
   readonly requestedIds?: import('./tickets/requested-id').RequestedIdPolicy
+  /** Import support: the source chooses every created id, so import remaps
+   * every ticket and adopts committed creates through the creation key inside
+   * `create`. */
+  readonly allocatesIds?: boolean
+  /** Explicit comment history, oldest first, for export and import only;
+   * `null` for an unknown ticket. Never called on a recurring path. */
+  readComments?(id: string): Promise<TicketComment[] | null>
+  /** Every planned import input this source would refuse, reported together
+   * before any import write. */
+  importProblems?(input: {
+    states: string[]
+    labels: string[]
+    creationKeys: string[]
+  }): Promise<string[]>
   readonly assets?: TicketAssetStore
   /** Check and mutate at the source boundary; absent means checks are unsupported. */
   mutateIfRevision?(id: string, expectedRevision: string, mutation: TicketMutation): Promise<void>
