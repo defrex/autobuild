@@ -7,6 +7,12 @@ import {
 } from '@defrex/autobuild/plugin-sdk'
 import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
+import {
+  AUTOBUILD_VERSION,
+  AUTOBUILD_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+} from '@defrex/autobuild/remote-store'
 import { createHostedStoreService } from './service'
 import { testProjects } from './testing/projects'
 import { testCredentials } from './testing/credentials'
@@ -377,6 +383,129 @@ test('policy publication uses named config existence, preserves decode errors an
     else if (scenario === 'invalid-artifact')
       await expect(client.synchronizePolicy(policy)).rejects.toThrow()
     else await client.synchronizePolicy(policy)
+    await store.close()
+  }
+})
+
+test('policy roles reach operator role moves and survive publishers predating them', async () => {
+  const store = new MemoryBuildStore()
+  const projects = testProjects([repo])
+  const credentials = testCredentials(projects, 'secret').store
+  const { token } = await credentials.issue(repo, 'owner')
+  const policies = new MemoryTicketPolicyStore()
+  const backend = new FakeTicketSource()
+  const diagnostics: string[] = []
+  const service = createHostedStoreService({
+    env,
+    openStore: async () => store,
+    openProjectRegistry: async () => projects,
+    openCredentials: async () => credentials,
+    openTicketPolicy: async () => policies,
+    diagnostic: (message) => diagnostics.push(message),
+    sourceFor: () => backend,
+  })
+  const fetchFn = async (input: string | URL | Request, init?: RequestInit) =>
+    service.fetch(new Request(input, init))
+  const client = new HostedTicketSource({
+    url: 'http://test',
+    token,
+    repo,
+    teamKey: 'ENG',
+    fetchFn,
+  })
+  const operator = new OperatorApiClient({
+    url: 'http://test',
+    token,
+    fetchFn: fetchFn as typeof fetch,
+  })
+  const base = {
+    source: 'hosted' as const,
+    teamKey: 'ENG',
+    triageState: 'triage',
+    readyState: 'ready',
+    claimedState: 'doing',
+    doneState: 'done',
+    createState: 'triage',
+    proposalState: 'triage',
+  }
+  const roles = { backlogState: 'icebox', rejectedState: 'rejected' }
+  // A client predating the roles: strict policy, no capability header.
+  const legacy = async (input: unknown, headers: Record<string, string> = {}) =>
+    fetchFn('http://test/tickets/policy', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        ...headers,
+      },
+      body: JSON.stringify({ context: { teamKey: 'ENG', repo }, input }),
+    })
+  const read = async (rolesAware: boolean) =>
+    (await (
+      await legacy(null, rolesAware ? { 'x-autobuild-ticket-policy-roles': '1' } : {})
+    ).json()) as { tickets: Record<string, string> }
+  try {
+    await client.synchronizePolicy({ version: 1, tickets: base })
+    const ticket = await client.create({ title: 'Later', body: 'Spec' }, { state: 'triage' })
+    const revision = async () => (await operator.getTicket(repo, ticket.ref.id)).ticket.revision
+    await expect(
+      operator.moveTicket(repo, ticket.ref.id, {
+        role: 'backlog',
+        expectedRevision: await revision(),
+      }),
+    ).rejects.toThrow('[tickets].backlogState')
+
+    await client.synchronizePolicy({ version: 1, tickets: { ...base, ...roles } })
+    await operator.moveTicket(repo, ticket.ref.id, {
+      role: 'backlog',
+      expectedRevision: await revision(),
+    })
+    expect((await client.get(ticket.ref.id))?.state).toBe('icebox')
+
+    // An older publish keeps the saved roles, and older readers never see them.
+    const kept = await legacy({ version: 1, tickets: { ...base, doneState: 'Done' } })
+    expect(kept.status).toBe(200)
+    expect(kept.headers.get('x-autobuild-ticket-policy-roles')).toBe('1')
+    expect((await read(true)).tickets).toMatchObject({ doneState: 'Done', ...roles })
+    expect((await read(false)).tickets).not.toHaveProperty('backlogState')
+    expect((await read(false)).tickets).not.toHaveProperty('rejectedState')
+
+    // A colliding older publish leaves the whole saved policy unchanged.
+    const collision = await legacy({ version: 1, tickets: { ...base, readyState: 'icebox' } })
+    expect(collision.status).toBe(200)
+    expect(await collision.json()).toEqual({ ok: true })
+    expect((await read(true)).tickets).toMatchObject({
+      readyState: 'ready',
+      doneState: 'Done',
+      ...roles,
+    })
+    expect(diagnostics).toEqual([
+      `policy publication kept for ${repo}: legacy publish names readyState "icebox", which the saved backlogState holds`,
+    ])
+
+    // Overlaps are refused, naming the issue, with the capability echoed.
+    const refused = await legacy(
+      { version: 1, tickets: { ...base, backlogState: 'Ready' } },
+      { 'x-autobuild-ticket-policy-roles': '1' },
+    )
+    expect(refused.status).toBe(400)
+    expect(refused.headers.get('x-autobuild-ticket-policy-roles')).toBe('1')
+    expect(((await refused.json()) as { error: string }).error).toContain(
+      'backlogState "Ready" names the same state as the ready role',
+    )
+
+    // A roles-aware publish is the complete policy: omitting the roles clears them.
+    await client.synchronizePolicy({ version: 1, tickets: base })
+    expect((await read(true)).tickets).not.toHaveProperty('backlogState')
+    await expect(
+      operator.moveTicket(repo, ticket.ref.id, {
+        role: 'rejected',
+        expectedRevision: await revision(),
+      }),
+    ).rejects.toThrow('[tickets].rejectedState')
+  } finally {
     await store.close()
   }
 })
