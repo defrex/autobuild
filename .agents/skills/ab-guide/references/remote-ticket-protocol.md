@@ -152,7 +152,7 @@ AB_TOKEN. Revocation, expiry, parent revocation and registration changes invalid
 grants. Existing combined-service BuildStore delegation remains supported.
 
 The service never contacts Linear or relays external trackers. If the project's
-source is Linear, file or another non-hosted source, machine HTTP, operator and
+source is Linear, GitHub, file or another non-hosted source, machine HTTP, operator and
 MCP ticket surfaces refuse with a message naming that project and source: its
 tickets live in its own source, accessed directly by its dispatcher. This is a
 409 conflict, not an empty queue. The dispatcher's direct adapters are unchanged.
@@ -260,13 +260,15 @@ Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
 `move`, `block` and `unblock`. A stale write fails without changing anything and
 reports the current revision. Omission preserves unguarded behavior. Blocker
 checks cover the entire batch. Dispatcher moves remain unguarded and change the
-revision. Sources without guarded writes, including Linear, refuse supplied
-revisions rather than ignoring them.
+revision. Sources without guarded writes, including Linear and GitHub, refuse
+supplied revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
 id, blockers, creation key and reference comments are read-only. It saves only
-changed fields with the opening revision. Unchanged or formatting-only edits
+changed fields with the opening revision. Sources without guarded writes,
+including Linear and GitHub, re-read the ticket immediately before an
+unguarded write and refuse a changed revision, with the no-lock race window of file checks. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
@@ -308,7 +310,7 @@ BuildStore protocol version.
 
 Create options accept optional `requestedId: string` alongside `state` and
 `idempotencyKey`. Older clients omit it and responses are unchanged. Unsupported
-sources reject supplied ids; Linear is not an import target. File sources keep
+sources reject supplied ids; Linear and GitHub are not import targets. File sources keep
 filesystem-safe ids exactly and never overwrite an occupied id.
 
 Hosted sources preserve only literal own-team `<teamKey>-<n>` ids, where `n` is a

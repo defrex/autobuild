@@ -176,8 +176,15 @@ export interface TicketCreateOptions {
   state?: string
   /** Source-level adoption key for crash-safe external creation. File and fake
    * sources treat it as opaque; Linear requires a durably reserved UUID v4,
-   * sends it verbatim as the issue id, and queries that id when adopting. */
+   * sends it verbatim as the issue id, and queries that id when adopting;
+   * GitHub writes it as a hidden marker in the issue body by the same request
+   * that opens the issue. */
   idempotencyKey?: string
+  /** ISO-8601. The earliest time this creation key could first have been
+   * used. A source whose key lookup is time-bounded (github) requires it with
+   * a key. Other sources ignore it. Callers must pass the same value on every
+   * retry. */
+  idempotencyKeyReservedAt?: string
 }
 
 /** Editable ticket fields. Omitted fields are preserved; state is deliberately
