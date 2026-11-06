@@ -797,8 +797,8 @@ export const ticketsInputSchema = z.strictObject({
    * (§3.3). A nonempty list is conjunctive: every configured label must be
    * present. For readyLabels = ["autobuild", "ready"], a ticket carrying only
    * "autobuild" does not satisfy the label gate. An explicit [] disables the
-   * label gate; absent uses the ticket source's default (linear: ["autobuild"];
-   * file: none). Resolved by readyCriteria in src/processes/dispatcher.ts.
+   * label gate; absent uses the ticket source's default (linear and github:
+   * ["autobuild"]; file: none). Resolved by readyCriteria in src/processes/dispatcher.ts.
    */
   readyLabels: z.array(z.string().min(1)).optional(),
   /**
@@ -833,7 +833,8 @@ export const ticketsInputSchema = z.strictObject({
       '[tickets].readyAssignee must be "me" (the owner of the API key) or a user email address (e.g. "person@example.com")',
     )
     .optional(),
-  /** Backend team key (e.g. "ENG") — required for linear and hosted. */
+  /** Backend team key (e.g. "ENG") — required for linear and hosted;
+   * forbidden for github. */
   teamKey: z.string().min(1).optional(),
   /** Workflow state claim() moves an issue to (§12); Linear and hosted. */
   claimedState: z
@@ -922,53 +923,58 @@ documentFields(ticketsInputSchema, {
 })
 documentSchema(ticketsInputSchema, {
   constraints:
-    'readyState is required except for hosted, which resolves omission to ready. url is forbidden for file and linear; hosted URLs are normalized service URLs.',
+    'readyState is required except for hosted and github, which resolve omission to ready. url is forbidden for file, linear and github; hosted URLs are normalized service URLs.',
 })
 documentSchema(ticketsInputSchema.shape.readyState, {
-  required: 'Required unless source = "hosted"; hosted omission resolves to "ready".',
+  required:
+    'Required unless source = "hosted" or "github"; omission there resolves to "ready". GitHub states are `autobuild:<state>` labels.',
 })
 documentSchema(ticketsInputSchema.shape.teamKey, {
-  required: 'Required for linear and hosted; forbidden for file; optional for plugins.',
+  required: 'Required for linear and hosted; forbidden for file and github; optional for plugins.',
 })
 documentSchema(ticketsInputSchema.shape.claimedState, { constraints: 'Forbidden for file.' })
-documentSchema(ticketsInputSchema.shape.dir, { constraints: 'Forbidden for linear and hosted.' })
+documentSchema(ticketsInputSchema.shape.dir, {
+  constraints: 'Forbidden for linear, hosted and github.',
+})
 documentSchema(ticketsInputSchema.shape.readyAssignee, { constraints: 'Allowed only for linear.' })
 documentSchema(ticketsInputSchema.shape.readyLabels, {
   constraints:
-    'Omission uses source readiness defaults (Linear: autobuild label; file: none). Explicit [] disables label gating.',
+    'Omission uses source readiness defaults (Linear and GitHub: autobuild label; file: none). Explicit [] disables label gating.',
 })
 documentSchema(ticketsInputSchema.shape.url, {
   constraints:
-    'Forbidden for file and linear. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.',
+    'Forbidden for file, linear and github. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.',
 })
 documentSchema(ticketsInputSchema.shape.doneState, {
-  constraints: 'Hosted resolution uses done when omitted.',
+  constraints:
+    'Hosted and github resolution uses done when omitted. A github ticket is done when its issue is closed as completed.',
 })
 documentSchema(ticketsInputSchema.shape.claimedState, {
   constraints:
-    'Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted.',
+    'Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted and github.',
 })
 documentSchema(ticketsInputSchema.shape.createState, {
-  constraints: 'Omission uses the source creation state (Linear team default; file Triage).',
+  constraints:
+    'Omission uses the source creation state (Linear team default; file Triage; github triage).',
 })
 documentSchema(ticketsInputSchema.shape.triageState, {
   constraints:
-    'Omission resolves to Backlog for Linear, triage for hosted, Triage for file/plugin sources.',
+    'Omission resolves to Backlog for Linear, triage for hosted and github, Triage for file/plugin sources.',
 })
 documentSchema(ticketsInputSchema.shape.proposalState, {
   constraints: 'Omission uses the resolved triageState.',
 })
 documentSchema(ticketsInputSchema.shape.backlogState, {
   constraints:
-    'Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).',
+    'Optional for every source, no default; `ab init` writes it for new configurations. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).',
 })
 documentSchema(ticketsInputSchema.shape.rejectedState, {
   constraints:
-    'Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).',
+    'Optional for every source, no default; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).',
 })
 documentSchema(ticketsInputSchema.shape.dir, {
   constraints:
-    'Forbidden for linear and hosted. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.',
+    'Forbidden for linear, hosted and github. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.',
 })
 const FILE_CLAIMED_STATE = 'doing'
 const FILE_DONE_STATE = 'Done'
@@ -1027,14 +1033,14 @@ export const ticketsSchema = ticketsInputSchema
         ctx.addIssue({ code: 'custom', path: ['url'], message: (error as Error).message })
       }
     }
-    if (tickets.source !== 'hosted' && tickets.readyState === undefined)
+    if (!['hosted', 'github'].includes(tickets.source) && tickets.readyState === undefined)
       ctx.addIssue({
         code: 'custom',
         path: ['readyState'],
         message:
           '[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
       })
-    if (['file', 'linear'].includes(tickets.source) && tickets.url !== undefined)
+    if (['file', 'linear', 'github'].includes(tickets.source) && tickets.url !== undefined)
       ctx.addIssue({
         code: 'custom',
         path: ['url'],
@@ -1052,7 +1058,7 @@ export const ticketsSchema = ticketsInputSchema
 
 documentSchema(ticketsSchema, {
   constraints:
-    'readyState is required except for hosted, whose omitted value resolves to ready. url is forbidden for file and linear; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.',
+    'readyState is required except for hosted and github, whose omitted value resolves to ready. url is forbidden for file, linear and github; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.',
 })
 export type TicketsConfig = z.infer<typeof ticketsSchema>
 
@@ -1451,6 +1457,18 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
         path: ['tickets', 'dir'],
         message: '[tickets].dir applies only to source = "file" — remove it or set source = "file"',
       })
+    }
+  } else if (tickets.source === 'github') {
+    // The forge repository is the tracker: no team or directory. A service
+    // url is refused with the other non-hosted sources in ticketsSchema.
+    for (const key of ['teamKey', 'dir'] as const) {
+      if (tickets[key] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['tickets', key],
+          message: `[tickets].${key} applies only to source = ${key === 'dir' ? '"file"' : '"linear" or "hosted"'} — remove it for source = "github"`,
+        })
+      }
     }
   } else if (tickets.source === 'file') {
     // dir is optional for the file source: absent = .autobuild/tickets.
