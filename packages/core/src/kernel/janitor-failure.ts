@@ -1,6 +1,17 @@
 import type { BuildState } from './reducer'
 import type { BuildStore } from '../store/types'
 import { DISPATCHER } from '../events/envelope'
+import { isForgeFailure } from '../ports/forge-failure'
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
+
+/** Repository-level scheduling signals: not a janitor failure, never aged as one. */
+export function janitorDeferral(error: unknown): boolean {
+  return (
+    error instanceof ForgeRequestDeferred ||
+    (isForgeFailure(error) && error.details.kind === 'rate-limited')
+  )
+}
+
 export async function recordJanitorFailure(
   store: BuildStore,
   slug: string,

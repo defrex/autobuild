@@ -45,7 +45,7 @@ import {
   MixedVersionDeferral,
 } from '../kernel/mixed-version'
 import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
-import { recordJanitorFailure } from '../kernel/janitor-failure'
+import { janitorDeferral, recordJanitorFailure } from '../kernel/janitor-failure'
 import { KernelGitUnavailable, kernelGitUnavailableDetail } from '../kernel/kernel-git'
 import { isForgeFailure } from '../ports/forge-failure'
 import {
@@ -2568,11 +2568,7 @@ export class Dispatcher {
                   forge: this.deps.forge,
                 })
               } catch (error) {
-                if (
-                  error instanceof ForgeRequestDeferred ||
-                  (isForgeFailure(error) && error.details.kind === 'rate-limited')
-                )
-                  throw error
+                if (janitorDeferral(error)) throw error
                 if (facts.log.restack.distance?.count != null)
                   report.janitorDiagnostics.push(
                     `build ${record.slug}: target distance failed — ${error instanceof Error ? error.message : String(error)}`,
@@ -2621,7 +2617,10 @@ export class Dispatcher {
           }
           await completeNodePoll()
         } catch (error) {
-          if (error instanceof ForgeRequestDeferred) {
+          // The guarded forge already recorded a classified rate limit as repository
+          // degradation; like the cooldown that follows it, it neither starts nor ages
+          // this build's janitor episode.
+          if (janitorDeferral(error)) {
             attempted = false
             return
           }
@@ -2670,11 +2669,7 @@ export class Dispatcher {
       })
       return true
     } catch (error) {
-      if (
-        error instanceof ForgeRequestDeferred ||
-        (isForgeFailure(error) && error.details.kind === 'rate-limited')
-      )
-        throw error
+      if (janitorDeferral(error)) throw error
       report.janitorDiagnostics.push(
         `build ${record.slug}: node read priming failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
       )
