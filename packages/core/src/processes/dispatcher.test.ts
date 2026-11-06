@@ -2859,6 +2859,26 @@ describe('Dispatcher dependency gate', () => {
       expect(h.tickets.claims).toContain('T-1')
     })
 
+    test('roles cost no extra source request per tick at any log length', async () => {
+      const { ticketRoleTickBudget } = await import('../testing/reduced-read-budget')
+      const perTick = await ticketRoleTickBudget(async () => {
+        let requests = 0
+        const source = new FakeTicketSource([], { createState: 'triage', doneState: 'done' })
+        const tickets = new Proxy(source, {
+          get(target, key) {
+            const value = Reflect.get(target, key, target)
+            if (typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              requests++
+              return value.apply(target, args)
+            }
+          },
+        })
+        return { tickets, requests: () => requests }
+      })
+      expect(perTick.every((count) => count > 0)).toBe(true)
+    }, 60_000)
+
     test('with the key unset a natively complete blocker resolves as before', async () => {
       const h = harness({ tickets: tickets(), toml: CAPACITY_2, wrapTickets: cancelResolves })
       const report = await h.dispatcher.tick()

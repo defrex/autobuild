@@ -14,13 +14,38 @@ test('initialized confirmation is bounded to distinct requested names with no lo
   const q = executor(async (text, values) => {
     calls.push(text)
     expect(text).toContain('name = ANY(')
-    expect(values).toEqual(['repo', { names: ['Ready', 'ready'], type: 'text' }])
+    expect(values).toEqual([
+      'repo',
+      { names: ['Ready', 'ready'], type: 'text' },
+      { names: [], type: 'text' },
+    ])
     return [{ name: 'Ready' }, { name: 'ready' }]
   })
   await seedTicketStates(q, 'repo', [])
   expect(calls).toHaveLength(0)
   await seedTicketStates(q, 'repo', ['Ready', 'ready', 'Ready'])
   expect(calls).toHaveLength(1)
+})
+
+test('role states match case-insensitively in the same single lookup', async () => {
+  const calls: { text: string; values: unknown[] }[] = []
+  const q = executor(async (text, values) => {
+    calls.push({ text, values })
+    if (text.includes('SELECT name')) return [{ name: 'Ready' }, { name: 'Icebox' }]
+    return []
+  })
+  await seedTicketStates(q, 'repo', ['Ready'], ['icebox', 'ICEBOX'])
+  expect(calls).toHaveLength(1)
+  expect(calls[0]!.text).toContain('lower(btrim(name)) = ANY(')
+  expect(calls[0]!.values).toEqual([
+    'repo',
+    { names: ['Ready'], type: 'text' },
+    { names: ['icebox'], type: 'text' },
+  ])
+  calls.length = 0
+  await seedTicketStates(q, 'repo', ['Ready'], ['icebox', 'rejected', 'Rejected'])
+  const inserts = calls.filter((call) => call.text.includes('INSERT'))
+  expect(inserts.map((call) => call.values)).toEqual([['repo', 'rejected']])
 })
 
 test('concurrent initializers recheck after the lock and insert only missing names', async () => {

@@ -1998,3 +1998,102 @@ export async function hostedSeedReadBudget() {
   }
   expect(gapCosts).toEqual([14, 14])
 }
+
+/** The backlog and rejected roles ride the dispatcher's existing ticket reads:
+ * a role-aware tick issues exactly as many ticket-source requests as a
+ * role-free one, at 100 and at 100,000 repository events, and an unchanged
+ * read after it costs zero event rows. `open` returns the source a project
+ * with `config` dispatches over and a running count of its source requests. */
+export async function ticketRoleTickBudget(
+  open: (
+    config: import('../config/schema').Config,
+  ) => Promise<{ tickets: import('../ports/types').TicketSource; requests: () => number }>,
+) {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const sha = 'a'.repeat(40)
+  const perTick = new Map<string, number[]>()
+  for (const roles of [false, true]) {
+    for (const length of [100, 100_000]) {
+      const config = parseConfig(
+        `[tickets]\nsource = "hosted"\nteamKey = "ENG"\n${
+          roles ? 'backlogState = "icebox"\nrejectedState = "rejected"\n' : ''
+        }[verify]\nsteps = []\n[finalize]\nsteps = []\n`,
+      )
+      const { tickets, requests } = await open(config)
+      // Every ready ticket is blocked, so ticks claim nothing and change nothing.
+      const seed = async (title: string, state: string, blocker?: string) => {
+        const ticket = await tickets.create({ title, body: 'Budget' })
+        if (blocker !== undefined) await tickets.addBlocker(ticket.ref.id, blocker)
+        await tickets.transition(ticket.ref.id, state)
+        return ticket.ref.id
+      }
+      const rejected = await seed('Rejected blocker', 'rejected')
+      const pending = await seed('Incomplete blocker', 'triage')
+      await seed('Blocked by rejected', 'ready', rejected)
+      await seed('Blocked by incomplete', 'ready', pending)
+      await seed('Deferred', 'icebox')
+
+      let now = 1_800_000_000_000
+      const clock = () => new Date(now)
+      const store = new MemoryBuildStore({ clock })
+      const repo = `https://github.com/budget/ticket-roles-${roles}-${length}`
+      await store.ensureRepo(repo)
+      for (let i = 0; i < length; i++)
+        await store.appendRepo(repo, {
+          actor: humanActor('budget'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        })
+      // The one serialized reduction per key happens before the measured ticks.
+      await readRepositoryFacts(store, repo)
+      await readBuildDigests(store, repo)
+      const counter = memoryRepositoryReadCounter(store, repo)
+      const costs: number[] = []
+      for (let tick = 0; tick < 2; tick++) {
+        now += 60_000
+        const forge = new FakeForge()
+        forge.seedBranch('main', sha)
+        const dispatcher = new Dispatcher({
+          store,
+          tickets,
+          workspaces: new FakeWorkspaceProvider({
+            root: '/ticket-role-budget',
+            mode: 'logical',
+            base: { source: 'remote', sha },
+          }),
+          forge,
+          config,
+          repo,
+          exec: async () => ({ stdout: `${sha}\trefs/heads/main\n`, stderr: '', exitCode: 0 }),
+          launchRunner: async () => {
+            throw new Error('no launches in the ticket role budget')
+          },
+          ids: sequentialIds(),
+          clock,
+        })
+        const before = requests()
+        counter.reset()
+        const report = await dispatcher.tick()
+        costs.push(requests() - before)
+        expect(report.dispatched).toBe(0)
+        expect(report.dependencyBlocked).toBe(2)
+        expect(
+          report.dependencyDiagnostics.some((line) => line.endsWith('which was rejected')),
+        ).toBe(roles)
+        expect(counter.rows).toBeLessThanOrEqual(32)
+        // Prepare the tick's own tail, then prove an unchanged read costs zero rows.
+        await readRepositoryFacts(store, repo)
+        await readBuildDigests(store, repo)
+        counter.reset()
+        await readRepositoryFacts(store, repo)
+        await readBuildDigests(store, repo)
+        expect(counter.rows).toBe(0)
+      }
+      perTick.set(`${roles}:${length}`, costs)
+      await store.close()
+    }
+  }
+  const [baseline, ...rest] = [...perTick.values()]
+  for (const costs of rest) expect(costs).toEqual(baseline!)
+  return baseline!
+}

@@ -1,6 +1,5 @@
 import { parseConfig } from '../config/load'
-import { HostedTicketSource } from '../ports/tickets/remote'
-import { ticketLifecycle } from '../ports/tickets/lifecycle'
+import { HostedTicketSource, hostedTicketPolicy } from '../ports/tickets/remote'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { access, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -245,27 +244,13 @@ export async function abConnect(raw: string | undefined, opts: ConnectOptions): 
         (!configuredTickets.url || normalizeServiceURL(configuredTickets.url) === service))
     ) {
       const tickets = parseConfig(updatedText).tickets
-      const lifecycle = ticketLifecycle(tickets)
       await new HostedTicketSource({
         url: service,
         token,
         repo: p.repo,
         teamKey: tickets.teamKey!,
         ...(opts.fetch ? { fetchFn: (input, init) => opts.fetch!(String(input), init) } : {}),
-      }).synchronizePolicy({
-        version: 1,
-        tickets: {
-          source: 'hosted',
-          teamKey: tickets.teamKey!,
-          readyState: lifecycle.ready,
-          triageState: lifecycle.triage,
-          claimedState: lifecycle.doing,
-          doneState: lifecycle.done,
-          createState: lifecycle.create,
-          proposalState: lifecycle.proposal,
-          ...(tickets.readyLabels !== undefined ? { readyLabels: tickets.readyLabels } : {}),
-        },
-      })
+      }).synchronizePolicy(hostedTicketPolicy(tickets))
     }
     credentials.save({ service, repo: p.repo, id, token })
     saved = true

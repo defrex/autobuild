@@ -16,8 +16,7 @@ import type { PluginFactoryContext } from '../../plugins/manifest'
 import type { TicketSource } from '../types'
 import { DEFAULT_TICKETS_DIR, FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
-import { HostedTicketSource } from './remote'
-import { ticketLifecycle } from './lifecycle'
+import { HostedTicketSource, hostedTicketPolicy } from './remote'
 import { normalizeServiceURL } from '../../connection'
 
 function reason(error: unknown): string {
@@ -87,21 +86,7 @@ async function rawTicketSource(
     })
     // Delegated sessions may read policy, but never redefine project authority.
     if (!ticketSession && !env.AB_HARVEST && !env.AB_PHASE) {
-      const lifecycle = ticketLifecycle(config)
-      await source.synchronizePolicy({
-        version: 1,
-        tickets: {
-          source: 'hosted',
-          teamKey: config.teamKey,
-          readyState: lifecycle.ready,
-          triageState: lifecycle.triage,
-          claimedState: lifecycle.doing,
-          doneState: lifecycle.done,
-          createState: lifecycle.create,
-          proposalState: lifecycle.proposal,
-          ...(config.readyLabels !== undefined ? { readyLabels: config.readyLabels } : {}),
-        },
-      })
+      await source.synchronizePolicy(hostedTicketPolicy(config))
     }
     return source
   }

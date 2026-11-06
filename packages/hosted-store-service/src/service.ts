@@ -630,6 +630,12 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                 ...(context.tickets.proposalState !== undefined
                   ? { proposalState: context.tickets.proposalState }
                   : {}),
+                ...(context.tickets.backlogState !== undefined
+                  ? { backlogState: context.tickets.backlogState }
+                  : {}),
+                ...(context.tickets.rejectedState !== undefined
+                  ? { rejectedState: context.tickets.rejectedState }
+                  : {}),
               })
           if (source.assets) return source
           const store = await authorityStore()
@@ -653,6 +659,8 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                 ...Object.values(lifecycleFor(context)),
                 context.tickets.createState,
                 context.tickets.proposalState,
+                context.tickets.backlogState,
+                context.tickets.rejectedState,
               ].filter((v): v is string => v !== undefined),
             ),
           ]
@@ -819,7 +827,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
               throw new MachineAuthError(403, 'project not registered')
             return (await openPolicy()).get(repo)
           },
-          put: async (repo, policy, writer) => {
+          put: async (repo, policy, writer, publish) => {
             if (!(await projects.has(repo)))
               throw new MachineAuthError(403, 'project not registered')
             // A new project can publish before its first dispatcher run. Only
@@ -838,9 +846,10 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                 await source.listStates?.()
               }
             }
-            await (await openPolicy()).put(repo, policy, writer)
+            return (await openPolicy()).put(repo, policy, writer, publish)
           },
         },
+        ...(options.diagnostic === undefined ? {} : { diagnostic: options.diagnostic }),
         sourceFor: async (context, principal) => {
           if (principal.kind === 'internal')
             throw new MachineAuthError(

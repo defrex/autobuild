@@ -33,7 +33,14 @@ import {
   ticketListingWireSchema,
   ticketWireSchema,
 } from './remote-protocol'
-import { HostedTicketSource, type HostedTicketFetch } from './remote'
+import {
+  hostedTicketPolicySchema,
+  projectTicketPolicy,
+  publishedTicketPolicy,
+  type HostedTicketPolicy,
+} from './remote-protocol'
+import { HostedTicketSource, hostedTicketPolicy, type HostedTicketFetch } from './remote'
+import { ticketsSchema } from '../../config/schema'
 
 // ── The fake fetch ───────────────────────────────────────────────────────────
 
@@ -49,6 +56,7 @@ interface CannedResponse {
   body?: unknown
   /** Simulate a non-JSON response (a gateway error page): `json()` rejects. */
   jsonThrows?: boolean
+  headers?: Record<string, string>
 }
 
 /** Canned-exchange fetch: dequeues one response per request, records each. */
@@ -67,6 +75,7 @@ function fakeTickets(responses: CannedResponse[]) {
     return {
       ok: status < 400,
       status,
+      headers: new Headers(next.headers),
       json: async () => {
         if (next.jsonThrows) throw new Error('invalid json')
         return next.body
@@ -175,6 +184,7 @@ describe('HostedTicketSource (client half)', () => {
         'x-autobuild-ticket-comments': '1',
         'x-autobuild-ticket-issue-links': '1',
         'x-autobuild-ticket-dependency-state': '1',
+        'x-autobuild-ticket-policy-roles': '1',
         authorization: 'Bearer t0k',
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -442,4 +452,130 @@ test('hosted create permits an explicit root target and rejects blank targets', 
       input: { draft: { ...request.input.draft, target: ' ' } },
     }).success,
   ).toBe(false)
+})
+
+// ── Project ticket policy roles ──────────────────────────────────────────────
+
+function policy(tickets: Partial<HostedTicketPolicy['tickets']> = {}): HostedTicketPolicy {
+  return {
+    version: 1,
+    tickets: {
+      source: 'hosted',
+      teamKey: 'AUT',
+      readyState: 'ready',
+      triageState: 'triage',
+      claimedState: 'doing',
+      doneState: 'done',
+      createState: 'triage',
+      proposalState: 'triage',
+      ...tickets,
+    },
+  }
+}
+
+test('policy carries optional backlog and rejected roles and refuses overlaps by key', () => {
+  expect(
+    hostedTicketPolicySchema.parse(policy({ backlogState: 'icebox', rejectedState: 'rejected' }))
+      .tickets,
+  ).toMatchObject({ backlogState: 'icebox', rejectedState: 'rejected' })
+  expect(hostedTicketPolicySchema.safeParse(policy({ backlogState: ' ' })).success).toBe(false)
+  for (const [tickets, message] of [
+    [{ backlogState: 'Ready' }, 'backlogState "Ready" names the same state as the ready role'],
+    [{ rejectedState: 'DONE' }, 'rejectedState "DONE" names the same state as the done role'],
+    [
+      { backlogState: 'icebox', rejectedState: 'Icebox' },
+      'backlogState "icebox" names the same state as the rejected role',
+    ],
+  ] as const) {
+    const result = hostedTicketPolicySchema.safeParse(policy(tickets))
+    expect(result.success).toBe(false)
+    expect(result.error!.issues.map((issue) => issue.message).join('\n')).toContain(message)
+  }
+  // Create is not checked, as in config.
+  expect(
+    hostedTicketPolicySchema.safeParse(policy({ createState: 'icebox', backlogState: 'icebox' }))
+      .success,
+  ).toBe(true)
+})
+
+test('publishedTicketPolicy replaces, retains, and keeps the saved policy on a collision', () => {
+  const saved = policy({ backlogState: 'icebox', rejectedState: 'rejected' })
+  expect(publishedTicketPolicy(saved, policy(), 'replace')).toEqual({
+    policy: policy(),
+  })
+  expect(publishedTicketPolicy(null, policy(), 'retain-roles')).toEqual({
+    policy: policy(),
+  })
+  expect(publishedTicketPolicy(saved, policy({ readyState: 'Ready' }), 'retain-roles')).toEqual({
+    policy: policy({
+      readyState: 'Ready',
+      backlogState: 'icebox',
+      rejectedState: 'rejected',
+    }),
+  })
+  // An explicit role is never altered by the saved one.
+  expect(
+    publishedTicketPolicy(saved, policy({ backlogState: 'later' }), 'retain-roles').policy.tickets,
+  ).toMatchObject({ backlogState: 'later', rejectedState: 'rejected' })
+  const ready = publishedTicketPolicy(saved, policy({ readyState: 'icebox' }), 'retain-roles')
+  expect(ready.policy).toBe(saved)
+  expect(ready.kept).toEqual([
+    'legacy publish names readyState "icebox", which the saved backlogState holds',
+  ])
+  const done = publishedTicketPolicy(saved, policy({ doneState: 'Rejected' }), 'retain-roles')
+  expect(done.policy).toBe(saved)
+  expect(done.kept).toEqual([
+    'legacy publish names doneState "Rejected", which the saved rejectedState holds',
+  ])
+})
+
+test('projectTicketPolicy hides the roles from readers predating them', () => {
+  const saved = policy({ backlogState: 'icebox', rejectedState: 'rejected' })
+  expect(projectTicketPolicy(saved, true)).toEqual(saved)
+  expect(projectTicketPolicy(saved, false)).toEqual(policy())
+})
+
+test('hostedTicketPolicy publishes the roles only when configured', () => {
+  const base = { source: 'hosted', teamKey: 'AUT' }
+  expect(hostedTicketPolicy(ticketsSchema.parse(base))).toEqual(policy())
+  expect(
+    hostedTicketPolicy(
+      ticketsSchema.parse({
+        ...base,
+        backlogState: 'icebox',
+        rejectedState: 'rejected',
+      }),
+    ),
+  ).toEqual(policy({ backlogState: 'icebox', rejectedState: 'rejected' }))
+})
+
+test('a service predating the roles is named only when the policy maps one', async () => {
+  const refusal = {
+    status: 400,
+    body: wireError('invalid ticket policy envelope', 'validation'),
+  }
+  const roles = policy({ backlogState: 'icebox' })
+  const old = makeSource([refusal])
+  expect((await rejectionOf(old.source.synchronizePolicy(roles))).message).toBe(
+    'ticket service predates backlog/rejected roles in ticket policy; upgrade the service or unset [tickets].backlogState and rejectedState',
+  )
+  expect(old.calls[0]!.headers['x-autobuild-ticket-policy-roles']).toBe('1')
+  expect(old.calls[0]!.body.input).toEqual(roles)
+  const plain = makeSource([refusal])
+  expect((await rejectionOf(plain.source.synchronizePolicy(policy()))).message).toBe(
+    'invalid ticket policy envelope',
+  )
+  const current = makeSource([
+    {
+      ...refusal,
+      body: wireError('invalid ticket policy envelope: bad', 'validation'),
+      headers: { 'x-autobuild-ticket-policy-roles': '1' },
+    },
+  ])
+  expect((await rejectionOf(current.source.synchronizePolicy(roles))).message).toBe(
+    'invalid ticket policy envelope: bad',
+  )
+  const ok = makeSource([{ body: OK }])
+  await ok.source.synchronizePolicy(policy())
+  expect(ok.calls[0]!.body.input).toEqual(policy())
 })
