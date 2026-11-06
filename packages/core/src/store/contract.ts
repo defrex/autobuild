@@ -740,6 +740,58 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('node targets name every node a build was created against or moved between', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/dg-targets'
+          const created = (target?: string, kind?: 'node'): EventWrite<'build.created'> => {
+            const write = buildCreatedWrite()
+            return {
+              ...write,
+              payload: {
+                ...write.payload,
+                repo,
+                ...(kind ? { kind } : {}),
+                ...(target ? { target: { ticket: write.payload.ticket, build: target } } : {}),
+              },
+            }
+          }
+          await store.createBuild({ ...sampleBuildInput('n1', { repo }), created: created() })
+          await store.createBuild({ ...sampleBuildInput('work', { repo }), created: created('n1') })
+          await store.createBuild({
+            ...sampleBuildInput('moved', { repo }),
+            created: created('n1', 'node'),
+          })
+          await store.createBuild({ ...sampleBuildInput('plain', { repo }), created: created() })
+          const ticket = buildCreatedWrite().payload.ticket
+          const move = {
+            id: 'move-1',
+            old: { target: { ticket, build: 'n1' }, branch: 'ab/n1' },
+            next: { target: { ticket, build: 'n2' }, branch: 'ab/n2' },
+            revision: 'r1',
+          }
+          await store.append('moved', {
+            actor: DISPATCHER,
+            type: 'node.parent-requested',
+            payload: move,
+          })
+          await store.append('moved', {
+            actor: DISPATCHER,
+            type: 'node.parent-accepted',
+            payload: move,
+          })
+          const digests = await store.getRepoBuildDigests(repo)
+          expect(digests.get('n1')?.nodeTargets).toEqual([])
+          expect(digests.get('work')?.nodeTargets).toEqual(['n1'])
+          expect(digests.get('moved')?.nodeTargets).toEqual(['n1', 'n2'])
+          expect(digests.get('plain')?.nodeTargets).toEqual([])
+          digests.get('moved')!.nodeTargets!.push('mutated')
+          expect((await store.getRepoBuildDigests(repo)).get('moved')?.nodeTargets).toEqual([
+            'n1',
+            'n2',
+          ])
+        })
+      })
+
       test('pending integration audits survive completion and clear on settlement', async () => {
         await withStore(factory, undefined, async (store) => {
           const repo = 'acme/audit-digest'
@@ -792,6 +844,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(digests.get('dg-no-journal')).toEqual({
             slug: 'dg-no-journal',
             observations: [],
+            nodeTargets: [],
           })
           // Read-only: no journal record was implicitly created.
           expect(await store.getRepo('acme/no-journal')).toBeNull()
@@ -807,7 +860,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           // that started from the events side would silently drop it.
           const digests = await store.getRepoBuildDigests('acme/dga')
           expect([...digests.keys()]).toEqual(['dg-a'])
-          expect(digests.get('dg-a')).toEqual({ slug: 'dg-a', observations: [] })
+          expect(digests.get('dg-a')).toEqual({ slug: 'dg-a', observations: [], nodeTargets: [] })
           const other = await store.getRepoBuildDigests('acme/dgb')
           expect([...other.keys()]).toEqual(['dg-other'])
         })
@@ -1027,28 +1080,33 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             expectedObservations[slug]!.find((item) => item.seq === seq)!.ts
           expect(digests.get('dg-open')).toEqual({
             slug: 'dg-open',
+            nodeTargets: [],
             observations: [{ seq: 2, ts: tsOf('dg-open', 2) }],
           })
           expect(digests.get('dg-done')).toEqual({
             slug: 'dg-done',
+            nodeTargets: [],
             readinessChangeSeq: 2,
             terminal: 'done',
             observations: [{ seq: 3, ts: tsOf('dg-done', 3) }],
           })
           expect(digests.get('dg-cleaning')).toEqual({
             slug: 'dg-cleaning',
+            nodeTargets: [],
             readinessChangeSeq: 2,
             terminal: 'aborted',
             observations: [{ seq: 3, ts: tsOf('dg-cleaning', 3) }],
           })
           expect(digests.get('dg-abandoned')).toEqual({
             slug: 'dg-abandoned',
+            nodeTargets: [],
             readinessChangeSeq: 3,
             terminal: 'done',
             observations: [],
           })
           expect(digests.get('dg-overwrite')).toEqual({
             slug: 'dg-overwrite',
+            nodeTargets: [],
             readinessChangeSeq: 4,
             terminal: 'done',
             observations: [],
@@ -1116,6 +1174,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             terminal: 'done',
             merged: secondMergeTs,
             mergedSha: 'abc222',
+            nodeTargets: [],
             observations: [
               { seq: 1, ts: (await store.getEvents('dg-paths'))[0]!.ts },
               { seq: 2, ts: (await store.getEvents('dg-paths'))[1]!.ts },

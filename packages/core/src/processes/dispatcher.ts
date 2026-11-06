@@ -96,6 +96,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runNodeTransaction } from '../kernel/node-restack-transaction'
 import { hasBuildTrailer } from '../kernel/build-identity'
+import { digestNodeTargets } from '../store/digest'
 import { readBuildDigests, readForgeHealth } from '../store/reduced-reads'
 import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../store/reduced-reads'
 import { ensureExecutionProgress } from './execution-no-progress'
@@ -813,6 +814,9 @@ export class Dispatcher {
     const children: { slug: string; state: Pick<BuildState, 'pollingActivity'> }[] = []
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (record.slug === slug) continue
+      // The digest names every node a build ever targeted, so a build it does
+      // not name can never be this node's child and needs no facts read.
+      if (!digestNodeTargets(digest).includes(slug)) continue
       const known = this.nodePollingBuilds.get(record.slug)
       // Only node relationships can move. Unrelated known work never needs
       // another full-facts read, even while it is running.

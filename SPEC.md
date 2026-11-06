@@ -1054,6 +1054,9 @@ history of finished builds (§16.1), and it backs the harvest-launch pressure ga
 decisions evaluate from digests and the repository journal alone, so
 gate-evaluation cost is flat in accumulated build history, with the full
 per-build scan paid only when a gate actually trips and a scan packet is built.
+The digest also carries the build's node targets, every node its target or
+parent moves ever named, so the dispatcher finds a node's child builds from
+digests and reads full facts only for builds that name that node.
 
 Stateless repository-level readers also have a bounded journal read,
 `getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type

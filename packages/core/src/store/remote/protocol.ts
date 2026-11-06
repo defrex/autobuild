@@ -329,6 +329,8 @@ export const buildDigestWireSchema = z.object({
   mergedSha: z.string().min(1).optional(),
   nodeContribution: eventPayloadSchemas['node.contribution-recorded'].optional(),
   kind: z.enum(['work', 'node']).optional(),
+  // Always present from current services; absent only from an older one.
+  nodeTargets: z.array(z.string().min(1)).optional(),
   nodeOpened: z.literal(true).optional(),
   prClosed: z.literal(true).optional(),
   slug: z.string().min(1),

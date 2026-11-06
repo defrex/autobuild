@@ -1383,6 +1383,21 @@ for (const change of ['newer', 'older', 'value', 'envelope'] as const) {
   })
 }
 
+test('an older service digest without node targets fails typed at use, with no per-build reads', async () => {
+  const { BuildDigestCapabilityError, digestNodeTargets } = await import('../digest')
+  const calls: string[] = []
+  const client = new RemoteBuildStore({
+    url: 'https://test',
+    fetchFn: (async (url, init) => {
+      calls.push(`${init?.method} ${url}`)
+      return Response.json([{ slug: 'old', observations: [] }])
+    }) as typeof fetch,
+  })
+  const digest = (await client.getRepoBuildDigests('repo')).get('old')!
+  expect(() => digestNodeTargets(digest)).toThrow(BuildDigestCapabilityError)
+  expect(calls).toEqual(['GET https://test/repos/repo/build-digests'])
+})
+
 test('invalid digest batch fails schema validation without discovery fallback', async () => {
   let calls = 0
   const client = new RemoteBuildStore({
