@@ -57,7 +57,11 @@ import { RemoteBuildStore } from '../store/remote/client'
 import { delegateCredential } from '../store/remote/credentials'
 import { isRemoteStoreRef } from './repo-state'
 import { projectToken } from './project-credentials'
-import { settleSummaryRequests } from './pr-summary-publication'
+import {
+  readLaunchFence,
+  settleSummaryRequests,
+  summaryHandoffPending,
+} from './pr-summary-publication'
 import { readDispatcherLiveness, StandbyIdentityResolver } from './dispatcher-liveness'
 import { formatDispatcherIdentity } from '../kernel/dispatcher-liveness'
 /**
@@ -3383,6 +3387,9 @@ class DispatchLoop {
       // reached the durable branch. Reconcile that fact before a replacement
       // runner can rerun the phase and create a non-fast-forward successor.
       await this.settlePendingPublication(slug, instance)
+      // Before the guest can run: every unsettled summary request above this
+      // fence at completion was written by this execution.
+      const launchFenceSeq = await readLaunchFence(this.repoView, slug)
       const launchAuth = /^https?:/i.test(this.wiring.storeRef)
         ? {
             token: await (this.wiring.credentialIssuer ?? delegateCredential)(
@@ -3447,8 +3454,19 @@ class DispatchLoop {
               }
 
               await this.repoView.refreshBuild(slug)
-              const state = (await readBuildFacts(this.repoView, slug)).value.state
+              const facts = (await readBuildFacts(this.repoView, slug)).value
+              const state = facts.state
               if (diagnostic === null && exit.exitCode === 0) {
+                if (!relaunch && summaryHandoffPending(facts, launchFenceSeq)) {
+                  // The guest yielded only so this host can publish its summary.
+                  await this.appendStatus({
+                    actor: DISPATCHER,
+                    type: 'dispatcher.summary-handoff',
+                    payload: { run: this.runId, slug, status: state.status },
+                  })
+                  this.routineDiagnostic(`build ${slug} handed off its PR summary`)
+                  return
+                }
                 await this.appendStatus({
                   actor: DISPATCHER,
                   type: 'dispatcher.runner-settled',

@@ -241,6 +241,36 @@ describe('reduceDispatchStatus', () => {
     }
   })
 
+  test('a summary handoff is routine while any other clean guest exit still warns parked', () => {
+    const started = event(1, 'dispatcher.run-started', {
+      run: 'run-a',
+      pid: 100,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: [],
+    })
+    const parked = event(2, 'dispatcher.runner-settled', {
+      run: 'run-a',
+      slug: 'alpha',
+      outcome: 'parked',
+      status: 'blocked',
+    })
+    const handoff = event(3, 'dispatcher.summary-handoff', {
+      run: 'run-a',
+      slug: 'beta',
+      status: 'verifying',
+    })
+
+    expect(reduceDispatchStatus([started, parked], 'run-a').warningNotice).toBe(
+      'build alpha parked (blocked)',
+    )
+    const routine = reduceDispatchStatus([started, { ...handoff, seq: 2 }], 'run-a')
+    expect(routine.warningNotice).toBeUndefined()
+    expect(routine.notice).toBeUndefined()
+    const both = reduceDispatchStatus([started, parked, handoff], 'run-a')
+    expect(both.warningNotice).toBe('build alpha parked (blocked)')
+    expect(both.notice).toBe('build alpha parked (blocked)')
+  })
+
   test('successful ticks supersede diagnostics and accepted config replaces warnings', () => {
     const events = [
       event(1, 'dispatcher.run-started', {
