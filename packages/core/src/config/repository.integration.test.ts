@@ -37,12 +37,11 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     command: 'build',
     always: true,
   })
-  expect(config.verify.stepConfigs.integration).toMatchObject({
+  // Integration holds every IO test and applies to every build, as unit does.
+  expect(config.verify.stepConfigs.integration).toEqual({
     kind: 'check',
     command: 'test-integration',
-    paths: expect.arrayContaining(['packages/core/src/**', 'packages/postgres-store/**']),
   })
-  expect(config.verify.stepConfigs.integration?.always).toBeUndefined()
   expect(config.verify.stepConfigs['ui-tui']).toEqual({
     kind: 'agent',
     skill: 'verify-ui-tui',
