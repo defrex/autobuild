@@ -50,24 +50,30 @@ async function runCapture(name: string): Promise<Run> {
     'fixture',
   )
 
+  // The result goes through a file, not stdout: the capture's child processes
+  // can leave the shared stdout pipe non-blocking, which cuts a large
+  // console.log at 64 KiB when the process exits.
+  const resultPath = join(tmp, `${name}-result.json`)
   // Launch with the same explicit environment as pixel parity. Git provenance
   // appears in detail frames and must not depend on when each fixture ran.
   const child = Bun.spawn(
     [
       'bun',
       '-e',
-      `import {captureDashboardFrames} from './tools/dashboard-capture'; const result = await captureDashboardFrames({workspacePath: process.argv[1]}); console.log(JSON.stringify(result, (key, value) => key === 'png' ? undefined : value));`,
+      `import {captureDashboardFrames} from './tools/dashboard-capture'; const result = await captureDashboardFrames({workspacePath: process.argv[1]}); await Bun.write(process.argv[2], JSON.stringify(result, (key, value) => key === 'png' ? undefined : value));`,
       workspace,
+      resultPath,
     ],
-    { cwd: join(import.meta.dir, '..'), env: captureEnvironment(), stdout: 'pipe', stderr: 'pipe' },
+    {
+      cwd: join(import.meta.dir, '..'),
+      env: captureEnvironment(),
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
   )
-  const [output, error, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
+  const [error, code] = await Promise.all([new Response(child.stderr).text(), child.exited])
   expect(code, error).toBe(0)
-  const result = JSON.parse(output) as DashboardCaptureResult
+  const result = JSON.parse(await readFile(resultPath, 'utf8')) as DashboardCaptureResult
   for (const frame of result.frames) frame.png = new Uint8Array(await readFile(frame.pngPath))
   return { result, status: await git(workspace, 'status', '--porcelain') }
 }

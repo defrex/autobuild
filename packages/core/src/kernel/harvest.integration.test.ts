@@ -1128,8 +1128,11 @@ describe('reduceHarvest', () => {
       })
     }
 
-    expect(reduceHarvest(await store.getRepoEvents('/repo')).latest?.reservations).toEqual([
-      { proposalKey: 'cluster-1', id, seq: 2 },
+    const events = await store.getRepoEvents('/repo')
+    // The first reservation fact's time is the key's reservation time.
+    const reservedAt = events.find((event) => event.seq === 2)!.ts
+    expect(reduceHarvest(events).latest?.reservations).toEqual([
+      { proposalKey: 'cluster-1', id, seq: 2, reservedAt },
     ])
   })
 
