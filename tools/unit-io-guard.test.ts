@@ -47,6 +47,32 @@ describe('unit IO guard', () => {
     expect(drainUnitIoViolations()).toEqual([])
   })
 
+  test('denies file-backed SQLite and allows in-memory databases', async () => {
+    const { Database } = await import('bun:sqlite')
+    expectThrows('bun:sqlite.Database', () => new Database('.ab/unit-io-guard.sqlite'))
+    expectThrows('bun:sqlite.Database', () => Database.open('.ab/unit-io-guard.sqlite'))
+    expectThrows('bun:sqlite.Database', () => new Database('file::memory:'))
+    const db = new Database(':memory:')
+    for (const method of ['exec', 'run', 'query', 'prepare'] as const)
+      expectThrows(`bun:sqlite.Database#${method}`, () =>
+        (db[method] as (sql: string) => unknown).call(
+          db,
+          "ATTACH DATABASE '.ab/unit-io-guard.sqlite' AS probe",
+        ),
+      )
+    expectThrows('bun:sqlite.Database#exec', () =>
+      db.exec("VACUUM INTO '.ab/unit-io-guard.sqlite'"),
+    )
+    expectThrows('bun:sqlite.Database#loadExtension', () => db.loadExtension('.ab/probe'))
+    db.exec("ATTACH ':memory:' AS scratch")
+    db.exec('CREATE TABLE probe (value TEXT)')
+    db.run("INSERT INTO probe VALUES ('kept in memory')")
+    expect(db.query('SELECT COUNT(*) AS n FROM probe').get()).toEqual({ n: 1 })
+    db.close()
+    for (const filename of [undefined, '']) new Database(filename).close()
+    expect(drainUnitIoViolations()).toEqual([])
+  })
+
   test('denies subprocesses', async () => {
     const childProcess = await import('node:child_process')
     expectThrows('child_process.spawnSync', () => childProcess.spawnSync('true'))

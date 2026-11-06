@@ -1,6 +1,7 @@
 // Deliberately offending unit tests. tools/unit-io-guard.integration.test.ts
 // runs this file under the unit IO guard and expects every test to fail.
 // The name keeps it out of both suites' collection.
+import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { Server, Socket } from 'node:net'
@@ -44,5 +45,11 @@ describe('unit IO offender', () => {
 
   test('Server#listen', () => {
     new Server().listen(0)
+  })
+
+  test('swallowed file-backed SQLite', () => {
+    try {
+      new Database('.ab/unit-io-offender.sqlite').close()
+    } catch {}
   })
 })

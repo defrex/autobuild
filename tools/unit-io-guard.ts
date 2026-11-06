@@ -37,6 +37,11 @@
  * | http2           | Http2ServerRequest/Response           | data, passes through             |
  * | dgram           | Socket                                | prototype bind/connect/send      |
  * | dns, dns/promis | Resolver                              | constructor denied               |
+ * | bun:sqlite      | Database                              | constructor and `open` denied    |
+ * |                 |                                       | for files; in-memory allowed     |
+ * | bun:sqlite      | Database#loadExtension, SQL that      | denied                           |
+ * |                 | ATTACHes or VACUUMs INTO a file       |                                  |
+ * | bun:sqlite      | Statement, SQLiteError, constants     | data, passes through             |
  */
 import { afterAll, afterEach, beforeEach, mock } from 'bun:test'
 import { createRequire } from 'node:module'
@@ -166,6 +171,25 @@ function closePrototype(target: object, method: string, name: string, category: 
   Object.defineProperty(target, method, { configurable: true, writable: true, value: denied })
 }
 
+/**
+ * True when a SQLite filename names an in-memory database. Bun opens without
+ * URI mode, so `file::memory:` and `?mode=memory` are ordinary file names.
+ */
+export function isInMemorySqlite(filename: unknown): boolean {
+  return filename === undefined || filename === null || filename === '' || filename === ':memory:'
+}
+
+const SQLITE_FILE_TARGET =
+  /\b(?:ATTACH\s+(?:DATABASE\s+)?|VACUUM\s+(?:\w+\s+)?INTO\s+)(['"])(.*?)\1/gi
+
+/** Names the first file an SQL text ATTACHes or VACUUMs INTO, if any. */
+export function sqliteFileTarget(sql: unknown): string | undefined {
+  if (typeof sql !== 'string') return undefined
+  for (const match of sql.matchAll(SQLITE_FILE_TARGET))
+    if (!isInMemorySqlite(match[2])) return match[2]
+  return undefined
+}
+
 type ModuleSpec = {
   id: string
   label: string
@@ -228,6 +252,7 @@ function install(): void {
   const dnsPromises = require('node:dns/promises')
   const timers = require('node:timers')
   const timersPromises = require('node:timers/promises')
+  const sqlite = require('bun:sqlite')
 
   const realSetTimeout = globalThis.setTimeout
   const realSetInterval = globalThis.setInterval
@@ -246,6 +271,36 @@ function install(): void {
     'child_process.ChildProcess#spawn',
     'subprocess',
   )
+
+  // bun:sqlite opens files natively, below node:fs. In-memory databases stay
+  // allowed; SQL statements reach files through ATTACH and VACUUM INTO.
+  const SqliteDatabase = deniedClass(sqlite.Database, 'bun:sqlite.Database', 'filesystem', (args) =>
+    isInMemorySqlite(args[0]),
+  )
+  Object.defineProperty(SqliteDatabase, 'open', {
+    configurable: true,
+    writable: true,
+    value: (filename: unknown, options?: unknown) => new SqliteDatabase(filename, options),
+  })
+  closePrototype(
+    sqlite.Database.prototype,
+    'loadExtension',
+    'bun:sqlite.Database#loadExtension',
+    'filesystem',
+  )
+  for (const method of ['exec', 'run', 'query', 'prepare']) {
+    const real = sqlite.Database.prototype[method] as AnyFunction
+    Object.defineProperty(sqlite.Database.prototype, method, {
+      configurable: true,
+      writable: true,
+      value: function (this: unknown, sql: unknown, ...rest: unknown[]) {
+        if (sqliteFileTarget(sql) !== undefined)
+          throw record(`bun:sqlite.Database#${method}`, 'filesystem')
+        return real.call(this, sql, ...rest)
+      },
+    })
+  }
+  sqlite.Database.setCustomSQLite = denySync('bun:sqlite.Database.setCustomSQLite', 'filesystem')
 
   const allowDescriptor = (args: unknown[]) =>
     isDescriptor(args[0]) || isDescriptor((args[1] as { fd?: unknown })?.fd)
@@ -403,6 +458,10 @@ function install(): void {
   modules.push(['timers/promises', timersPromisesWrapped])
   ;(modules.find(([id]) => id === 'timers')?.[1] as Record<string, unknown>).promises =
     timersPromisesWrapped
+
+  const sqliteWrapped: Record<string, unknown> = { ...sqlite, Database: SqliteDatabase }
+  sqliteWrapped.default = sqliteWrapped
+  mock.module('bun:sqlite', () => sqliteWrapped)
 
   for (const [id, wrapped] of modules) {
     if (!('default' in wrapped) || wrapped.default !== wrapped) wrapped.default = wrapped
