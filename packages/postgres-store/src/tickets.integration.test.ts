@@ -1191,3 +1191,94 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl)
+  test('policy roles seed onto existing states, survive older publishers and never half-apply', async () => {
+    const isolated = await isolatedDatabase()
+    const sql = new SQL(isolated.url)
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const projects = new PostgresProjectRegistry(sql)
+    const policies = new PostgresTicketPolicyStore(sql)
+    const repo = 'https://github.com/acme/roles'
+    const base = {
+      source: 'hosted' as const,
+      teamKey: 'ENG',
+      triageState: 'triage',
+      readyState: 'ready',
+      claimedState: 'doing',
+      doneState: 'done',
+      createState: 'triage',
+      proposalState: 'triage',
+    }
+    const roles = { backlogState: 'ICEBOX', rejectedState: 'rejected' }
+    const lifecycle = { triage: 'triage', ready: 'ready', doing: 'doing', done: 'done' }
+    const states = async () =>
+      (await sql`SELECT name FROM ab_ticket_states WHERE repo = ${repo} ORDER BY name`).map(
+        (row: Record<string, unknown>) => String(row.name),
+      )
+    const row = async () =>
+      (
+        await sql`SELECT policy::text AS policy, writer, updated_at::text AS updated_at
+        FROM project_ticket_policy WHERE repo = ${repo}`
+      )[0]
+    try {
+      await projects.add(repo, 'owner')
+      const source = db.source({ repo, teamKey: 'ENG', lifecycle })
+      await source.addState('icebox', { about: 'Deferred' })
+      const parked = await source.create({ title: 'Parked', body: 'Body' }, { state: 'icebox' })
+
+      // A role mapped onto an existing state keeps it and its tickets; a
+      // missing role state is created once.
+      await policies.put(repo, { version: 1, tickets: { ...base, ...roles } }, 'current')
+      expect(await states()).toEqual(['doing', 'done', 'icebox', 'ready', 'rejected', 'triage'])
+      expect((await source.get(parked.ref.id))?.state).toBe('icebox')
+
+      // An older publisher omits the roles; they are kept.
+      expect(
+        await policies.put(repo, { version: 1, tickets: { ...base, doneState: 'Done' } }, 'old', {
+          mode: 'retain-roles',
+        }),
+      ).toEqual({})
+      expect((await policies.get(repo))?.tickets).toMatchObject({ doneState: 'Done', ...roles })
+
+      // A colliding older publish writes nothing at all.
+      const before = { row: await row(), states: await states() }
+      const kept = await policies.put(
+        repo,
+        { version: 1, tickets: { ...base, readyState: 'icebox' } },
+        'collides',
+        { mode: 'retain-roles' },
+      )
+      expect(kept.kept).toEqual([
+        'legacy publish names readyState "icebox", which the saved backlogState holds',
+      ])
+      expect({ row: await row(), states: await states() }).toEqual(before)
+
+      // Concurrent older and current publishes serialize and never lose the roles.
+      await Promise.all([
+        policies.put(repo, { version: 1, tickets: base }, 'old', { mode: 'retain-roles' }),
+        policies.put(repo, { version: 1, tickets: { ...base, ...roles } }, 'current'),
+      ])
+      expect((await policies.get(repo))?.tickets).toMatchObject(roles)
+
+      // A roles-aware publish without them clears the mapping; states remain.
+      await policies.put(repo, { version: 1, tickets: base }, 'current')
+      expect((await policies.get(repo))?.tickets).not.toHaveProperty('backlogState')
+      expect(await states()).toContain('rejected')
+
+      // A new registration never inherits a role.
+      await policies.put(repo, { version: 1, tickets: { ...base, ...roles } }, 'current')
+      await projects.remove(repo, 'owner')
+      await projects.add(repo, 'owner')
+      await policies.put(repo, { version: 1, tickets: base }, 'old', { mode: 'retain-roles' })
+      expect((await policies.get(repo))?.tickets).not.toHaveProperty('backlogState')
+
+      // A source opened with a role seeds its state on first read.
+      const later = db.source({ repo, teamKey: 'ENG', lifecycle, backlogState: 'later' })
+      expect((await later.listStates()).map((state) => state.name)).toContain('later')
+    } finally {
+      await db.close()
+      await sql.close()
+      await isolated.cleanup()
+    }
+  })

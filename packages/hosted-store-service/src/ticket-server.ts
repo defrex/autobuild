@@ -37,6 +37,9 @@ import {
   TICKET_ISSUE_LINKS_CAPABILITY,
   TICKET_DEPENDENCY_STATE_HEADER,
   TICKET_DEPENDENCY_STATE_CAPABILITY,
+  TICKET_POLICY_ROLES_HEADER,
+  TICKET_POLICY_ROLES_CAPABILITY,
+  projectTicketPolicy,
   TicketIssueLinksUnsupported,
   refuseUnsupportedIssueLinks,
   type HostedTicketContext,
@@ -58,8 +61,17 @@ export interface TicketServerOptions {
   grants?: TicketGrantStore
   policy?: {
     get(repo: string): Promise<HostedTicketPolicy | null>
-    put(repo: string, policy: HostedTicketPolicy, writer: string): Promise<void>
+    /** `retain-roles` keeps saved roles a publisher predating them omits;
+     * `kept` reports a publish left unchanged rather than erase a role. */
+    put(
+      repo: string,
+      policy: HostedTicketPolicy,
+      writer: string,
+      options: { mode: 'replace' | 'retain-roles' },
+    ): Promise<{ kept?: string[] } | void>
   }
+  /** Receives operator-facing notices, such as a kept legacy policy publish. */
+  diagnostic?: (message: string) => void
   clock?: Clock
   /** Observes unexpected source failures without changing their wire response. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
@@ -423,7 +435,13 @@ export function createTicketServer(options: TicketServerOptions): {
             })
             .safeParse(raw)
           if (!envelope.success)
-            throw new TicketRequestError(400, 'validation', 'invalid ticket policy envelope')
+            throw new TicketRequestError(
+              400,
+              'validation',
+              `invalid ticket policy envelope: ${envelope.error.issues.map((issue) => issue.message).join('; ')}`,
+            )
+          const rolesAware =
+            req.headers.get(TICKET_POLICY_ROLES_HEADER) === TICKET_POLICY_ROLES_CAPABILITY
           const repo =
             envelope.data.context.repo ?? (principal.kind !== 'admin' ? principal.repo : undefined)
           if (!repo || !options.policy)
@@ -436,14 +454,23 @@ export function createTicketServer(options: TicketServerOptions): {
                 !['harvest-runner', 'harvest-phase'].includes(principal.delegation.kind))
             )
               throw new MachineAuthError(403, 'credential cannot read ticket policy')
-            return json(200, await options.policy.get(repo))
+            const policy = await options.policy.get(repo)
+            return json(200, policy && projectTicketPolicy(policy, rolesAware))
           }
           if (principal.kind !== 'project' && principal.kind !== 'admin')
             throw new MachineAuthError(
               403,
               'only project or owner authority may publish ticket policy',
             )
-          await options.policy.put(repo, envelope.data.input, principal.user)
+          // A publisher predating the roles never erases them: absent roles keep
+          // their saved values, and a colliding publish keeps the saved policy.
+          const published = await options.policy.put(repo, envelope.data.input, principal.user, {
+            mode: rolesAware ? 'replace' : 'retain-roles',
+          })
+          if (published?.kept)
+            (options.diagnostic ?? console.warn)(
+              `policy publication kept for ${repo}: ${published.kept.join('; ')}`,
+            )
           return json(200, { ok: true })
         }
         const operation = url.pathname.slice('/tickets/'.length) as HostedTicketOperation
@@ -512,12 +539,14 @@ export function createTicketServer(options: TicketServerOptions): {
     },
   }
   return {
-    // Every ticket response, failures included, advertises issue-link support so
-    // a current client can recognize an older server's strict-schema refusal.
+    // Every ticket response, failures included, advertises issue-link and
+    // policy-role support so a current client can recognize an older server's
+    // strict-schema refusal.
     async fetch(req: Request): Promise<Response> {
       const response = await server.fetch(req)
       const headers = new Headers(response.headers)
       headers.set(TICKET_ISSUE_LINKS_HEADER, TICKET_ISSUE_LINKS_CAPABILITY)
+      headers.set(TICKET_POLICY_ROLES_HEADER, TICKET_POLICY_ROLES_CAPABILITY)
       return new Response(response.body, { status: response.status, headers })
     },
   }

@@ -45,6 +45,10 @@ export interface PostgresTicketContext {
   proposalState?: string
   claimedState?: string
   createState?: string
+  /** Optional roles seeded when missing, matched case-insensitively onto an
+   * existing state of the same name. */
+  backlogState?: string
+  rejectedState?: string
 }
 
 function requiredState(value: string, label: string): string {
@@ -98,6 +102,7 @@ export class PostgresTicketSource implements TicketSource {
   private readonly claimedState: string
   private readonly createState: string
   private readonly configured: string[]
+  private readonly roleStates: string[]
 
   constructor(
     private readonly sql: SQL,
@@ -121,12 +126,19 @@ export class PostgresTicketSource implements TicketSource {
         ].map((value) => requiredState(value, 'ticket state')),
       ),
     )
+    this.roleStates = [context.backlogState, context.rejectedState]
+      .filter((value) => value !== undefined)
+      .map((value) => requiredState(value, 'ticket state'))
     this.claimedState = context.claimedState ?? lifecycle.doing
     this.createState = context.createState ?? lifecycle.triage
   }
 
+  private seed(q: Exec): Promise<void> {
+    return seedTicketStates(q, this.repo, this.configured, this.roleStates)
+  }
+
   private async states(q: Exec): Promise<TicketStateInfo[]> {
-    await seedTicketStates(q, this.repo, this.configured)
+    await this.seed(q)
     const rows: Row[] = await q`SELECT s.name, s.about, count(t.id)::integer AS tickets
       FROM ab_ticket_states s LEFT JOIN ab_tickets t ON t.repo = s.repo AND t.state = s.name
       WHERE s.repo = ${this.repo} GROUP BY s.name, s.about`
@@ -147,7 +159,7 @@ export class PostgresTicketSource implements TicketSource {
 
   async countStates(names: readonly string[]): Promise<TicketStateCount[]> {
     return this.retry.tx(this.sql, (q) =>
-      readTicketStateCounts(q, this.repo, this.configured, names),
+      readTicketStateCounts(q, this.repo, this.configured, names, this.roleStates),
     )
   }
 
@@ -281,7 +293,7 @@ export class PostgresTicketSource implements TicketSource {
       throw new Error('ticket page limit and offset must be nonnegative integers')
     const labels = criteria.labels ?? []
     return this.retry.tx(this.sql, async (q) => {
-      if (criteria.state === undefined) await seedTicketStates(q, this.repo, this.configured)
+      if (criteria.state === undefined) await this.seed(q)
       const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
       const counts: Row[] = await q`SELECT count(*)::text AS total FROM ab_tickets
         WHERE repo = ${this.repo} AND (${state}::text IS NULL OR state = ${state})
@@ -311,7 +323,7 @@ export class PostgresTicketSource implements TicketSource {
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
     return this.retry.tx(this.sql, async (q) => {
-      if (criteria.state === undefined) await seedTicketStates(q, this.repo, this.configured)
+      if (criteria.state === undefined) await this.seed(q)
       const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
       // Project targets in the listing statement to avoid per-record lookups.
       const rows: Row[] = await q`SELECT *, revision::text AS revision,
@@ -332,7 +344,7 @@ export class PostgresTicketSource implements TicketSource {
 
   async get(id: string): Promise<Ticket | null> {
     return this.retry.tx(this.sql, async (q) => {
-      await seedTicketStates(q, this.repo, this.configured)
+      await this.seed(q)
       const rows: Row[] =
         await q`SELECT *, revision::text AS revision, ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers FROM ab_tickets WHERE repo = ${this.repo} AND (id = ${id} OR lower(readable_id) = lower(${id}))`
       if (!rows[0]) return null
@@ -353,7 +365,7 @@ export class PostgresTicketSource implements TicketSource {
 
   async claim(id: string): Promise<boolean> {
     return this.retry.tx(this.sql, async (q) => {
-      await seedTicketStates(q, this.repo, this.configured)
+      await this.seed(q)
       const row = await this.lookup(q, id)
       if (!row) return false
       const storageId = String(row.id)

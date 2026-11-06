@@ -616,6 +616,76 @@ for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.v
   })
 }
 
+// Policy roles need an explicit capability, so published clients keep their
+// strict historical policy shape (frozen in tickets-v1.2.ts) on publish and read.
+for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
+  const version = publication.version
+  test(`published ${version} policy publishes keep saved roles and reads omit them`, async () => {
+    const repo = 'https://github.com/acme/compat'
+    const policies = new MemoryTicketPolicyStore()
+    const diagnostics: string[] = []
+    const server = createTicketServer({
+      secret,
+      sourceFor: () => new FakeTicketSource(),
+      policy: policies,
+      diagnostic: (message) => diagnostics.push(message),
+    })
+    const base = {
+      source: 'hosted' as const,
+      teamKey: 'ENG',
+      readyState: 'ready',
+      triageState: 'triage',
+      claimedState: 'doing',
+      doneState: 'done',
+      createState: 'triage',
+      proposalState: 'triage',
+    }
+    await new HostedTicketSource({
+      url: 'https://tickets.example',
+      token: admin,
+      repo,
+      teamKey: 'ENG',
+      fetchFn: (input, init) => server.fetch(new Request(input.toString(), init)),
+    }).synchronizePolicy({
+      version: 1,
+      tickets: { ...base, backlogState: 'icebox', rejectedState: 'rejected' },
+    })
+    const send = async (input: unknown) => {
+      const response = await server.fetch(
+        request(
+          '/tickets/policy',
+          version,
+          { context: { teamKey: 'ENG', repo }, input },
+          admin,
+          publication.protocol!,
+        ),
+      )
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    const frozen = (tickets: Partial<typeof base>) =>
+      ticket120.hostedTicketPolicySchema.parse({ version: 1, tickets: { ...base, ...tickets } })
+    ticket120.successWireSchema.parse(await send(frozen({ doneState: 'Done' })))
+    expect((await policies.get(repo))?.tickets).toMatchObject({
+      doneState: 'Done',
+      backlogState: 'icebox',
+      rejectedState: 'rejected',
+    })
+    // A published publish naming a saved role's state keeps the saved policy.
+    ticket120.successWireSchema.parse(await send(frozen({ readyState: 'icebox' })))
+    expect((await policies.get(repo))?.tickets).toMatchObject({
+      readyState: 'ready',
+      doneState: 'Done',
+      backlogState: 'icebox',
+    })
+    expect(diagnostics).toEqual([
+      `policy publication kept for ${repo}: legacy publish names readyState "icebox", which the saved backlogState holds`,
+    ])
+    const read = ticket120.hostedTicketPolicySchema.parse(await send(null))
+    expect(read.tickets).toEqual({ ...base, doneState: 'Done' })
+  })
+}
+
 test('a current client receives each existing blocker native state', async () => {
   const backend = new FakeTicketSource()
   const server = createTicketServer({ secret, sourceFor: () => backend })

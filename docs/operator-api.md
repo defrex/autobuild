@@ -345,8 +345,8 @@ when no events are available. Repository event reads have a 1,000-position
 window; build history itself remains available through explicit pages.
 
 
-Hosted ticket tools resolve independent project ticket policy before legacy uploaded
-configuration. Queue, detail, state discovery and mutations work before any build
+Hosted ticket tools resolve independent project ticket policy, including its
+backlog and rejected roles for role moves, before legacy uploaded configuration. Queue, detail, state discovery and mutations work before any build
 or dispatcher run; detail reports a null matching build. Ticket policy publication
 never creates synthetic build or repository history.
 

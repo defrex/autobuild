@@ -309,8 +309,9 @@ former configuration roles remain custom states with their tickets intact.
 Listing puts role-holding states first in workflow order (triage, backlog,
 ready, claimed, done, rejected), then other states, including empty states and
 purposes. Move by role with `ab ticket move <id> --role backlog|rejected|triage|ready`
-exactly as for the file source. Configured
-names keep their spelling; lookup prefers an exact match, then a unique
+exactly as for the file source; MCP `tickets.move` takes the same roles. A role
+mapped onto an existing state, such as `backlogState = "icebox"`, keeps that
+state and its tickets. Configured names keep their spelling; lookup prefers an exact match, then a unique
 case-insensitive match. States belong to one project.
 
 The directory `ls` and `mv` instructions above apply only to the file source.
