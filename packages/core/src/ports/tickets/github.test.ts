@@ -1558,6 +1558,34 @@ describe('github integration tree', () => {
     expect(github.issue(Number(id))?.body).toBe('Body.\n<!-- autobuild:creation-key k-target -->')
   })
 
+  test('a keyed retry revalidates its recorded target and refuses one demoted since', async () => {
+    const { github, source } = tree()
+    const parent = await node(source)
+    const key = { idempotencyKey: 'k-demoted', idempotencyKeyReservedAt: new Date().toISOString() }
+    github.failNext(
+      500,
+      {},
+      { message: 'lost' },
+      (method, path) => path.endsWith('/sub_issues') && method === 'POST',
+    )
+    await expect(
+      source.create({ title: 'Child', body: 'Body.', target: parent }, key),
+    ).rejects.toThrow(/but its target #\d+ was not recorded/)
+    const id = String(Number(parent) + 1)
+    await source.update(parent, { kind: 'work' })
+    github.resetRequests()
+    await expect(source.create({ title: 'Retry', body: 'Other.' }, key)).rejects.toThrow(
+      `github create: ticket "${id}" already exists at https://github.com/acme/widgets/issues/${id}, but its recorded target #${parent} is no longer valid, so it was not recorded: target ${parent} is not a node.`,
+    )
+    expect(github.writes()).toEqual([])
+    expect(github.subIssues(Number(parent))).toEqual([])
+    expect(github.issueCount()).toBe(2)
+    await source.update(parent, { kind: 'node' })
+    const retry = await source.create({ title: 'Retry', body: 'Other.' }, key)
+    expect(retry).toMatchObject({ ref: { id }, title: 'Child', target: parent })
+    expect(github.subIssues(Number(parent))).toEqual([Number(id)])
+  })
+
   test('an unkeyed create whose sub-issue write fails names the issue and the repair', async () => {
     const { github, source } = tree()
     const parent = await node(source)

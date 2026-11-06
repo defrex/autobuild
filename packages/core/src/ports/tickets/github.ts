@@ -1254,8 +1254,10 @@ export class GitHubTicketSource implements TicketSource {
   }
 
   /** Make a created issue a sub-issue of its target. A recovery leaves a
-   * parent a person has set since alone. A failure says the issue exists, so
-   * a retry adopts it rather than duplicating it. */
+   * parent a person has set since alone, and revalidates the recorded target
+   * before writing it, since the target may have changed since the first
+   * attempt. A failure says the issue exists, so a retry adopts it rather
+   * than duplicating it. */
   private async recordTarget(
     issue: GitHubIssue,
     target: string,
@@ -1264,6 +1266,18 @@ export class GitHubTicketSource implements TicketSource {
   ): Promise<void> {
     const parent = parentOf(issue)
     if (parent !== undefined && (adopting || this.localParent(issue) === Number(target))) return
+    if (adopting) {
+      try {
+        await this.checkTarget('create', String(issue.number), target)
+      } catch (error) {
+        throw new Error(
+          `github create: ticket "${issue.number}" already exists at ${issue.html_url}, ` +
+            `but its recorded target #${target} is no longer valid, so it was not recorded: ${message(error)}. ` +
+            `Make #${target} a node again and retry with the same creation key, or choose a target with \`ab ticket update ${issue.number} --target <node>\`.`,
+          { cause: error },
+        )
+      }
+    }
     try {
       await this.setParent('create', issue, Number(target), false)
     } catch (error) {
@@ -1303,16 +1317,7 @@ export class GitHubTicketSource implements TicketSource {
     target: string,
   ): Promise<string> {
     try {
-      const canonical = await validateTicketTree(
-        {
-          name: this.name,
-          get: (ticket) => this.readTicket(operation, parseIssueId(ticket)),
-          listAll: () => this.listAll(),
-        },
-        id,
-        { target },
-      )
-      return canonical as string
+      return await this.checkTarget(operation, id, target)
     } catch (error) {
       throw new Error(
         `github ${operation}: ticket "${name}": ${message(error)} — nothing was written`,
@@ -1321,6 +1326,23 @@ export class GitHubTicketSource implements TicketSource {
         },
       )
     }
+  }
+
+  private async checkTarget(
+    operation: string,
+    id: string | undefined,
+    target: string,
+  ): Promise<string> {
+    const canonical = await validateTicketTree(
+      {
+        name: this.name,
+        get: (ticket) => this.readTicket(operation, parseIssueId(ticket)),
+        listAll: () => this.listAll(),
+      },
+      id,
+      { target },
+    )
+    return canonical as string
   }
 
   /** A node keeps its kind while any local sub-issue targets it; the node's
