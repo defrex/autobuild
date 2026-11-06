@@ -87,7 +87,7 @@ describe('plugin SDK package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.9.0')
+    expect(PLUGIN_API_VERSION).toBe('1.10.0')
     for (const symbol of [
       describeAgentRunnerContract,
       describeTicketSourceContract,
@@ -319,7 +319,7 @@ describe('plugin SDK package surface', () => {
         const observer: ForgeRequestObserver = (request) => { if (request.build !== context.build) throw new Error('context') }
         observer(context)
         if (!isForgeFailure(new ForgeFailure('limit', details))) throw new Error('missing runtime failure export')
-        if (PLUGIN_API_VERSION !== '1.9.0') {
+        if (PLUGIN_API_VERSION !== '1.10.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
         }
         if (typeof FakeTicketSource !== 'function') {
