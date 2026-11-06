@@ -5,9 +5,11 @@
  *
  * It serves the REST routes and the GraphQL queries the adapter sends, with
  * ETags (a hash of the response) and `If-None-Match` → 304, and counts every
- * request by route so budget tests can assert exact costs. It deliberately
- * serves no comment-history, REST issue-events or REST search route: any
- * adapter read of those fails a test with a 404.
+ * request by route so budget tests can assert exact costs. It serves the
+ * comment-history route (`comments-list`) for export and import, which
+ * recurring-read tests assert is never sent. It deliberately serves no REST
+ * issue-events or REST search route: any adapter read of those fails a test
+ * with a 404.
  *
  * UI-style mutators simulate what people do on GitHub outside the adapter.
  */
@@ -41,6 +43,13 @@ interface FakeIssue {
   history: Array<{ at: number; state: 'open' | 'closed'; state_reason: string | null }>
 }
 
+interface FakeComment {
+  id: number
+  body: string
+  created_at: string
+  user: { login: string } | null
+}
+
 interface FakeLabel {
   name: string
   description: string | null
@@ -54,6 +63,7 @@ export type FakeGitHubRequestKind =
   | 'get-issue'
   | 'patch-issue'
   | 'comment'
+  | 'comments-list'
   | 'blocked-by-list'
   | 'blocked-by-add'
   | 'blocked-by-remove'
@@ -101,6 +111,8 @@ export class FakeGitHubIssues {
   readonly requests: FakeGitHubRequestRecord[] = []
   /** Issue comments posted through the API or the UI, by issue number. */
   readonly comments = new Map<number, string[]>()
+  /** The same comments as the history route serves them, oldest first. */
+  private readonly commentRecords = new Map<number, FakeComment[]>()
   hasIssues = true
   permissions: Record<string, boolean> = { pull: true, push: true }
   /** When false, the token lacks Issues write: every REST write is refused. */
@@ -267,12 +279,9 @@ export class FakeGitHubIssues {
     this.changed(issue, true)
   }
 
-  uiComment(number: number, body: string, count = 1): void {
+  uiComment(number: number, body: string, count = 1, author: string | null = 'octocat'): void {
     const issue = this.require(number)
-    issue.comments += count
-    const list = this.comments.get(number) ?? []
-    for (let i = 0; i < count; i++) list.push(body)
-    this.comments.set(number, list)
+    for (let i = 0; i < count; i++) this.addComment(issue, body, author)
     this.changed(issue, true)
   }
 
@@ -438,7 +447,8 @@ export class FakeGitHubIssues {
     if (rest === '') return 'repo'
     if (rest === '/issues') return method === 'POST' ? 'create-issue' : 'list-issues'
     if (/^\/issues\/\d+$/.test(rest)) return method === 'PATCH' ? 'patch-issue' : 'get-issue'
-    if (/^\/issues\/\d+\/comments$/.test(rest)) return 'comment'
+    if (/^\/issues\/\d+\/comments$/.test(rest))
+      return method === 'POST' ? 'comment' : 'comments-list'
     if (/^\/issues\/\d+\/dependencies\/blocked_by$/.test(rest))
       return method === 'POST' ? 'blocked-by-add' : 'blocked-by-list'
     if (/^\/issues\/\d+\/dependencies\/blocked_by\/\d+$/.test(rest)) return 'blocked-by-remove'
@@ -498,10 +508,13 @@ export class FakeGitHubIssues {
     if (match && method === 'POST') {
       const issue = this.live(Number(match[1]))
       const text = (body as { body?: string })?.body ?? ''
-      issue.comments++
-      this.comments.set(issue.number, [...(this.comments.get(issue.number) ?? []), text])
+      const comment = this.addComment(issue, text, 'autobuild[bot]')
       this.changed(issue, true)
-      return { json: { id: this.nextId++, body: text }, status: 201 }
+      return { json: comment, status: 201 }
+    }
+    if (match && method === 'GET') {
+      const issue = this.live(Number(match[1]))
+      return this.page(this.commentRecords.get(issue.number) ?? [], query, rest)
     }
     match = /^\/issues\/(\d+)\/dependencies\/blocked_by$/.exec(rest)
     if (match) {
@@ -778,6 +791,22 @@ export class FakeGitHubIssues {
     }
     this.issues.set(issue.number, issue)
     return issue
+  }
+
+  private addComment(issue: FakeIssue, body: string, author: string | null): FakeComment {
+    const comment: FakeComment = {
+      id: this.nextId++,
+      body,
+      created_at: new Date(this.clock()).toISOString(),
+      user: author === null ? null : { login: author },
+    }
+    issue.comments++
+    this.comments.set(issue.number, [...(this.comments.get(issue.number) ?? []), body])
+    this.commentRecords.set(issue.number, [
+      ...(this.commentRecords.get(issue.number) ?? []),
+      comment,
+    ])
+    return comment
   }
 
   private ensureLabel(name: string): FakeLabel {
