@@ -1142,10 +1142,19 @@ and every failure path leaves live and pristine byte-untouched.
 
 ```sh
 bun install
-bun run check     # Biome lint + format, zero diagnostics
-bun test          # unit tests, colocated *.test.ts
-bun typecheck     # tsc --noEmit
+bun run check             # Biome lint + format, zero diagnostics
+bun run test              # in-memory unit tests, colocated *.test.ts, IO-guarded
+bun run test:integration  # IO tests, colocated *.integration.test.ts
+bun typecheck             # tsc --noEmit
 ```
+
+A unit test touches no filesystem, subprocess, network socket, or real clock
+wait; `bun run test` preloads a guard that fails any test that does, naming the
+call. Any test that does IO is an integration test named
+`*.integration.test.ts`, whether or not it needs a database. Run the suites
+through these scripts rather than bare `bun test`, which skips the guard and
+also picks up integration files. Database-backed integration tests skip
+without `AB_POSTGRES_TEST_URL`; every other integration test runs without it.
 
 For dashboard presentation work, run the repository-only hot CLI:
 
@@ -1286,12 +1295,13 @@ but reported as skipped: live provider access requires credentials/resources
 and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 
-The two remote clients get client-only unit coverage in core itself:
+The two remote clients get client-only integration coverage in core itself:
 `RemoteBuildStore` (`store/remote/client.integration.test.ts`, which also pins scoped-token
 minting/verification) and `HostedTicketSource` (`ports/tickets/remote.integration.test.ts`)
 run against an injected `fetchFn` with responses built from the protocol's wire
-schemas. The full over-the-wire seam suites (client → HTTP → server) run in
-`packages/hosted-store-service` in the same `bun test`.
+schemas. The full over-the-wire seam suites (client → HTTP → server) live in
+`packages/hosted-store-service` (`*.seam.integration.test.ts`) and run with the
+client tests in `bun run test:integration`.
 
 To run the Linear contract manually against a destructive scratch target:
 
