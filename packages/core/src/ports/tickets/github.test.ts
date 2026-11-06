@@ -614,7 +614,10 @@ describe('github claim', () => {
 
 describe('github reopen check is bounded', () => {
   test('history beyond the window fails closed with a diagnostic, and a re-added label decides', async () => {
-    const { github, source } = setup()
+    // A ticking clock: re-adding the label within the same millisecond would
+    // otherwise restore the issue's exact ETag and its saved verdict.
+    let now = Date.parse('2026-01-01T00:00:00Z')
+    const { github, source } = setup({ now: () => (now += 1) })
     const id = await created(source, 'ready')
     github.uiClose(Number(id))
     github.uiReopen(Number(id))

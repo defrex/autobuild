@@ -130,10 +130,10 @@ describe('plugin manifest', () => {
   test('rejects malformed, invalid-range, and incompatible manifests', () => {
     expect(() => parsePluginManifest({ name: 'x', apiVersion: '^1', extra: true })).toThrow()
     expect(() => parsePluginManifest({ name: 'x', apiVersion: 'not-semver' })).toThrow(
-      /invalid plugin API range.*host provides 1\.9\.0/,
+      /invalid plugin API range.*host provides 1\.10\.0/,
     )
     expect(() => parsePluginManifest({ name: 'future', apiVersion: '^2.0.0' })).toThrow(
-      /future.*\^2\.0\.0.*1\.9\.0/,
+      /future.*\^2\.0\.0.*1\.10\.0/,
     )
   })
 })
