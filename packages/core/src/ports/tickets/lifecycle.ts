@@ -15,8 +15,10 @@ export interface TicketLifecycle {
 }
 
 export function ticketLifecycle(tickets: TicketsConfig, legacyHosted = false): TicketLifecycle {
-  const hosted = tickets.source === 'hosted'
-  const old = tickets.source === 'linear' || (hosted && legacyHosted)
+  // GitHub states are `autobuild:<state>` labels, so its defaults share the
+  // hosted source's lowercase spelling.
+  const hosted = tickets.source === 'hosted' || tickets.source === 'github'
+  const old = tickets.source === 'linear' || (tickets.source === 'hosted' && legacyHosted)
   const triage = tickets.triageState ?? (old ? 'Backlog' : hosted ? 'triage' : 'Triage')
   return {
     triage,
