@@ -7,8 +7,11 @@ import type { BuildStore } from '../store/types'
 import { describeStoreOpeningContract } from './store-opening.contract'
 import {
   abRepositoryStatus,
+  OPERATOR_PRESENCE_UNAVAILABLE,
   projectRepositoryStatus,
   renderRepositoryStatus,
+  repositoryStatusFromFacts,
+  type RepositoryStatus,
   type RepositoryStatusOpts,
 } from './repository-status'
 
@@ -84,7 +87,7 @@ describe('ab repository status', () => {
         latestRun: null,
         latestStoppedRun: null,
       },
-      operator: { registrations: [] },
+      operator: { presence: 'loaded', registrations: [] },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
       publications: [],
@@ -118,7 +121,7 @@ describe('ab repository status', () => {
           latestRun: null,
           latestStoppedRun: null,
         },
-        operator: { registrations: [] },
+        operator: { presence: 'loaded', registrations: [] },
         sandboxes: [],
         upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
         publications: [],
@@ -130,7 +133,7 @@ describe('ab repository status', () => {
   test('human output labels the repository and every dispatcher setting', () => {
     const status = projectRepositoryStatus(REPO, [])
     expect(renderRepositoryStatus(status)).toEqual([
-      'operator: absent',
+      'operator: unavailable (presence not loaded)',
       'forge requests: unavailable',
       `repository: ${REPO}`,
       'dispatcher: absent — no dispatcher holds the repository',
@@ -302,6 +305,14 @@ describeStoreOpeningContract('ab repository status', {
   expectedCanonicalMarker: REPO,
 })
 
+/** The operator query matches the CLI everywhere except operator presence,
+ * which only the CLI loads; the query marks it unavailable. */
+function expectQueryParity(query: RepositoryStatus, cli: RepositoryStatus): void {
+  expect(cli.operator.presence).toBe('loaded')
+  expect(query.operator).toEqual({ presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE })
+  expect({ ...query, operator: null }).toEqual({ ...cli, operator: null })
+}
+
 test('status and operator queries resolve a hidden holder with live heartbeat attribution', async () => {
   const { DISPATCHER } = await import('../events/envelope')
   const { manualClock } = await import('../testing/fixed')
@@ -344,7 +355,7 @@ test('status and operator queries resolve a hidden holder with live heartbeat at
     heartbeatAt: null,
     heartbeatAgeMs: null,
   })
-  expect(await getRepositoryStatus(store, REPO, clock())).toEqual(status)
+  expectQueryParity(await getRepositoryStatus(store, REPO, clock()), status)
   const human = options(store, { now: clock })
   await abRepositoryStatus(human)
   expect(human.output.join('\n')).toContain(
@@ -416,7 +427,7 @@ test('a live latest holder never falls back to full history in CLI or operator s
     await abRepositoryStatus(opts)
     const status = JSON.parse(opts.output.join('\n'))
     expect(status.dispatcher.holder.run).toBe('live')
-    expect(await getRepositoryStatus(bounded, REPO, clock())).toEqual(status)
+    expectQueryParity(await getRepositoryStatus(bounded, REPO, clock()), status)
   }
   expect(boundedRows).toBeLessThan(10)
 })
@@ -618,6 +629,7 @@ test('operator status reports live registrations, ages and exactly one human lin
   const opts = options(store, { json: true, now })
   await abRepositoryStatus(opts)
   const projection = JSON.parse(opts.output.join('\n'))
+  expect(projection.operator.presence).toBe('loaded')
   expect(
     projection.operator.registrations.map((row: { heartbeatAgeMs: number }) => row.heartbeatAgeMs),
   ).toEqual([1000, 0])
@@ -636,6 +648,66 @@ test('operator status reports live registrations, ages and exactly one human lin
   const absent = options(store, { now })
   await abRepositoryStatus(absent)
   expect(absent.output.filter((line) => line.startsWith('operator:'))).toEqual(['operator: absent'])
+  const empty = options(store, { json: true, now })
+  await abRepositoryStatus(empty)
+  expect(JSON.parse(empty.output.join('\n')).operator).toEqual({
+    presence: 'loaded',
+    registrations: [],
+  })
+})
+
+test('human output renders one line distinguishing unavailable, absent and present', () => {
+  const lines = (operator: RepositoryStatus['operator']): string[] =>
+    renderRepositoryStatus({ ...projectRepositoryStatus(REPO, []), operator }).filter((line) =>
+      line.startsWith('operator:'),
+    )
+  const row = {
+    id: 'a',
+    repo: REPO,
+    host: 'one',
+    pid: 10,
+    startedAt: '2026-10-24T12:00:00.000Z',
+    heartbeatAt: '2026-10-24T12:00:00.000Z',
+    heartbeatAgeMs: 0,
+  }
+  expect(lines({ presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE })).toEqual([
+    'operator: unavailable (presence not loaded)',
+  ])
+  expect(lines({ presence: 'loaded', registrations: [] })).toEqual(['operator: absent'])
+  expect(lines({ presence: 'loaded', registrations: [row, { ...row, id: 'b' }] })).toEqual([
+    'operator: present (2 registrations)',
+  ])
+})
+
+test('surfaces that do not load presence mark it unavailable despite live registrations', async () => {
+  const { getRepositoryStatus } = await import('../operator/query')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  const now = new Date('2026-10-24T12:00:00.000Z')
+  const store = new MemoryBuildStore({ clock: () => now })
+  const identity = { id: 'a', host: 'one', pid: 10, startedAt: now.toISOString() }
+  await store.upsertOperatorPresence(REPO, identity)
+  await store.upsertOperatorPresence(REPO, { ...identity, id: 'b', host: 'two', pid: 20 })
+  expect(await store.listOperatorPresence(REPO)).toHaveLength(2)
+  const unavailable = { presence: 'unavailable' as const, reason: OPERATOR_PRESENCE_UNAVAILABLE }
+
+  const queried = await getRepositoryStatus(store, REPO, now)
+  expect(queried.operator).toEqual(unavailable)
+  expect('registrations' in queried.operator).toBe(false)
+  expect(renderRepositoryStatus(queried).filter((line) => line.startsWith('operator:'))).toEqual([
+    'operator: unavailable (presence not loaded)',
+  ])
+
+  const facts = (await readRepositoryFacts(store, REPO)).value
+  const fromFacts = repositoryStatusFromFacts(REPO, facts, queried.dispatcher)
+  expect(fromFacts.operator).toEqual(unavailable)
+  expect('registrations' in fromFacts.operator).toBe(false)
+
+  const cli = options(store, { json: true, now: () => now })
+  await abRepositoryStatus(cli)
+  expect(JSON.parse(cli.output.join('\n')).operator).toMatchObject({
+    presence: 'loaded',
+    registrations: [{ id: 'a' }, { id: 'b' }],
+  })
 })
 
 for (const outcome of ['normal', 'abnormal'] as const) {

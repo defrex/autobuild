@@ -32,9 +32,22 @@ import { sandboxStates } from '../processes/sandbox-state'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
+/** Why a status surface reports operator presence as unavailable. */
+export const OPERATOR_PRESENCE_UNAVAILABLE =
+  'operator presence is loaded only by ab repository status; this surface did not read registrations'
+
+/**
+ * Operator presence on a repository status. Only a `loaded` projection read
+ * the presence registrations; its empty list is confirmed absence. An
+ * `unavailable` projection is not evidence that no operator is present.
+ */
+export type RepositoryOperatorStatus =
+  | { presence: 'loaded'; registrations: Array<OperatorPresence & { heartbeatAgeMs: number }> }
+  | { presence: 'unavailable'; reason: string }
+
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
-  operator: { registrations: Array<OperatorPresence & { heartbeatAgeMs: number }> }
+  operator: RepositoryOperatorStatus
   repo: string
   upgrades: DispatchUpgradeState
   rollbackHold?: DispatchUpgradeState['lastRollback']
@@ -135,7 +148,7 @@ export function projectRepositoryStatus(
       ? { missingAccounts: repositoryReadFactsReducer.reduce(events).missingAccounts }
       : {}),
     repo,
-    operator: { registrations: [] },
+    operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: dispatchUpgradeReducer.reduce(events),
     rollbackHold: effectiveRollbackHold(dispatchUpgradeReducer.reduce(events), dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
@@ -177,7 +190,7 @@ export function repositoryStatusFromFacts(
       ? { missingAccounts: facts.missingAccounts }
       : {}),
     repo,
-    operator: { registrations: [] },
+    operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: facts.upgrades,
     rollbackHold: effectiveRollbackHold(facts.upgrades, dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
@@ -241,9 +254,11 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     ...Object.values(status.missingAccounts ?? {}).map(
       (account) => `Missing credentials: ${account.remedy} [${account.source}]`,
     ),
-    status.operator.registrations.length
-      ? `operator: present (${status.operator.registrations.length} registrations)`
-      : 'operator: absent',
+    status.operator.presence === 'unavailable'
+      ? 'operator: unavailable (presence not loaded)'
+      : status.operator.registrations.length
+        ? `operator: present (${status.operator.registrations.length} registrations)`
+        : 'operator: absent',
     ...(status.upgrades.lastRollback
       ? [
           `runtime rollback: ${status.upgrades.lastRollback.payload.failed.version} → ${status.upgrades.lastRollback.payload.restored.version}; ${status.upgrades.lastRollback.payload.reason}`,
@@ -394,12 +409,15 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
     const { dispatcher } = await readDispatcherLiveness(store, repo, observedAt)
     const facts = (await readRepositoryFacts(store, repo)).value
     const status = repositoryStatusFromFacts(repo, facts, dispatcher)
-    status.operator.registrations = (await store.listOperatorPresence(repo))
-      .map((row) => ({
-        ...row,
-        heartbeatAgeMs: Math.max(0, observedAt.getTime() - Date.parse(row.heartbeatAt)),
-      }))
-      .filter((row) => row.heartbeatAgeMs < OPERATOR_PRESENCE_TTL_MS)
+    status.operator = {
+      presence: 'loaded',
+      registrations: (await store.listOperatorPresence(repo))
+        .map((row) => ({
+          ...row,
+          heartbeatAgeMs: Math.max(0, observedAt.getTime() - Date.parse(row.heartbeatAt)),
+        }))
+        .filter((row) => row.heartbeatAgeMs < OPERATOR_PRESENCE_TTL_MS),
+    }
     const capacity = await readRepositoryCapacity(store, repo, facts, dispatcher, observedAt)
     if (capacity) status.capacity = capacity
     if (opts.json === true) {
