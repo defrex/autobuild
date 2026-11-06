@@ -477,7 +477,7 @@ if (testUrl) {
     // resolving the stream, so an invalid batch on an unknown stream reports
     // the validation or ceiling error — not unknown-stream. The remote server
     // deliberately runs the opposite order (SPEC §7.6); that side is pinned
-    // in core's remote.test.ts. Both orders must write nothing. Runs only
+    // in core's remote.integration.test.ts. Both orders must write nothing. Runs only
     // in the integration step, with AB_POSTGRES_TEST_URL set — unit tests do
     // not exercise it; the order here is otherwise fixed by the SPEC §7.6 text.
     test('append rejection precedence: an invalid or oversized batch on an unknown stream rejects before any lookup and writes nothing', async () => {

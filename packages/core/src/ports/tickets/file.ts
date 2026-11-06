@@ -243,7 +243,7 @@ export class FileTicketSource implements TicketSource {
     // otherwise-idempotent transition to the current state.
     await this.loadAt(found)
     // Idempotent by construction — the dispatcher retries transitions after a
-    // crash (file.test.ts explains the window). rename(2) would no-op here
+    // crash (file.integration.test.ts explains the window). rename(2) would no-op here
     // anyway, but resting idempotency on that POSIX subtlety would make it a
     // property of the syscall rather than of this adapter.
     if (found.state === target) return

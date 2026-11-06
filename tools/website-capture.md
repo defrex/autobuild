@@ -62,7 +62,7 @@ acknowledge completion. Both measurement and screenshot navigation repeat this
 preparation. Missing/duplicate IDs, missing adapters, invalid durations, rejected
 seeks and missing final acknowledgement fail capture. No marked figures is an
 explicit zero count, not omitted evidence. Fixture examples and negative cases
-live in `website-capture.test.ts`.
+live in `website-capture.integration.test.ts`.
 
 ## Unit smoke versus full verification
 

@@ -27,9 +27,9 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * hand-maintained `.ab-pristine/` exclusion (pristine copies are `ab
  * upgrade`'s three-way-merge baselines and must never be edited to satisfy
  * a finding). Canonical skill documents have their own reference guard,
- * `skill-self-containment.test.ts`, and the vendored `.agents/skills` copies of those
+ * `skill-self-containment.integration.test.ts`, and the vendored `.agents/skills` copies of those
  * canonical skills inherit it through the byte-for-byte mirroring in
- * `tools/vendored-skills-sync.test.ts`. Repo-local skills (no canonical inventory entry)
+ * `tools/vendored-skills-sync.integration.test.ts`. Repo-local skills (no canonical inventory entry)
  * are guarded by `tools/skill-docs-asset-check.ts`. A plan or reviewer must not claim this
  * check validates SKILL.md files.
  *
@@ -77,7 +77,7 @@ export type DocsAssetFinding =
  *
  * Canonical `skills/**` is inside `files` and therefore counted, even though a
  * canonical skill cannot in fact reference `docs/assets` without failing
- * `packages/core/src/cli/skill-self-containment.test.ts`. Counting it is vacuous rather than
+ * `packages/core/src/cli/skill-self-containment.integration.test.ts`. Counting it is vacuous rather than
  * wrong, and deriving the set mechanically from `files` cannot fall out of date
  * the way a hand-maintained list would.
  *

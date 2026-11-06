@@ -371,7 +371,7 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
  * registry-seam declarations) are assembled in
  * `ports/workspace/builtin-capabilities.ts`, which takes this subset from
  * here — a parity now enforced by
- * `ports/workspace/builtin-capabilities.test.ts` (AUT-573), so a builtin
+ * `ports/workspace/builtin-capabilities.integration.test.ts` (AUT-573), so a builtin
  * added to only one table fails tests rather than compiling silently. The
  * construction-site refusal text differs by design from the
  * parse-site one, so it is NOT copied from this table.
@@ -381,7 +381,7 @@ export interface WorkspaceProviderConfigDeclaration {
    * carries EXACTLY ONE of `configSchema` / `configRefusalMessage`: when the
    * schema is absent, the declaration must carry `configRefusalMessage` for
    * nonempty provider config to be refused (the neither-key side is pinned by
-   * the AUT-565 test in config.test.ts), and carrying BOTH is forbidden —
+   * the AUT-565 test in config.integration.test.ts), and carrying BOTH is forbidden —
    * `configSchema`'s superRefine checks `configRefusalMessage` first, so the
    * refusal branch would win and the schema would silently never apply (the
    * both-keys side is pinned by its sibling test). Providers absent from

@@ -40,7 +40,7 @@ export const baseEnv: Record<string, string> = {
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: 'store-secret-canary',
   // The hosted service's env parser requires a blob backend even when the
-  // opener is injected; dummies satisfy it (service.test.ts precedent).
+  // opener is injected; dummies satisfy it (service.io.integration.test.ts precedent).
   AB_BLOB_BACKEND: 's3',
   AB_S3_BUCKET: 'unused',
   AB_S3_REGION: 'us-east-1',

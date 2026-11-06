@@ -77,13 +77,20 @@ export async function runInspected(
   }
 }
 
-export async function suiteCommands(mode: string, args: string[]): Promise<string[][]> {
+export const UNIT_IO_GUARD_PRELOAD = './tools/unit-io-guard.ts'
+
+export async function suiteCommands(
+  mode: string,
+  args: string[],
+  options: { env?: Record<string, string | undefined>; report?: (message: string) => void } = {},
+): Promise<string[][]> {
   if (mode === 'unit')
     return [
       [
         process.execPath,
         'test',
-        '--path-ignore-patterns=**/*.integration.test.ts',
+        `--preload=${UNIT_IO_GUARD_PRELOAD}`,
+        '--path-ignore-patterns=**/*.integration.test.*',
         ...Array.from(
           new Bun.Glob('packages/*/src').scanSync({ cwd: checkoutRoot, onlyFiles: false }),
         ).sort(),
@@ -95,15 +102,25 @@ export async function suiteCommands(mode: string, args: string[]): Promise<strin
       ],
     ]
   if (mode === 'integration') {
-    const files = Array.from(
-      new Bun.Glob('packages/**/*.integration.test.ts').scanSync({ cwd: checkoutRoot }),
-    )
+    const files = [
+      ...new Set(
+        ['packages', 'tools', 'scripts', 'bin'].flatMap((dir) =>
+          Array.from(
+            new Bun.Glob(`${dir}/**/*.integration.test.{ts,tsx}`).scanSync({ cwd: checkoutRoot }),
+          ),
+        ),
+      ),
+    ]
       .filter((path) => !path.includes('/node_modules/'))
       .sort()
-    return [
-      [process.execPath, 'test', ...files, ...args],
-      [process.execPath, 'tools/hosted-service-packaging.ts'],
-    ]
+    const commands = [[process.execPath, 'test', ...files, ...args]]
+    if ((options.env ?? process.env).AB_POSTGRES_TEST_URL)
+      commands.push([process.execPath, 'tools/hosted-service-packaging.ts'])
+    else
+      (options.report ?? console.error)(
+        'skipping hosted-service deploy rehearsal: AB_POSTGRES_TEST_URL is unset',
+      )
+    return commands
   }
   throw new Error('Expected test-temp-leaks mode: unit or integration')
 }
