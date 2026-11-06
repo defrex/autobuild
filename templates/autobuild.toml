@@ -38,6 +38,7 @@ harvestThreshold = 5
 source = "file"
 readyState = "ready"
 # Optional, recommended lifecycle roles: deferred and declined work.
-# Remove either to go without that role.
+# Keep both for source = "file", "hosted" or "github"; a Linear team maps them
+# to its own workflow names instead. Remove either to go without that role.
 backlogState = "backlog"
 rejectedState = "rejected"
