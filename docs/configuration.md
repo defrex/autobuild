@@ -1391,7 +1391,7 @@ and configured agent-runtime credentials available, run:
 AB_RUN_VERCEL_SANDBOX_LIVE=1 \
 AB_VERCEL_SANDBOX_LIVE_REPO=/absolute/path/to/consumer \
 AB_STORE=https://store.example AB_TOKEN=… \
-bun test packages/core/src/scenarios/vercel-sandbox.live.test.ts
+bun test packages/core/src/scenarios/vercel-sandbox.live.integration.test.ts
 ```
 
 The suite first runs `ab init` readiness validation through the production
@@ -1412,7 +1412,7 @@ sandbox should use an API-key provider such as `vercel-ai-gateway/...` with
 or attempt an interactive login. Plugin runtimes retain their existing API authentication. Claude Code can select a subscription or Kimi billing account. Codex can explicitly select a ChatGPT subscription authorized with `bun ab accounts login NAME`; one local dispatcher or hosted refreshing secret owns renewal, and the real tokens stay on the host.
 
 The opt-in live lifecycle suite is
-`packages/core/src/scenarios/vercel-sandbox.live.test.ts`. Set
+`packages/core/src/scenarios/vercel-sandbox.live.integration.test.ts`. Set
 `AB_RUN_VERCEL_SANDBOX_LIVE=1`, `AB_VERCEL_SANDBOX_LIVE_REPO` to an independent
 checkout with a ready file ticket and this provider configuration, plus the
 hosted Store, Vercel, runtime, and GitHub credentials above. Its readiness case
@@ -2341,9 +2341,9 @@ each caller's existing fail-safe behavior. Role `args` apply to those one-shots
 too. Effective arguments are recorded on session-start facts.
 
 The injected Codex protocol/contract suite is deterministic and credential-free:
-`bun test packages/core/src/ports/runner/codex.test.ts`. An authenticated local smoke run is
+`bun test packages/core/src/ports/runner/codex.integration.test.ts`. An authenticated local smoke run is
 opt-in:
-`AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test packages/core/src/ports/runner/codex.live.test.ts`.
+`AB_RUN_LIVE_PORT_CONTRACTS=1 AB_CODEX_CONTRACT_MODEL=gpt-… bun test packages/core/src/ports/runner/codex.live.integration.test.ts`.
 
 Core agent phases route by phase name (`plan`, `plan-review`, `implement`,
 `code-review`, `finalize`, and `reconcile`). Agent verify steps and agent

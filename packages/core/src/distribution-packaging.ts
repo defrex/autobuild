@@ -46,7 +46,7 @@ async function execOrThrow(
  * invariant, not a local detail: the `patchedDependencies` rule in
  * `tools/workspace-manifest-check.ts` rejects a root manifest whose packed
  * dependency set contains a patched package, and the negative control in
- * `packages/core/src/plugin-sdk/package.test.ts` (the packed-distribution
+ * `packages/core/src/plugin-sdk/package.integration.test.ts` (the packed-distribution
  * better-auth canary) pins the consumed-manifest failure shape this strip
  * guards, so removing the field from this list fails the suite loudly.
  *

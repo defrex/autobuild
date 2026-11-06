@@ -10,7 +10,7 @@ import { repoRoot } from './git-tracked'
  * convention the AUT-407/#385/AUT-423 migration established; until now it was
  * enforced only by a one-off grep. This check is how the migration stays true.
  *
- * Scope: test files (`*.test.ts` / `*.test.tsx`, which covers `*.live.test.ts`)
+ * Scope: test files (`*.test.ts` / `*.test.tsx`, which covers `*.live.integration.test.ts`)
  * under `packages/<pkg>/src/`. Files outside `packages/` — notably `tools/` —
  * are not scanned, and neither are production files; tools legitimately reach
  * into workspace src trees and are governed by a separate proposal.
@@ -40,7 +40,7 @@ import { repoRoot } from './git-tracked'
  * navigation and refactoring blast radius across the boundary, and still
  * bypasses the public/testing subpath-export convention — so it violates the
  * convention exactly as much as a runtime import. The store-service
- * dispatcher scan (`packages/hosted-store-service/src/package-boundary.test.ts`)
+ * dispatcher scan (`packages/hosted-store-service/src/package-boundary.integration.test.ts`)
  * excludes these same forms on purpose: it guards a **runtime deployment
  * boundary** (no module may load the dispatcher's kernel/provider closure in
  * a deployment), and a fully erased import loads nothing, so flagging it

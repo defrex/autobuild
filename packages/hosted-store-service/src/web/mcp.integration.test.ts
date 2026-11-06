@@ -1,5 +1,5 @@
 /**
- * The hosted MCP OAuth flow from mcp.test.ts, run against a migrated isolated
+ * The hosted MCP OAuth flow from mcp.io.integration.test.ts, run against a migrated isolated
  * Postgres schema: production adapter parity for the auth schema DDL end to
  * end. Needs AB_POSTGRES_TEST_URL.
  */

@@ -31,7 +31,7 @@ import { dispatchFailureBudgetReducer } from '../processes/dispatch-failure-budg
 import { ticketSourceHealthReducer } from './ticket-source-health'
 /**
  * Every incremental reducer, with its published version and the whole-array
- * functions it backs. `reducer-registry.test.ts` snapshots the versions and
+ * functions it backs. `reducer-registry.integration.test.ts` snapshots the versions and
  * the accumulator shapes, and scans `kernel/`, `store/` and `processes/` so a
  * new event-array projection must be registered here or excluded with a reason.
  */

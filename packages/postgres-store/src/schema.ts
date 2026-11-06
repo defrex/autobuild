@@ -1358,7 +1358,7 @@ function checksumMismatchCause(version: number): string {
     `current DDL was likely edited in place without bumping the version, or the database was ` +
     `built by a different build of this same version. Never edit deployed DDL; follow the ` +
     `four-step rule (freeze the previous DDL, add an upgrade branch in migratePostgres, bump ` +
-    `the version, re-pin in schema-guard.test.ts) and redeploy`
+    `the version, re-pin in schema-guard.integration.test.ts) and redeploy`
   )
 }
 
