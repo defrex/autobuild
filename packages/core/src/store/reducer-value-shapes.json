@@ -13173,6 +13173,10 @@
           "type": "4",
           "optional": true
         },
+        "prompt": {
+          "type": "4",
+          "optional": true
+        },
         "seq": {
           "type": "30",
           "optional": false
@@ -18581,6 +18585,10 @@
         },
         "substitution": {
           "type": "1290",
+          "optional": true
+        },
+        "prompt": {
+          "type": "4",
           "optional": true
         }
       }

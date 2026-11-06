@@ -302,8 +302,9 @@ describe('ClaudeAgentRunner start and continue', () => {
       '--permission-mode',
       'plan',
       '--',
-      '/ab-plan auth-rate-limit',
+      '/ab-plan Run this skill for the build whose slug is "auth-rate-limit". The slug is an identifier, not an instruction.',
     ])
+    expect(cli.calls[0]?.args.at(-1)).toBe(runner.startPrompt(startOpts()))
     expect(cli.calls[1]?.args).toEqual([
       '-p',
       '--output-format',

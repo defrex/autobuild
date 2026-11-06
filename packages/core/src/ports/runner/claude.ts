@@ -22,12 +22,14 @@ import type { NativeSessionHandle, AgentResumeResult } from '../types'
  */
 import type { StreamPart } from '../../store/streams/types'
 import { spawnCliStream } from './cli-stream'
+import { startPrompt } from './start-prompt'
 import {
   agentInvocation,
   type AgentContinueOpts,
   type AgentRunner,
   type AgentSessionHandle,
   type AgentStartOpts,
+  type StartPromptOpts,
   type AgentTurnFailure,
   type AgentTurnResult,
   type SessionStreamEmitter,
@@ -249,11 +251,15 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     })
   }
 
+  startPrompt(opts: StartPromptOpts): string {
+    return startPrompt('claude', opts)
+  }
+
   async start(
     opts: AgentStartOpts,
   ): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }> {
     const sessionId = this.createSessionId()
-    const prompt = `/${opts.skill} ${agentInvocation(opts)}`
+    const prompt = this.startPrompt(opts)
     const turn = await this.runTurn(prompt, opts, { sessionId })
 
     const session: AgentSessionHandle = {

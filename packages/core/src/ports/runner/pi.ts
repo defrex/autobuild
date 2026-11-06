@@ -16,12 +16,14 @@ import {
   type AgentRunner,
   type AgentSessionHandle,
   type AgentStartOpts,
+  type StartPromptOpts,
   type AgentTurnFailure,
   type AgentTurnResult,
   type SessionStreamEmitter,
   type Transcript,
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
+import { startPrompt } from './start-prompt'
 import {
   classifyProviderError,
   configurationFailure,
@@ -433,11 +435,15 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     }
   }
 
+  startPrompt(opts: StartPromptOpts): string {
+    return startPrompt('pi', opts)
+  }
+
   async start(
     opts: AgentStartOpts,
   ): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }> {
     const model = opts.model !== undefined ? parsePiModel(opts.model) : undefined
-    const prompt = `/skill:${opts.skill} ${agentInvocation(opts)}`
+    const prompt = this.startPrompt(opts)
     let native: PiSession | undefined
     let turn: PiTurn
     const turnEvents: PiTurnEventHook = {}

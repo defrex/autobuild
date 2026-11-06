@@ -386,6 +386,36 @@ describe('reduceBuild: open sessions carry the stream id (SPEC §9)', () => {
   })
 })
 
+describe('reduceBuild: open sessions carry the effective prompt', () => {
+  test('session.started passes the optional prompt through; historical logs omit it', () => {
+    const prompted = toLog([
+      ...prelude(),
+      ev('session.started', {
+        session: 's_plan',
+        role: 'plan',
+        runner: 'codex',
+        phase: 'plan',
+        round: 1,
+        prompt: '$ab-plan Run this skill for the build whose slug is "stop-the-tools".',
+      }),
+    ])
+    expect(reduceBuild(prompted).sessions.open[0]?.prompt).toBe(
+      '$ab-plan Run this skill for the build whose slug is "stop-the-tools".',
+    )
+    const historical = toLog([
+      ...prelude(),
+      ev('session.started', {
+        session: 's_plan',
+        role: 'plan',
+        runner: 'codex',
+        phase: 'plan',
+        round: 1,
+      }),
+    ])
+    expect(reduceBuild(historical).sessions.open[0]?.prompt).toBeUndefined()
+  })
+})
+
 describe('reduceBuild: §15.6 happy path', () => {
   const log = toLog([
     ...prelude(), // 1-4

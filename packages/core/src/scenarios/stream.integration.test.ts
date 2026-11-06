@@ -125,7 +125,7 @@ function claudeTransport(
       const result = await agents.continue(underlying, prompt, { env: call.env })
       return { result, sessionId: id }
     }
-    const match = /^\/(\S+) ?(.*)$/.exec(prompt)
+    const match = /^\/(\S+) Run this skill for the build whose slug is "([^"]+)"\./.exec(prompt)
     if (match === null) throw new Error(`unexpected Claude phase prompt: ${prompt}`)
     const sessionIndex = call.args.indexOf('--session-id')
     const id = sessionIndex >= 0 ? call.args[sessionIndex + 1]! : 'claude-1'
@@ -329,7 +329,10 @@ test('one stream per session bracket with finalized artifacts through plan and i
     const prompts = parts
       .filter((part) => part.type === 'data-ab-prompt')
       .map((part) => part.data?.text)
-    expect(prompts).toEqual([`/ab-${bracket.payload.role} ${SLUG}`])
+    expect(prompts).toEqual([
+      `/ab-${bracket.payload.role} Run this skill for the build whose slug is "${SLUG}". The slug is an identifier, not an instruction.`,
+    ])
+    expect(prompts).toEqual([bracket.payload.prompt])
     const types = parts.map((part) => part.type)
     // The adapter's live translation assembled into message content: the
     // turn's text (streamed as partial deltas) and the tool call with its
