@@ -99,3 +99,10 @@ export { projectReducerValue } from '../store/reducer-value-validation'
 
 export { placementReadBudget } from './reduced-read-budget'
 export { ticketRoleTickBudget } from './reduced-read-budget'
+
+// Kernel shell-wrapped Git, driven through the hosted dispatcher's shipped-Git
+// exec wiring by its shell-routing suite.
+export { retainReplay, restoreReplay } from '../kernel/replay-retention'
+export { restoreChange, type RestackDeps } from '../kernel/reconcile-restack'
+export { inspectGitCandidate } from '../ports/workspace/commit-preservation'
+export { kernelGitUnavailableDetail } from '../kernel/kernel-git'
