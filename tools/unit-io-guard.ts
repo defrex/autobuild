@@ -192,7 +192,7 @@ const SQLITE_MEMORY_LITERAL = /^(['"])(?::memory:)?\1$/
 export function sqliteFileTarget(sql: unknown): string | undefined {
   if (typeof sql !== 'string') return undefined
   for (const match of sql.matchAll(SQLITE_FILE_TARGET))
-    if (!SQLITE_MEMORY_LITERAL.test(match[1])) return match[1]
+    if (!SQLITE_MEMORY_LITERAL.test(match[1] ?? '')) return match[1] ?? ''
   return undefined
 }
 
