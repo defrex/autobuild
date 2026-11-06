@@ -2956,7 +2956,9 @@ supplied revisions rather than ignoring them.
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
 kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
-changed fields with the opening revision. Unchanged or formatting-only edits
+changed fields with the opening revision. Sources without guarded writes,
+including Linear and GitHub, re-read the ticket immediately before an
+unguarded write and refuse a changed revision, with the no-lock race window of file checks. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
