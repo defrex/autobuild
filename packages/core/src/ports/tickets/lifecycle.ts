@@ -48,3 +48,27 @@ export function holdsState(state: string | undefined, name: string | undefined):
 /** Roles a ticket can be moved into by role rather than by native name. */
 export const TICKET_MOVE_ROLES = ['triage', 'ready', 'backlog', 'rejected'] as const
 export type TicketMoveRole = (typeof TICKET_MOVE_ROLES)[number]
+
+/** Every lifecycle role, in import priority: a state holding several roles
+ * lands in the destination's state for the first. */
+export const LIFECYCLE_ROLES = [
+  'done',
+  'rejected',
+  'claimed',
+  'ready',
+  'backlog',
+  'triage',
+  'proposal',
+  'create',
+] as const
+export type LifecycleRole = (typeof LIFECYCLE_ROLES)[number]
+
+/** The native state a role names; `claimed` is the lifecycle's `doing`. */
+export function roleState(lifecycle: TicketLifecycle, role: LifecycleRole): string | undefined {
+  return role === 'claimed' ? lifecycle.doing : lifecycle[role]
+}
+
+/** The roles native state `name` holds, in `LIFECYCLE_ROLES` order. */
+export function stateRolesIn(lifecycle: TicketLifecycle, name: string): LifecycleRole[] {
+  return LIFECYCLE_ROLES.filter((role) => holdsState(name, roleState(lifecycle, role)))
+}

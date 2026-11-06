@@ -1147,6 +1147,63 @@ describe('runCli — ticket routing', () => {
     expect(await store.getRepoEvents(migrationRepo)).toHaveLength(1)
   })
 
+  test('import --states refuses to leave an unfinished build behind; export refuses --states', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const { exportTickets } = await import('../ports/tickets/migration')
+    const { MemoryBuildStore } = await import('../store/memory')
+    const original = new FileTicketSource({ dir: join(tmp, 'old') })
+    await original.create(
+      { title: 'Ready', body: 'spec' },
+      { requestedId: 'OLD-1', state: 'ready' },
+    )
+    await original.create(
+      { title: 'Doing', body: 'spec' },
+      { requestedId: 'OLD-2', state: 'doing' },
+    )
+    const dir = join(tmp, 'export')
+    await exportTickets({ source: original, repo: 'https://example.test/owner/repo', dir })
+    const store = new MemoryBuildStore()
+    const ensure = store.ensureRepo.bind(store)
+    store.ensureRepo = async (repo) => {
+      const record = await ensure(repo)
+      if (!(await store.getBuild('b-1')))
+        await store.createBuild({ slug: 'b-1', repo, ticket: { source: 'file', id: 'OLD-2' } })
+      return record
+    }
+    const target = new FileTicketSource({ dir: join(tmp, 'tickets') })
+    let writes = 0
+    target.create = async () => {
+      writes++
+      throw new Error('unexpected write')
+    }
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      exec: async (cmd: string[]) => ({
+        stdout: cmd.includes('remote.origin.url')
+          ? 'https://example.test/org/repo.git'
+          : `${join(tmp, '.git')}\n${join(tmp, '.git')}\n${tmp}\n`,
+        stderr: '',
+        exitCode: 0,
+      }),
+      stdout: () => {},
+      stderr: () => {},
+      openStore: () => store,
+      sourceFactory: () => target,
+    }
+    await expect(abTicket(['import', dir, '--states', 'ready'], opts)).rejects.toThrow(
+      'build b-1 is unfinished for ticket OLD-2, which --states excludes',
+    )
+    expect(writes).toBe(0)
+    await expect(
+      abTicket(['export', join(tmp, 'again'), '--states', 'ready'], opts),
+    ).rejects.toThrow('--states selects what to import')
+    await expect(abTicket(['import', dir, '--states', ','], opts)).rejects.toThrow(
+      '--states needs at least one state',
+    )
+  })
+
   test('direct export recording accepts new tickets in the configured tracker and still checks every original ID', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const { FileTicketSource } = await import('../ports/tickets/file')
