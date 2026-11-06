@@ -42,7 +42,7 @@ Wrap an `AgentRunner` that supports:
 - typed failures: verbatim message, retry-compatible `permanent` bit, optional `cause: availability | exhaustion | credentials | configuration` routing evidence
 - the distribution-managed `ab` launcher
 
-Declare served model prefixes and a default. Optional tool-free `oneShot` sits beside the runner interface.
+Declare served model prefixes and a default. Optional tool-free `oneShot` sits beside the runner interface. An optional `startPrompt(opts)` returns the exact first message `start` sends, which the kernel records on `session.started`.
 
 ### `workspace-provider`
 

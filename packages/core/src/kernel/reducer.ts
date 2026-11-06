@@ -149,6 +149,8 @@ export interface OpenSession {
   round?: number
   /** Live-view stream id (SPEC §9); absent on historical events. */
   stream?: string
+  /** Effective first message the bracket sent; absent on historical events. */
+  prompt?: string
   /** seq of the `session.started` event. */
   seq: number
 }
@@ -503,7 +505,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 29
+export const BUILD_REDUCER_VERSION = 30
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -973,6 +975,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           phase: event.payload.phase,
           round: event.payload.round,
           stream: event.payload.stream,
+          prompt: event.payload.prompt,
           seq: event.seq,
         })
         break

@@ -146,6 +146,7 @@ A runtime must:
 Optional capabilities:
 
 - **`oneShot`**, tool-free and separate from phase sessions.
+- **`startPrompt(opts)`** returns the exact first message `start` sends for those inputs. The kernel records it on `session.started` so `ab build status` shows what the model was sent; omit it when unknown, and the fact records no prompt.
 - **Native resume.** Declaring it means running `describeNativeResumeContract` with a `NativeResumeContractFixture` and preserving fresh-process identity and continuation semantics.
 
 Test with an `AgentRunnerContractFactory` whose `AgentRunnerContractHarness` fixtures cover successful turns, typed failures, cancellation, turn-environment observations and cleanup. Run `describeAgentRunnerContract` unchanged, or expose its fixture through the plugin descriptor and run:
