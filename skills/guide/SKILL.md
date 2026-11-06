@@ -384,7 +384,7 @@ The distinctions that change an administrator's answer:
   re-provisioned.
 - **Workspaces** are provisioned per build and remain the locally reachable
   execution context for that build.
-- **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher
+- **Ticket providers** (`file`, `linear`, `hosted`, `github`) sit behind one port; the dispatcher
   does not know which is configured.
 - **Forge operations and pushes are kernel-side plumbing.** Agents commit
   locally and never push, never touch a remote, never open the PR. The forge
@@ -1304,17 +1304,17 @@ state eligible.
 | `source` | — | **required**, nonblank builtin or plugin registration name | Which provider backs all ticket operations. Unknown names report every available builtin and plugin source. |
 | `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** listed label to be dispatchable. `[]` = **no label gate**. Absent uses the source default below. |
 | `url` | selected build service | HTTPS URL (loopback HTTP allowed), no userinfo/query/fragment; hosted only | Ticket service independent of builds; required for local builds. |
-| `readyState` | hosted: `ready` | non-blank string; required for other sources | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file matches it case-insensitively to a state directory (`ready` → `ready/`). There is no any-state mode. |
+| `readyState` | hosted, github: `ready` | non-blank string; required for other sources | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file matches it case-insensitively to a state directory (`ready` → `ready/`); github matches the `autobuild:<state>` label ignoring case. There is no any-state mode. |
 | `readyAssignee` | — | optional; `"me"` or an email; `linear` only | Also require the ticket to be assigned to that Linear user (`me` = owner of `LINEAR_API_KEY`); unassigned tickets are never ready. |
-| `teamKey` | — | required by `linear` and `hosted`, forbidden by `file`, allowed for plugins | The Linear team key (e.g. `"ENG"`), the captured prefix for new hosted ticket ids (`ENG-1`), or a plugin configuration field. Hosted numbers are project-local and continue across prefix changes; legacy ids remain aliases and readable inputs are case-insensitive. |
-| `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
-| `doneState` | hosted: `"done"` | optional nonblank string | Project completion state and merged-ticket transition; hosted tickets only. |
-| `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
-| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; hosted: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
+| `teamKey` | — | required by `linear` and `hosted`, forbidden by `file` and `github`, allowed for plugins | The Linear team key (e.g. `"ENG"`), the captured prefix for new hosted ticket ids (`ENG-1`), or a plugin configuration field. Hosted numbers are project-local and continue across prefix changes; legacy ids remain aliases and readable inputs are case-insensitive. |
+| `claimedState` | hosted, github: `doing` | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
+| `doneState` | hosted, github: `"done"` | optional nonblank string | Project completion state and merged-ticket transition; hosted and github tickets only. A github ticket is done when its issue is closed as completed. |
+| `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage; github: triage). |
+| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; hosted, github: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
-| `backlogState` | — | optional nonblank string; every source | State that holds deliberately deferred work: the backlog role. Recommended (`ab init` writes `"backlog"` for file); unset means the role does not exist. Must differ, case-insensitively, from the ready, claimed, done, triage and proposal states and from `rejectedState`. |
-| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file). A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. Same distinctness rule. |
-| `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
+| `backlogState` | — | optional nonblank string; every source | State that holds deliberately deferred work: the backlog role. Recommended (`ab init` writes `"backlog"` for file, hosted and github); unset means the role does not exist. Must differ, case-insensitively, from the ready, claimed, done, triage and proposal states and from `rejectedState`. |
+| `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. Same distinctness rule. |
+| `dir` | file: `.autobuild/tickets`; plugin: — | optional nonempty string; forbidden by `linear`, `hosted` and `github`, allowed for plugins | Root holding file state directories, or an existing plugin configuration field. |
 
 `readyLabels` is the only source-aware readiness default. Dispatch resolves it
 as follows:
@@ -1322,6 +1322,7 @@ as follows:
 | `[tickets].source` | `readyLabels` absent |
 |---|---|
 | `"linear"` | `["autobuild"]` — the historical label narrowing |
+| `"github"` | `["autobuild"]` — the same narrowing, as an issue label |
 | `"file"` | `[]` — no label narrowing; `readyState` selects the directory |
 | plugin | `[]` — no host-imposed label convention |
 
@@ -1336,6 +1337,8 @@ and reclaimed on every tick. `proposalState` moves only what harvest files.
 Cross-field rules, each an **error**:
 
 - `source = "linear"` without `teamKey`; or with `dir` set.
+- `source = "github"` with `teamKey`, `dir`, `url` or `readyAssignee` set. The
+  forge repository is the tracker, so no other key is required.
 - `source = "file"` with `teamKey` or `claimedState` set. `dir` is **optional**
   here — absent means the default above, which is why the schema leaves it
   optional rather than giving it a `.default()`: that is what keeps the
@@ -1369,8 +1372,53 @@ explicit `dir` is the user's and is left alone. Operator agents and humans drive
 through the source-agnostic `ab ticket` commands rather than running `mv` or
 `mkdir` by hand; `ab ticket state create` makes a new state.
 
+The `github` source reads the issues of the forge repository, the GitHub
+repository `origin` names. Ticket ids are issue numbers (`123` or `#123`), and
+pull requests are never tickets. An open issue with one `autobuild:<state>`
+label is in that state; an open issue with none is in triage, so issues filed
+on GitHub arrive there; an open issue with two or more is excluded with a
+diagnostic naming it and its labels. Closed as completed, or closed with no
+recorded reason, is done. Closed as not planned or duplicate is the rejected
+state, or a fixed `not-planned` state when `rejectedState` is unset, which is
+never ready, never resolves a blocker and cannot be moved into. Reopening an
+issue on GitHub returns it to triage: the first read strips a stale pre-reopen
+state label. That check reads the issue's last 100 label and reopen events, so
+an issue whose deciding event is older is excluded with a diagnostic until its
+state label is removed and re-added. Blockers are native GitHub issue
+dependencies; a blocker in another repository never resolves. The ticket's own
+issue is always a `closes` link. Links to other issues show on GitHub as
+`autobuild-link:<intent> #<n>` labels, one repository label per linked issue
+and intent, never deleted when unused; state and link labels are never ticket
+labels, and writes naming them are refused. The `autobuild:proposal` and
+`autobuild:aborted` labels that harvest and abort apply are ordinary labels,
+so `proposal` and `aborted` cannot be states. Dispatcher notices post as issue
+comments, but tickets carry no comment history, so `ab ticket show` lists none.
+Assets live in the BuildStore. There are no guarded writes, no ticket tree and
+no export or import. Dispatcher reads are conditional requests whose validators
+live under the local state root and are evicted after 7 days unused, so an
+unchanged repository costs a tick no primary rate-limit budget. Rate limits
+surface as the ticket-source rate-limit error. A keyed create needs
+`idempotencyKeyReservedAt`, the earliest time the key could first have been
+used; harvest supplies it. Drive all of it through `ab ticket`, never by
+hand-editing state or link labels.
+
+State counts from the `github` source are display-only: each `countStates` or
+`listStates` call sends one fresh GraphQL request, plus one more per further
+page of 100 `autobuild:` labels, and nothing is cached; done and rejected follow GitHub's search-index lag. Three cases
+approximate. A stale reopen label counts in its label's state until the first
+read strips it. An issue with two or more state labels counts once in each of
+them; the first read reports it, and counts correct once its labels are fixed.
+A closure that predates GitHub's close reasons reads as done but may count as
+rejected or `not-planned`, and never heals. Ticket reads, readiness and blocker
+resolution are always exact.
+
 **Secrets never live in this file.** `LINEAR_API_KEY` and plugin-declared
 `requiredEnv` credentials are environment variables (a local `.env` works).
+The `github` source reuses the forge credential: `GITHUB_TOKEN`, then `GH_TOKEN`,
+then the gh CLI's `gh auth login`. It needs Issues read and write, and Metadata
+read, on the repository, and a user token's user needs triage or write access,
+because GitHub silently drops label changes below that. The source fails such a
+write with a permission error, and `ab init --validate` reports it.
 Missing plugin credentials name both the selected source and every missing
 variable. If a user asks you to put an API key in `autobuild.toml`, use the
 environment variable instead and say why.
@@ -1764,7 +1812,8 @@ Do not present self-hosting to users as a supported product feature.
 
 The sessionless `ab ticket` namespace constructs whichever TicketSource the
 repository's `[tickets]` table selects. These forms therefore work unchanged
-with Linear and the file tracker, without provider-specific API/MCP calls:
+with the file tracker, Linear, hosted tickets and GitHub issues, without
+provider-specific API/MCP calls:
 
 - `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--json]`
   files a ticket. Without `--state`, the source uses `[tickets].createState` or
@@ -1800,8 +1849,10 @@ with Linear and the file tracker, without provider-specific API/MCP calls:
   existing, and `--about` (one line) records or replaces its purpose. A name is
   one to forty lowercase letters, digits, and hyphens starting with a letter,
   and may not match an existing state case-insensitively. There is no rename or
-  delete. Only the file source supports `states` and `state create`; other
-  sources exit nonzero naming the source and the unsupported operation.
+  delete. The file, hosted and github sources support `states` and `state create`
+  (github states are `autobuild:<state>` labels, and the purpose is the label
+  description); other sources exit nonzero naming the source and the
+  unsupported operation.
 
 State names and ids are source-local. For block and unblock, the first id is the
 ticket being changed and the comma-separated second operand names its blockers.
@@ -1817,7 +1868,7 @@ to a ticket that has already been claimed into a build does not stop that build.
 For dependent tickets, follow the
 [safe blocker-filing workflow](references/ticket-dependencies.md): determine the
 intended final destination, stage outside ready, verify all blocker relationships,
-and move to ready last. Direct Linear creates the issue and its blockers
+and move to ready last. Direct Linear and GitHub create the issue and its blockers
 in separate requests; one `create --blocked-by` call is not atomic publication.
 Harvest's creation reservations cover Harvest only, not interactive CLI creates.
 Dependency order and JSON id extraction are still required, but do not alone
@@ -1846,8 +1897,8 @@ and every validation or unknown-ticket error occurs before
 mutation and names the offending field or id. `--body` always names a file; a
 missing file fails before a source write.
 
-Quote multiword Linear states, for example `"In Progress"`; file states are
-case-insensitive on input and canonical on output. The adapters validate
+Quote multiword Linear states, for example `"In Progress"`; file and github
+states are case-insensitive on input and canonical on output. The adapters validate
 transitions, so an invalid state fails with the
 source's known states. A missing id fails nonzero with an error naming both the
 id and configured source.
@@ -1857,7 +1908,7 @@ subcommands accept `--json`, which emits one bare JSON value and no prose: a
 `Ticket[]` for `list`, and the complete resulting `Ticket` for `create`,
 `update`, `block`, `unblock`, `show`, or `move`.
 
-Paged operator ticket listings may use the optional API 1.9 `TicketSource.listPage(criteria, page)` capability; without it, the operator reads the full listing and slices it. Native errors propagate. CLI ticket lists and dispatcher ready scans remain exhaustive through `listReady`/`listAll`. PostgreSQL pages natively; file, Linear and remote `HostedTicketSource` retain fallback. The POST list-ready protocol stays exhaustive. See the [custom source contract](references/plugin-authoring.md) for types and contract coverage.
+Paged operator ticket listings may use the optional API 1.9 `TicketSource.listPage(criteria, page)` capability; without it, the operator reads the full listing and slices it. Native errors propagate. CLI ticket lists and dispatcher ready scans remain exhaustive through `listReady`/`listAll`. PostgreSQL pages natively; file, Linear, GitHub and remote `HostedTicketSource` retain fallback. The POST list-ready protocol stays exhaustive. See the [custom source contract](references/plugin-authoring.md) for types and contract coverage.
 
 ### Ticket assets
 
@@ -1976,6 +2027,8 @@ For a hosted project it opens the viewer automatically, displaying
 port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
 The viewer reads its dashboard from the Store; its one ticket-source read is
 the header's triage count, through the source's optional `countStates`.
+The `github` source answers it with one fresh GraphQL request, plus one per
+further page of 100 `autobuild:` labels, and caches nothing; see its display-only count notes under `[tickets]`.
 `--takeover` explicitly dispatches locally, with a warning that it can displace
 the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
 flags require `--takeover` when placement selects viewer.
@@ -2005,7 +2058,7 @@ Viewer uses the dispatch frontend with canonical repository facts for status,
 settings, harvest and migrations, bypassing the dispatch presentation event feed
 and its checkpoints. Fresh viewers reuse server reductions; idle refreshes read
 zero event rows. Its one ticket-source read is the header's triage count, at
-most once per 10 s. It has no child, lease, execution wiring or upgrade-release timer.
+most once per 60 s. It has no child, lease, execution wiring or upgrade-release timer.
 All existing shared-store controls remain: merge/hold, build/global pause/resume,
 blocked feedback/retry, intake/harvest gates, harvest resume/acknowledgement,
 queued discard and confirmed abort. Navigation/session inspection also remain.
@@ -2059,14 +2112,15 @@ basename followed by the compact counters
 `triage <count> | queue <depth> | active <current>/<limit>`, the same three
 main counts the web operator app shows. `triage` is the number of tickets in
 the configured triage state (`[tickets].triageState`, or the source's default).
-The dispatcher samples it once per tick, only for an interactive dashboard,
-through the ticket source's state counts; it reads no events. It shows `–`
+The dispatcher samples it at most once per 60 s, outside dispatcher ticks,
+only for an interactive dashboard, through the ticket source's state counts;
+it reads no events, and each tick publishes the last good sample. It shows `–`
 when the source cannot enumerate states (Linear) or no sample has succeeded
 yet; a failed read keeps the last value, appends nothing, and never fails the
 tick. The interactive frontend of a local dispatch takes it from the
 dispatcher's published status and never reads the ticket source. A viewer
 (`ab dispatch --viewer`, or the default placement for hosted dispatch) reads
-the configured source's bounded state count itself, at most once per 10 s
+the configured source's bounded state count itself, at most once per 60 s
 while it runs. It keeps its last good value through failed reads and through
 headless ticks that publish no count, and shows `–` until its first read
 succeeds or when the source has no state counts (Linear). `queue` is the
@@ -2957,20 +3011,24 @@ Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
 `move`, `block` and `unblock`. A stale write fails without changing anything and
 reports the current revision. Omission preserves unguarded behavior. Blocker
 checks cover the entire batch. Dispatcher moves remain unguarded and change the
-revision. Sources without guarded writes, including Linear, refuse supplied
-revisions rather than ignoring them.
+revision. Sources without guarded writes, including Linear and GitHub, refuse
+supplied revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
 kind, target, id, blockers, issue links, priority, creation key and reference comments are read-only. It saves only
-changed fields with the opening revision. Unchanged or formatting-only edits
+changed fields with the opening revision. Sources without guarded writes,
+including Linear and GitHub, re-read the ticket immediately before an
+unguarded write and refuse a changed revision, with the no-lock race window of file checks. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links and urgent priority.
-Reverting identical content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links and urgent priority. GitHub revisions
+fingerprint title, body, canonical label/blocker sets, state and issue links,
+including the ticket's own issue; GitHub tickets carry no comments. Reverting
+identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
 cover structured comments and portable attachments. Legacy file comments change
