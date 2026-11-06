@@ -7,6 +7,8 @@ import type { EventEnvelope, EventWrite } from '../events/catalog'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import type { EventType } from '../events/payloads'
 import { FakeForge } from '../ports/forge/fake'
+import { ForgeFailure } from '../ports/forge-failure'
+import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock } from '../testing/fixed'
 import { settlePendingPublication, type PublicationSettlementDeps } from './publication-settlement'
@@ -511,6 +513,128 @@ describe('settlePendingPublication', () => {
     await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(/missing PR description/)
     expect(h.published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
     expect(h.forge.opened).toEqual([])
+  })
+
+  async function requestFinalize(h: Awaited<ReturnType<typeof seed>>) {
+    const description = await h.store.putArtifact(SLUG, {
+      kind: 'pr-description',
+      content: '# Remote title\n\nRemote body.\n',
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('finalize', 'session-1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'finalize',
+        branch: BRANCH,
+        sha: SHA,
+        description: { kind: description.kind, rev: description.revision },
+      },
+    })
+  }
+  const ofType = async (store: MemoryBuildStore, type: string) =>
+    (await store.getEvents(SLUG)).filter((event) => event.type === type)
+
+  test('a forge-rejected finalize PR create escalates once and parks until answered', async () => {
+    const h = await seed()
+    h.forge.setHeadSha(SHA)
+    await requestFinalize(h)
+    const message = 'Validation Failed: No commits between main and ab/remote-settlement'
+    h.forge.rejectNextOpenPr(422, message, 'GitHub')
+
+    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toBeInstanceOf(
+      ForgeRequestDeferred,
+    )
+    const [raised] = await ofType(h.store, 'escalation.raised')
+    expect(raised).toMatchObject({
+      actor: KERNEL,
+      payload: {
+        phase: 'finalize',
+        round: 1,
+        source: 'policy',
+        policyCause: 'non-retryable-phase-failure',
+      },
+    })
+    const question = (raised!.payload as { question: string }).question
+    expect(question).toContain('GitHub')
+    expect(question).toContain('HTTP 422')
+    expect(question).toContain(message)
+    expect(await ofType(h.store, 'finalize.completed')).toHaveLength(0)
+    expect(await ofType(h.store, 'infrastructure.failed')).toHaveLength(0)
+    expect(h.forge.openPrAttempts).toBe(1)
+
+    // Repeated ticks defer without a forge request or a second escalation.
+    for (let tick = 0; tick < 2; tick += 1)
+      await expect(settlePendingPublication(h.deps, SLUG)).rejects.toBeInstanceOf(
+        ForgeRequestDeferred,
+      )
+    expect(await ofType(h.store, 'escalation.raised')).toHaveLength(1)
+    expect(h.forge.openPrAttempts).toBe(1)
+
+    // A retry answer authorizes exactly one more attempt; a repeat refusal
+    // raises a new escalation.
+    const id = (raised!.payload as { id: string }).id
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: { id, answer: 'retry', resolution: 'retry' },
+    })
+    h.forge.rejectNextOpenPr(422, message, 'GitHub')
+    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toBeInstanceOf(
+      ForgeRequestDeferred,
+    )
+    const escalations = await ofType(h.store, 'escalation.raised')
+    expect(escalations).toHaveLength(2)
+    expect((escalations[1]!.payload as { id: string }).id).not.toBe(id)
+    expect(h.forge.openPrAttempts).toBe(2)
+    expect(await ofType(h.store, 'infrastructure.failed')).toHaveLength(0)
+
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: (escalations[1]!.payload as { id: string }).id,
+        answer: 'retry',
+        resolution: 'retry',
+      },
+    })
+    await settlePendingPublication(h.deps, SLUG)
+    expect(await ofType(h.store, 'finalize.completed')).toHaveLength(1)
+    expect(h.forge.openPrAttempts).toBe(3)
+  })
+
+  test('an abort answer to a finalize rejection stops retrying without deferring release', async () => {
+    const h = await seed()
+    h.forge.setHeadSha(SHA)
+    await requestFinalize(h)
+    h.forge.rejectNextOpenPr(422, 'Validation Failed', 'GitHub')
+    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toBeInstanceOf(
+      ForgeRequestDeferred,
+    )
+    const [raised] = await ofType(h.store, 'escalation.raised')
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: { id: (raised!.payload as { id: string }).id, answer: 'stop', resolution: 'abort' },
+    })
+    const error = await settlePendingPublication(h.deps, SLUG).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toBeInstanceOf(ForgeRequestDeferred)
+    expect(h.forge.openPrAttempts).toBe(1)
+  })
+
+  test('a rate-limited finalize PR create keeps its cooldown path without escalating', async () => {
+    const h = await seed()
+    h.forge.setHeadSha(SHA)
+    await requestFinalize(h)
+    const limited = new ForgeFailure('rate limited', {
+      kind: 'rate-limited',
+      resetAt: '2026-11-06T00:10:00.000Z',
+    })
+    h.forge.openPr = async () => {
+      throw limited
+    }
+    await expect(settlePendingPublication(h.deps, SLUG)).rejects.toBe(limited)
+    expect(await ofType(h.store, 'escalation.raised')).toHaveLength(0)
   })
 
   test('drives the settlement guard across lease expiry deterministically via the injected clock', async () => {

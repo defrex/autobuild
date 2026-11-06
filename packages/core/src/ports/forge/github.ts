@@ -20,7 +20,7 @@ import {
   neutralizeClosingReferences,
   withIssueKeywords,
 } from '../../kernel/issue-keywords'
-import { NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
+import { ForgeRejection, NoCommitsBetweenBranchesError, type BuildLandingOptions } from '../types'
 import { findSummaryMarker } from './summary-marker'
 /**
  * GitHubForge (SPEC §3.2): the Forge adapter for GitHub, speaking the GitHub
@@ -990,21 +990,39 @@ export class GitHubForge implements Forge {
       return { number: created.number, url: created.html_url, headSha: created.head.sha }
     } catch (error) {
       if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
-      if (error instanceof GitHubApiError && error.status === 422) {
+      if (!(error instanceof GitHubApiError) || error.status < 400 || error.status > 499)
+        throw error
+      if (error.status === 422) {
         const raced = await probe()
         if (raced) return raced
-        const validation = z
-          .object({
-            errors: z.array(z.object({ message: z.string().optional() }).passthrough()).optional(),
-          })
-          .passthrough()
-          .safeParse(error.body)
-        const noCommits = validation.success
-          ? validation.data.errors?.find((item) => /no commits between/i.test(item.message ?? ''))
-          : undefined
-        if (noCommits?.message) throw new NoCommitsBetweenBranchesError(noCommits.message)
       }
-      throw error
+      // Any other client error is a rejection a retry cannot fix. GitHub's
+      // documented error body is `message` plus optional `errors[]` entries
+      // that may carry their own `message`.
+      const validation = z
+        .object({
+          message: z.string().optional(),
+          errors: z.array(z.object({ message: z.string().optional() }).passthrough()).optional(),
+        })
+        .passthrough()
+        .safeParse(error.body)
+      const details = validation.success
+        ? (validation.data.errors ?? []).flatMap((item) => (item.message ? [item.message] : []))
+        : []
+      const summary = validation.success ? validation.data.message : undefined
+      const forgeMessage = summary
+        ? details.length > 0
+          ? `${summary}: ${details.join('; ')}`
+          : summary
+        : error.message
+      const noCommits =
+        error.status === 422 ? details.find((item) => /no commits between/i.test(item)) : undefined
+      if (noCommits) throw new NoCommitsBetweenBranchesError(noCommits, { forgeMessage })
+      throw new ForgeRejection(error.message, {
+        forge: 'GitHub',
+        status: error.status,
+        forgeMessage,
+      })
     }
   }
 

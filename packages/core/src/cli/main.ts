@@ -1598,7 +1598,9 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       stdout(
         event.type === 'publication.requested'
           ? `${event.type} recorded (seq ${event.seq}); publication is pending — do not run ab done again`
-          : `${event.type} recorded (seq ${event.seq})`,
+          : event.type === 'escalation.raised'
+            ? `implement produced no commits over its base — escalation ${(event.payload as { id: string }).id} recorded (seq ${event.seq}); this session is complete, do not run another terminal`
+            : `${event.type} recorded (seq ${event.seq})`,
       )
       return 0
     }

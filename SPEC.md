@@ -1203,7 +1203,9 @@ The base-selection invariants make this safe with Git:
   resume). It validates that immutable base against HEAD and records it verbatim.
   A moving or rewritten destination never changes the review range, and review
   requires no target fetch or merge-base calculation. Missing provenance fails
-  before publication. Successful restacks establish the baseline for later loops
+  before publication. A HEAD equal to the base is an empty contribution: `ab done`
+  records an `implement` escalation naming the build and both SHAs as the
+  session's terminal, instead of a completion or publication request. Successful restacks establish the baseline for later loops
   and collapses. Historical event ranges stay immutable; the current
   `implement.commits` projection advances to `targetBase..headSha`
   on successful leaf `restack.rewritten`, `restack.completed`, and
@@ -4562,6 +4564,17 @@ publication keeps its workspace through backoff and unresolved exhaustion.
 Classified rate limits retain repository cooldown and consume no publication
 retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
+
+A forge that refuses a dispatcher-side finalize PR create with a non-transient,
+non-rate-limit answer (a 4xx such as a validation error or GitHub's "No commits
+between" 422) is a question for the operator, not a provider failure. The
+kernel raises one `finalize` escalation (`policy`, `non-retryable-phase-failure`)
+whose question names the forge, the HTTP status and the forge's message
+verbatim. It records no `infrastructure.failed` and consumes no
+`maxInfrastructureAttempts`. While it is open the request is parked without
+calling the forge. A `retry` answer re-attempts the PR create once; a repeat
+refusal raises a new escalation. Rate limits and transient forge failures keep
+their existing handling.
 
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).

@@ -607,6 +607,17 @@ Classified rate limits retain repository cooldown and consume no publication
 retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
 
+When the forge refuses a dispatcher-side finalize PR create with a
+non-transient, non-rate-limit answer, such as a 4xx validation error or
+GitHub's "No commits between" 422, the build raises one `finalize` escalation
+(`policy`, `non-retryable-phase-failure`) whose question quotes the forge, the
+HTTP status and its message. It consumes no `maxInfrastructureAttempts` and
+needs no provider cleanup, and the dispatcher makes no further attempt while it
+is open. Compare the branch with its base first. A bare retry re-attempts the
+PR create once, a repeat refusal raises a new escalation, and abort ends the
+build. An implement round with no commits over its base escalates at
+`implement` instead; answer it with guidance, a spec revision, or abort.
+
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
 Skipped polls preserve the episode across restart. After
