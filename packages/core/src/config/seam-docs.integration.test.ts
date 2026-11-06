@@ -43,10 +43,12 @@ test('complete seam configurations parse through the production schema', async (
     'file',
     'linear',
     'hosted',
+    'github',
   ])
   expect(configs.get('ticket-sources')![0]!.tickets.dir).toBe('.tickets')
   expect(configs.get('ticket-sources')![1]!.tickets.readyLabels).toEqual(['autobuild'])
   expect(configs.get('ticket-sources')![2]!.tickets.url).toBe('https://tickets.example.com')
+  expect(configs.get('ticket-sources')![3]!.tickets.readyLabels).toEqual(['autobuild'])
   expect(
     configs
       .get('agent-runtimes')!

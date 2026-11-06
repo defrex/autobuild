@@ -1242,7 +1242,12 @@ export class HarvestRunner {
       })
     }
     const alreadyFiled = new Map(current.filed.map((entry) => [entry.proposalKey, entry]))
-    const reservations = new Map(current.reservations.map((entry) => [entry.proposalKey, entry.id]))
+    const reservations = new Map(
+      current.reservations.map((entry) => [
+        entry.proposalKey,
+        { id: entry.id, reservedAt: entry.reservedAt },
+      ]),
+    )
     const dispositions: HarvestDisposition[] = []
     const report: Array<Record<string, unknown>> = []
 
@@ -1256,17 +1261,18 @@ export class HarvestRunner {
           // declared prerequisite cannot leave behind the start of a ready-
           // ticket create path, while origins are refreshed at this boundary.
           const blockers = await resolveHarvestCreateBlockers(proposal, observations, tickets)
-          let reservedId = reservations.get(proposalKey)
-          if (reservedId === undefined) {
-            reservedId = uuids()
+          let reservation = reservations.get(proposalKey)
+          if (reservation === undefined) {
+            const id = uuids()
             await this.ensureLease()
-            await store.appendRepo(repo, {
+            const reserved = await store.appendRepo(repo, {
               actor: KERNEL,
               type: 'harvest.proposal.id-reserved',
-              payload: { run: run.run, proposalKey, id: reservedId },
+              payload: { run: run.run, proposalKey, id },
             })
             await this.ensureLease()
-            reservations.set(proposalKey, reservedId)
+            reservation = { id, reservedAt: reserved.ts }
+            reservations.set(proposalKey, reservation)
           }
           const body = renderHarvestProposal(proposal, observations)
           const ticket = (
@@ -1279,7 +1285,9 @@ export class HarvestRunner {
               },
               {
                 state: defaultProposalState(config),
-                idempotencyKey: reservedId,
+                idempotencyKey: reservation.id,
+                // The reservation fact's time bounds a time-limited key lookup.
+                idempotencyKeyReservedAt: reservation.reservedAt,
               },
             )
           ).ref
