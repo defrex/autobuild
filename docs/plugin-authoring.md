@@ -536,7 +536,7 @@ default a stable urgent-first partition (urgent, then normal, each in source
 order), or for newest the reversed source order. Native errors propagate. Unpaged operator
 listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
 `listReady`/`listAll`. The hosted PostgreSQL source counts matches without
-bodies and reads only the SQL-bounded window. File, Linear and the remote
+bodies and reads only the SQL-bounded window. File, Linear, GitHub and the remote
 `HostedTicketSource` retain fallback; the POST list-ready protocol stays exhaustive.
 
 Hosted cooldown recording rejects observed reset deadlines beyond the 24-hour

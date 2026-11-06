@@ -44,6 +44,8 @@ export interface HarvestProposalReservation {
   proposalKey: string
   id: string
   seq: number
+  /** The reservation fact's time: the earliest the id could first be used. */
+  reservedAt: string
 }
 
 export interface HarvestRecoveryRequest {
@@ -220,7 +222,7 @@ export interface HarvestAcc {
 }
 
 /** Bump when `HarvestAcc`'s shape or fold semantics change. */
-export const HARVEST_REDUCER_VERSION = 3
+export const HARVEST_REDUCER_VERSION = 4
 
 function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void {
   const order = acc.runs
@@ -590,6 +592,7 @@ function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void 
           proposalKey: event.payload.proposalKey,
           id: event.payload.id,
           seq: event.seq,
+          reservedAt: event.ts,
         })
         break
       }
