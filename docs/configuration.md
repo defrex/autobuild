@@ -2669,6 +2669,8 @@ project-scoped transactional validation. Linear maps kind to the exact `node`
 label and target to a parent carrying that label. Ordinary grouping parents do
 not impose targets; explicit clear removes the parent relation. Node demotion
 with targeting children and cycles are refused regardless of child state.
+GitHub also maps kind to the exact `node` label, and target to the sub-issue
+relation with a node's issue; other parents are grouping and stay untouched.
 See [integration trees](integration-tree.md) for admission, lifecycle and commands.
 
 ### Source configuration
