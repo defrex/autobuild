@@ -83,7 +83,7 @@ export interface FrameSpec {
   /** Overlay the read-only session view over scripted stream parts. The
    * harness injects a wire and never reaches DispatchFrontend, so this is
    * necessarily a renderer-level overlay (like `transcript`) — the production
-   * controller path is covered by dispatch-frontend.test.ts. */
+   * controller path is covered by dispatch-frontend.integration.test.ts. */
   session?: {
     slug: string
     sessionId: string

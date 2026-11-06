@@ -97,7 +97,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/scenarios/` | In-memory end-to-end harness and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
-| `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and full config surface; `references/` is the shared installed-documentation seam for every vendored skill. Update it when config or shared guidance changes; `packages/core/src/cli/guide-skill.test.ts` guards schema coverage and `packages/core/src/cli/skill-self-containment.test.ts` guards installed references | §16.3 |
+| `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and full config surface; `references/` is the shared installed-documentation seam for every vendored skill. Update it when config or shared guidance changes; `packages/core/src/cli/guide-skill.integration.test.ts` guards schema coverage and `packages/core/src/cli/skill-self-containment.integration.test.ts` guards installed references | §16.3 |
 | `docs/spec-standard.md` | The standalone definition of "buildable" every ticket surface uses; kept byte-identical with `skills/guide/references/spec-standard.md` for installed agents | §6.1 |
 | `templates/` | Valid setup-only config baseline with comment anchors rendered by `ab init` | §16.3 |
 
@@ -310,7 +310,7 @@ cursors outside the tail window fail without replay; see
 [hosted event bounds and exact resume](remote-store-protocol.md#hosted-event-bounds-and-exact-resume).
 Actual event listings, transcripts and cursor streams remain raw reads. The
 interactive terminal frontend retains its independently established incremental
-feed. `tools/persisted-reduced-reads.test.ts` scans production TypeScript calls
+feed. `tools/persisted-reduced-reads.integration.test.ts` scans production TypeScript calls
 and maintains precise, reason-bearing exceptions for these boundaries and pure
 reference projections; stale exceptions fail the check.
 
@@ -401,7 +401,7 @@ recovery; the matching launch consumes it once without process-local state. A
 producer round's feedback is a discriminated union — findings, a
 failed verify report, or guidance — and a round may carry none, so a round with
 guidance writes no `$AB_CONTEXT_DIR/findings.json`. The receiving skills document their
-corresponding input, and `packages/core/src/cli/skill-guidance.test.ts` derives that
+corresponding input, and `packages/core/src/cli/skill-guidance.integration.test.ts` derives that
 requirement from the phase table.
 
 **Finalize publication.** Content-producing `finalize:*` checks or agents
@@ -1287,8 +1287,8 @@ and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 
 The two remote clients get client-only unit coverage in core itself:
-`RemoteBuildStore` (`store/remote/client.test.ts`, which also pins scoped-token
-minting/verification) and `HostedTicketSource` (`ports/tickets/remote.test.ts`)
+`RemoteBuildStore` (`store/remote/client.integration.test.ts`, which also pins scoped-token
+minting/verification) and `HostedTicketSource` (`ports/tickets/remote.integration.test.ts`)
 run against an injected `fetchFn` with responses built from the protocol's wire
 schemas. The full over-the-wire seam suites (client → HTTP → server) run in
 `packages/hosted-store-service` in the same `bun test`.
@@ -1300,7 +1300,7 @@ AB_RUN_LIVE_PORT_CONTRACTS=1 \
 LINEAR_API_KEY=… \
 AB_LINEAR_CONTRACT_TEAM_KEY=SCRATCH \
 AB_LINEAR_CONTRACT_PROJECT_ID=… \
-bun test packages/core/src/ports/tickets/linear.live.test.ts
+bun test packages/core/src/ports/tickets/linear.live.integration.test.ts
 ```
 
 The token must be able to create, update, relate, and archive issues in the
@@ -1318,7 +1318,7 @@ To run the GitHub contract manually:
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 GH_TOKEN=… \
 AB_GITHUB_CONTRACT_REPO=owner/destructive-scratch-repo \
-bun test packages/core/src/ports/forge/github.live.test.ts
+bun test packages/core/src/ports/forge/github.live.integration.test.ts
 ```
 
 `GITHUB_TOKEN` may be used instead of `GH_TOKEN`. The repository must have
@@ -1337,15 +1337,15 @@ execution, and one-shot completion:
 ```sh
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_CLAUDE_CONTRACT_MODEL=claude-sonnet-4-… \
-bun test packages/core/src/ports/runner/claude.live.test.ts
+bun test packages/core/src/ports/runner/claude.live.integration.test.ts
 
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_CODEX_CONTRACT_MODEL=gpt-… \
-bun test packages/core/src/ports/runner/codex.live.test.ts
+bun test packages/core/src/ports/runner/codex.live.integration.test.ts
 
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
 AB_PI_CONTRACT_MODEL=openai/gpt-… \
-bun test packages/core/src/ports/runner/pi.live.test.ts
+bun test packages/core/src/ports/runner/pi.live.integration.test.ts
 ```
 
 Claude uses the locally installed Claude Code CLI and its configured login; the
@@ -1379,7 +1379,7 @@ That package probe does not invoke a provider and can be selected without
 
 ```sh
 AB_RUN_LIVE_PORT_CONTRACTS=1 \
-bun test packages/core/src/ports/runner/pi.live.test.ts -t 'gates tools discovered'
+bun test packages/core/src/ports/runner/pi.live.integration.test.ts -t 'gates tools discovered'
 ```
 
 Once opted in, the probe fails with the missing expected tool and its exact
@@ -1577,7 +1577,7 @@ Replay retention stores thin Git packs in bounded binary chunks, with a fixed-si
 
 
 GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in
-`ports/forge/github.live.test.ts`, using `AB_RUN_LIVE_PORT_CONTRACTS=1` and an
+`ports/forge/github.live.integration.test.ts`, using `AB_RUN_LIVE_PORT_CONTRACTS=1` and an
 explicit disposable `AB_GITHUB_CONTRACT_REPO`. Offline transport tests are not
 live provider evidence.
 

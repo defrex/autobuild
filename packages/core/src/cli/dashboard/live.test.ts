@@ -46,7 +46,7 @@ describe('paintableRows: the frame needs one row fewer than the screen', () => {
   // line away even on a freshly cleared alternate display.
   //
   // This file's fake CANNOT observe that — it appends to an array, so nothing
-  // ever scrolls. Neither can render.test.ts, which counts lines and knows
+  // ever scrolls. Neither can render.integration.test.ts, which counts lines and knows
   // nothing of the trailing newline. The rule is therefore asserted here,
   // next to the newline that causes it.
 
