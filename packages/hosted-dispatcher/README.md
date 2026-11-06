@@ -66,7 +66,10 @@ closure including glibc and the dynamic loader, and a CA bundle.
   `/tmp/abg…` path once before its first Git command.
 - **Isolation.** Every kernel Git command of a tick runs the shipped Git with
   its own libraries, no system or global Git config, and HTTPS as the only
-  transport, so it never starts a host program. The tick log line says
+  transport, so it never starts a host program. Kernel shell pipelines reach
+  it through a `git` launcher on the shell's `PATH` that applies the tree's
+  libraries to Git alone, so the shell and other host programs keep the
+  host's. The tick log line says
   `kernelGit=shipped:<version>`, or `kernelGit=host-path (<reason>)` when the
   tree could not be used.
 
