@@ -777,10 +777,20 @@ export function stateRoles(
   const named: Array<[TicketStateRole, string]> = [
     ['create', tickets.createState ?? 'triage'],
     ['ready', tickets.readyState],
-    ['claimed', tickets.source === 'hosted' ? (tickets.claimedState ?? 'doing') : 'doing'],
+    [
+      'claimed',
+      tickets.source === 'hosted' || tickets.source === 'github'
+        ? (tickets.claimedState ?? 'doing')
+        : 'doing',
+    ],
     ['triage', triage],
     ['proposal', tickets.proposalState ?? triage],
-    ['done', tickets.source === 'hosted' ? (tickets.doneState ?? 'done') : 'done'],
+    [
+      'done',
+      tickets.source === 'hosted' || tickets.source === 'github'
+        ? (tickets.doneState ?? 'done')
+        : 'done',
+    ],
   ]
   if (tickets.backlogState !== undefined) named.push(['backlog', tickets.backlogState])
   if (tickets.rejectedState !== undefined) named.push(['rejected', tickets.rejectedState])
