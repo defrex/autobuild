@@ -305,7 +305,13 @@ export async function abDisconnect(opts: ConnectOptions): Promise<void> {
     throw new Error(
       'Multiple services: use ab disconnect --tickets for tickets; set AB_STORE to the build service and select --builds for builds',
     )
-  if (!p.service && !opts.builds && p.ticketService) return abDisconnect({ ...opts, tickets: true })
+  if (!p.service && !opts.builds && p.ticketService) {
+    if (typeof p.ticketService !== 'string' || !/^https?:/.test(p.ticketService))
+      throw new Error(
+        'Hosted tickets have no service URL: [tickets] url is missing and the build store is not an HTTP service. Set [tickets] url (or run ab connect --tickets <url>), then retry ab disconnect --tickets',
+      )
+    if (!opts.tickets) return abDisconnect({ ...opts, tickets: true })
+  }
   if (!p.service) throw new Error('No configured service')
   const credentials = new ProjectCredentials(opts.env)
   const entry = credentials.load(p.service, p.repo)
