@@ -194,7 +194,7 @@ A plugin relying on a capability declares an `apiVersion` range containing its v
 - **1.7** Workspace factory seams.
 - **1.8** Forge failure classification and request observers.
 - **1.9** Optional native ticket-source paging (`listPage`); older sources retain operator slicing.
-- **1.10** Optional ticket-source ready-assignee capability (`readyAssignee`, with `prepareReadyAssignee`, `readyAssigneeRefusal` and `describeReadyAssignee`); sources without it refuse `[tickets].readyAssignee`.
+- **1.10** Optional ticket-source ready-assignee capability (`readyAssignee`, with `prepareReadyAssignee`, `readyAssigneeRefusal` and `describeReadyAssignee`); sources without it refuse `[tickets].readyAssignee`. Also optional targeted ticket listing (`listTargeting`); older tree sources are observed through `listAll`.
 
 ## 2. Create a repository-local module
 
@@ -478,6 +478,8 @@ An adapter opts in with `integrationTree: true` and must:
 - read targets as source-local canonical ticket ids
 - before writing any mixed patch, including revision-checked writes, validate same-source existence, node kind, self and ancestor cycles, corrupt chains, and demotion of a node with children
 - expose kind and target in revisions
+
+Optionally (API 1.10), implement `listTargeting(nodeId: string): Promise<TicketListing>`: every ticket in every state whose target is `nodeId`, exhausting pagination and propagating infrastructure failures. It must equal `listAll()` filtered by `target === nodeId`, with diagnostics only for excluded records it read. Integration observation prefers it, so a node's completeness read can cost what its children cost instead of a full scan; a failure never falls back to `listAll`. The shared `describeTicketSourceContract` suite checks the equality for any source that declares it.
 
 Don't opt in unless the source preserves these semantics. Legacy sources get ordinary CRUD; the compatibility facade refuses metadata writes before legacy methods run, and unsupported sources should also refuse metadata at their own write boundary.
 
