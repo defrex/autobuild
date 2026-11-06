@@ -258,7 +258,8 @@ test('an API 1.8 plugin records request attribution and recovers from classified
       return poll(...args)
     }
     const failed = await h.dispatcher.tick({ acceptNewWork: false })
-    expect(failed.janitorFailed).toBe(1)
+    expect(failed.janitorFailed).toBe(0)
+    expect(reduceBuild(await h.events(slug)).janitor).toBeUndefined()
     expect(failed.forgeRequests).toEqual({
       total: 1,
       unattributed: 0,
