@@ -1915,7 +1915,10 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       source: 'policy',
       policyCause: 'verify-failure-limit',
       phase: 'verify:unit',
-      question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
+      question:
+        'maxVerifyAttempts (3) exhausted: 3 failed verify cycles count against the build-wide budget: ' +
+        'attempt 1 (verify:unit), attempt 2 (verify:unit), attempt 3 (verify:unit). ' +
+        'verify:unit failed in every counted cycle.',
     }
     expect(decide(exhausted)).toEqual(expected)
     expect(decide(exhausted)).toEqual(decide(exhausted)) // stable on re-decide
@@ -1963,7 +1966,10 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       source: 'policy',
       policyCause: 'verify-failure-limit',
       phase: 'verify:unit',
-      question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
+      question:
+        'maxVerifyAttempts (3) exhausted: 3 failed verify cycles count against the build-wide budget: ' +
+        'attempt 1 (verify:unit), attempt 2 (verify:unit), attempt 3 (verify:unit). ' +
+        'verify:unit failed in every counted cycle.',
     })
   })
 
@@ -2026,7 +2032,10 @@ describe('decideNext: rule 7 — verify (walkthrough A, §15.6-A)', () => {
       source: 'policy',
       policyCause: 'verify-failure-limit',
       phase: 'verify:unit',
-      question: 'maxVerifyAttempts (3) exhausted: verify:unit is still failing',
+      question:
+        'maxVerifyAttempts (3) exhausted: 4 failed verify cycles count against the build-wide budget: ' +
+        'attempt 1 (verify:unit), attempt 2 (verify:unit), attempt 3 (verify:unit), attempt 4 (verify:unit). ' +
+        'verify:unit failed in every counted cycle.',
     })
   })
 
@@ -2829,7 +2838,10 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
       source: 'policy',
       policyCause: 'verify-failure-limit',
       phase: 'verify:types',
-      question: 'maxVerifyAttempts (3) exhausted: verify:types is still failing',
+      question:
+        'maxVerifyAttempts (3) exhausted: 3 failed verify cycles count against the build-wide budget: ' +
+        'attempt 2 (verify:types), attempt 3 (verify:types), attempt 4 (verify:types). ' +
+        'verify:types failed in every counted cycle.',
     })
   })
 
@@ -3444,6 +3456,104 @@ describe('failure cycle accounting', () => {
       feedback: { verify: { step: 'types', report: report0 } },
     })
     checkIncremental(logIndexReducer, events)
+  })
+  const mixedStepConfig = (maxVerifyAttempts: number) =>
+    parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+
+[policy]
+maxVerifyAttempts = ${maxVerifyAttempts}
+
+[commands]
+postgres = "bun run test:postgres"
+website = "bun run test:website"
+unit = "bun test"
+
+[verify]
+steps = ["postgres", "website", "unit"]
+
+[verify.postgres]
+kind = "check"
+command = "postgres"
+
+[verify.website]
+kind = "check"
+command = "website"
+
+[verify.unit]
+kind = "check"
+command = "unit"
+`)
+  const postgresReport = { kind: 'verify-report:postgres', rev: 0 }
+  const websiteReport = { kind: 'verify-report:website', rev: 0 }
+  const unitReport = { kind: 'verify-report:unit', rev: 0 }
+  // AUT-841: three real failures on three different steps, the last one after
+  // a passing cycle and target movement.
+  const mixedStepHistory = (): EventWrite[][] => [
+    [
+      ...prelude(),
+      ...planApproved(),
+      ...implementRound(1, 'sha-r1'),
+      ...codeReview(1, 'approve'),
+      ...verifyRun('postgres', 1, false, postgresReport),
+    ],
+    [
+      ...implementRound(2, 'sha-r2', { verify: { step: 'postgres', report: postgresReport } }),
+      ...codeReview(2, 'approve'),
+      ...verifyRun('postgres', 2, true),
+      ...verifyRun('website', 2, false, websiteReport),
+    ],
+    [
+      ...implementRound(3, 'sha-r3', { verify: { step: 'website', report: websiteReport } }),
+      ...codeReview(3, 'approve'),
+      ...verifyRun('postgres', 3, true),
+      ...verifyRun('website', 3, true),
+      ...verifyRun('unit', 3, true),
+      ev('reconcile.completed', {
+        mergeCommit: 'target-3',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+      ...verifyRun('postgres', 4, true),
+      ...verifyRun('website', 4, true),
+      ...verifyRun('unit', 4, false, unitReport),
+    ],
+  ]
+
+  test('AUT-841: failures on postgres, website and unit exhaust the build-wide budget and say so', () => {
+    const limited = mixedStepConfig(3)
+    const [first, second, third] = mixedStepHistory()
+    expect(decideNext(toLog(first!), limited)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'implement',
+      feedback: { verify: { step: 'postgres', report: postgresReport } },
+    })
+    expect(decideNext(toLog([...first!, ...second!]), limited)).toMatchObject({
+      kind: 'run-phase',
+      phase: 'implement',
+      feedback: { verify: { step: 'website', report: websiteReport } },
+    })
+    const events = toLog([...first!, ...second!, ...third!])
+    expect(decideNext(events, limited)).toEqual({
+      kind: 'raise-escalation',
+      source: 'policy',
+      policyCause: 'verify-failure-limit',
+      phase: 'verify:unit',
+      question:
+        'maxVerifyAttempts (3) exhausted: 3 failed verify cycles count against the build-wide budget: ' +
+        'attempt 1 (verify:postgres), attempt 2 (verify:website), attempt 4 (verify:unit). ' +
+        'No single step failed in every counted cycle; the latest failed cycle, attempt 4, failed verify:unit.',
+    })
+    checkIncremental(logIndexReducer, events)
+  })
+  test('the same mixed-step history under a larger configured limit routes back to implement', () => {
+    const events = toLog(mixedStepHistory().flat())
+    expect(decideNext(events, mixedStepConfig(4))).toMatchObject({
+      kind: 'run-phase',
+      phase: 'implement',
+      feedback: { verify: { step: 'unit', report: unitReport } },
+    })
   })
   test('duplicate failure records for one logical cycle cannot exhaust the budget', () => {
     const writes = [
