@@ -45,11 +45,18 @@ compare the rendered site with the approved design in `design/website/`, using t
    file is absent, continue unchanged.
 2. Run `bun run capture:website`. Chromium is required. Read
    `.ab/website-frames/verify-report.md` and `inventory.json`. Capture failure,
-   a partial inventory, missing or unopenable PNG, or missing final motion
-   evidence is a failure; attach nothing.
+   a partial inventory, missing or unopenable PNG or tile, an inventory
+   `tiles` sequence whose `index` values are not contiguous `1..count`, or
+   missing final motion evidence is a failure; attach nothing.
 3. Read the materialized spec, `design/website/README.md` and
    `design/website/design-system.md`. Open **every** PNG named by the inventory
    with the image-capable file tool and every paired landing reference.
+   An entry with `tiles` is one frame cut into ordered row tiles because the
+   whole page would exceed the store's artifact ceiling: open every tile in
+   `index` order and judge the frame as one page. Clipping or a seam exactly at
+   a tile boundary is an artifact of tiling, not a finding, but content must
+   read continuously across the boundary (use each tile's `top` and `height`
+   rows).
    Check still reduced-motion evidence and all 390px overflow results. Require
    start, midpoint and final samples at both widths for every marked animated
    figure; verify completion acknowledgement and visible state progression.
@@ -91,6 +98,17 @@ compare the rendered site with the approved design in `design/website/`, using t
    ab verdict pass --notes .ab/website-frames/verify-report.md
    ```
 
+   A tiled entry has no `<id>.png`; attach **every** one of its tiles under the
+   tile's own `id` instead:
+
+   ```
+   ab artifact put website-frame:<tile-id>:png .ab/website-frames/<tile-id>.png --attach
+   ```
+
+   The capture never leaves a PNG over the store's artifact ceiling, so an
+   upload rejection is a capture or tooling failure to report, not a reason to
+   drop evidence.
+
    On failure attach nothing, record each missing frame or finding (frame,
    difference and location), then end exactly once:
 
@@ -104,7 +122,7 @@ compare the rendered site with the approved design in `design/website/`, using t
   reference without the applicable leaf or node authorization, matching reference
   and README update, and matching capture required above, when the page scrolls
   sideways at 390px, when the capture crashes,
-  or when a PNG cannot be opened.
+  or when a PNG or a tile of a tiled frame is missing or cannot be opened.
 - **Fail** when no Chromium binary is available. That is a host setup problem
   for the operator, not a reason to skip: record the missing binary and
   `CHROMIUM_BIN` in the report and use the failing verdict.
