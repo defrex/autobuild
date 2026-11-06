@@ -47,7 +47,12 @@ import {
   requireRewrite,
 } from '../kernel/reconcile-restack'
 import { reconcileHead, reconcileRewriteHead } from '../kernel/reconcile-head'
-import { readBuildFacts, readBuildSelector, readPhaseFailures } from '../store/reduced-reads'
+import {
+  readBuildFacts,
+  readBuildSelector,
+  readPhaseFailures,
+  type CurrentBuildFacts,
+} from '../store/reduced-reads'
 import { delegateCredential } from '../store/remote/credentials'
 import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
 /**
@@ -103,6 +108,7 @@ import { KERNEL, agentActor, type Actor } from '../events/envelope'
 import type { IdSource } from '../ids'
 import { decideNextFromFacts, type Decision } from '../kernel/engine'
 import { defineReducer } from '../kernel/incremental'
+import { continuesVerifyCycle } from '../kernel/pr-summary'
 import { PHASE_SPECS } from '../kernel/phases'
 import type { BuildState } from '../kernel/reducer'
 import { evaluateVerifyApplicability } from '../kernel/verify-applicability'
@@ -1461,7 +1467,7 @@ export class BuildRunner {
         const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
         if (await this.requestRelaunch(facts)) break
         if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) break
-        if (await this.refreshSummary()) break
+        if (await this.refreshSummary(facts)) break
         if (facts.publication.pending()) {
           const next = decideNextFromFacts(facts.state, facts.log, await this.captureConfig())
           // Inert controls cannot start more work under unsettled publication.
@@ -1527,21 +1533,38 @@ export class BuildRunner {
     }
   }
 
-  private async refreshSummary(): Promise<boolean> {
+  private async refreshSummary(facts: CurrentBuildFacts): Promise<boolean> {
     if (await deferMixedVersion(this.deps.store, this.deps.slug, KERNEL)) return false
     try {
       await this.ensureLease()
     } catch {
       return false
     }
-    return refreshSummaryBoundary({
-      store: this.deps.store,
-      forge: this.deps.forge,
-      slug: this.deps.slug,
-      workspacePath: this.deps.workspacePath,
-      storeRef: this.deps.sessionEnv?.AB_STORE ?? 'local',
-      clock: this.deps.clock,
-    })
+    return refreshSummaryBoundary(
+      {
+        store: this.deps.store,
+        forge: this.deps.forge,
+        slug: this.deps.slug,
+        workspacePath: this.deps.workspacePath,
+        storeRef: this.deps.sessionEnv?.AB_STORE ?? 'local',
+        clock: this.deps.clock,
+      },
+      { continuesVerifyCycle: this.summaryContinuesVerifyCycle(facts), reassert: true },
+    )
+  }
+
+  /** Pure over the loop's facts and the config that decided the last step;
+   * any doubt publishes as before. */
+  private summaryContinuesVerifyCycle(facts: CurrentBuildFacts): boolean {
+    try {
+      return continuesVerifyCycle(
+        facts.summaryBoundary,
+        facts.log.verifyStarted,
+        decideNextFromFacts(facts.state, facts.log, this.boundaryConfig),
+      )
+    } catch {
+      return false
+    }
   }
 
   /**
