@@ -23,7 +23,7 @@ export function refuseUnsupportedMetadata(
 ): void {
   if (!source.integrationTree && (patch.kind !== undefined || patch.target !== undefined))
     throw new Error(
-      `${source.name} ticket source does not support kind/target writes; use a source with integrationTree support (file, Linear or hosted)`,
+      `${source.name} ticket source does not support kind/target writes; use a source with integrationTree support (file, Linear, GitHub or hosted)`,
     )
   refuseUnsupportedIssueLinks(source, patch)
 }
@@ -88,7 +88,12 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
           const ticket = await target.get(id)
           return ticket ? normalizeSourceTicket(target, ticket) : null
         }
-      if (property === 'listReady' || property === 'listAll' || property === 'listPage')
+      if (
+        property === 'listReady' ||
+        property === 'listAll' ||
+        property === 'listPage' ||
+        property === 'listTargeting'
+      )
         return async (...args: unknown[]) => {
           const listing = await value.apply(target, args)
           return {
