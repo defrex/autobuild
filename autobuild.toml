@@ -78,13 +78,15 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # A plan may deselect optional steps in its opening `verifySteps` front matter;
 # a plan without that metadata runs all of them.
 [verify]
-# Cheap gates precede independent suites: unit needs no database, build probes
-# use isolated temporary directories, and integration alone uses PostgreSQL on
-# 5432 (its deploy rehearsal uses a unique schema, temporary consumer and
-# ephemeral ports). Integration runs in its own stage after unit and build: on
-# the 4-vCPU sandbox, running all three at once pushed tests a few milliseconds
-# past their 5 s default in both suites (2026-10-28). Integration takes about
-# 5 minutes, so serializing it costs little wall-clock and nothing in compute.
+# Cheap gates precede independent suites. Unit is the in-memory suite: a guard
+# fails any unit test that does IO, so it takes seconds. Integration holds every
+# IO test (filesystem, processes, sockets, real time) plus the PostgreSQL suites
+# on 5432 (its deploy rehearsal uses a unique schema, temporary consumer and
+# ephemeral ports), and build probes use isolated temporary directories, so all
+# three run concurrently. They were serialized on 2026-10-28 because unit and
+# integration, both heavy, overran 5 s test defaults on the 4-vCPU sandbox;
+# with unit reduced to seconds of CPU, integration plus build carries the same
+# load the old unit plus build stage did.
 # All deterministic checks precede agents. Keep ui-tui separate from ui-app:
 # both write .ab/dashboard-frames, including ui-app's capture-parity recapture.
 # ui-app's .ab/web-dashboard-frames, ui-website's .ab/website-frames and docs'
@@ -94,8 +96,7 @@ test-integration = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TES
 # reports here; cheap gates already run before the long suites.
 steps = [
   ["lint", "types"],
-  ["unit", "build"],
-  "integration",
+  ["unit", "build", "integration"],
   "ui-tui",
   ["ui-app", "ui-website", "docs"],
 ]
@@ -113,20 +114,21 @@ command = "typecheck"
 kind = "check"
 command = "test"
 
-# Unit tests never need a database. Packaging is its own gate: every
+# Unit tests do no IO. Packaging is its own gate: every
 # publishable package must pack, resolve its imports, and keep its bins.
 [verify.build]
 kind = "check"
 command = "build"
 always = true
 
-# Integration tests need a database: the *.integration.test.ts suites plus a
-# packed hosted-service deploy rehearsal. The hosted packages build on most of
-# core, so core changes run it too; docs, skills and site-only builds skip it.
+# Integration runs every IO test: the *.integration.test.ts files across
+# packages/, tools/, scripts/ and bin/, the PostgreSQL suites, and (with the
+# database) a packed hosted-service deploy rehearsal. Like unit before it, it
+# applies to every build: many of these tests check skills, docs and
+# configuration, so path gating would silently stop them for those builds.
 [verify.integration]
 kind = "check"
 command = "test-integration"
-paths = ["packages/core/src/**", "packages/postgres-store/**", "packages/hosted-store-service/**", "packages/hosted-dispatcher/**", "templates/hosted-service/**", "tools/hosted-service-packaging.ts", "scripts/postgres-live.sh", "package.json", "bun.lock"]
 
 # Visual evidence for dashboard-touching builds. The kernel decides
 # applicability from the build-owned diff; the skill never inspects Git or skips.

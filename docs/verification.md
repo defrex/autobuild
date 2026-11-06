@@ -167,17 +167,17 @@ Autobuild's own chain: this repository's choices, not defaults.
 |---|---|---|---|
 | 1 | lint | check | formatting and lint; mandatory |
 | 2 | types | check | TypeScript type checking |
-| 3 | unit | check | the test suite, minus database-backed integration tests |
+| 3 | unit | check | the in-memory test suite; a guard fails any test that does IO |
 | 4 | build | check | packs every publishable package and checks its contents, imports and bins; mandatory |
-| 5 | integration | check | database-backed store, service and migration suites, plus a packed hosted-service deploy rehearsal |
+| 5 | integration | check | every IO test (filesystem, processes, network, real time) plus database-backed suites and a packed hosted-service deploy rehearsal; runs concurrently with unit and build |
 | 6 | ui-tui | agent | captures terminal-dashboard frames and judges them |
 | 7 | ui-app | agent | captures operator web-app frames and judges them against the design |
 | 8 | ui-website | agent | captures site and docs frames at desktop and phone widths, compared with approved references |
 | 9 | docs | agent | fails when a `docs/` passage no longer matches the build's user-facing changes |
 
-Steps 5 to 9 are optional and path-scoped. Integration covers core, the Postgres store and the hosted packages; the others run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
+Steps 5 to 9 are optional. Integration covers every package plus `tools/`, `scripts/` and `bin/`, and applies to every build because many of its tests check skills, docs and configuration. Steps 6 to 9 are path-scoped and run through repository skills `verify-ui-tui`, `verify-ui-app`, `verify-ui-website` and `verify-docs`. The docs step applies to product source, skills, templates, `SPEC.md`, `README.md` and `docs/`.
 
-A plan for a docs change like this page selects lint, types, unit, build, ui-website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched ui-tui and ui-app steps aren't selected.
+A plan for a docs change like this page selects lint, types, unit, build, integration, ui-website and docs; both of the last two pass their path checks because they cover `docs/`. The untouched ui-tui and ui-app steps aren't selected.
 
 Grouped failures retain the legacy `feedback.verify` object for the first report
 in configured order. A decisive `verify.stage-failed` receipt carries the full

@@ -4,7 +4,7 @@
  *
  * The store fixture is a seeded MemoryBuildStore (the reference adapter — its
  * behavior IS the contract, store/contract.ts) and the git fixtures are real
- * throwaway repos, matching the patterns in git-worktree.test.ts.
+ * throwaway repos, matching the patterns in git-worktree.integration.test.ts.
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -118,7 +118,7 @@ export function makeDeps(opts: {
 /**
  * Wrap a store so ONE build's compare-and-set append fails outright, to drive
  * the bulk walk's partial-progress path. Prototype-proxy idiom, as
- * `withRacingAppend` in bulk-control.test.ts; every other build and every other
+ * `withRacingAppend` in bulk-control.integration.test.ts; every other build and every other
  * operation delegates untouched, so the walk's real bookkeeping is what the
  * failure report is built from.
  */

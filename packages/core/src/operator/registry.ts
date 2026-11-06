@@ -22,7 +22,7 @@ import { TicketIssueLinksUnsupported } from '../ports/tickets/issue-links'
  * carried as base64 strings at the entry level (`builds.artifact`'s
  * `contentBase64` is the base64 of the exact artifact bytes), so a binding's
  * `JSON.stringify` can never silently corrupt bytes. The contract suite
- * (packages/hosted-store-service/src/registry.contract.test.ts) asserts the
+ * (packages/hosted-store-service/src/registry.contract.integration.test.ts) asserts the
  * round-trip for every tool.
  *
  * Risk classes live in `operator/annotations.ts` (checked in, enforced by the

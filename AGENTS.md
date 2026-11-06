@@ -58,7 +58,7 @@ A canonical skill exists in three places in this repository, and a feature
 build advances all three in the same commit: the source in `skills/`, the
 vendored copy in `.agents/skills/ab-*`, and the pristine copy in
 `.agents/skills/.ab-pristine/ab-*`. The pristine tree is not reserved for
-upgrade tooling. `tools/vendored-skills-sync.test.ts` holds every copy to byte
+upgrade tooling. `tools/vendored-skills-sync.integration.test.ts` holds every copy to byte
 parity with the canonical install form with no exception list, so a plan that
 excludes `.ab-pristine` from a skill change is wrong and will fail verify.
 
@@ -250,8 +250,11 @@ and verification of this tooling must not restart the live dispatcher.
 
 ## Development conventions
 
-- Keep tests colocated as `*.test.ts`. Unit tests never need a database; a test that does is an integration test named `*.integration.test.ts`, run by `bun run test:integration` with `AB_POSTGRES_TEST_URL` set and skipped by `bun run test`. In-memory end-to-end scenarios are in `packages/core/src/scenarios/`.
-- Run `bun run check`, `bun run check:build`, `bun run test`, and `bun typecheck` before finishing changes.
+- Keep tests colocated as `*.test.ts`. A unit test runs in memory: it touches no filesystem, subprocess, network socket or real clock wait (a delayed timer that fires, `Bun.sleep`, `Atomics.wait`). Module loading by the test runner is exempt. Any test that does any of these, including through a helper or at module import, is an integration test named `*.integration.test.ts`, whether or not it needs a database.
+- `bun run test` runs the unit suite under `tools/unit-io-guard.ts`, which fails a test that does IO and names the offending call. `bun run test:integration` runs every integration test across `packages/`, `tools/`, `scripts/` and `bin/`; only the database-backed ones skip without `AB_POSTGRES_TEST_URL`. Opt-in live contract tests are integration tests too, named `*.live.integration.test.ts`, and skip unless their variable is set.
+- The `integration` verify step applies to every build and runs alongside `unit` and `build`, because many integration tests check skills, docs and configuration. Plans that select verify steps keep it selected.
+- In-memory end-to-end scenarios are in `packages/core/src/scenarios/`; scenarios that use the temporary-directory harness are integration tests there.
+- Run `bun run check`, `bun run check:build`, `bun run test`, and `bun typecheck` before finishing changes, and `bun run test:integration` when the change touches integration tests or the IO they exercise.
 - Preserve narrow port interfaces. New BuildStore adapters must pass the shared suite in `packages/core/src/store/contract.ts`.
 - Validate every event write and derive status through `packages/core/src/kernel/reducer.ts`; events record facts, never derived state.
 - Keep phase behavior centralized in `packages/core/src/kernel/phases.ts` and deterministic transitions in `packages/core/src/kernel/engine.ts`.

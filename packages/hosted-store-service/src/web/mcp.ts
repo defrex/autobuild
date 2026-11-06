@@ -29,7 +29,7 @@ import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/pro
  * per request from the bearer token, so cold starts behave identically to
  * warm instances. GET serves the SDK's standalone SSE stream with 200 —
  * stateless mode disables session validation, not server-to-client streams
- * (pinned by the unit test in src/web/mcp.test.ts) — and DELETE answers 200,
+ * (pinned by the test in src/web/mcp.io.integration.test.ts) — and DELETE answers 200,
  * discarding the per-request transport. 405 is reserved for methods outside
  * GET/POST/DELETE, which the MCP transport contract permits for stateless
  * servers.
