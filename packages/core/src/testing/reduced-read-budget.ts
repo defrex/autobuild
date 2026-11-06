@@ -54,6 +54,7 @@ import {
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { abWatch, decodeCursor } from '../cli/watch'
 import { abWait } from '../cli/wait'
+import { TRIAGE_COUNT_REFRESH_MS } from '../cli/triage-count-sampler'
 import type { Exec } from '../ports/workspace/git-worktree'
 
 export interface ReducedReadCosts {
@@ -1065,12 +1066,17 @@ steps = []
     let ticketScanWrites = 0
     let deferredAttempts = 0
     let tickAcquisitions = { facts: 0, digests: 0 }
-    // The display-only triage sample is one bounded source call per tick, and
-    // only for a dispatcher that feeds an interactive frontend.
+    // The display-only triage sample is read only by a dispatcher that feeds
+    // an interactive frontend, between ticks and at most once per
+    // TRIAGE_COUNT_REFRESH_MS; no read ever lands inside a tick window.
+    const startedAt = Date.now()
     let stateReads = 0
+    let stateReadsInTick = 0
+    let tickOpen = false
     const tickets = Object.assign(new FakeTicketSource([]), {
       listStates: async () => {
         stateReads++
+        if (tickOpen) stateReadsInTick++
         return [{ name: 'triage', tickets: 2 }]
       },
     })
@@ -1085,14 +1091,19 @@ steps = []
             expect(costs.historicalEvents).toBe(0)
             acquisitions.facts = acquisitions.digests = ticketScanWrites = 0
             costs.events = costs.historicalEvents = 0
+            tickOpen = true
             return target.beginRepoTick(...args)
           }
         if (interactive && key === 'finishRepoTick')
-          return (...args: Parameters<BuildStore['finishRepoTick']>) => {
+          return async (...args: Parameters<BuildStore['finishRepoTick']>) => {
             // Close the kernel window before the independent dashboard poll.
             tickAcquisitions = { ...acquisitions, facts: acquisitions.facts - ticketScanWrites }
-            if (outage && ticks === 0) throw new Error('budget tick write refused')
-            return target.finishRepoTick(...args)
+            try {
+              if (outage && ticks === 0) throw new Error('budget tick write refused')
+              return await target.finishRepoTick(...args)
+            } finally {
+              tickOpen = false
+            }
           }
         if (interactive && key === 'appendRepo')
           return (...args: Parameters<BuildStore['appendRepo']>) => {
@@ -1160,7 +1171,11 @@ steps = []
         // Drain the asynchronous launch gate before closing each tick window.
         await new Promise((resolve) => setTimeout(resolve, 0))
         expect(tickAcquisitions).toEqual({ facts: 1, digests: 1 })
-        expect(stateReads).toBe(interactive ? ticks + 1 : 0)
+        expect(stateReadsInTick).toBe(0)
+        expect(stateReads).toBeLessThanOrEqual(
+          interactive ? Math.ceil((Date.now() - startedAt) / TRIAGE_COUNT_REFRESH_MS) + 1 : 0,
+        )
+        if (interactive) expect(stateReads).toBeGreaterThan(0)
         expect(costs.historicalEvents).toBe(0)
         expect(costs.events).toBeLessThanOrEqual(32)
         // Prepare the newly written tick-completed tail, then prove an
