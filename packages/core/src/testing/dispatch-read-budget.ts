@@ -19,6 +19,11 @@ import { FileTicketSource } from '../ports/tickets/file'
 import { HostedTicketSource } from '../ports/tickets/remote'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { boundedStateCount } from '../ports/tickets/states'
+import {
+  TRIAGE_COUNT_REFRESH_MS,
+  TriageCountSampler,
+  triageReader,
+} from '../cli/triage-count-sampler'
 
 const tickCounters = {
   merged: 0,
@@ -222,24 +227,58 @@ export async function dispatchReadBudget(
       }
     }
   }
+  // The interactive kernel child's dispatcher samples the triage count as
+  // DispatchLoop wires it: poked between simulated ticks, never inside one,
+  // and at most once per TRIAGE_COUNT_REFRESH_MS over the whole run.
+  const kernelStates = { calls: 0, inTick: 0 }
+  let kernelTicking = false
+  const kernelSampler = new TriageCountSampler(
+    triageReader(
+      {
+        countStates: async (names) => {
+          kernelStates.calls++
+          if (kernelTicking) kernelStates.inTick++
+          return [{ name: names[0]!, tickets: 5 }]
+        },
+      },
+      () => 'Triage',
+    ),
+    () => new Date(now),
+  )
+  const kernelStartedAt = now
+  const kernelTick = async (work: () => Promise<void> = async () => {}) => {
+    kernelTicking = true
+    try {
+      await work()
+    } finally {
+      kernelTicking = false
+    }
+    kernelSampler.poke()
+    await kernelSampler.settled()
+  }
+  kernelSampler.poke()
+  await kernelSampler.settled()
   try {
     for (let batch = 0; batch < 24; batch++) {
-      for (let i = 0; i < 128; i++) {
-        await backing.appendRepo(repo, {
-          actor: DISPATCHER,
-          type: 'dispatcher.tick-completed',
-          payload: {
-            run: childRun,
-            queued: 0,
-            triage: 5,
-            counters: tickCounters,
-            janitorDiagnostics: [],
-            ticketDiagnostics: [],
-            creationDiagnostics: [],
-            dependencyDiagnostics: [],
-          },
-        })
-      }
+      await kernelTick(async () => {
+        for (let i = 0; i < 128; i++) {
+          const triage = kernelSampler.value
+          await backing.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run: childRun,
+              queued: 0,
+              ...(triage !== undefined ? { triage } : {}),
+              counters: tickCounters,
+              janitorDiagnostics: [],
+              ticketDiagnostics: [],
+              creationDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          })
+        }
+      })
       const before = { ...metrics }
       now += 6000
       await refresh()
@@ -278,6 +317,7 @@ export async function dispatchReadBudget(
     const beforeQuiet = { ...metrics }
     for (let poll = 0; poll < 40; poll++) {
       now += 500
+      await kernelTick()
       await refresh()
     }
     expect(metrics.puts - beforeQuiet.puts).toBe(1)
@@ -285,12 +325,17 @@ export async function dispatchReadBudget(
     const settled = { ...metrics }
     for (let poll = 0; poll < 120; poll++) {
       now += 500
+      await kernelTick()
       await refresh()
     }
     expect(metrics.puts).toBe(settled.puts)
     expect(metrics.bytes).toBe(settled.bytes)
     expect(metrics.rows).toBe(settled.rows)
     expect(sourceStateReads.calls).toBe(0)
+    expect(kernelStates.inTick).toBe(0)
+    const elapsed = now - kernelStartedAt
+    expect(kernelStates.calls).toBeGreaterThan(1)
+    expect(kernelStates.calls).toBeLessThanOrEqual(Math.ceil(elapsed / TRIAGE_COUNT_REFRESH_MS) + 1)
   } finally {
     for (const [index, prototype] of stateSources.entries())
       for (const [slot, method] of stateMethods.entries()) {
@@ -564,7 +609,7 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
           let expected = configured ? 1 : 0
           expect(counts.calls).toBe(expected)
           for (let poll = 0; poll < 4; poll++) {
-            now += 15_000
+            now += TRIAGE_COUNT_REFRESH_MS
             await refresh()
             if (configured) expected++
             expect(counts.calls).toBe(expected)
@@ -586,7 +631,7 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
           expect(slices.rows()).toBe(1)
           expect(rawCalls).toBe(0)
           slices.reset()
-          now += 15_000
+          now += TRIAGE_COUNT_REFRESH_MS
           await refresh()
           if (configured) expected++
           expect(slices.rows()).toBe(0)
@@ -595,7 +640,7 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
             expect(new Set(counts.names)).toEqual(new Set(['Triage']))
             // A failed read keeps the last good count and reads no events.
             counts.fail = true
-            now += 15_000
+            now += TRIAGE_COUNT_REFRESH_MS
             await refresh()
             expect(counts.calls).toBe(++expected)
             expect(internals.model?.triage).toBe(7)
