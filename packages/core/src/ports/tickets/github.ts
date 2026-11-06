@@ -5,18 +5,20 @@
  * offline against `FakeGitHubIssues`.
  *
  * States are `autobuild:<state>` labels and closing reasons (see
- * `github-issues.ts`); blockers are GitHub's native issue dependencies;
- * assets stay in the BuildStore through the generic CLI path; there are no
- * guarded writes, comment history, integration tree, export or import.
+ * `github-issues.ts`); blockers are GitHub's native issue dependencies; a
+ * node is the exact `node` label and a target is the sub-issue relation to a
+ * node's issue; assets stay in the BuildStore through the generic CLI path;
+ * there are no guarded writes, comment history, export or import.
  *
  * Cost (CLAUDE.md "Store read cost is a correctness property", applied to
  * GitHub budget): the source holds no BuildStore handle. Recurring reads
- * (the ready listing, candidates' blockers and reopen checks, dependency
- * reads, `get`, the label registry) are conditional through a durable
- * validator store, so an unchanged repository answers a tick with 304s.
- * Counts are one fresh, bounded GraphQL request per call and are never
- * cached. Explicit history reads, the keyed-create scan, the claim read and
- * every write store nothing.
+ * (the ready listing, candidates' blockers, reopen checks and parent issues,
+ * dependency reads, `get`, the label registry, and `listTargeting`'s node,
+ * sub-issue and child reads) are conditional through a durable validator
+ * store, so an unchanged repository answers a tick with 304s. Counts are one
+ * fresh, bounded GraphQL request per call and are never cached. Explicit
+ * history reads (`listAll`), the keyed-create scan, the claim read and every
+ * write store nothing.
  */
 import { z } from 'zod'
 import {
@@ -41,6 +43,7 @@ import type {
 import { TicketSourceRateLimitError } from '../types'
 import {
   type CreationIntent,
+  effectiveLabels,
   encodeCreationMarker,
   type GitHubIssue,
   githubIssueSchema,
@@ -51,13 +54,16 @@ import {
   isStateLabel,
   issueLinksOf,
   issueState,
+  isNode,
   labelNames,
   lifecycleNames,
   linkLabel,
   linkLabelsFor,
   mergeIssueLinks,
+  NODE_LABEL,
   NOT_PLANNED_STATE,
   needsReopenCheck,
+  parentOf,
   parseIssueId,
   type ReopenVerdict,
   rejectedStateOf,
@@ -82,6 +88,7 @@ import {
   validateStateName,
   validateStatePurpose,
 } from './states'
+import { validateTicketTree } from './tree'
 import { validateTicketUpdate } from './update'
 
 const SOURCE = 'github ticket source'
@@ -96,6 +103,7 @@ const LABEL_COLOR = 'ededed'
 const LABEL_ROLES = ['triage', 'push', 'maintain', 'admin']
 const STATE_LABEL_DESCRIPTION = 'Autobuild ticket state'
 const LINK_LABEL_DESCRIPTION = 'Autobuild issue link'
+const NODE_LABEL_DESCRIPTION = 'Autobuild integration node'
 /** GitHub limits a label description to 100 characters. */
 const LABEL_DESCRIPTION_MAX = 100
 
@@ -134,6 +142,19 @@ interface Hydrated {
   diagnostics: string[]
   /** Listing-time fact: every blocker is in this repository and done. */
   blockersResolved: boolean
+}
+
+interface HydrateOptions {
+  remember: boolean
+  etag?: string
+  /** The listing batch by number, so a parent in it needs no read. */
+  parents?: Map<number, GitHubIssue>
+  /** Parent reads that missed the batch, deduplicated within one call. */
+  parentReads?: Map<number, Promise<GitHubIssue | null>>
+  /** A target already known (a node's own sub-issue list); skips resolution. */
+  target?: string | null
+  /** False for reads that never return a target (dependency states). */
+  resolveTarget?: boolean
 }
 
 interface Blockers {
@@ -180,6 +201,7 @@ function blockerList(ids: string[]): string {
 export class GitHubTicketSource implements TicketSource {
   readonly name = 'github'
   readonly issueLinks = true
+  readonly integrationTree = true
 
   private readonly transport: GitHubRequest
   private readonly owner: string
@@ -641,10 +663,48 @@ export class GitHubTicketSource implements TicketSource {
     return match?.[1]
   }
 
-  private async hydrate(
-    issue: GitHubIssue,
-    opts: { remember: boolean; etag?: string },
-  ): Promise<Hydrated> {
+  /** The number of the issue's parent when it is in this repository. */
+  private localParent(issue: GitHubIssue): number | undefined {
+    const parent = parentOf(issue)
+    if (parent === undefined || parent.repo.toLowerCase() !== this.fullName.toLowerCase())
+      return undefined
+    return parent.number
+  }
+
+  private isLocalChild(issue: GitHubIssue): boolean {
+    const repo = this.repositoryOf(issue)
+    return (
+      issue.pull_request === undefined &&
+      (repo === undefined || repo.toLowerCase() === this.fullName.toLowerCase())
+    )
+  }
+
+  /**
+   * A ticket's target: its local parent issue, only when that parent carries
+   * the exact `node` label. Any other parent (a non-node, another
+   * repository's issue, a transferred or deleted one) is grouping. The
+   * parent's label is read from the parent itself, because relabelling it
+   * leaves the child's own ETag unchanged.
+   */
+  private async targetOf(issue: GitHubIssue, opts: HydrateOptions): Promise<string | undefined> {
+    if (opts.target !== undefined) return opts.target ?? undefined
+    if (opts.resolveTarget === false) return undefined
+    const number = this.localParent(issue)
+    if (number === undefined) return undefined
+    let parent: GitHubIssue | null | undefined = opts.parents?.get(number)
+    if (parent === undefined) {
+      const reads = opts.parentReads ?? new Map<number, Promise<GitHubIssue | null>>()
+      let read = reads.get(number)
+      if (read === undefined) {
+        read = this.readIssue('parent', number, opts.remember).then((r) => r?.issue ?? null)
+        reads.set(number, read)
+      }
+      parent = await read
+    }
+    return parent !== null && isNode(parent) ? String(number) : undefined
+  }
+
+  private async hydrate(issue: GitHubIssue, opts: HydrateOptions): Promise<Hydrated> {
     const diagnostics: string[] = []
     const n = issue.number
     const links = issueLinksOf(issue)
@@ -679,8 +739,9 @@ export class GitHubTicketSource implements TicketSource {
       }
     }
     const blockers = await this.blockers(issue, opts.remember)
+    const target = await this.targetOf(issue, opts)
     return {
-      ticket: this.toTicket(current, state, blockers.ids, links.links),
+      ticket: this.toTicket(current, state, blockers.ids, links.links, target),
       listed: state !== undefined,
       diagnostics,
       blockersResolved: blockers.resolved,
@@ -692,10 +753,12 @@ export class GitHubTicketSource implements TicketSource {
     state: string | undefined,
     blockedBy: string[],
     issueLinks: IssueLink[],
+    target: string | undefined,
   ): Ticket {
     const { body, marker } = splitCreationMarker(issue.body)
     const ticket: Ticket = {
-      kind: 'work',
+      kind: isNode(issue) ? 'node' : 'work',
+      ...(target !== undefined ? { target } : {}),
       revision: '',
       ref: { source: this.name, id: String(issue.number), url: issue.html_url, title: issue.title },
       ...(marker !== undefined ? { creationKey: marker.key } : {}),
@@ -786,15 +849,70 @@ export class GitHubTicketSource implements TicketSource {
     keep: (ticket: Ticket) => boolean,
     remember: boolean,
   ): Promise<TicketListing> {
+    const parents = new Map(issues.map((issue) => [issue.number, issue]))
+    const parentReads = new Map<number, Promise<GitHubIssue | null>>()
+    return this.collect(issues, keep, { remember, parents, parentReads })
+  }
+
+  private async collect(
+    issues: GitHubIssue[],
+    keep: (ticket: Ticket) => boolean,
+    opts: HydrateOptions,
+  ): Promise<TicketListing> {
     const tickets: Ticket[] = []
     const diagnostics: string[] = []
     for (const issue of issues) {
-      const hydrated = await this.hydrate(issue, { remember })
+      const hydrated = await this.hydrate(issue, opts)
       diagnostics.push(...hydrated.diagnostics)
       if (!hydrated.listed || !keep(hydrated.ticket)) continue
       tickets.push({ ...hydrated.ticket, blockersResolved: hydrated.blockersResolved })
     }
     return { tickets, diagnostics }
+  }
+
+  /**
+   * The tickets targeting one node, read from the node's side: the node
+   * issue, then (unless its summary counts none) its paginated sub-issues,
+   * all conditional. Every local sub-issue of a node targets it, so this
+   * equals `listAll` filtered by target at a cost that follows the node's
+   * children, not the repository.
+   */
+  async listTargeting(nodeId: string): Promise<TicketListing> {
+    const empty: TicketListing = { tickets: [], diagnostics: [] }
+    const number = parseIssueId(nodeId)
+    if (number === null) return empty
+    const read = await this.readIssue('listTargeting', number, true)
+    if (read === null || !isNode(read.issue)) return empty
+    if (read.issue.sub_issues_summary?.total === 0) return empty
+    const children = (await this.subIssues('listTargeting', number, true)).filter((child) =>
+      this.isLocalChild(child),
+    )
+    return this.collect(children, () => true, { remember: true, target: String(number) })
+  }
+
+  /** Every sub-issue of issue `number`, exhausting pagination. */
+  private async subIssues(
+    operation: string,
+    number: number,
+    remember: boolean,
+  ): Promise<GitHubIssue[]> {
+    const issues: GitHubIssue[] = []
+    let page: string | undefined = '1'
+    while (page !== undefined) {
+      const response = await this.must(
+        operation,
+        'GET',
+        this.path(`/issues/${number}/sub_issues`),
+        {
+          query: { per_page: PAGE, page },
+          remember,
+        },
+      )
+      for (const json of z.array(z.unknown()).parse(response.json))
+        issues.push(this.parseIssue(operation, json))
+      page = nextPage(response.link)
+    }
+    return issues
   }
 
   async dependencyStates(ids: string[]): Promise<DependencyState[]> {
@@ -812,7 +930,11 @@ export class GitHubTicketSource implements TicketSource {
         results.push({ id, exists: false, resolved: false, blockedBy: [] })
         continue
       }
-      const { ticket } = await this.hydrate(read.issue, { remember: true, ...etagOf(read) })
+      const { ticket } = await this.hydrate(read.issue, {
+        remember: true,
+        resolveTarget: false,
+        ...etagOf(read),
+      })
       results.push({
         id,
         exists: true,
@@ -933,9 +1055,14 @@ export class GitHubTicketSource implements TicketSource {
 
   async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
     if (opts.requestedId !== undefined) throw new Error('github does not support requested ids')
-    if (draft.kind === 'node' || (draft.target !== undefined && draft.target !== null))
-      throw new Error(`${this.name} ticket source does not support kind/target writes`)
-    const labels = draft.labels ?? []
+    let labels: string[]
+    try {
+      labels = effectiveLabels(draft.kind, draft.labels, []) ?? []
+    } catch (error) {
+      throw new Error(
+        `github create: ticket "${draft.title}": ${message(error)} — nothing was written`,
+      )
+    }
     this.refuseManagedLabels('create', labels)
     const links = mergeIssueLinks(normalizeIssueLinks(draft.issueLinks ?? []))
     const blockedBy = [...new Set(draft.blockedBy ?? [])]
@@ -958,6 +1085,11 @@ export class GitHubTicketSource implements TicketSource {
       if (!Number.isFinite(reservedAt)) throw new TicketCreationKeyReservationRequired()
     }
     const state = await this.resolveTarget('create', opts.state ?? this.lifecycle.create)
+    const target =
+      draft.target === undefined || draft.target === null
+        ? undefined
+        : await this.validateTarget('create', undefined, draft.title, draft.target)
+    if (labels.includes(NODE_LABEL)) await this.ensureNodeLabel('create')
     const write = writeForState(state, this.lifecycle, [...labels, ...links.map(linkLabel)])
     if (key !== undefined && reservedAt !== undefined) {
       const adopted = await this.findByCreationKey(key, reservedAt)
@@ -967,7 +1099,12 @@ export class GitHubTicketSource implements TicketSource {
     // closes it as a follow-up.
     const initial = write.labels
     await this.ensureLabels('create', initial)
-    const intent: CreationIntent = { state, issueLinks: links, blockedBy }
+    const intent: CreationIntent = {
+      state,
+      issueLinks: links,
+      blockedBy,
+      ...(target !== undefined ? { target } : {}),
+    }
     const response = await this.must('create', 'POST', this.path('/issues'), {
       body: {
         title: draft.title,
@@ -1059,6 +1196,8 @@ export class GitHubTicketSource implements TicketSource {
         current = await this.patchIssue('create', current.number, { labels: [...held, ...missing] })
       }
     }
+    if (intent.target !== undefined)
+      await this.recordTarget(current, intent.target, adopting, key !== undefined)
     if (intent.blockedBy.length > 0)
       await this.recordBlockers(current, intent.blockedBy, adopting, key !== undefined)
     if (key !== undefined) {
@@ -1114,18 +1253,138 @@ export class GitHubTicketSource implements TicketSource {
     }
   }
 
+  /** Make a created issue a sub-issue of its target. A recovery leaves a
+   * parent a person has set since alone. A failure says the issue exists, so
+   * a retry adopts it rather than duplicating it. */
+  private async recordTarget(
+    issue: GitHubIssue,
+    target: string,
+    adopting: boolean,
+    retryableByKey: boolean,
+  ): Promise<void> {
+    const parent = parentOf(issue)
+    if (parent !== undefined && (adopting || this.localParent(issue) === Number(target))) return
+    try {
+      await this.setParent('create', issue, Number(target), false)
+    } catch (error) {
+      throw new Error(
+        `github create: ticket "${issue.number}" ${retryableByKey ? 'already exists' : 'was created'} at ${issue.html_url}, ` +
+          `but its target #${target} was not recorded. ` +
+          (retryableByKey
+            ? 'Retry with the same creation key; GitHub will adopt this ticket and finish only what is missing. '
+            : `Do not rerun ticket creation; set it with \`ab ticket update ${issue.number} --target ${target}\`. `) +
+          `Underlying failure: ${message(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
   private async fresh(operation: string, number: number): Promise<Ticket> {
-    const read = await this.readIssue(operation, number, false)
-    if (read === null) throw new Error(`github ${operation}: issue #${number} disappeared`)
+    const ticket = await this.readTicket(operation, number)
+    if (ticket === null) throw new Error(`github ${operation}: issue #${number} disappeared`)
+    return ticket
+  }
+
+  /** A fresh, unconditional read of a ticket, or `null` when there is none. */
+  private async readTicket(operation: string, number: number | null): Promise<Ticket | null> {
+    const read = number === null ? null : await this.readIssue(operation, number, false)
+    if (read === null) return null
     return (await this.hydrate(read.issue, { remember: false })).ticket
+  }
+
+  // ── Integration tree ──────────────────────────────────────────────────────
+
+  /** The shared target checks (exists, is a node, no cycle) over fresh reads;
+   * returns the canonical target id. */
+  private async validateTarget(
+    operation: string,
+    id: string | undefined,
+    name: string,
+    target: string,
+  ): Promise<string> {
+    try {
+      const canonical = await validateTicketTree(
+        {
+          name: this.name,
+          get: (ticket) => this.readTicket(operation, parseIssueId(ticket)),
+          listAll: () => this.listAll(),
+        },
+        id,
+        { target },
+      )
+      return canonical as string
+    } catch (error) {
+      throw new Error(
+        `github ${operation}: ticket "${name}": ${message(error)} — nothing was written`,
+        {
+          cause: error,
+        },
+      )
+    }
+  }
+
+  /** A node keeps its kind while any local sub-issue targets it; the node's
+   * own sub-issue list, fully paginated, says whether one does. */
+  private async refuseDemotion(operation: string, id: string, issue: GitHubIssue): Promise<void> {
+    if (issue.sub_issues_summary?.total === 0) return
+    const child = (await this.subIssues(operation, issue.number, false)).find((sub) =>
+      this.isLocalChild(sub),
+    )
+    if (child !== undefined)
+      throw new Error(
+        `github ${operation}: cannot change node ${id} to work: ticket ${child.number} targets it — nothing was written`,
+      )
+  }
+
+  /** The repository's `node` label, created on demand. GitHub label names are
+   * unique ignoring case, so a label cased otherwise would stand in for it
+   * and every node would read as work: that is refused. */
+  private async ensureNodeLabel(operation: string): Promise<void> {
+    const label = await this.readLabel(operation, NODE_LABEL, true)
+    if (label === null) {
+      await this.createLabel(operation, NODE_LABEL, NODE_LABEL_DESCRIPTION)
+      return
+    }
+    if (label.name !== NODE_LABEL)
+      throw new Error(
+        `github ${operation}: repository label "${label.name}" stands in for the ${NODE_LABEL} label; rename it to "${NODE_LABEL}" on GitHub — nothing was written`,
+      )
+  }
+
+  /** Make `child` a sub-issue of issue `target`. GitHub answers 422 both for
+   * an existing relation and for a refused one (the child cap, the depth
+   * limit); only the child's parent, read back, says the write already holds. */
+  private async setParent(
+    operation: string,
+    child: GitHubIssue,
+    target: number,
+    replace: boolean,
+  ): Promise<void> {
+    try {
+      await this.must(operation, 'POST', this.path(`/issues/${target}/sub_issues`), {
+        body: { sub_issue_id: child.id, ...(replace ? { replace_parent: true } : {}) },
+      })
+    } catch (error) {
+      if (statusOf(error) !== 422) throw error
+      const read = await this.readIssue(operation, child.number, false)
+      if (read === null || this.localParent(read.issue) !== target) throw error
+    }
+  }
+
+  private async clearParent(operation: string, child: GitHubIssue, parent: number): Promise<void> {
+    try {
+      await this.must(operation, 'DELETE', this.path(`/issues/${parent}/sub_issue`), {
+        body: { sub_issue_id: child.id },
+      })
+    } catch (error) {
+      if (statusOf(error) !== 404) throw error
+    }
   }
 
   // ── Grooming writes ───────────────────────────────────────────────────────
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
     const validated = validateTicketUpdate(patch)
-    if (validated.kind !== undefined || validated.target !== undefined)
-      throw new Error(`${this.name} ticket source does not support kind/target writes`)
     const number = parseIssueId(id)
     if (number === null) throw new Error(`github update: unknown ticket "${id}"`)
     if (validated.labels !== undefined) this.refuseManagedLabels('update', validated.labels)
@@ -1139,6 +1398,51 @@ export class GitHubTicketSource implements TicketSource {
     if (read === null) throw new Error(`github update: unknown ticket "${id}"`)
     const { issue } = read
     const held = labelNames(issue)
+    // Every kind and target check runs before any write.
+    let ticketLabels = validated.labels
+    let parentWrite: { set: number; replace: boolean } | { clear: number } | undefined
+    if (
+      validated.kind !== undefined ||
+      validated.target !== undefined ||
+      validated.labels !== undefined
+    ) {
+      try {
+        ticketLabels = effectiveLabels(validated.kind, validated.labels, ticketLabelsOf(issue))
+      } catch (error) {
+        throw new Error(`github update: ticket "${id}": ${message(error)} — nothing was written`)
+      }
+      const currentKind = isNode(issue) ? 'node' : 'work'
+      const effectiveKind =
+        ticketLabels === undefined
+          ? currentKind
+          : ticketLabels.includes(NODE_LABEL)
+            ? 'node'
+            : 'work'
+      if (currentKind === 'node' && effectiveKind === 'work')
+        await this.refuseDemotion('update', id, issue)
+      if (validated.target !== undefined) {
+        const parent = parentOf(issue)
+        const local = this.localParent(issue)
+        const parentIssue =
+          local === undefined ? null : await this.readIssue('update', local, false)
+        const parentIsNode = parentIssue !== null && isNode(parentIssue.issue)
+        if (validated.target === null) {
+          // A grouping parent is no target, so there is nothing to clear.
+          if (parentIsNode) parentWrite = { clear: local! }
+        } else {
+          const canonical = Number(await this.validateTarget('update', id, id, validated.target))
+          if (parent !== undefined && !parentIsNode) {
+            const named = local !== undefined ? `#${local}` : `${parent.repo}#${parent.number}`
+            throw new Error(
+              `github update: ticket "${id}" is a sub-issue of ${named}, which is not a node; remove it from ${named} or label ${named} ${NODE_LABEL} on GitHub — nothing was written`,
+            )
+          }
+          if (local !== canonical) parentWrite = { set: canonical, replace: parentIsNode }
+        }
+      }
+      if (ticketLabels?.includes(NODE_LABEL) && !held.includes(NODE_LABEL))
+        await this.ensureNodeLabel('update')
+    }
     const body: Record<string, unknown> = {}
     if (validated.title !== undefined) body.title = validated.title
     if (validated.body !== undefined) {
@@ -1146,16 +1450,30 @@ export class GitHubTicketSource implements TicketSource {
       const marker = (issue.body ?? '').slice(stored.length)
       body.body = validated.body + marker
     }
-    if (validated.labels !== undefined || links !== undefined) {
+    if (ticketLabels !== undefined || links !== undefined) {
       const labels = [
-        ...(validated.labels ?? held.filter((name) => !isStateLabel(name) && !isLinkLabel(name))),
+        ...(ticketLabels ?? held.filter((name) => !isStateLabel(name) && !isLinkLabel(name))),
         ...held.filter(isStateLabel),
         ...(links === undefined ? held.filter(isLinkLabel) : linkLabelsFor(number, links)),
       ]
       await this.ensureLabels('update', labels)
       body.labels = [...new Set(labels)]
     }
-    await this.patchIssue('update', number, body)
+    const fields = Object.keys(body)
+    if (fields.length > 0) await this.patchIssue('update', number, body)
+    if (parentWrite === undefined) return
+    try {
+      if ('set' in parentWrite)
+        await this.setParent('update', issue, parentWrite.set, parentWrite.replace)
+      else await this.clearParent('update', issue, parentWrite.clear)
+    } catch (error) {
+      if (fields.length === 0) throw error
+      const change = 'set' in parentWrite ? `target #${parentWrite.set}` : 'target removal'
+      throw new Error(
+        `github update: ticket "${id}" had ${fields.join(', ')} applied, but its ${change} was not recorded; rerun the target change. Underlying failure: ${message(error)}`,
+        { cause: error },
+      )
+    }
   }
 
   async addBlocker(id: string, blockerId: string): Promise<void> {
