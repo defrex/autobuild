@@ -4464,7 +4464,7 @@ reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
 and state; file revisions also cover nonempty issue links. GitHub revisions
-fingerprint title, body, canonical label/blocker sets, state and issue links,
+fingerprint kind, target, title, body, canonical label/blocker sets, state and issue links,
 including the ticket's own issue; GitHub tickets carry no comments. Reverting
 identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
