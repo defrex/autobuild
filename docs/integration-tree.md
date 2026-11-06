@@ -66,9 +66,9 @@ those children are completed. Clear or reparent its children first.
 File tickets persist kind and target in frontmatter. Hosted tickets validate
 changes transactionally within the project. Existing tickets default to work with
 no target; metadata changes increment the revision once, while equivalent aliases
-and unchanged values do not. The `github` source and legacy plugins without
-`integrationTree` support read as work with no target and refuse explicit metadata
-writes, including clears and mixed patches, with guidance to use a capable source.
+and unchanged values do not. Legacy plugins without `integrationTree` support
+read as work with no target and refuse explicit metadata writes, including clears
+and mixed patches, with guidance to use a capable source.
 
 Linear uses the exact `node` label for kind and the parent relation for target only when that parent has the node
 label. Ordinary grouping parents remain grouping and survive unrelated edits;
@@ -77,6 +77,18 @@ node and receives the same guards; explicit kind and labels must agree. Linear
 label and parent connections are fully paginated and guarded writes are refused.
 Kind and target participate in content revisions; file writes retain their
 best-effort unlocked semantics. `ab ticket edit` displays these fields read-only.
+
+GitHub also uses the exact `node` label for kind. A ticket targets a node by
+being a sub-issue of the node's issue, so each node's children show in its
+sub-issue list on GitHub. A parent without the `node` label, or in another
+repository, is grouping: it gives no target, never blocks dispatch, and is left
+untouched. `--target` on a sub-issue of a grouping parent is refused, naming the
+parent, and `--no-target` never removes grouping. Setting a target replaces a
+node parent. Adding or removing a sub-issue or the `node` label in the GitHub
+UI reads back the same as `ab ticket`. Sub-issue lists are fully paginated.
+GitHub caps a node at 100 direct sub-issues and 8 levels of nesting. A
+repository label cased otherwise, such as `Node`, must be renamed to `node`
+before tickets can become nodes. There are no guarded writes.
 
 A ready node opens `ab-node/<slug>` at its parent's sampled head. Opening intent
 and acknowledgement are durable. Its branch admits children immediately, with
@@ -125,8 +137,9 @@ pipeline against its frozen destination.
 A node collects until every ticket targeting it is natively done or cancelled,
 or sits in the configured rejected state, all frozen child claims have settled,
 and at least one contribution has merged. Triage, backlog and ready children
-keep it incomplete; a rejected child does not. Exhaustive enumeration
-failures fail closed. Completeness is sampled again before verification and
+keep it incomplete; a rejected child does not. Exhaustive enumeration of the
+tickets targeting it (a source's `listTargeting` when present, otherwise
+`listAll`) fails closed. Completeness is sampled again before verification and
 publication; tracker edits cannot be transactional with a forge write.
 
 The kernel runs all configured verify steps with normal path applicability on
