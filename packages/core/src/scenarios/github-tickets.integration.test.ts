@@ -4,9 +4,15 @@
  * transition closes it as completed; a closed-unmerged PR, an abort and a
  * spec bounce leave it open in triage. Every tick reads through
  * `GitHubTicketSource` over the in-memory GitHub fake, and none of them sends
- * a GraphQL or search request: ticks never count. No network.
+ * a GraphQL, search or comment-history request: ticks never count. No network.
  */
 import { afterEach, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { recordTicketMigration } from '../kernel/ticket-migrations'
+import { exportTickets, importTickets } from '../ports/tickets/migration'
+import { Dispatcher, type DispatcherDeps } from '../processes/dispatcher'
 import { humanActor } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
 import { FakeGitHubIssues } from '../ports/tickets/github-fake'
@@ -19,6 +25,7 @@ import {
   CONFORMING_BODY,
   happyHandlers,
   makeHarness,
+  readyTicket,
   type E2eHarness,
 } from './harness'
 
@@ -69,6 +76,8 @@ async function openPr(h: E2eHarness, github: FakeGitHubIssues, issue: number): P
 function expectNoCounts(github: FakeGitHubIssues): void {
   expect(github.graphqlRequests()).toEqual([])
   expect(github.requests.filter((r) => r.path.includes('search'))).toEqual([])
+  // Comment history is an explicit export/import read, never a tick's.
+  expect(github.count('comments-list')).toBe(0)
 }
 
 test('a merged build closes its issue as completed, with no state label', async () => {
@@ -121,4 +130,48 @@ test('a spec bounce leaves the issue open in triage', async () => {
   expect(github.issue(issue)).toMatchObject({ state: 'open', labels: ['autobuild'] })
   expect(github.comments.get(issue)).toHaveLength(1)
   expectNoCounts(github)
+}, 30_000)
+
+test('a build in flight across an import into github closes the remapped issue', async () => {
+  const h = await makeHarness({ handlers: happyHandlers(), tickets: [readyTicket('AUT-9')] })
+  harnesses.push(h)
+  expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+  expect((await h.runLatest()).prState).toBe('open')
+  const [build] = await h.store.listBuilds()
+  const dir = await mkdtemp(join(tmpdir(), 'github-import-'))
+  try {
+    await exportTickets({ source: h.tickets, dir: join(dir, 'export'), repo: h.origin })
+    const github = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: github.transport,
+      repository: github.repository,
+      lifecycle: ticketLifecycle(ticketsSchema.parse({ source: 'github' })),
+      readyLabels: ['autobuild'],
+    })
+    const result = await importTickets({
+      source,
+      dir: join(dir, 'export'),
+      repo: h.origin,
+      assets: h.store,
+    })
+    const issue = Number(result.mapping['AUT-9'])
+    expect(issue).toBe(1001)
+    await h.store.ensureRepo(h.origin)
+    await recordTicketMigration(h.store, h.origin, { kind: 'human', user: 'operator' }, result)
+    h.dispatcher = new Dispatcher({
+      ...(h.dispatcher as unknown as { deps: DispatcherDeps }).deps,
+      tickets: source,
+    })
+    github.resetRequests()
+    h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
+    const ticks = [await h.dispatcher.tick(), await h.dispatcher.tick()]
+    expect(ticks.some((tick) => tick.merged === 1)).toBe(true)
+    expect(github.issue(issue)).toMatchObject({ state: 'closed', state_reason: 'completed' })
+    expect(github.comments.get(issue)?.at(-1)).toBe(
+      `build ${build!.slug} merged: https://fake.forge/pr/1`,
+    )
+    expect(github.count('comments-list')).toBe(0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 }, 30_000)

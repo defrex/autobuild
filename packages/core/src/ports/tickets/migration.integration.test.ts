@@ -17,6 +17,15 @@ import { normalizeStateName } from './states'
 import { MemoryBuildStore } from '../../store/memory'
 import { composeTicketAssets, preparePinnedAssets } from '../../store/ticket-assets'
 import { readAssetSnapshot } from '../../store/ticket-asset-snapshots'
+import {
+  readTicketMigrations,
+  recordTicketMigration,
+  resolveTicketRef,
+} from '../../kernel/ticket-migrations'
+import type { GitHubRequest } from '../forge/github-transport'
+import { FakeGitHubIssues } from './github-fake'
+import { GitHubTicketSource } from './github'
+import type { TicketLifecycle } from './lifecycle'
 let root: string
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'migration-'))
@@ -632,4 +641,352 @@ test('import stamps a stable reservation time and passes it with every creation 
   expect((await readMigrationManifest(dir)).reservedAt).toBe(stamped)
   expect(reservations.length).toBeGreaterThan(1)
   expect(new Set(reservations)).toEqual(new Set([stamped]))
+})
+
+// ── GitHub as destination and source ─────────────────────────────────────────
+
+const FILE_LIFECYCLE: TicketLifecycle = {
+  triage: 'triage',
+  ready: 'ready',
+  doing: 'doing',
+  done: 'done',
+  create: 'triage',
+  proposal: 'triage',
+  backlog: 'icebox',
+  rejected: 'wontfix',
+}
+const GITHUB_LIFECYCLE: TicketLifecycle = {
+  triage: 'triage',
+  ready: 'ready',
+  doing: 'doing',
+  done: 'done',
+  create: 'triage',
+  proposal: 'triage',
+  backlog: 'later',
+  rejected: 'rejected',
+}
+function github(lifecycle: TicketLifecycle = GITHUB_LIFECYCLE, transport?: GitHubRequest) {
+  const fake = new FakeGitHubIssues({ firstNumber: 5001 })
+  const source = new GitHubTicketSource({
+    transport: transport ?? fake.transport,
+    repository: fake.repository,
+    lifecycle,
+    readyLabels: [],
+  })
+  return { fake, source, assets: new MemoryBuildStore(), lifecycle }
+}
+/** A file tracker in every lifecycle role, exported with its roles. */
+async function roleExport() {
+  const source = new FileTicketSource({ dir: join(root, 'source') })
+  for (const state of ['icebox', 'wontfix']) await source.addState(state)
+  const ready = await source.create(
+    {
+      title: 'Ready',
+      body: 'exact\r\nbody  ',
+      labels: ['☃'],
+      issueLinks: [{ issue: 832, intent: 'refs' }],
+    },
+    { requestedId: 'AUT-1', state: 'ready' },
+  )
+  const triage = await source.create({ title: 'Triage', body: 'T' }, { requestedId: 'AUT-2' })
+  const done = await source.create(
+    { title: 'Done', body: 'D' },
+    { requestedId: 'AUT-3', state: 'done' },
+  )
+  await source.create({ title: 'Iced', body: 'I' }, { requestedId: 'AUT-4', state: 'icebox' })
+  await source.create({ title: 'Nope', body: 'N' }, { requestedId: 'AUT-5', state: 'wontfix' })
+  await source.addBlocker(ready.ref.id, triage.ref.id)
+  await source.addBlocker(triage.ref.id, done.ref.id)
+  await source.comment(ready.ref.id, 'first\r\n')
+  await source.comment(ready.ref.id, 'second')
+  await source.assets.putTicketAsset('repo', ready.ref.id, bundle)
+  const dir = join(root, 'export')
+  await exportTickets({ source, dir, repo: 'repo', lifecycle: FILE_LIFECYCLE })
+  return { source, dir }
+}
+test('export records each state’s lifecycle roles', async () => {
+  const { dir } = await roleExport()
+  const manifest = await readMigrationManifest(dir)
+  expect(manifest.roles).toMatchObject({
+    done: ['done'],
+    wontfix: ['rejected'],
+    doing: ['claimed'],
+    ready: ['ready'],
+    icebox: ['backlog'],
+    triage: ['triage', 'proposal', 'create'],
+  })
+})
+test('file → github import remaps every id and carries state, blockers, links, comments and assets', async () => {
+  const { dir } = await roleExport()
+  const target = github()
+  const lines: string[] = []
+  const result = await importTickets({
+    source: target.source,
+    assets: target.assets,
+    dir,
+    repo: 'repo',
+    lifecycle: target.lifecycle,
+    print: (line) => lines.push(line),
+  })
+  const mapping = result.mapping
+  expect(Object.keys(mapping).sort()).toEqual(['AUT-1', 'AUT-2', 'AUT-3', 'AUT-4', 'AUT-5'])
+  expect(JSON.parse(await readFile(join(dir, IMPORT_MAP), 'utf8')).tickets).toEqual(mapping)
+  for (const [from, to] of Object.entries(mapping)) expect(lines).toContain(`${from} → ${to}`)
+  expect(target.fake.issueCount()).toBe(5)
+  const issue = (id: string) => target.fake.issue(Number(mapping[id]))!
+  const ready = await target.source.get(mapping['AUT-1']!)
+  expect(ready).toMatchObject({
+    title: 'Ready',
+    body: 'exact\r\nbody  ',
+    labels: ['☃'],
+    state: 'ready',
+  })
+  expect(ready?.issueLinks).toContainEqual({ issue: 832, intent: 'refs' })
+  expect(issue('AUT-1').labels).toContain('autobuild:ready')
+  expect(issue('AUT-3')).toMatchObject({ state: 'closed', state_reason: 'completed' })
+  expect(issue('AUT-5')).toMatchObject({ state: 'closed', state_reason: 'not_planned' })
+  expect(issue('AUT-4').labels).toContain('autobuild:later')
+  expect(issue('AUT-2').labels.filter((l) => l.startsWith('autobuild:'))).toEqual([])
+  expect(ready?.blockedBy).toEqual([mapping['AUT-2']!])
+  expect((await target.source.get(mapping['AUT-2']!))?.blockedBy).toEqual([mapping['AUT-3']!])
+  expect(target.fake.comments.get(Number(mapping['AUT-1']))).toEqual(['first\r\n', 'second'])
+  expect(
+    (await target.assets.getTicketAsset('repo', mapping['AUT-1']!, 'design', 'reference'))?.entries,
+  ).toEqual(bundle.entries)
+})
+test('an interrupted github import resumes by creation key without duplicates', async () => {
+  const { dir } = await roleExport()
+  const fake = new FakeGitHubIssues({ firstNumber: 5001 })
+  let creates = 0
+  let lose = true
+  const transport: GitHubRequest = async (method, path, opts) => {
+    const response = await fake.transport(method, path, opts)
+    if (lose && method === 'POST' && path.endsWith('/issues') && ++creates === 2) {
+      lose = false
+      throw new Error('response lost')
+    }
+    return response
+  }
+  const target = new GitHubTicketSource({
+    transport,
+    repository: fake.repository,
+    lifecycle: GITHUB_LIFECYCLE,
+    readyLabels: [],
+  })
+  const assets = new MemoryBuildStore()
+  const run = () =>
+    importTickets({ source: target, assets, dir, repo: 'repo', lifecycle: GITHUB_LIFECYCLE })
+  await expect(run()).rejects.toThrow('rerun import')
+  expect(fake.issueCount()).toBe(2)
+  const first = await run()
+  const asset = await assets.getTicketAsset('repo', first.mapping['AUT-1']!, 'design', 'reference')
+  const second = await run()
+  expect(second.mapping).toEqual(first.mapping)
+  expect(fake.issueCount()).toBe(5)
+  expect(fake.comments.get(Number(first.mapping['AUT-1']))).toEqual(['first\r\n', 'second'])
+  expect((await target.get(first.mapping['AUT-2']!))?.blockedBy).toEqual([first.mapping['AUT-3']!])
+  expect(
+    (await assets.getTicketAsset('repo', first.mapping['AUT-1']!, 'design', 'reference'))?.meta
+      .revision,
+  ).toBe(asset?.meta.revision)
+})
+test('a role without a destination state, unrepresentable states and managed labels refuse before any write', async () => {
+  const { dir } = await roleExport()
+  const { backlog: _backlog, ...noBacklog } = GITHUB_LIFECYCLE
+  const target = github(noBacklog)
+  await expect(
+    importTickets({
+      source: target.source,
+      assets: target.assets,
+      dir,
+      repo: 'repo',
+      lifecycle: noBacklog,
+    }),
+  ).rejects.toThrow(
+    'state icebox holds the backlog role, but the destination has no backlog state; configure [tickets].backlogState',
+  )
+  expect(target.fake.writes()).toEqual([])
+  expect((await readMigrationManifest(dir)).reservedAt).toBeUndefined()
+
+  const legacy = join(root, 'legacy')
+  await mkdir(join(legacy, 'proposal'), { recursive: true })
+  await writeFile(
+    join(legacy, 'proposal', 'one.md'),
+    serializeTicketFile({ id: 'one', title: 'One', labels: ['autobuild:foo'] }, 'body'),
+  )
+  const other = github()
+  const refused = importTickets({
+    source: other.source,
+    dir: legacy,
+    repo: 'repo',
+    lifecycle: GITHUB_LIFECYCLE,
+  })
+  await expect(refused).rejects.toThrow('import refused (no target changes)')
+  await expect(refused).rejects.toThrow('state "proposal" cannot be a GitHub state')
+  await expect(refused).rejects.toThrow('label "autobuild:foo" would collide')
+  expect(other.fake.writes()).toEqual([])
+})
+test('--states imports only the named states and drops blockers on done tickets', async () => {
+  const { dir } = await roleExport()
+  const target = github()
+  const result = await importTickets({
+    source: target.source,
+    assets: target.assets,
+    dir,
+    repo: 'repo',
+    lifecycle: target.lifecycle,
+    states: ['Triage', 'ready', 'icebox'],
+    inFlight: [{ build: 'b-done', ticket: { source: 'linear', id: 'AUT-3' } }],
+  })
+  expect(Object.keys(result.mapping).sort()).toEqual(['AUT-1', 'AUT-2', 'AUT-4'])
+  expect(target.fake.issueCount()).toBe(3)
+  expect((await target.source.get(result.mapping['AUT-2']!))?.blockedBy).toBeUndefined()
+})
+test('--states reports excluded blockers, unfinished builds and unknown states before any write', async () => {
+  const { source, dir } = await roleExport()
+  void source
+  const target = github()
+  const refused = importTickets({
+    source: target.source,
+    assets: target.assets,
+    dir,
+    repo: 'repo',
+    lifecycle: target.lifecycle,
+    states: ['ready', 'nope'],
+    inFlight: [{ build: 'b-1', ticket: { source: 'file', id: 'AUT-4' } }],
+  })
+  await expect(refused).rejects.toThrow('AUT-1 is blocked by AUT-2, which --states excludes')
+  await expect(refused).rejects.toThrow(
+    'build b-1 is unfinished for ticket AUT-4, which --states excludes',
+  )
+  await expect(refused).rejects.toThrow('--states names unknown state "nope"')
+  expect(target.fake.writes()).toEqual([])
+})
+/** A GitHub tracker with every issue shape an export must keep. */
+async function githubTracker() {
+  const fake = new FakeGitHubIssues()
+  const lifecycle = { ...GITHUB_LIFECYCLE, backlog: undefined, rejected: undefined }
+  const source = new GitHubTicketSource({
+    transport: fake.transport,
+    repository: fake.repository,
+    lifecycle,
+    readyLabels: [],
+  })
+  const blocker = await source.create({ title: 'Blocker', body: 'B' }, { state: 'triage' })
+  const ready = await source.create(
+    { title: 'Ready', body: 'R', labels: ['bug'] },
+    { state: 'ready' },
+  )
+  await source.addBlocker(ready.ref.id, blocker.ref.id)
+  fake.uiComment(Number(ready.ref.id), 'looks good', 1, 'mona')
+  const done = fake.fileIssue({ title: 'Done', state: 'closed' })
+  const rejected = fake.fileIssue({
+    title: 'Rejected',
+    state: 'closed',
+    state_reason: 'not_planned',
+  })
+  const linked = await source.create(
+    {
+      title: 'Linked',
+      body: 'L',
+      issueLinks: [
+        { issue: Number(ready.ref.id), intent: 'refs' },
+        { issue: 832, intent: 'closes' },
+      ],
+    },
+    { state: 'triage' },
+  )
+  fake.openPullRequest()
+  return { fake, source, lifecycle, ids: { blocker, ready, done, rejected, linked } }
+}
+test('github export writes every issue, closed included, with comments and roles', async () => {
+  const tracker = await githubTracker()
+  const dir = join(root, 'export')
+  tracker.fake.resetRequests()
+  await exportTickets({
+    source: tracker.source,
+    dir,
+    repo: 'repo',
+    lifecycle: { ...tracker.lifecycle, rejected: 'not-planned' },
+  })
+  expect(tracker.fake.writes()).toEqual([])
+  const manifest = await readMigrationManifest(dir)
+  expect(manifest.roles).toMatchObject({
+    done: ['done'],
+    ready: ['ready'],
+    'not-planned': ['rejected'],
+  })
+  expect(Object.keys(manifest.keys)).toHaveLength(5)
+  const portable = new FileTicketSource({ dir })
+  const ready = await portable.get(tracker.ids.ready.ref.id)
+  expect(ready).toMatchObject({
+    state: 'ready',
+    labels: ['bug'],
+    blockedBy: [tracker.ids.blocker.ref.id],
+  })
+  expect(ready?.comments).toEqual([
+    { body: 'looks good', author: 'mona', createdAt: expect.any(String) },
+  ])
+  expect((await portable.get(String(tracker.ids.done)))?.state).toBe('done')
+  expect((await portable.get(String(tracker.ids.rejected)))?.state).toBe('not-planned')
+
+  // Into a file tracker ids are kept, and continuity resolves.
+  const file = new FileTicketSource({ dir: join(root, 'file') })
+  const result = await importTickets({ source: file, dir, repo: 'repo', lifecycle: FILE_LIFECYCLE })
+  expect(result.mapping[tracker.ids.ready.ref.id]).toBe(tracker.ids.ready.ref.id)
+  expect((await file.get(String(tracker.ids.rejected)))?.state).toBe('wontfix')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  await recordTicketMigration(store, 'repo', { kind: 'human', user: 'test' }, result)
+  expect(
+    resolveTicketRef(
+      await readTicketMigrations(store, 'repo'),
+      { source: 'github', id: tracker.ids.ready.ref.id },
+      'file',
+    ).id,
+  ).toBe(tracker.ids.ready.ref.id)
+})
+test('github → github import rewrites links between exported issues and refuses excluded ones', async () => {
+  const tracker = await githubTracker()
+  const dir = join(root, 'export')
+  await exportTickets({
+    source: tracker.source,
+    dir,
+    repo: 'repo',
+    lifecycle: { ...tracker.lifecycle, rejected: 'not-planned' },
+  })
+  const excluded = github()
+  await expect(
+    importTickets({
+      source: excluded.source,
+      dir,
+      repo: 'repo',
+      lifecycle: excluded.lifecycle,
+      states: ['triage'],
+    }),
+  ).rejects.toThrow(
+    `${tracker.ids.linked.ref.id} links issue #${tracker.ids.ready.ref.id}, which --states excludes`,
+  )
+  expect(excluded.fake.writes()).toEqual([])
+
+  const target = github()
+  const { mapping } = await importTickets({
+    source: target.source,
+    dir,
+    repo: 'repo',
+    lifecycle: target.lifecycle,
+  })
+  const linked = await target.source.get(mapping[tracker.ids.linked.ref.id]!)
+  expect(linked?.issueLinks).toEqual(
+    expect.arrayContaining([
+      { issue: Number(mapping[tracker.ids.linked.ref.id]), intent: 'closes' },
+      { issue: Number(mapping[tracker.ids.ready.ref.id]), intent: 'refs' },
+      { issue: 832, intent: 'closes' },
+    ]),
+  )
+  expect(linked?.issueLinks).toHaveLength(3)
+  expect(target.fake.issue(Number(mapping[String(tracker.ids.rejected)]))).toMatchObject({
+    state: 'closed',
+    state_reason: 'not_planned',
+  })
 })
