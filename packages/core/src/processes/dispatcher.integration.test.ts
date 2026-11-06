@@ -11028,7 +11028,10 @@ describe('declarative merge reconciliation', () => {
         }
         return native(...args)
       }
-      expect((await h.poll()).janitorFailed).toBe(1)
+      expect((await h.poll()).janitorFailed).toBe(0)
+      expect(
+        (await h.store.getEvents(h.slug)).some((e) => e.type === 'build.janitor-attempt-failed'),
+      ).toBe(false)
       expect((await h.state()).landing?.applicationFailure).toBeDefined()
       expect((await h.state()).landing?.nativeEnablePending !== undefined).toBe(uncertain)
       expect((await h.store.getEvents(h.slug)).some((e) => e.type === 'build.land-requested')).toBe(
