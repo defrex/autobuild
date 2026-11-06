@@ -116,6 +116,19 @@ const parts = {
   dashboard: dashboardFactsReducer,
   deferral: currentDeferralObservationReducer,
 }
+/** Capacity of `replacedHeads`; supersession beyond it falls back to refusal. */
+export const REPLACED_HEADS_CAP = 64
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+/** The published history each recorded rewrite replaced. */
+function replacedShas(event: AbEvent): string[] {
+  const shas =
+    event.type === 'node.rewritten'
+      ? [event.payload.previous]
+      : event.type === 'restack.rewritten' || event.type === 'reconcile.rewritten'
+        ? [event.payload.oldHead, event.payload.localBranchHead]
+        : []
+  return [...new Set(shas)].filter((sha) => OID.test(sha))
+}
 export interface RunnerAttach {
   seq: number
   ts: string
@@ -158,6 +171,9 @@ export interface BuildReadAcc {
   finalizePublicationRequested: boolean
   workspaceFence?: Extract<AbEvent, { type: 'workspace.fenced' }>
   workspacePreservation?: Extract<AbEvent, { type: 'workspace.commits-preserved' }>
+  /** Bounded record of the latest distinct shas a recorded rewrite replaced,
+   * newest last. Preserved branch heads it covers are superseded. */
+  replacedHeads: string[]
   workspaceLoss?: Extract<AbEvent, { type: 'workspace.commits-lost' }>
   latestWorkspace?: Extract<
     AbEvent,
@@ -217,7 +233,7 @@ export interface BuildReadAcc {
 }
 export const buildReadFactsReducer = defineReducer({
   rawEvents: true,
-  version: 6 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 7 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     runnerAttaches: [],
     summaryRequests: summaryRequestsReducer.initial(),
@@ -251,6 +267,7 @@ export const buildReadFactsReducer = defineReducer({
     reconcileBases: {},
     reconcileHistory: [],
     restackHistory: [],
+    replacedHeads: [],
     candidateRecoveries: {},
     candidateRecoverySeqs: {},
     sessionStarts: [],
@@ -333,6 +350,13 @@ export const buildReadFactsReducer = defineReducer({
       // branch over a durably acknowledged rewrite of the public branch.
       if (event.type === 'reconcile.rewritten' || event.type === 'restack.rewritten')
         delete acc.workspacePreservation
+      for (const sha of replacedShas(event)) {
+        const index = acc.replacedHeads.indexOf(sha)
+        if (index >= 0) acc.replacedHeads.splice(index, 1)
+        acc.replacedHeads.push(sha)
+        if (acc.replacedHeads.length > REPLACED_HEADS_CAP)
+          acc.replacedHeads.splice(0, acc.replacedHeads.length - REPLACED_HEADS_CAP)
+      }
       if (event.type === 'session.started') {
         const last = acc.sessionStarts.at(-1)
         if (event.payload.continuation && last?.session === event.payload.continuation.predecessor)
@@ -510,6 +534,7 @@ export const buildReadFactsReducer = defineReducer({
     latestWorkspace: acc.latestWorkspace,
     workspaceFence: acc.workspaceFence,
     workspacePreservation: acc.workspacePreservation,
+    replacedHeads: [...acc.replacedHeads],
     workspaceLoss: acc.workspaceLoss,
     planFeedback: structuredClone(acc.planFeedback),
     findings: structuredClone(acc.findings),

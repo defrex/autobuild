@@ -221,7 +221,11 @@ retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
 
 Preserved restoration checkpoints survive repeated replacement; a published
-reconcile or restack rewrite retires the old checkpoint.
+reconcile or restack rewrite retires the old checkpoint. Node, restack and
+reconcile rewrites also supersede a branch checkpoint that the build's bounded
+record of its latest 64 replaced heads covers: provisioning keeps its archived
+objects but never restores it over the branch. Coverage older than that bound
+falls back to refusing divergent branch work.
 Recovery context applies to the following session and its repeated hydration; later
 sessions do not inherit obsolete reconstruction instructions.
 

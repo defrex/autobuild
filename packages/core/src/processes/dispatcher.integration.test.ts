@@ -13790,6 +13790,179 @@ test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
   },
 )
 
+test.each(['current', 'exact', 'ancestor', 'divergent'] as const)(
+  'replacement after a node rewrite never restores a superseded branch head (%s release)',
+  async (release) => {
+    const { preserveGitCommits, restoreGitCommits } = await import(
+      '../ports/workspace/commit-preservation'
+    )
+    const { gitRewrite } = await import('../ports/forge/git-rewrite')
+    const { spawnExec } = await import('../ports/workspace/git-worktree')
+    const git = async (args: string[], cwd: string) => {
+      const result = await spawnExec(
+        ['git', '-c', 'user.email=ab@test.invalid', '-c', 'user.name=ab-test', ...args],
+        { cwd },
+      )
+      if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`)
+      return result.stdout.trim()
+    }
+    const root = await mkdtemp(join(tmpdir(), 'ab-superseded-release-'))
+    try {
+      const slug = 'superseded-release'
+      const branch = `ab/${slug}`
+      const origin = join(root, 'origin.git')
+      const source = join(root, 'source')
+      await git(['init', '-q', '--bare', origin], tmpdir())
+      await git(['init', '-q', '-b', 'main', source], tmpdir())
+      await git(['commit', '-q', '--allow-empty', '-m', 'base'], source)
+      await git(['remote', 'add', 'origin', origin], source)
+      const base = await git(['rev-parse', 'HEAD'], source)
+      const tree = await git(['rev-parse', 'HEAD^{tree}'], source)
+      const commit = (parent: string, message: string) =>
+        git(['commit-tree', tree, '-p', parent, '-m', message], source)
+      // base ← A ← P was published, then node rewrites replaced P with Q and Q with Q2.
+      const a = await commit(base, 'published ancestor')
+      const p = await commit(a, 'published, then replaced')
+      const q = await commit(base, 'node rewrite')
+      const q2 = await commit(q, 'second node rewrite')
+      const d = await commit(base, 'unpublished divergent work')
+      const archive = (sha: string) => `refs/autobuild/archive/${slug}/${sha}`
+      await git(['push', '-q', 'origin', 'main', `${p}:refs/heads/${branch}`], source)
+      // The released workspace's local branch still lags the published rewrite.
+      const local = { current: p, exact: p, ancestor: a, divergent: d }[release]
+      await git(['update-ref', `refs/heads/${branch}`, local], source)
+      let replacements = 0
+      const provider: WorkspaceProvider = {
+        name: 'superseded-fixture',
+        // `current` honours the bounded record; the others model receipts
+        // written before it existed (or by a provider that ignores it).
+        preservation: async (input) => ({
+          outcome: 'preserved',
+          heads: await preserveGitCommits({
+            ...input,
+            replaced: release === 'current' ? input.replaced : undefined,
+            base,
+            exec: spawnExec,
+            workspacePath: source,
+            archive: gitRewrite(spawnExec, false).archive,
+          }),
+        }),
+        recovery: {
+          fence: async () => ({ outcome: 'confirmed' }),
+          reap: async () => ({
+            outcome: 'confirmed',
+            snapshots: { outcome: 'confirmed', deleted: 0 },
+          }),
+        },
+        provision: async (input) => {
+          // The first attempt fails transiently, so a second rewrite lands
+          // between the release and the provision that succeeds.
+          if (++replacements === 1) throw new Error('sandbox capacity unavailable')
+          const path = join(root, `replacement-${replacements}`)
+          await git(['clone', '-q', '--branch', input.branch, origin, path], root)
+          const { skipped } = await restoreGitCommits({
+            exec: spawnExec,
+            workspacePath: path,
+            branch: input.branch,
+            heads: input.restoration ?? [],
+            replaced: input.restorationReplaced,
+          })
+          return {
+            provider: 'superseded-fixture',
+            ref: path,
+            path,
+            branch: input.branch,
+            base: { source: 'existing', sha: await git(['rev-parse', 'HEAD'], path) },
+            ...(skipped.length ? { restorationSkipped: skipped } : {}),
+          }
+        },
+        release: async () => {},
+      }
+      const h = harness({ workspaceProvider: provider })
+      await seedBuild(h, { slug, workspaceProvider: provider.name, workspaceRef: 'source' })
+      const rewrite = async (id: string, previous: string, head: string) => {
+        await git(
+          [
+            'push',
+            '-q',
+            '-f',
+            'origin',
+            `${head}:refs/heads/${branch}`,
+            `${previous}:${archive(previous)}`,
+          ],
+          source,
+        )
+        for (const write of [
+          {
+            type: 'node.writer-reserved',
+            payload: {
+              id,
+              operation: 'restack',
+              expected: previous,
+              parent: head,
+              oldBase: base,
+              archive: archive(previous),
+              changes: [],
+              upstreamBuilds: [],
+              merges: [],
+            },
+          },
+          { type: 'node.publish-intended', payload: { id, head } },
+          { type: 'node.rewritten', payload: { id, previous, head } },
+          { type: 'node.writer-settled', payload: { id, outcome: 'completed' } },
+        ] as const)
+          await h.store.append(slug, { actor: KERNEL, ...write } as EventWrite)
+      }
+      await rewrite('first', p, q)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      await h.dispatcher.drainProvisioning()
+      // The node branch is rewritten again between release and provisioning.
+      expect((await h.store.getEvents(slug)).some((e) => e.type === 'workspace.released')).toBe(
+        true,
+      )
+      await rewrite('second', q, q2)
+      h.clock.advance(10 * 60_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      await h.dispatcher.drainProvisioning()
+      const events = await h.store.getEvents(slug)
+      const receipt = events.findLast((e) => e.type === 'workspace.commits-preserved')
+      expect(receipt?.type === 'workspace.commits-preserved' && receipt.payload.heads).toEqual([
+        expect.objectContaining({
+          sha: local,
+          role: release === 'current' ? 'producer' : 'branch',
+        }),
+      ])
+      // The published branch is never touched.
+      expect(await git(['rev-parse', `refs/heads/${branch}`], origin)).toBe(q2)
+      const provisioned = events.filter(
+        (e) => e.type === 'workspace.provisioned' && e.payload.ref !== 'source',
+      )
+      const failures = events.filter(
+        (e) =>
+          e.type === 'infrastructure.failed' &&
+          e.payload.error.includes('would overwrite divergent branch work'),
+      )
+      expect(replacements).toBeGreaterThan(1)
+      if (release === 'divergent') {
+        expect(provisioned).toHaveLength(0)
+        expect(failures.length).toBeGreaterThan(0)
+        return
+      }
+      expect(failures).toHaveLength(0)
+      expect(provisioned).toHaveLength(1)
+      const [replacement] = provisioned
+      const payload =
+        replacement?.type === 'workspace.provisioned' ? replacement.payload : undefined
+      expect(payload?.base.sha).toBe(q2)
+      expect(payload?.restorationSkipped).toEqual(
+        release === 'current' ? undefined : [{ sha: local, reason: 'superseded' }],
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+)
+
 /** A recovery-capable provider whose environment `g0` was flagged
  * `cleanup-required`; it records every recovery call in order. */
 function flaggedWorkspaceFixture(opts: { preservation?: () => Promise<never> } = {}) {

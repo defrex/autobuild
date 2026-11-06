@@ -622,6 +622,12 @@ export const eventPayloadSchemas = {
     remote: z.boolean().optional(),
     branch: z.string().min(1),
     base: workspaceBaseSchema,
+    /** Preserved branch heads not restored over the branch: already
+     * contained, or superseded by a recorded rewrite in the bounded record. */
+    restorationSkipped: z
+      .array(z.strictObject({ sha: gitOid, reason: z.enum(['contained', 'superseded']) }))
+      .min(1)
+      .optional(),
   }),
   'workspace.cleanup-required': z.strictObject({
     provider: z.string().min(1),
