@@ -1397,8 +1397,12 @@ labels, and writes naming them are refused. The `autobuild:proposal` and
 `autobuild:aborted` labels that harvest and abort apply are ordinary labels,
 so `proposal` and `aborted` cannot be states. Dispatcher notices post as issue
 comments, but tickets carry no comment history, so `ab ticket show` lists none;
-export and import read it explicitly. Assets live in the BuildStore. There are
-no guarded writes and no ticket tree. Export and import are supported, and
+export and import read it explicitly.
+Assets live in the BuildStore. A node is an issue with the exact `node` label,
+and a ticket targets a node by being a sub-issue of the node's issue; a parent
+without that label, or in another repository, is grouping that gives no target
+and is left untouched (see [integration trees](references/integration-tree.md)).
+There are no guarded writes. Export and import are supported, and
 import remaps every id to a new issue number (see the
 [ticket migration procedure](references/ticket-migration.md)). Dispatcher reads are conditional requests whose validators
 live under the local state root and are evicted after 7 days unused, so an
@@ -3022,7 +3026,7 @@ reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets,
 state and urgent priority; file revisions also cover nonempty issue links. GitHub revisions
-fingerprint title, body, canonical label/blocker sets, state and issue links,
+fingerprint kind, target, title, body, canonical label/blocker sets, state and issue links,
 including the ticket's own issue; GitHub tickets carry no comments. Reverting
 identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
