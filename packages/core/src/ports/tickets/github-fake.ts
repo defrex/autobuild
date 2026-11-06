@@ -604,10 +604,8 @@ export class FakeGitHubIssues {
         issue.state_reason = 'reopened'
         issue.events.push({ type: 'reopened' })
       }
-    } else if (input.state_reason !== undefined && issue.state === 'closed') {
-      stateChanged = true
-      issue.state_reason = input.state_reason
     }
+    // GitHub documents state_reason as ignored unless the state changes.
     this.changed(issue, true, stateChanged)
     return this.json(issue)
   }

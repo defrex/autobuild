@@ -146,6 +146,29 @@ describe('github states', () => {
     expect((await roles.source.get(other))?.state).toBe('backlog')
   })
 
+  test('a closed issue changes its completion reason in both directions', async () => {
+    const { github, source } = setup({ lifecycle: { rejected: 'rejected' } })
+    const duplicate = github.fileIssue({ state: 'closed', state_reason: 'duplicate' })
+    const sameReason = github.fileIssue({ state: 'closed', state_reason: 'not_planned' })
+    await source.transition(String(duplicate), 'done')
+    expect(github.issue(duplicate)).toMatchObject({ state: 'closed', state_reason: 'completed' })
+    expect(await source.get(String(duplicate))).toMatchObject({ state: 'done', resolved: true })
+    await source.transition(String(duplicate), 'rejected')
+    expect(github.issue(duplicate)).toMatchObject({ state: 'closed', state_reason: 'not_planned' })
+    expect(await source.get(String(duplicate))).toMatchObject({
+      state: 'rejected',
+      resolved: false,
+    })
+    github.resetRequests()
+    await source.transition(String(sameReason), 'rejected')
+    expect(github.issue(sameReason)).toMatchObject({ state: 'closed', state_reason: 'not_planned' })
+    expect(github.issue(sameReason)?.history.map((entry) => entry.state)).toEqual([
+      'open',
+      'closed',
+    ])
+    expect(github.writes()).toHaveLength(1)
+  })
+
   test('closing strips state labels, so a UI reopen comes back in triage', async () => {
     const { github, source } = setup()
     const id = await created(source, 'ready', { labels: ['bug'] })

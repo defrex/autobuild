@@ -865,6 +865,14 @@ export class GitHubTicketSource implements TicketSource {
     const target = write.labels.filter(isStateLabel)
     await this.ensureLabels(operation, target)
     if (write.state === 'closed') {
+      // GitHub ignores state_reason unless the state changes, so a closed
+      // issue whose completion differs from the target's is reopened first.
+      const completed = write.state_reason === 'completed'
+      if (issue.state === 'closed' && isClosedCompleted(issue) !== completed)
+        await this.patchIssue(operation, issue.number, {
+          state: 'open',
+          labels: write.labels,
+        })
       await this.patchIssue(operation, issue.number, {
         state: 'closed',
         state_reason: write.state_reason,
