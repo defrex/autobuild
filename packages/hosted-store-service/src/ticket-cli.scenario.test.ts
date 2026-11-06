@@ -364,6 +364,68 @@ test('CLI lists and creates hosted states with purpose and duplicate refusal', a
   }
 })
 
+test('CLI reports hosted role states and moves by role onto mapped states', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'ab-hosted-roles-cli-'))
+  const states: { name: string; tickets: number; about?: string }[] = [
+    { name: 'triage', tickets: 0 },
+    { name: 'Ready', tickets: 0 },
+    { name: 'icebox', tickets: 1 },
+  ]
+  const backend = Object.assign(new FakeTicketSource(), {
+    listStates: async () => states,
+    addState: async (name: string, opts: { about?: string } = {}) => {
+      const state = { name, tickets: 0, ...opts }
+      states.push(state)
+      return { state, created: true }
+    },
+  })
+  const parked = await backend.create({ title: 'Parked', body: 'Body' }, { state: 'icebox' })
+  const project = await ticketProject(repo, 'roles-secret')
+  const service = createHostedStoreService({
+    ...project,
+    env: {
+      AB_STORE_SECRET: 'roles-secret',
+      AB_POSTGRES_URL: 'postgres://unused/injected',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'unused',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    sourceFor: () => backend,
+  })
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: service.fetch })
+  try {
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\nbacklogState = "icebox"\nrejectedState = "rejected"\n',
+    )
+    const invoke = async (args: string[]) => {
+      let text = ''
+      await abTicket(args, {
+        targetRepo: repo,
+        env: { AB_STORE: server.url.href, AB_TOKEN: project.token },
+        stdout: (line) => {
+          text += line
+        },
+        stderr: () => {},
+      })
+      return JSON.parse(text)
+    }
+    expect(await invoke(['states', '--json'])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'icebox', tickets: 1, roles: ['backlog'] }),
+      ]),
+    )
+    await invoke(['move', parked.ref.id, '--role', 'rejected', '--json'])
+    expect((await backend.get(parked.ref.id))?.state).toBe('rejected')
+    expect(states.map((state) => state.name)).toContain('rejected')
+  } finally {
+    server.stop(true)
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
 test('file export imports Linear-style ids and states through hosted HTTP with comments, assets and blockers', async () => {
   const { mkdir, readFile } = await import('node:fs/promises')
   const root = await mkdtemp(join(tmpdir(), 'ticket-migration-http-'))

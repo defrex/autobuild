@@ -324,6 +324,23 @@ test('independent ticket service uses its own credential and publishes policy be
       ),
     ).rejects.toThrow('does not match')
     expect(calls).toHaveLength(1)
+    const published = (call: (typeof calls)[number] | undefined) =>
+      (call?.body as { input: { tickets: Record<string, unknown> } }).input.tickets
+    expect(published(calls[0])).not.toHaveProperty('backlogState')
+    expect(published(calls[0])).not.toHaveProperty('rejectedState')
+    await createTicketSource(
+      {
+        source: 'hosted',
+        url: 'https://tickets.test',
+        teamKey: 'ENG',
+        readyState: 'ready',
+        backlogState: 'icebox',
+        rejectedState: 'rejected',
+      },
+      env,
+      REPO,
+    )
+    expect(published(calls[1])).toMatchObject({ backlogState: 'icebox', rejectedState: 'rejected' })
   } finally {
     globalThis.fetch = original
     await rm(home, { recursive: true, force: true })
