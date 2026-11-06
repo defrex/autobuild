@@ -132,13 +132,13 @@ assets.
 Before any write, import reports every problem together: states that cannot be
 `autobuild:` labels (for example `proposal`, or names that are not lowercase),
 a rejected state when `[tickets].rejectedState` is unset, and ticket labels that
-start with `autobuild:` or `autobuild-link:`. Import refuses an export with
-integration-tree kinds or targets, because the GitHub source does not keep them.
+start with `autobuild:` or `autobuild-link:`. Node kinds become the exact `node`
+label, and targets become sub-issue relationships to the remapped node issues.
 Issue links are kept. They are rewritten through the mapping only when the export
 came from GitHub, because only then do they name the exported tickets.
 
 Export from a `github` source covers every issue, closed ones included. It records
-comment history with authors and timestamps, blockers and issue links, and skips
+comment history with authors and timestamps, kinds, targets, blockers and issue links, and skips
 pull requests. An issue it cannot read as a ticket, such as one with two state
 labels, fails the export. Issues closed as not planned export in the rejected
 role even when `[tickets].rejectedState` is unset. Export and import read comment

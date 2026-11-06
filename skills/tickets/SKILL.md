@@ -299,8 +299,12 @@ triage) and as the closing reason (completed is done, not planned is the
 rejected role). Issue links to other issues are `autobuild-link:<intent> #<n>`
 labels, and blockers are native issue dependencies. Use `ab ticket move` and
 `--issues` rather than editing those labels on GitHub, and never leave two state
-labels on one issue: it drops out of listings until one is removed.
-`ab ticket state create` makes the `autobuild:<state>` label, with the purpose
+labels on one issue: it drops out of listings until one is removed. A node is
+an issue with the exact `node` label, and a ticket's target is the node whose
+sub-issue it is; another parent is plain grouping and gives no target. Set them
+with `ab ticket create --kind`/`--target` and `ab ticket update --kind`,
+`--target` or `--no-target`; sub-issues and `node` labels changed on GitHub are
+read the same way. `ab ticket state create` makes the `autobuild:<state>` label, with the purpose
 as its description, and refuses an existing name as hosted creation does. GitHub
 tickets carry no comment history, so `ab ticket show` lists none; only
 `ab ticket export` and `import` read it.
@@ -353,7 +357,7 @@ reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
 and state; file revisions also cover nonempty issue links. GitHub revisions
-fingerprint title, body, canonical label/blocker sets, state and issue links,
+fingerprint kind, target, title, body, canonical label/blocker sets, state and issue links,
 including the ticket's own issue; GitHub tickets carry no comments. Reverting identical
 content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
