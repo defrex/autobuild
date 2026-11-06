@@ -1,7 +1,27 @@
 import { expect, test } from 'bun:test'
 import { makeHarness, happyHandlers, readyTicket } from './harness'
 import { controlBuild } from '../cli/build-control'
-import { reduceBuild } from '../kernel/reducer'
+import { reduceBuild, type BuildState } from '../kernel/reducer'
+import type { TicketListing } from '../ports/types'
+import type { BuildRecord } from '../store/types'
+
+/** Supplied observation inputs from full entries, naming each entry's target
+ * and parent moves the way its digest would. */
+function inputsOf(listing: TicketListing, entries: { record: BuildRecord; state: BuildState }[]) {
+  return {
+    listing,
+    builds: entries.map(({ record, state }) => ({
+      record,
+      nodeTargets: [
+        state.target?.build,
+        ...[state.nodeRestack?.parentRequest, state.nodeRestack?.parentChange].flatMap((move) =>
+          move ? [move.old.target?.build, move.next.target?.build] : [],
+        ),
+      ].filter((build): build is string => build !== undefined),
+    })),
+    state: async (slug: string) => entries.find((entry) => entry.record.slug === slug)!.state,
+  }
+}
 
 // Model a large source using native resolved tickets. One scan corresponds to
 // many provider pages; increasing the node count must not multiply those pages.
@@ -117,7 +137,7 @@ test('display metadata follows membership authorities, survives failed scans, an
     ],
     diagnostics: [] as string[],
   }
-  const inputs = async () => ({ listing, builds: records })
+  const inputs = async () => inputsOf(listing, records)
   const first = await observeIntegration(store, source, 'node', inputs)
   expect(first.openChildren).toEqual(['FROZEN', 'QUEUED'])
   expect(first.contributions).toEqual(['landed'])
@@ -255,7 +275,7 @@ test('recorded remaps join frozen children to current membership and isolate unr
     record: { ...child.record, slug: 'unrelated', ticket: { source: 'foreign', id: 'OTHER' } },
     state: reduceBuild([]),
   }
-  const inputs = async () => ({ listing: await source.listAll(), builds: [child, unrelated] })
+  const inputs = async () => inputsOf(await source.listAll(), [child, unrelated])
   const absent = await observeIntegration(store, source, 'node', inputs)
   expect(absent.diagnostics.join()).toContain('ab ticket migration record')
   await recordTicketMigration(
@@ -317,7 +337,7 @@ test('a rejected child no longer keeps its node incomplete; a backlog child does
     { ...readyTicket('DECLINED'), target: 'NODE', state: 'Rejected' },
     { ...readyTicket('DEFERRED'), target: 'NODE', state: 'backlog' },
   ])
-  const inputs = async () => ({ listing: await source.listAll(), builds: [] })
+  const inputs = async () => inputsOf(await source.listAll(), [])
   const roles = { rejectedState: 'rejected' }
   expect((await observeIntegration(store, source, 'node', inputs, roles)).openChildren).toEqual([
     'DEFERRED',

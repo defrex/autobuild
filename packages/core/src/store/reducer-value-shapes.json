@@ -26020,6 +26020,10 @@
         "openInstance": {
           "type": "38",
           "optional": false
+        },
+        "nodeTargets": {
+          "type": "20",
+          "optional": false
         }
       }
     },
@@ -26073,6 +26077,10 @@
         },
         "nodeContribution": {
           "type": "40",
+          "optional": true
+        },
+        "nodeTargets": {
+          "type": "19",
           "optional": true
         },
         "nodeOpened": {

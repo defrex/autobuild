@@ -253,7 +253,11 @@ if (testUrl) {
         try {
           const digests = await store.getRepoBuildDigests('acme/v6')
           expect([...digests.keys()]).toEqual(['v6-build'])
-          expect(digests.get('v6-build')).toEqual({ slug: 'v6-build', observations: [] })
+          expect(digests.get('v6-build')).toEqual({
+            slug: 'v6-build',
+            observations: [],
+            nodeTargets: [],
+          })
         } finally {
           await store.close()
         }

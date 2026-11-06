@@ -24,6 +24,8 @@ import type { BuildDigest } from './types'
  * cost growing with the actual signal, not with total history. */
 export const DIGEST_EVENT_TYPES = [
   'build.created',
+  'node.parent-requested',
+  'node.parent-accepted',
   'integration.landed',
   'integration.audited',
   'node.opened',
@@ -48,6 +50,8 @@ export type DigestEventRow = Pick<AbEvent, 'type' | 'seq' | 'ts'> & {
   mergedSha?: string
   nodeContribution?: BuildDigest['nodeContribution']
   kind?: 'work' | 'node'
+  /** Node build slugs this event's target or parent move names. */
+  nodeTargets?: string[]
   hostedSeq?: number
   instance?: string
 }
@@ -79,10 +83,32 @@ export interface DigestAcc {
   reclaimed: number[]
   /** `openExecution`: the latest start's instance, cleared only by an instance-matched end. */
   openInstance: string | null
+  /** Sorted unique node slugs any target or parent move has named. */
+  nodeTargets: string[]
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 10
+export const BUILD_DIGEST_REDUCER_VERSION = 11
+
+/** A peer's digest answer predates a field a caller needs. Callers fail with
+ * this rather than reconstructing the field from per-build reads. */
+export class BuildDigestCapabilityError extends Error {
+  readonly capability = 'nodeTargets' as const
+  constructor(readonly slug: string) {
+    super(
+      `build digest for ${slug} has no nodeTargets: the store's digest answer predates node targets`,
+    )
+    this.name = 'BuildDigestCapabilityError'
+  }
+}
+
+/** Every node build the digest's build has targeted or moved between. */
+export function digestNodeTargets(
+  digest: Pick<BuildDigest, 'slug' | 'nodeTargets'>,
+): readonly string[] {
+  if (digest.nodeTargets === undefined) throw new BuildDigestCapabilityError(digest.slug)
+  return digest.nodeTargets
+}
 
 export const buildDigestReducer: IncrementalReducer<
   DigestAcc,
@@ -96,10 +122,13 @@ export const buildDigestReducer: IncrementalReducer<
     hosted: [],
     reclaimed: [],
     openInstance: null,
+    nodeTargets: [],
   }),
   fold(acc, events) {
     for (const event of events) {
       if (event.rawUnknown) advanceCompatibility(acc.compatibility, [event.rawUnknown])
+      if (event.nodeTargets?.some((target) => !acc.nodeTargets.includes(target)))
+        acc.nodeTargets = [...new Set([...acc.nodeTargets, ...event.nodeTargets])].sort()
       if (
         [
           'node.writer-settled',
@@ -152,6 +181,7 @@ export const buildDigestReducer: IncrementalReducer<
     hosted,
     reclaimed,
     openInstance,
+    nodeTargets,
   }) => {
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
@@ -171,6 +201,7 @@ export const buildDigestReducer: IncrementalReducer<
       ...(terminal !== undefined ? { terminal } : {}),
       ...(reclaimPending ? { reclaimPending: true as const } : {}),
       ...(openInstance !== null ? { executionOpen: true as const } : {}),
+      nodeTargets: [...nodeTargets],
     }
   },
 })

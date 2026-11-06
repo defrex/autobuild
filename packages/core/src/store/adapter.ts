@@ -52,7 +52,13 @@ export type {
 export { validateCreatedEvent } from './new-build'
 export { createBuildScopedStore } from './build-scope'
 export { createSessionScopedStore } from './session-handle'
-export { DIGEST_EVENT_TYPES, type DigestEventRow, reduceBuildDigest } from './digest'
+export {
+  BuildDigestCapabilityError,
+  DIGEST_EVENT_TYPES,
+  type DigestEventRow,
+  digestNodeTargets,
+  reduceBuildDigest,
+} from './digest'
 export {
   projectRepositoryStateEvents,
   REPOSITORY_RUN_SCOPED_EVENT_TYPES,

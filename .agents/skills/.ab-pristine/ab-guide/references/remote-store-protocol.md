@@ -748,7 +748,8 @@ from one build's log:
     "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "base": "cccccccccccccccccccccccccccccccccccccccc",
     "identities": ["build:child"]
-  }
+  },
+  "nodeTargets": ["ab-node-auth"]    // node builds the build's target or parent moves ever named, sorted; [] when none
 }
 ```
 
@@ -758,6 +759,16 @@ A node contribution is usable only when its `landing` matches `mergedSha`;
 recording or recovering a contribution advances `readinessChangeSeq`. These
 members are additive: older peers can omit them, leaving presence unproven rather
 than substituting source completion. They do not change the protocol version.
+
+`nodeTargets` lists every node build named by the build's `build.created`
+target or by either side of a `node.parent-requested` or
+`node.parent-accepted` move. The set only grows, so it is a superset of the
+nodes the build relates to, and a dispatcher finds a node's child builds from
+digests, reading full facts only for builds that name that node. Current
+services always send it, possibly empty. The field is additive and keeps the
+protocol version: older clients ignore it. A client that needs it and gets an
+answer without it, from an older service, fails with a typed error instead of
+reading each build's facts.
 
 The digest is derived from the event log on every call — the server persists
 nothing and there is no refresh step. Protocol version `3` reshaped the

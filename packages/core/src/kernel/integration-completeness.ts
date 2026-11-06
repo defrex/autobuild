@@ -2,7 +2,8 @@ import { readTicketMigrations, resolveTicketRef, type TicketMigrations } from '.
 import type { BuildState } from './reducer'
 import type { TicketSource, TicketListing } from '../ports/types'
 import type { BuildStore, BuildRecord } from '../store/types'
-import { readBuildFacts } from '../store/reduced-reads'
+import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
+import { digestNodeTargets } from '../store/digest'
 import { DISPATCHER } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
 import { contributedIssueLinks } from './node-issue-links'
@@ -13,7 +14,11 @@ import { holdsState } from '../ports/tickets/lifecycle'
 export interface IntegrationObservationInputs {
   migrations?: TicketMigrations
   listing: TicketListing
-  builds: { record: BuildRecord; state: BuildState }[]
+  /** Every repository build with the node slugs its digest names, a superset
+   * of every node it targets or moves between. */
+  builds: { record: BuildRecord; nodeTargets: readonly string[] }[]
+  /** Current facts for one build; memoized for this sample. */
+  state: (slug: string) => Promise<BuildState>
 }
 export async function integrationObservationInputs(
   store: BuildStore,
@@ -23,10 +28,25 @@ export async function integrationObservationInputs(
   if (!tickets.integrationTree || !tickets.listAll)
     throw new Error('ticket source cannot establish exhaustive integration completeness')
   const listing = await tickets.listAll()
-  const builds = []
-  for (const record of await store.listBuildsForRepo(repo))
-    builds.push({ record, state: (await readBuildFacts(store, record.slug)).value.state })
-  return { listing, builds, migrations: await readTicketMigrations(store, repo) }
+  // Records before digests, so a concurrent create cannot break completeness.
+  const records = await store.listBuildsForRepo(repo)
+  const digests = await readBuildDigests(store, repo)
+  const builds = records.map((record) => {
+    const digest = digests.get(record.slug)
+    if (digest === undefined)
+      throw new Error(`build digest missing for ${record.slug}: the digest read broke completeness`)
+    return { record, nodeTargets: digestNodeTargets(digest) }
+  })
+  const states = new Map<string, Promise<BuildState>>()
+  const state = (slug: string) => {
+    let read = states.get(slug)
+    if (!read) {
+      read = readBuildFacts(store, slug).then((facts) => facts.value.state)
+      states.set(slug, read)
+    }
+    return read
+  }
+  return { listing, builds, state, migrations: await readTicketMigrations(store, repo) }
 }
 
 /** A failed or partial enumeration cannot authorize verification or publication. */
@@ -56,8 +76,16 @@ export async function observeIntegration(
     const {
       listing,
       builds,
+      state: facts,
       migrations: supplied,
     } = await (inputs ? inputs() : integrationObservationInputs(store, tickets, record.repo))
+    // Only builds whose digest names this node can relate to it; the rest
+    // never need a facts read.
+    const related = await Promise.all(
+      builds
+        .filter((build) => build.nodeTargets.includes(slug))
+        .map(async (build) => ({ record: build.record, state: await facts(build.record.slug) })),
+    )
     const migrations = supplied ?? (await readTicketMigrations(store, record.repo))
     const nodeRef = resolveTicketRef(migrations, record.ticket, tickets.name, slug)
     observation.membershipSource = tickets.name
@@ -74,7 +102,7 @@ export async function observeIntegration(
       )
         children.add(ticket.ref.id)
     // Frozen claims survive edits to the source ticket's target.
-    for (const { record: build, state: child } of builds) {
+    for (const { record: build, state: child } of related) {
       if (child.target?.build === slug && child.status !== 'done' && child.status !== 'aborted')
         children.add(current(build)?.id ?? build.slug)
       // A merged contribution whose links the node has not recorded stays open
@@ -138,7 +166,7 @@ export async function observeIntegration(
     for (const { record: build } of builds)
       if (
         (build.ticket?.source === tickets.name ||
-          builds.some(
+          related.some(
             (entry) =>
               entry.record.slug === build.slug &&
               (entry.state.target?.build === slug ||
@@ -151,7 +179,7 @@ export async function observeIntegration(
           current(build)?.id ?? build.slug,
           build.ticket?.title,
         )
-    for (const { record: build, state: child } of builds) {
+    for (const { record: build, state: child } of related) {
       if (
         !build.ticket ||
         child.target?.build !== slug ||
