@@ -183,6 +183,10 @@ export class LiveConfig {
     startupContent: string,
     private readonly runtimes: RuntimeRegistry,
     private readonly publish: ConfigReloadPublisher,
+    /** A synchronous, request-free check of a composed reload against the
+     * running process (for example the ticket source's capabilities); a
+     * throw rejects the reload and keeps the previous snapshot. */
+    private readonly validate?: (config: Config) => void,
   ) {
     this.acceptedContent = startupContent
     this.snapshot = {
@@ -252,6 +256,7 @@ export class LiveConfig {
     const config = composeReloadedConfig(this.startup, candidate)
     let resolver: RuntimeResolver
     try {
+      this.validate?.(config)
       for (const [name, account] of Object.entries(this.snapshot.config.accounts)) {
         if (account.kind === 'chatgpt-subscription' && !same(account, config.accounts[name]))
           throw new Error(
