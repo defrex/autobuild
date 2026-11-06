@@ -9646,6 +9646,222 @@ test('recovered dispatch completion shares the guard before its first attachment
   ).toEqual(['execution-no-progress'])
 })
 
+// ── No-progress guard on provision continuation tails ───────────────────────
+
+describe('no-progress guard on provision continuation tails', () => {
+  function continuationProvider(operations: string[]): WorkspaceProvider {
+    return {
+      name: 'remote-test',
+      preservation: async () => ({ outcome: 'preserved', heads: [] }),
+      recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      async provision(opts) {
+        operations.push('provision')
+        return {
+          provider: 'remote-test',
+          ref: `sandbox-g${operations.length}`,
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? BASE_SHA },
+        }
+      },
+      async release() {},
+    }
+  }
+
+  type Tail = 'launch' | 'dispatch'
+
+  function tailHarness(tail: Tail, operations: string[]): Harness {
+    return harness({
+      workspaceProvider: continuationProvider(operations),
+      ...(tail === 'dispatch' ? { tickets: [readyTicket('T-continuation')] } : {}),
+      opts: { leaseTtlMs: 0 },
+    })
+  }
+
+  /** `launch`: an attached build whose released workspace the sweep replaces.
+   * `dispatch`: a queued build whose recovered completion provisions first. */
+  async function seedTail(h: Harness, tail: Tail): Promise<string> {
+    const slug =
+      tail === 'launch'
+        ? await seedBuild(h, { workspaceRef: 'sandbox-g0', workspaceProvider: 'remote-test' })
+        : await seedBuild(h, { attached: false, workspace: false, ticketId: 'T-continuation' })
+    if (tail === 'launch') await releaseWorkspace(h, slug)
+    return slug
+  }
+
+  async function releaseWorkspace(h: Harness, slug: string): Promise<void> {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-g0', reason: 'replacement' },
+    })
+  }
+
+  async function appendEmptyExecutions(h: Harness, slug: string, count: number, from = 0) {
+    for (let index = from; index < from + count; index++) {
+      const instance = `empty-${index}`
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { instance, provider: 'remote-test', workspaceRef: 'sandbox-g0' },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance, workspaceRef: 'sandbox-g0', outcome: 'completed', exitCode: 0 },
+      })
+    }
+  }
+
+  /** One tick that kicks the tail's continuation, drained to completion. */
+  async function runContinuation(h: Harness, slug: string, operations: string[]) {
+    const provisioned = operations.length
+    const before = (await h.store.getEvents(slug)).filter(
+      (event) => event.type === 'workspace.provisioned',
+    ).length
+    await h.dispatcher.tick({ resumeCurrent: true })
+    await h.dispatcher.drainProvisioning()
+    // The continuation really ran: no assertion below can pass vacuously.
+    expect(operations.length).toBe(provisioned + 1)
+    expect(
+      (await h.store.getEvents(slug)).filter((event) => event.type === 'workspace.provisioned'),
+    ).toHaveLength(before + 1)
+  }
+
+  async function noProgressEscalations(h: Harness, slug: string) {
+    return (await h.store.getEvents(slug)).filter(
+      (event) =>
+        event.type === 'escalation.raised' && event.payload.policyCause === 'execution-no-progress',
+    )
+  }
+
+  for (const tail of ['launch', 'dispatch'] as const) {
+    test(`the ${tail} tail escalates instead of launching at the limit`, async () => {
+      const operations: string[] = []
+      const h = tailHarness(tail, operations)
+      const slug = await seedTail(h, tail)
+      await appendEmptyExecutions(h, slug, 3)
+
+      await runContinuation(h, slug, operations)
+      expect(h.launches).toEqual([])
+      const raised = await noProgressEscalations(h, slug)
+      expect(raised.map((event) => event.payload)).toEqual([
+        expect.objectContaining({
+          source: 'policy',
+          phase: 'setup',
+          policyCause: 'execution-no-progress',
+        }),
+      ])
+
+      // Further ticks stay parked on the one open escalation.
+      await h.dispatcher.tick({ resumeCurrent: true })
+      await h.dispatcher.drainProvisioning()
+      expect(h.launches).toEqual([])
+      expect(await noProgressEscalations(h, slug)).toHaveLength(1)
+    })
+
+    for (const empties of [0, 1, 2]) {
+      test(`the ${tail} tail still launches below the limit (${empties} empty)`, async () => {
+        const operations: string[] = []
+        const h = tailHarness(tail, operations)
+        const slug = await seedTail(h, tail)
+        await appendEmptyExecutions(h, slug, empties)
+
+        await runContinuation(h, slug, operations)
+        expect(h.launches).toEqual([slug])
+        expect(await noProgressEscalations(h, slug)).toHaveLength(0)
+      })
+    }
+
+    test(`the ${tail} tail launches after a progress fact resets the streak`, async () => {
+      const operations: string[] = []
+      const h = tailHarness(tail, operations)
+      const slug = await seedTail(h, tail)
+      await appendEmptyExecutions(h, slug, 3)
+      await h.store.append(slug, {
+        actor: agentActor('implement', 's_progress'),
+        type: 'observation.recorded',
+        payload: { id: 'o_progress', kind: 'followup', summary: 'progress' },
+      })
+
+      await runContinuation(h, slug, operations)
+      expect(h.launches).toEqual([slug])
+      expect(await noProgressEscalations(h, slug)).toHaveLength(0)
+    })
+
+    test(`the ${tail} tail re-arms after the escalation is answered`, async () => {
+      const operations: string[] = []
+      const h = tailHarness(tail, operations)
+      const slug = await seedTail(h, tail)
+      await appendEmptyExecutions(h, slug, 3)
+      await runContinuation(h, slug, operations)
+      expect(h.launches).toEqual([])
+
+      await controlBuild({
+        store: h.store,
+        repo: REPO,
+        slug,
+        user: 'operator',
+        action: { kind: 'answer', text: 'try again' },
+      })
+      await releaseWorkspace(h, slug)
+      await runContinuation(h, slug, operations)
+      expect(h.launches).toEqual([slug])
+
+      // Three fresh empty executions reach the limit again on the same tail.
+      await appendEmptyExecutions(h, slug, 3, 3)
+      await releaseWorkspace(h, slug)
+      await runContinuation(h, slug, operations)
+      expect(h.launches).toEqual([slug])
+      expect(await noProgressEscalations(h, slug)).toHaveLength(2)
+    })
+
+    test(`the ${tail} tail still starts a runner to acknowledge a pending abort`, async () => {
+      const operations: string[] = []
+      const h = tailHarness(tail, operations)
+      const slug = await seedTail(h, tail)
+      await appendEmptyExecutions(h, slug, 3)
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc_no_progress',
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'execution-no-progress',
+          question: 'three consecutive executions ended without progress',
+        },
+      })
+      await controlBuild({
+        store: h.store,
+        repo: REPO,
+        slug,
+        user: 'operator',
+        action: { kind: 'abort' },
+      })
+
+      if (tail === 'launch') {
+        await runContinuation(h, slug, operations)
+      } else {
+        // A queued build with a pending command is acknowledged by the
+        // ordinary guarded launch before dispatch completion provisions, as
+        // on main; the dispatch tail is never reached.
+        await h.dispatcher.tick({ resumeCurrent: true })
+        await h.dispatcher.drainProvisioning()
+        expect(operations).toEqual([])
+      }
+      expect(h.launches).toEqual([slug])
+      expect(await noProgressEscalations(h, slug)).toHaveLength(1)
+    })
+  }
+})
+
 describe('dispatcher pipeline pins', () => {
   const pipeline = (table: 'verify' | 'finalize', name: string) =>
     parseConfig(
