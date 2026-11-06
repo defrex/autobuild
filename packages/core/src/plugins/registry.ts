@@ -160,6 +160,7 @@ function normalize<AdapterFactory, ContractFactory>(
 export class PluginRegistry {
   readonly ticketSources = reserved<TicketSourcePluginFactory, TicketSourceContractFactory>([
     'file',
+    'github',
     'hosted',
     'linear',
   ])
