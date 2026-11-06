@@ -311,6 +311,7 @@ export class LinearTicketSource implements TicketSource {
   readonly name = 'linear'
   readonly integrationTree = true
   readonly priority = true
+  readonly readyAssignee = true
 
   async readExportSnapshot(opts: ExportSnapshotOptions = {}): Promise<Ticket[]> {
     let completed = 0
@@ -473,6 +474,19 @@ export class LinearTicketSource implements TicketSource {
       { email: assignee },
     )
     return data.users.nodes[0] ?? null
+  }
+
+  /** `ab init --validate`: who a `readyAssignee` value names. */
+  async describeReadyAssignee(assignee: string): Promise<string> {
+    const user = await this.resolveAssignee(assignee)
+    if (user === null) {
+      throw new Error(
+        assignee === 'me'
+          ? '[tickets].readyAssignee = "me" but LINEAR_API_KEY did not resolve to a Linear user — check the key'
+          : `[tickets].readyAssignee "${assignee}" matches no user in the Linear workspace — check the address or use "me"`,
+      )
+    }
+    return `${assignee} → ${user.name} <${user.email}>`
   }
 
   async listReady(criteria: {
