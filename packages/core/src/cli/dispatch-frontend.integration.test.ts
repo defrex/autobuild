@@ -3936,14 +3936,15 @@ test('a viewer without a counting ticket source shows – even when a count was 
   }
 })
 
-test('a viewer shows only its own triage count, read at most once per 10 s', async () => {
+test('a viewer shows only its own triage count, read at most once per 60 s', async () => {
   const names: string[] = []
   let gate = deferred<void>()
+  let inbox = 3
   const source = Object.assign(new FakeTicketSource(), {
     countStates: async (requested: readonly string[]) => {
       names.push(...requested)
       await gate.promise
-      return [{ name: 'Inbox', tickets: 3 }]
+      return [{ name: 'Inbox', tickets: inbox }]
     },
   })
   const h = await viewerTriageHarness(async () => source)
@@ -3956,21 +3957,30 @@ test('a viewer shows only its own triage count, read at most once per 10 s', asy
   await h.settle()
   await h.advance(0)
   expect(h.triage()).toBe(3)
+  // 500 ms, 15 s and 59 s after the first read: no second request.
   await h.advance(500)
+  await h.advance(14_500)
+  await h.advance(44_000)
   expect(names).toHaveLength(1)
+  // The ticket source changes with no store event; the count converges on the
+  // next due read without any further update.
+  inbox = 6
+  await h.advance(1_000)
+  expect(names).toHaveLength(2)
+  expect(h.triage()).toBe(6)
   // A stalled read suppresses the next due request instead of stacking one.
   gate = deferred<void>()
-  await h.frame(10_000)
-  await waitFor(() => names.length === 2, 'due count request')
-  await h.frame(15_000)
-  expect(names).toHaveLength(2)
+  await h.frame(60_000)
+  await waitFor(() => names.length === 3, 'due count request')
+  await h.frame(60_000)
+  expect(names).toHaveLength(3)
   gate.resolve()
   await h.settle()
   h.controller.abort()
   await h.running
   // A stopped viewer starts no further reads.
-  await h.advance(15_000)
-  expect(names).toHaveLength(2)
+  await h.advance(60_000)
+  expect(names).toHaveLength(3)
 })
 
 test('failed opens and counts never fail the viewer and retry on the next due refresh', async () => {
@@ -3988,10 +3998,10 @@ test('failed opens and counts never fail the viewer and retry on the next due re
   })
   await h.settle()
   expect(h.triage()).toBeUndefined()
-  await h.advance(15_000)
+  await h.advance(60_000)
   expect([opens, counts]).toEqual([2, 1])
   expect(h.triage()).toBeUndefined()
-  await h.advance(15_000)
+  await h.advance(60_000)
   expect([opens, counts]).toEqual([2, 2])
   expect(h.triage()).toBe(5)
   h.controller.abort()
