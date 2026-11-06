@@ -192,3 +192,23 @@ test('tree-capable native page normalization retains node targets and metadata',
     total: 5,
   })
 })
+
+test('compatibility normalizes targeted listings and preserves the receiver', async () => {
+  const fake = new FakeTicketSource()
+  const node = await fake.create({ title: 'Node', body: 'spec', kind: 'node' })
+  const child = await fake.create({ title: 'Child', body: 'spec', target: node.ref.id })
+  const { kind: _kind, ...raw } = child
+  const plugin: TicketSource = Object.assign(Object.create(fake) as TicketSource, {
+    integrationTree: true,
+    async listTargeting(this: TicketSource, nodeId: string) {
+      expect(this).toBe(plugin)
+      expect(nodeId).toBe(node.ref.id)
+      return { tickets: [raw as typeof child], diagnostics: ['excluded'] }
+    },
+  })
+  const source = compatibleTicketSource(plugin)
+  expect(await source.listTargeting!(node.ref.id)).toEqual({
+    tickets: [{ ...raw, kind: 'work' }],
+    diagnostics: ['excluded'],
+  })
+})
