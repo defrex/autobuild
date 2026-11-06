@@ -1,12 +1,28 @@
 import { DISPATCHER } from '../events/envelope'
 import { remoteBranchHead } from '../ports/forge/git-rewrite'
-import type { Forge, WorkspaceProvider } from '../ports/types'
+import type { Forge, WorkspacePreservationHead, WorkspaceProvider } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { preserveGitCommits } from '../ports/workspace/commit-preservation'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildStore } from '../store/types'
 
 export class WorkspaceFenceUnknown extends Error {}
+
+/** Provider-independent exact supersession: a preserved branch head that a
+ * recorded rewrite replaced keeps its objects as a producer and never moves
+ * the branch. Ancestor coverage stays with the providers' Git checks. */
+export function supersedeRestorationHeads(
+  heads: WorkspacePreservationHead[] | undefined,
+  replaced: readonly string[],
+): { restoration: WorkspacePreservationHead[] | undefined; superseded: string[] } {
+  const superseded: string[] = []
+  const restoration = heads?.map((head) => {
+    if (head.role !== 'branch' || !replaced.includes(head.sha)) return head
+    superseded.push(head.sha)
+    return { ...head, role: 'producer' as const }
+  })
+  return { restoration, superseded }
+}
 
 /** Every caller holds the build's cleanup boundary. A fence is revalidated on
  * every invocation, including restart: durable receipts cannot stop new code. */
@@ -98,6 +114,7 @@ export async function preserveWorkspaceBeforeRelease(deps: {
       branch: handle.branch,
       base: source.payload.base.sha,
       candidates,
+      replaced: current.value.replacedHeads,
     })
   } else {
     const rewrite = deps.forge.kernelRewrite ?? deps.forge.rewrite
@@ -130,6 +147,8 @@ export async function preserveWorkspaceBeforeRelease(deps: {
         base,
         candidates,
         archive: rewrite.archive,
+        replaced: current.value.replacedHeads,
+        local: deps.forge.name === 'local-git',
       }),
     }
   }

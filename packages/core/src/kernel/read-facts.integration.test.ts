@@ -1,7 +1,7 @@
 import { decodeLog } from './log-index-value'
 import { expect, test } from 'bun:test'
 import { randomBuildLog } from './generators/build-log'
-import { buildReadFactsReducer, buildStreamSeedReducer } from './read-facts'
+import { REPLACED_HEADS_CAP, buildReadFactsReducer, buildStreamSeedReducer } from './read-facts'
 import { buildReducer, reduceBuild } from './reducer'
 import { autoMergeDeferralObservation, currentDeferralObservationReducer } from './auto-merge'
 import { mergeDecision } from '../cli/attention'
@@ -232,4 +232,91 @@ test('published rewrites retire checkpoints while repeated provisioning retains 
   ])
   expect(buildReadFactsReducer.finish(acc).workspacePreservation).toBeUndefined()
   expect(buildReadFactsReducer.finish(acc).latestWorkspace?.payload.base.sha).toBe('b'.repeat(40))
+})
+
+test('rewrites keep a bounded record of the latest replaced heads', () => {
+  const event = (seq: number, type: string, payload: unknown) =>
+    ({
+      seq,
+      type,
+      payload,
+      ts: '2026-01-01T00:00:00Z',
+      actor: KERNEL,
+    }) as import('../events/catalog').AbEvent
+  const oid = (n: number) => n.toString(16).padStart(40, '0')
+  const leaf = (type: 'reconcile.rewritten' | 'restack.rewritten', seq: number) =>
+    event(seq, type, {
+      id: `rewrite-${seq}`,
+      ...(type === 'reconcile.rewritten'
+        ? { attempt: 1, conflicted: false }
+        : { trigger: 'verify-entry', cycle: 0, observation: 1, message: 'restack' }),
+      branch: 'ab/build',
+      oldHead: oid(1001),
+      oldBase: oid(1),
+      targetBase: oid(2),
+      changeSha: oid(3),
+      workspaceHead: oid(1002),
+      localBranchHead: oid(1002),
+      headSha: oid(1003),
+      archives: [],
+    })
+  // A minimal valid node restack whose only effect is replacing `previous`.
+  const node = (seq: number, previous: string) => {
+    const id = `node-${seq}`
+    const head = oid(9000 + seq)
+    return [
+      event(seq, 'node.writer-reserved', {
+        id,
+        operation: 'restack',
+        expected: previous,
+        parent: head,
+        oldBase: oid(1),
+        archive: 'archive',
+        changes: [],
+        upstreamBuilds: [],
+        merges: [],
+      }),
+      event(seq, 'node.publish-intended', { id, head }),
+      event(seq, 'node.rewritten', { id, previous, head }),
+      event(seq, 'node.writer-settled', { id, outcome: 'completed' }),
+    ]
+  }
+  const finish = (acc: ReturnType<typeof buildReadFactsReducer.initial>) =>
+    buildReadFactsReducer.finish(acc).replacedHeads
+  // The Evidence ordering: the receipt naming `previous` lands after the rewrite.
+  let acc = buildReadFactsReducer.advance(buildReadFactsReducer.initial(), [
+    ...node(1, oid(500)),
+    event(2, 'workspace.commits-preserved', {
+      workspace: 1,
+      execution: 0,
+      ref: 'old',
+      branch: 'ab/build',
+      phase: 'reconcile',
+      round: 1,
+      heads: [
+        {
+          role: 'branch',
+          sha: oid(500),
+          remoteRef: `refs/autobuild/archive/build/${oid(500)}`,
+          commits: [oid(500)],
+        },
+      ],
+    }),
+  ])
+  expect(finish(acc)).toEqual([oid(500)])
+  acc = buildReadFactsReducer.advance(roundtrip(acc), [
+    leaf('reconcile.rewritten', 3),
+    leaf('restack.rewritten', 4),
+  ])
+  // Leaf rewrites retire the checkpoint, never the record; duplicates move newest.
+  expect(buildReadFactsReducer.finish(acc).workspacePreservation).toBeUndefined()
+  expect(finish(acc)).toEqual([oid(500), oid(1001), oid(1002)])
+  acc = buildReadFactsReducer.advance(roundtrip(acc), node(5, oid(500)))
+  expect(finish(acc)).toEqual([oid(1001), oid(1002), oid(500)])
+  acc = buildReadFactsReducer.advance(
+    roundtrip(acc),
+    Array.from({ length: 70 }, (_, i) => node(10 + i, oid(2000 + i))).flat(),
+  )
+  expect(finish(acc)).toHaveLength(REPLACED_HEADS_CAP)
+  expect(finish(acc)).toEqual(Array.from({ length: 64 }, (_, i) => oid(2006 + i)))
 })
