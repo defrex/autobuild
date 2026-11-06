@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TicketSource, TicketUpdate } from '../ports/types'
 import { parseTicketFile, serializeTicketFile } from '../ports/tickets/file-codec'
-import { TicketRevisionUnsupported } from '../ports/tickets/revision'
+import { TicketRevisionConflict } from '../ports/tickets/revision'
 import { requireTicket, updateTicket } from '../ports/tickets/operations'
 
 export type TicketEditorRunner = (command: string, path: string) => Promise<number>
@@ -25,7 +25,6 @@ export async function editTicket(
   stdout: (line: string) => void,
   runner: TicketEditorRunner = runTicketEditor,
 ): Promise<void> {
-  if (!source.mutateIfRevision) throw new TicketRevisionUnsupported(source.name)
   const command = env.VISUAL?.trim() || env.EDITOR?.trim()
   if (!command) throw new Error('set VISUAL or EDITOR to edit a ticket')
   const ticket = await requireTicket(source, id)
@@ -81,8 +80,17 @@ export async function editTicket(
       if (parsed.body !== ticket.body) patch.body = parsed.body
       if (JSON.stringify(parsed.front.labels) !== JSON.stringify(ticket.labels))
         patch.labels = parsed.front.labels
-      if (Object.keys(patch).length > 0)
-        await updateTicket(source, id, patch, false, ticket.revision)
+      if (Object.keys(patch).length > 0) {
+        if (source.mutateIfRevision) await updateTicket(source, id, patch, false, ticket.revision)
+        else {
+          // Without guarded writes, re-read just before the unguarded write,
+          // with the same race window as file revision checks.
+          const current = await requireTicket(source, id)
+          if (current.revision !== ticket.revision)
+            throw new TicketRevisionConflict(id, ticket.revision, current.revision)
+          await updateTicket(source, id, patch, false)
+        }
+      }
     }
     await rm(directory, { recursive: true })
     stdout(`ticket edit complete: ${source.name}:${id}`)

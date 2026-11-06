@@ -4,7 +4,13 @@ import { readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FileTicketSource } from './file'
-import { exportTickets, importTickets, IMPORT_MAP } from './migration'
+import {
+  exportTickets,
+  importTickets,
+  IMPORT_MAP,
+  MANIFEST,
+  readMigrationManifest,
+} from './migration'
 import { serializeTicketFile } from './file-codec'
 import { hostedRequestedIds } from './requested-id'
 import { normalizeStateName } from './states'
@@ -595,4 +601,35 @@ test('urgent priority survives export and import, and a target without it refuse
     'cannot store ticket priority',
   )
   expect((await plain.listAll()).tickets).toHaveLength(0)
+})
+
+test('import stamps a stable reservation time and passes it with every creation key', async () => {
+  const source = await fixture()
+  const dir = join(root, 'export')
+  await exportTickets({ source, dir, repo: 'repo' })
+  const exported = JSON.parse(await readFile(join(dir, MANIFEST), 'utf8'))
+  // Export bytes stay unchanged: only an import records the time.
+  expect('reservedAt' in exported).toBe(false)
+  expect((await readMigrationManifest(dir)).reservedAt).toBeUndefined()
+
+  const target = new FileTicketSource({ dir: join(root, 'target') })
+  const create = target.create.bind(target)
+  const reservations: Array<string | undefined> = []
+  let fail = true
+  target.create = async (draft, opts) => {
+    reservations.push(opts?.idempotencyKeyReservedAt)
+    const result = await create(draft, opts)
+    if (fail) {
+      fail = false
+      throw new Error('response lost')
+    }
+    return result
+  }
+  await expect(importTickets({ source: target, dir, repo: 'repo' })).rejects.toThrow('rerun import')
+  const stamped = (await readMigrationManifest(dir)).reservedAt
+  expect(stamped).toEqual(expect.any(String))
+  await importTickets({ source: target, dir, repo: 'repo' })
+  expect((await readMigrationManifest(dir)).reservedAt).toBe(stamped)
+  expect(reservations.length).toBeGreaterThan(1)
+  expect(new Set(reservations)).toEqual(new Set([stamped]))
 })
