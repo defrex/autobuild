@@ -12,6 +12,7 @@ import {
   displayText,
   buildActionAvailability,
   capacityExplanation,
+  NO_DISPATCHER_RUN_LINE,
   landingPolicyDisplay,
   mergeVocabulary,
   mergeSummary,
@@ -231,13 +232,17 @@ export function BuildsView(props: BuildsViewProps) {
   return (
     <DashboardSurface>
       {Boolean(
-        model.warningLines?.length ||
+        model.configuration === 'no-dispatcher-run' ||
+          model.warningLines?.length ||
           model.availableUpgrade ||
           model.handoffs?.length ||
           model.rollback ||
           model.capacity?.borrowingNodes.length,
       ) && (
         <div className="messages">
+          {model.configuration === 'no-dispatcher-run' && (
+            <p className="slack notice">{NO_DISPATCHER_RUN_LINE}</p>
+          )}
           {model.capacity?.borrowingNodes.length ? (
             <p className="slack notice capacity-notice">
               active {model.active.current}/{model.active.limit}

@@ -86,6 +86,7 @@ import type { UIMessage } from 'ai'
 import type { StreamOutcome, StreamPart } from '../../store/streams/types'
 export { dashboardBuildControl } from './actions'
 export type { DashboardBuildControl } from './actions'
+export { NO_DISPATCHER_RUN_LINE, activeCounterText } from './configuration'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   openHarvestRun,
@@ -323,6 +324,11 @@ export interface DashboardModel {
   /** Shared occupied/effective slot counter; idle integration nodes are free. */
   active: DashboardCounter
   capacity?: DispatchCapacity
+  /** Absent: the recorded run's effective configuration projected this model.
+   * `no-dispatcher-run`: the repository journal records no dispatcher run, so
+   * pipeline configuration (steps, verify universe, capacity) is unknown and
+   * `active.limit` is not meaningful. */
+  configuration?: 'no-dispatcher-run'
   /** Tickets in the configured triage state from the dispatcher's last
    * successful sample; absent is unknown (`–`). */
   triage?: number

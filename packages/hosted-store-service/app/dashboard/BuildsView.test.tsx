@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test'
-import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
+import {
+  NO_DISPATCHER_RUN_LINE,
+  type DashboardBuild,
+  type DashboardModel,
+} from '@defrex/autobuild/operator-presentation'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { awaitingConsent, BuildPageView, BuildsView, LandingSignoff } from './BuildsView'
 
@@ -370,4 +374,32 @@ test('node merge sign-off follows projected readiness, never an open PR or curre
   delete row.landing.command
   delete row.landing.decision
   expect(awaitingConsent(row)).toBe(false)
+})
+
+test('a project with no dispatcher run shows the one factual line above the empty list', () => {
+  const html = renderToStaticMarkup(
+    <BuildsView
+      repo="owner/repo"
+      model={{
+        repo: 'owner/repo',
+        queued: 0,
+        active: { current: 0, limit: 0 },
+        configuration: 'no-dispatcher-run',
+        drained: false,
+        repositoryPaused: false,
+        defaultAutoMerge: false,
+        harvestPaused: false,
+        builds: [],
+      }}
+      now={0}
+      onActivate={noop}
+      onHoverPreview={noop}
+      onOpenBuild={noop}
+      onRowBuildControl={noop}
+      onRowHarvest={noop}
+    />,
+  )
+  expect(html.split(NO_DISPATCHER_RUN_LINE)).toHaveLength(2)
+  expect(html).toContain('no active builds')
+  expect(html).not.toContain('0/0')
 })

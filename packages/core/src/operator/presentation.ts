@@ -13,6 +13,7 @@ export {
   repositoryActionAvailability,
 } from '../cli/dashboard/actions'
 export type { DashboardActionAvailability, DashboardBuildControl } from '../cli/dashboard/actions'
+export { NO_DISPATCHER_RUN_LINE, activeCounterText } from '../cli/dashboard/configuration'
 export type {
   DashboardBuild,
   DashboardHarvest,

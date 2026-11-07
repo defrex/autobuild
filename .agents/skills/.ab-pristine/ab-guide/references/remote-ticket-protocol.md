@@ -156,6 +156,10 @@ source is Linear, file or another non-hosted source, machine HTTP, operator and
 MCP ticket surfaces refuse with a message naming that project and source: its
 tickets live in its own source, accessed directly by its dispatcher. This is a
 409 conflict, not an empty queue. The dispatcher's direct adapters are unchanged.
+Configuration refusals carry a `code`: `external-ticket-source` for a non-hosted
+source, `no-dispatcher-run` when a project has neither a published ticket policy
+nor any recorded dispatcher run, and `effective-config-unavailable` for other
+missing or unreadable configuration.
 
 ## Operations
 
