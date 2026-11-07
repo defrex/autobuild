@@ -124,7 +124,10 @@ A branch head equal to or contained in one of them is superseded. Preserve
 archives it only as a producer; provision skips it before any branch mutation
 and reports each skipped head, as `contained` or `superseded`, in the result's
 `restorationSkipped`. The dispatcher demotes exact matches itself, so a
-provider that ignores these fields stays safe.
+provider that ignores these fields stays safe. `preserve` also receives
+`neverExecuted` when no execution ever started in the environment: a missing
+base, `HEAD`, branch, or candidate object then means nothing to preserve rather
+than an error. A provider that ignores it stays strict, and cleanup fails safely.
 Provision/start failures signal `WorkspaceCleanupRequired` rather than deleting
 or implicitly recreating an existing checkout. A confirmed `snapshot_not_found`
 lookup establishes filesystem absence, while retaining the stale name for
