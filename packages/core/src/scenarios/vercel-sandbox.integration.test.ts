@@ -1249,7 +1249,9 @@ test.each(['orphaned', 'normal'] as const)(
     expect(verifierCalls).toBe(mode === 'orphaned' ? 0 : 1)
     expect((await readBuildFacts(store, slug)).value.state.sessions.open).toHaveLength(0)
     await dispatcher().tick({ acceptNewWork: false })
-    expect(launches).toBe(mode === 'orphaned' ? 1 : 2)
+    // The stale verify occurrence coalesces into the rerun verifier's cycle,
+    // so the normal mode no longer spends a launch on its summary handoff.
+    expect(launches).toBe(1)
   },
 )
 
