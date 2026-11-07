@@ -24,7 +24,6 @@ import type {
 import { TicketSourceRateLimitError } from '../types'
 import { validateTicketUpdate } from './update'
 import { refuseUnsupportedIssueLinks } from './issue-links'
-import { refuseUnsupportedPriority } from './priority'
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql'
 
@@ -120,6 +119,8 @@ interface GqlIssue {
   title: string
   description: string | null
   url: string
+  /** Linear's 0–4 scale; only 1 (Urgent) maps to `urgent`. */
+  priority?: number
   state: { name: string; type: string } | null
   labels: { nodes: Array<{ name: string }>; pageInfo?: PageInfo }
   comments?: Connection<{ body: string; createdAt: string; user: { name: string } | null }>
@@ -220,7 +221,7 @@ const METADATA_FIELDS =
   'team { key } parent { id identifier team { key } labels(first: 50) { nodes { name } pageInfo { hasNextPage endCursor } } }'
 
 const ISSUE_FIELDS =
-  `${METADATA_FIELDS} id identifier title description url state { name type } labels(first: 50) { nodes { name } pageInfo { hasNextPage endCursor } } ` +
+  `${METADATA_FIELDS} id identifier title description url priority state { name type } labels(first: 50) { nodes { name } pageInfo { hasNextPage endCursor } } ` +
   `inverseRelations(first: ${LINEAR_RELATION_PAGE_SIZE}) { nodes { id type issue { id identifier } } }`
 
 // Linear computes complexity from requested bounds, not returned counts:
@@ -240,7 +241,7 @@ const relationFields = (ready: boolean) => (ready ? READY_RELATIONS : DEPENDENCY
 const dependencyFields = `id identifier state { name type } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${DEPENDENCY_RELATIONS} } ${PAGE_INFO} }`
 const DEPENDENCY_QUERY = `query Dependencies($filter: IssueFilter!, $first: Int!, $after: String) { issues(filter: $filter, first: $first, after: $after, includeArchived: true) { nodes { ${dependencyFields} } ${PAGE_INFO} } }`
 const DEPENDENCY_FALLBACK_QUERY = `query Dependency($id: String!) { issue(id: $id) { ${dependencyFields} } }`
-const READY_FIELDS = `${METADATA_FIELDS} id identifier title description url state { name type } labels(first: ${READY_LABEL_PAGE_SIZE}) { nodes { name } ${PAGE_INFO} } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} }`
+const READY_FIELDS = `${METADATA_FIELDS} id identifier title description url priority state { name type } labels(first: ${READY_LABEL_PAGE_SIZE}) { nodes { name } ${PAGE_INFO} } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} }`
 const LIST_READY_QUERY = `query ListReady($filter: IssueFilter!, $first: Int!, $after: String) { issues(filter: $filter, first: $first, after: $after) { nodes { ${READY_FIELDS} } ${PAGE_INFO} } }`
 
 /** Refuse partial success and cursor loops on every connection independently. */
@@ -253,9 +254,10 @@ function nextCursor(info: PageInfo | undefined, seen: Set<string>): string | nul
   return cursor
 }
 
-const DETAIL_FIELDS = `${METADATA_FIELDS} id identifier title description url state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} }`
+const DETAIL_FIELDS = `${METADATA_FIELDS} id identifier title description url priority state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} }`
 const GET_DETAIL_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${DETAIL_FIELDS} } }`
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
+const ISSUE_PRIORITY_QUERY = `query IssuePriority($id: String!) { issue(id: $id) { id priority } }`
 const RESOLVE_ISSUE_QUERY = `query ResolveIssue($id: String!) { issue(id: $id) { id } }`
 const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name type } } }`
 const TEAM_INFO_QUERY = `query TeamInfo($teamKey: String!) { teams(filter: { key: { eq: $teamKey } }) { nodes { id states { nodes { id name } } labels { nodes { id name } } } } }`
@@ -267,6 +269,9 @@ const CREATE_ISSUE_MUTATION = `mutation CreateIssue($input: IssueCreateInput!) {
 const UPDATE_ISSUE_MUTATION = `mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`
 const CREATE_RELATION_MUTATION = `mutation CreateRelation($issueId: String!, $relatedIssueId: String!) { issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: blocks }) { success } }`
 const DELETE_RELATION_MUTATION = `mutation DeleteRelation($id: String!) { issueRelationDelete(id: $id) { success } }`
+// Linear priority: 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low.
+const LINEAR_NO_PRIORITY = 0
+const LINEAR_URGENT = 1
 const linearReservedIssueIdSchema = z.uuidv4()
 
 type ReadQuery = <T>(
@@ -305,6 +310,7 @@ async function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
 export class LinearTicketSource implements TicketSource {
   readonly name = 'linear'
   readonly integrationTree = true
+  readonly priority = true
 
   async readExportSnapshot(opts: ExportSnapshotOptions = {}): Promise<Ticket[]> {
     let completed = 0
@@ -671,8 +677,6 @@ export class LinearTicketSource implements TicketSource {
   async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
     // Linear links GitHub issues natively through its own integration.
     refuseUnsupportedIssueLinks(this, draft)
-    // Linear priority mapping is separate (part C); urgent is refused here.
-    refuseUnsupportedPriority(this, draft)
     if (opts.requestedId !== undefined) throw new Error('linear does not support requested ids')
     const reservedId = opts.idempotencyKey
     if (reservedId !== undefined && !linearReservedIssueIdSchema.safeParse(reservedId).success) {
@@ -707,6 +711,8 @@ export class LinearTicketSource implements TicketSource {
     if (canonicalTarget != null)
       input.parentId = await this.resolveIssueId('create', canonicalTarget)
     if (reservedId !== undefined) input.id = reservedId
+    // `normal` needs nothing: Linear creates issues with No priority.
+    if (draft.priority === 'urgent') input.priority = LINEAR_URGENT
 
     let issue: GqlIssue | null = null
     let createError: unknown
@@ -740,7 +746,6 @@ export class LinearTicketSource implements TicketSource {
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
     refuseUnsupportedIssueLinks(this, patch)
-    refuseUnsupportedPriority(this, patch)
     const validated = validateTicketUpdate(patch)
     if (
       validated.kind !== undefined ||
@@ -758,8 +763,16 @@ export class LinearTicketSource implements TicketSource {
       if (validated.target !== undefined || (current.kind === 'node' && effectiveKind === 'work'))
         validated.target = await this.validateTree(id, { ...validated, kind: effectiveKind })
     }
-    const issueId = await this.resolveIssueId('update', id)
     const input: Record<string, unknown> = {}
+    if (validated.priority === 'urgent') input.priority = LINEAR_URGENT
+    // `normal` clears only Urgent; High, Medium or Low set by a person stays.
+    // A person setting Urgent between this read and the write keeps it.
+    else if (
+      validated.priority === 'normal' &&
+      (await this.currentPriority('update', id)) === LINEAR_URGENT
+    )
+      input.priority = LINEAR_NO_PRIORITY
+    const issueId = await this.resolveIssueId('update', id)
 
     if (validated.target === null) input.parentId = null
     else if (validated.target !== undefined)
@@ -776,6 +789,9 @@ export class LinearTicketSource implements TicketSource {
         )
       }
     }
+    // Only a priority-only `normal` patch on a non-urgent issue gets here
+    // empty; there is nothing to write.
+    if (Object.keys(input).length === 0) return
 
     const data = await this.gql<{ issueUpdate: { success: boolean } }>(
       'update',
@@ -1213,6 +1229,24 @@ export class LinearTicketSource implements TicketSource {
     return payload.data
   }
 
+  /** Read an issue's Linear priority, caching its UUID for the write. */
+  private async currentPriority(operation: string, id: string): Promise<number | undefined> {
+    let data: { issue: { id: string; priority?: number } | null }
+    try {
+      data = await this.gql<{ issue: { id: string; priority?: number } | null }>(
+        operation,
+        ISSUE_PRIORITY_QUERY,
+        { id },
+      )
+    } catch (error) {
+      if (isEntityNotFound(error)) throw new Error(`linear ${operation}: unknown ticket "${id}"`)
+      throw error
+    }
+    if (!data.issue) throw new Error(`linear ${operation}: unknown ticket "${id}"`)
+    this.issueIds.set(id, data.issue.id)
+    return data.issue.priority
+  }
+
   private async resolveIssueId(operation: string, id: string): Promise<string> {
     const cached = this.issueIds.get(id)
     if (cached) return cached
@@ -1367,6 +1401,7 @@ export class LinearTicketSource implements TicketSource {
       issue.parent.labels.nodes.some((label) => label.name === 'node')
         ? issue.parent.identifier
         : undefined
+    const priority = issue.priority === LINEAR_URGENT ? ('urgent' as const) : undefined
     return {
       kind,
       ...(target !== undefined ? { target } : {}),
@@ -1378,6 +1413,7 @@ export class LinearTicketSource implements TicketSource {
         labels: issue.labels.nodes.map((label) => label.name),
         state: issue.state?.name,
         blockedBy,
+        priority,
       }),
       ref: {
         source: this.name,
@@ -1392,6 +1428,7 @@ export class LinearTicketSource implements TicketSource {
       resolved: RESOLVED_STATE_TYPES.has(issue.state?.type ?? ''),
       labels: issue.labels.nodes.map((label) => label.name),
       ...(blockedBy.length > 0 ? { blockedBy } : {}),
+      ...(priority ? { priority } : {}),
     }
   }
 }

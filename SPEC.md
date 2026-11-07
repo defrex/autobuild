@@ -2577,8 +2577,11 @@ else changes. Sources declare support. The file source stores
 urgent priority in its revisions; the in-memory fake behaves the same way.
 The hosted source stores priority in the hosted ticket store, covers it in its
 revision, and lists urgent ready tickets first; an update that omits priority
-never changes it. The Linear source does not store priority, nor do plugins
-without the capability: they read every ticket as normal and refuse a create or
+never changes it. The Linear source maps its native Urgent priority (1) to
+`urgent` and reads every other value as normal; it writes Urgent for `urgent`,
+clears only a current Urgent to No priority for `normal`, and covers urgent
+priority in its revisions. Plugins without the capability read every ticket
+as normal and refuse a create or
 update naming `urgent` with a typed error naming the source, before anything is
 written. Naming `normal` on such a source is a successful no-op. `ab ticket
 create` and `update` take `--priority urgent|normal`; operator and MCP ticket
@@ -4515,8 +4518,8 @@ write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
-File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links and urgent priority.
+File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets,
+state and urgent priority; file revisions also cover nonempty issue links.
 Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
