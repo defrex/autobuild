@@ -55,6 +55,7 @@ import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { abWatch, decodeCursor } from '../cli/watch'
 import { abWait } from '../cli/wait'
 import type { Exec } from '../ports/workspace/git-worktree'
+export { syntheticPresenceObservation } from './presence-history'
 
 export interface ReducedReadCosts {
   events: number

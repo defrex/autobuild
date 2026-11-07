@@ -5,12 +5,15 @@ import { join } from 'node:path'
 import {
   presenceWitness,
   projectPresence,
-  presenceEvidence,
+  compactProbe,
+  projectProbe,
+  probeEvidence,
   destinationAliases,
   blockerBuild,
   missingChanges,
   observePresence,
   ownedContribution,
+  type LandingEvidence,
   type PresenceBuild,
 } from './change-presence'
 import type { NodeGit } from './node-restack'
@@ -215,14 +218,21 @@ test('immutable witnesses reproject late, nested and withdrawn facts without Git
   expect(projectPresence(witness, landings)).not.toContain('build:leaf')
   expect(projectPresence(witness, [], aliases)).not.toContain('build:leaf')
   expect(projectPresence(witness, [{ slug: 'empty', sha: head, contribution: [] }])).toEqual(before)
-  expect(presenceEvidence(witness, before)).toMatch(/^presence-v3:[a-f0-9]{64}$/)
-  expect(presenceEvidence({ ...witness, commits: [...witness.commits].reverse() }, after)).toBe(
-    presenceEvidence(witness, after),
-  )
-  expect(presenceEvidence(witness, after)).not.toBe(presenceEvidence(witness, before))
-  expect(
-    presenceEvidence(witness, projectPresence(witness, [...landings].reverse(), aliases)),
-  ).toBe(presenceEvidence(witness, after))
+  const questions = ['build:direct', 'build:leaf'] as const
+  const answer = (facts: LandingEvidence[], factAliases = aliases) => {
+    const probe = compactProbe(witness, questions, facts, factAliases)
+    const identities = projectProbe(probe, facts, factAliases)
+    return { probe, identities, evidence: probeEvidence(probe, identities) }
+  }
+  const compactBefore = answer([], new Map())
+  const compactAfter = answer(landings)
+  expect(compactBefore.identities).toEqual(['build:direct'])
+  expect(compactAfter.identities).toEqual(['build:direct', 'build:leaf'])
+  expect(compactAfter.probe.commits).toEqual([original, 'b'.repeat(40), head].sort())
+  expect(compactBefore.evidence).toMatch(/^presence-v4:[a-f0-9]{64}$/)
+  expect(compactAfter.evidence).not.toBe(compactBefore.evidence)
+  expect(answer([...landings].reverse()).evidence).toBe(compactAfter.evidence)
+  expect(answer([landings[0]!]).identities).toEqual(['build:direct'])
   expect(() =>
     projectPresence(
       witness,
@@ -239,9 +249,9 @@ test('immutable witnesses reproject late, nested and withdrawn facts without Git
       sha: (i + 100).toString(16).padStart(40, '0'),
     }))
     expect(projectPresence(witness, unrelated)).toEqual(before)
-    expect(presenceEvidence(witness, projectPresence(witness, unrelated))).toBe(
-      presenceEvidence(witness, before),
-    )
+    const grown = answer([...landings, ...unrelated])
+    expect(grown.evidence).toBe(compactAfter.evidence)
+    expect(JSON.stringify(grown.probe)).toBe(JSON.stringify(compactAfter.probe))
   }
 })
 
@@ -278,6 +288,38 @@ test('witness validation rejects malformed, noncanonical and unsupported proofs'
         actor: DISPATCHER,
         type: 'change-presence.observed',
         payload: { ...payload, witness: invalid },
+      }),
+    ).toThrow()
+  const probe = {
+    version: 1 as const,
+    questions: ['build:a' as const, 'build:b' as const],
+    commits: ['a'.repeat(40)],
+    reachable: ['a'.repeat(40)],
+    builds: ['build:a' as const, 'build:b' as const],
+    trailers: ['build:a' as const],
+  }
+  const { witness: _legacy, ...current } = payload
+  const probed = { ...current, probe }
+  await store.appendRepo('repo', {
+    actor: DISPATCHER,
+    type: 'change-presence.observed',
+    payload: probed,
+  })
+  expect((await readRepositoryFacts(store, 'repo')).value.presence['root:main']).toEqual(probed)
+  for (const invalid of [
+    { ...probed, probe: { ...probe, version: 2 } },
+    { ...probed, probe: { ...probe, questions: ['build:b', 'build:a'] } },
+    { ...probed, probe: { ...probe, commits: ['a'.repeat(40), 'a'.repeat(40)] } },
+    { ...probed, probe: { ...probe, reachable: ['b'.repeat(40)] } },
+    { ...probed, probe: { ...probe, trailers: ['build:c'] } },
+    { ...probed, probe: { ...probe, extra: true } },
+    { ...probed, identities: ['build:c'] },
+  ])
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'change-presence.observed',
+        payload: invalid,
       }),
     ).toThrow()
 })

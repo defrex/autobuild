@@ -1223,11 +1223,33 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect((await readRepositoryFacts(store, repo)).value.presence['root:main']).toEqual(
             later,
           )
+          // Current observations carry a query-scoped probe; the v1 witness above is legacy.
+          const { witness: _witness, ...current } = later
+          const probed = {
+            ...current,
+            evidence: `presence-v4:${'0'.repeat(64)}`,
+            probe: {
+              version: 1 as const,
+              questions: ['build:blocker' as const, 'build:second' as const],
+              commits: ['a'.repeat(40)],
+              reachable: ['a'.repeat(40)],
+              builds: ['build:blocker' as const, 'build:second' as const],
+              trailers: ['build:blocker' as const],
+            },
+          }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'change-presence.observed',
+            payload: probed,
+          })
+          expect((await readRepositoryFacts(store, repo)).value.presence['root:main']).toEqual(
+            probed,
+          )
           expect(
             (await store.getRepoStateEvents(repo)).filter(
               (event) => event.type === 'change-presence.observed',
             ),
-          ).toHaveLength(2)
+          ).toHaveLength(3)
         })
       })
 
