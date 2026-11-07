@@ -2928,7 +2928,7 @@ describe('Dispatcher dependency gate', () => {
       expect(h.tickets.claims).toContain('T-1')
     })
 
-    test('roles cost no extra source request per tick at any log length', async () => {
+    test('roles and the triage sample cost no extra source request per tick at any log length', async () => {
       const { ticketRoleTickBudget } = await import('../testing/reduced-read-budget')
       const perTick = await ticketRoleTickBudget(async () => {
         let requests = 0
@@ -2944,7 +2944,8 @@ describe('Dispatcher dependency gate', () => {
           },
         })
         return { tickets, requests: () => requests }
-      })
+        // The fake source has no bounded counts: the triage sample requests nothing.
+      }, 0)
       expect(perTick.every((count) => count > 0)).toBe(true)
     }, 60_000)
 

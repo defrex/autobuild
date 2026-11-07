@@ -217,7 +217,10 @@ describe('ab-guide — dispatch dashboard summary', () => {
       '`triage` is the number of tickets in the configured triage state (`[tickets].triageState`',
     )
     expect(compact).toContain('only for an interactive dashboard')
-    expect(compact).toContain('It shows `–` when the source cannot enumerate states')
+    expect(compact).toContain(
+      'through one bounded state-count read (`countStates`), never a ticket listing',
+    )
+    expect(compact).toContain('It shows `–` when the source has no bounded state counts')
     expect(compact).toContain('a failed read keeps the last value, appends nothing')
     expect(compact).toContain('never reads the ticket source')
     expect(compact).toContain('`queue` is the ready-ticket queue depth')
