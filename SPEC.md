@@ -2779,8 +2779,11 @@ pending while ancestors restack or reconcile. A durable availability observation
 allows unchanged idle ticks, including after restart, to skip repository preparation
 and native auto-merge cancellation. Exact node/parent heads, contribution base,
 request contents, accepted ancestry, foreign aliases and confirmed landing evidence
-invalidate that observation when they change; polling timestamps do not. Failed
-assessments never establish unavailability. Availability is not proof of destination
+invalidate that observation when they change; polling timestamps do not. Confirmed
+landing evidence comes from every repository build, including mixed-version deferred
+builds whose own decisions stay withheld, so the dispatcher check and the node
+transaction assess the same fingerprint. Failed assessments never establish
+unavailability. Availability is not proof of destination
 coverage. Moving to another destination branch explicitly settles obsolete requests
 with `destination-changed`; losing identities on the same branch leaves them waiting.
 Native auto-merge is suspended with confirmed, reusable receipts only when replay

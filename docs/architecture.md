@@ -1593,7 +1593,10 @@ live provider evidence.
 `node.restack-availability-observed` facts. The dispatcher checks this reduced value
 before repository preparation; transactions retain unavailable requests and explicitly
 settle obsolete destinations. Landing and ancestry changes invalidate waiting results
-even at unchanged Git heads. Targeting-leaf cancellation runs only at the actionable
+even at unchanged Git heads. The dispatcher's per-tick availability batch is
+`repoBuildDigests(true)`, which includes mixed-version deferred builds' landing facts
+without deciding for them, so its fingerprint equals the one the node transaction
+records. Targeting-leaf cancellation runs only at the actionable
 replay boundary using `landing-publication.ts` receipts, including recovery.
 
 `kernel/node-restack.ts` inventories the contribution above the durable previous
