@@ -58,7 +58,13 @@ import {
   withForgeRequestContext,
   forgeRequestContext,
 } from '../ports/forge-request-context'
-import { dispatchCapacity, nodeCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
+import {
+  dispatchCapacity,
+  intakeCapacity,
+  nodeCapacity,
+  slotRequest,
+  type CapacityBuild,
+} from '../kernel/dispatch-capacity'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import {
   landingAuthorized,
@@ -80,6 +86,7 @@ import {
   integrationFailed,
   integrationVerified,
   integrationHeadVerified,
+  integrationAdmissible,
 } from '../kernel/integration-state'
 import {
   normalizeIdentities,
@@ -1216,6 +1223,10 @@ export class Dispatcher {
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
     await this.leaseSweep(report, launched, paused, opts)
+    if (this.outOfBudget(opts)) return report
+    // Nodes with a durable verification request take freed slots before
+    // intake, whether or not idle node polling visited them this tick.
+    await this.admitWaitingNodes(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
       await this.dispatch(report, launched, autoMergeUser, paused, opts, autoMergeSeedFact)
@@ -3046,6 +3057,46 @@ export class Dispatcher {
       })
     }
     return builds
+  }
+
+  /** Admit every node awaiting verification that has a slot, in slug order,
+   * through the janitor's own admission path. Independent of `acceptNewWork`:
+   * node admission is existing work, never intake. */
+  private async admitWaitingNodes(
+    report: TickReport,
+    launched: Set<string>,
+    opts: TickOpts,
+  ): Promise<void> {
+    if (
+      !(await this.repoBuildDigests()).some(
+        ({ digest }) => digest.kind === 'node' && digest.terminal === undefined,
+      )
+    )
+      return
+    const now = this.deps.clock()
+    const waiting = (await this.capacityBuilds())
+      .filter((build) => slotRequest(build, now) === 'verification')
+      .sort((a, b) => (a.record.slug < b.record.slug ? -1 : a.record.slug > b.record.slug ? 1 : 0))
+    for (const { record, state } of waiting) {
+      if (this.outOfBudget(opts)) return
+      if (
+        launched.has(record.slug) ||
+        this.hasLiveExecutionLease(record) ||
+        !state.nodeOpened ||
+        (state.janitor && Date.parse(state.janitor.nextAttemptAt) > now.getTime())
+      )
+        continue
+      await withForgeRequestContext({ build: record.slug }, async () => {
+        try {
+          if (!(await this.nodeHasCapacity(record.slug))) return
+          await this.prepareIntegration(record, state, report, launched)
+        } catch (error) {
+          report.janitorDiagnostics.push(
+            `build ${record.slug}: node admission failed — ${String(error)}`,
+          )
+        }
+      })
+    }
   }
 
   private async nodeHasCapacity(slug: string): Promise<boolean> {
@@ -5370,11 +5421,13 @@ export class Dispatcher {
     // pending work are live, only waiting on a human. Capacity is per repo
     // (§16.1) — another repo's builds never consume this repo's slots.
     const capacityBuilds = await this.capacityBuilds()
-    const active = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock()).occupied
+    // A node awaiting verification reserves its slot ahead of new claims until
+    // `admitWaitingNodes` gives it one; this only ever lowers the claim budget.
+    const projection = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock())
     const activeRefs: TicketRef[] = capacityBuilds
       .filter(({ state }) => state.status !== 'done' && state.status !== 'aborted')
       .flatMap(({ record }) => (record.ticket ? [record.ticket] : []))
-    let capacity = config.capacity - active
+    let capacity = intakeCapacity(projection)
 
     // The ready scan runs even at full capacity: `queued` is the operator's
     // standing queue-depth report and must stay honest exactly when the
@@ -6331,20 +6384,7 @@ export class Dispatcher {
     launched: Set<string>,
     sampling: { refreshOnly?: boolean } = {},
   ): Promise<void> {
-    if (
-      state.targetRewrite ||
-      state.status === 'paused' ||
-      state.status === 'done' ||
-      state.status === 'aborted' ||
-      state.pendingCommands.length ||
-      state.openEscalations.length ||
-      state.prState === 'merged' ||
-      state.prState === 'closed' ||
-      state.integration?.intent ||
-      state.nodeRestack?.parentRequest ||
-      state.nodeRestack?.parentChange
-    )
-      return
+    if (!integrationAdmissible(state)) return
     const forge = this.kernelForge()
     if (!record.branch || !state.baseBranch || !forge.compareBranches) return
     const comparison = await forge.compareBranches(state.baseBranch!, record.branch!)

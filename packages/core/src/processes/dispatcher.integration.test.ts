@@ -14354,6 +14354,79 @@ test('fresh node polling has bounded reads at 100 and 100000 events', async () =
   })
 }, 30_000)
 
+test('fresh node polling while the node waits for a slot at full capacity has bounded reads', async () => {
+  const toml = [
+    'capacity = 1',
+    '[commands]',
+    'test = "true"',
+    '[verify]',
+    'steps = ["unit"]',
+    '[verify.unit]',
+    'kind = "check"',
+    'command = "test"',
+  ].join('\n')
+  const h = harness({ toml, tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const node = (await h.store.listBuilds())[0]!
+  // An unrelated running leaf holds the only slot; the node has a current,
+  // complete verification request and no runner.
+  await seedBuild(h, { slug: 'slot-holder', attached: true })
+  const { integrationConfig } = await import('../kernel/integration-state')
+  const { dispatchCapacity } = await import('../kernel/dispatch-capacity')
+  const before = (await readBuildFacts(h.store, node.slug)).value.state
+  await h.store.append(node.slug, {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: [], diagnostics: [], contributions: ['merged-child'] },
+  })
+  await h.store.append(node.slug, {
+    actor: DISPATCHER,
+    type: 'integration.prepared',
+    payload: {
+      id: 'cycle',
+      head: before.nodeComparison!.headSha,
+      parent: before.nodeComparison!.parentSha,
+      config: integrationConfig(parseConfig(withReadyState(toml))),
+    },
+  })
+  const slotWaiting = async () => {
+    const builds = []
+    for (const record of await h.store.listBuilds()) {
+      const facts = (await readBuildFacts(h.store, record.slug)).value
+      builds.push({
+        record,
+        state: facts.state,
+        workspace: facts.workspace !== null,
+        provisioning: facts.provisionMarker !== undefined,
+      })
+    }
+    return (
+      dispatchCapacity(builds, 1, h.clock()).waitingNodes?.some(
+        (waiting) => waiting.slug === node.slug && waiting.request === 'verification',
+      ) === true
+    )
+  }
+  expect(await slotWaiting()).toBe(true)
+  const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
+  await nodePollingReadBudget({
+    store: h.store as MemoryBuildStore,
+    slug: node.slug,
+    advance: (ms) => h.clock.advance(ms),
+    slotWaiting,
+    tick: () =>
+      harness({
+        toml,
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+  expect(h.launches).not.toContain(node.slug)
+}, 30_000)
+
 test('node child discovery against digests without node targets fails typed, never reading facts', async () => {
   const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
   h.forge.remoteBranches.set('main', BASE_SHA)

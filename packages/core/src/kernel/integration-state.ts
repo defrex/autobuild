@@ -170,6 +170,23 @@ export function integrationCycleVerified(state: BuildState): boolean {
   )
 }
 
+/** Durable facts that rule out preparing or admitting integration verification. */
+export function integrationAdmissible(state: BuildState): boolean {
+  return !(
+    state.targetRewrite ||
+    state.status === 'paused' ||
+    state.status === 'done' ||
+    state.status === 'aborted' ||
+    state.pendingCommands.length ||
+    state.openEscalations.length ||
+    state.prState === 'merged' ||
+    state.prState === 'closed' ||
+    state.integration?.intent ||
+    state.nodeRestack?.parentRequest ||
+    state.nodeRestack?.parentChange
+  )
+}
+
 export function integrationNeedsRunner(state: BuildState): boolean {
   return integrationCurrent(state) && !integrationFailed(state) && !integrationCycleVerified(state)
 }
