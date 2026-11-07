@@ -4873,6 +4873,8 @@
     "$.recoveryCheckpoint.settled: string",
     "$.recoveryCheckpoint: object",
     "$.remoteWorkspace: boolean",
+    "$.replacedHeads: array",
+    "$.replacedHeads[]: string",
     "$.restackHistory: array",
     "$.restackHistory[].actor.kind: string",
     "$.restackHistory[].actor: object",

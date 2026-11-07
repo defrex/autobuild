@@ -343,6 +343,15 @@ export interface WorkspaceHandle {
 export interface WorkspaceProvisionResult extends WorkspaceHandle {
   /** Durable evidence for the commit this provision selected or reused. */
   base: WorkspaceBase
+  /** Preserved branch heads not restored over the branch. Omitted when empty. */
+  restorationSkipped?: RestorationSkip[]
+}
+
+/** A preserved branch head the branch already contains, or that a recorded
+ * rewrite in the build's bounded replaced-head record superseded. */
+export interface RestorationSkip {
+  sha: string
+  reason: 'contained' | 'superseded'
 }
 
 /** A provider refused to destroy a checkout during provision/start. The
@@ -389,6 +398,9 @@ export interface WorkspacePublication {
     branch: string
     base: string
     candidates: string[]
+    /** Shas a recorded rewrite replaced (bounded, newest last). A local
+     * branch they cover is archived only as a producer, never as `branch`. */
+    replaced?: string[]
   }): Promise<{ outcome: 'preserved'; heads: WorkspacePreservationHead[] } | { outcome: 'absent' }>
 
   /** Trusted after-teardown path; never route a restack through plain publish. */
@@ -475,6 +487,10 @@ export interface WorkspaceProvider {
      * Providers must preserve unknown unpublished work during ordinary resume. */
     publication?: { sha: string; cacheHeads: string[] }
     restoration?: WorkspacePreservationHead[]
+    /** The build's bounded replaced-head record, newest last. A preserved
+     * branch head it covers must not be restored over the branch; report it
+     * in `restorationSkipped`. */
+    restorationReplaced?: string[]
     /** Immutable recovery checkpoint, never a moved base branch. */
     revision?: string
     /** Monotonic environment generation used in provider idempotency keys. */

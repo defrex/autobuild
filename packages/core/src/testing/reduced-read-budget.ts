@@ -5,6 +5,7 @@ import { missingAccountCredentials, reconcileMissingAccounts } from '../accounts
 import { decideNextFromFacts } from '../kernel/engine'
 import { proveTargetLineage } from '../kernel/target-lineage'
 import { nodeRestackLog } from '../kernel/generators/node-restack-log'
+import { REPLACED_HEADS_CAP } from '../kernel/read-facts'
 import { observeTarget } from '../kernel/target-observation'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -2333,4 +2334,51 @@ export async function ticketRoleTickBudget(
   const [baseline, ...rest] = [...perTick.values()]
   for (const costs of rest) expect(costs).toEqual(baseline!)
   return baseline!
+}
+
+/** The bounded replaced-head record rides in the saved build facts: a warm
+ * read touches no event rows, and its size is fixed at any rewrite count. */
+export async function replacedHeadsReadBudget(opts: {
+  store: BuildStore
+  costs: ReducedReadCosts
+  fresh: () => Promise<BuildStore>
+}) {
+  const { store, costs } = opts
+  const node = 'replaced-heads-budget'
+  const oid = (n: number) => n.toString(16).padStart(40, '0')
+  await store.createBuild({ slug: node, repo, branch: 'ab-node/replaced-heads-budget' })
+  const log = nodeRestackLog()
+  for (const event of log.slice(0, 2)) await store.append(node, event)
+  const replaced: string[] = []
+  let appended = 0
+  let transaction = 0
+  const sizes = new Map<number, number>()
+  // Both journal lengths hold more rewrites than the record's capacity.
+  for (const length of [1_000, 10_000]) {
+    while (appended < length) {
+      const id = transaction++
+      for (const event of log.slice(2)) {
+        const payload = JSON.parse(
+          JSON.stringify(event.payload)
+            .replaceAll('node-tx', `rewrite-${id}`)
+            .replaceAll('a'.repeat(40), oid(id * 2 + 1))
+            .replaceAll('c'.repeat(40), oid(id * 2 + 2)),
+        )
+        await store.append(node, { actor: event.actor, type: event.type, payload })
+        appended++
+      }
+      replaced.push(oid(id * 2 + 1))
+    }
+    expect(replaced.length).toBeGreaterThan(REPLACED_HEADS_CAP)
+    for (const reader of [store, await opts.fresh()]) {
+      await readBuildFacts(reader, node)
+      costs.events = costs.metadata = costs.bytes = 0
+      const facts = (await readBuildFacts(reader, node)).value
+      expect(costs.events).toBe(0)
+      expect(facts.replacedHeads).toEqual(replaced.slice(-REPLACED_HEADS_CAP))
+      const size = JSON.stringify(facts.replacedHeads).length
+      if (length === 1_000) sizes.set(0, size)
+      else expect(size).toBe(sizes.get(0)!)
+    }
+  }
 }

@@ -1,5 +1,67 @@
 import type { Exec } from './git-worktree'
-import type { ForgeRewrite, WorkspacePreservationHead } from '../types'
+import type { ForgeRewrite, RestorationSkip, WorkspacePreservationHead } from '../types'
+
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+
+/** The replaced sha in the bounded record that equals or contains `sha`.
+ * Replaced commits were published once and stay archived under
+ * `<archivePrefix><sha>`; a remote workspace fetches only those it lacks.
+ * Missing objects or unreadable archives mean "not covered", never an error. */
+export async function supersedingReplacedHead(input: {
+  exec: Exec
+  workspacePath: string
+  sha: string
+  replaced: string[]
+  archivePrefix: string
+  local?: boolean
+}): Promise<string | undefined> {
+  if (!OID.test(input.sha) || !input.replaced.every((sha) => OID.test(sha)))
+    throw new Error('invalid replaced head')
+  if (!/^refs\/autobuild\/archive\/[a-z0-9-]+\/$/.test(input.archivePrefix))
+    throw new Error('invalid replaced head archive prefix')
+  if (input.replaced.includes(input.sha)) return input.sha
+  const run = (args: string[]) => input.exec(['git', ...args], { cwd: input.workspacePath })
+  const newestFirst = [...input.replaced].reverse()
+  const contain = async (candidates: string[]) => {
+    const missing: string[] = []
+    for (const replaced of candidates) {
+      const result = await run(['merge-base', '--is-ancestor', input.sha, replaced])
+      if (result.exitCode === 0) return { covering: replaced, missing }
+      if (result.exitCode !== 1) missing.push(replaced)
+    }
+    return { covering: undefined, missing }
+  }
+  const first = await contain(newestFirst)
+  if (first.covering || input.local || first.missing.length === 0) return first.covering
+  const refs = first.missing.map((sha) => `${input.archivePrefix}${sha}`)
+  const listed = await run(['ls-remote', '--refs', 'origin', ...refs])
+  if (listed.exitCode !== 0) return undefined
+  const advertised = new Set(
+    listed.stdout
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .filter(([sha, ref]) => ref === `${input.archivePrefix}${sha}`)
+      .map(([, ref]) => ref!),
+  )
+  const fetchable = refs.filter((ref) => advertised.has(ref))
+  if (fetchable.length === 0) return undefined
+  const fetched = await run([
+    'fetch',
+    '--no-tags',
+    '--no-write-fetch-head',
+    '--refmap=',
+    'origin',
+    ...fetchable.map((ref) => `+${ref}:${ref}`),
+  ])
+  if (fetched.exitCode !== 0) return undefined
+  const verified: string[] = []
+  for (const ref of fetchable) {
+    const sha = ref.slice(input.archivePrefix.length)
+    const actual = await run(['rev-parse', '--verify', `${ref}^{commit}`])
+    if (actual.exitCode === 0 && actual.stdout.trim() === sha) verified.push(sha)
+  }
+  return (await contain(verified)).covering
+}
 
 /** Boundary-only Git inspection. Inventory traverses the unpublished change,
  * while immutable archive acknowledgement proves the tip and its ancestry. */
@@ -11,6 +73,10 @@ export async function preserveGitCommits(input: {
   base: string
   candidates: string[]
   archive: ForgeRewrite['archive']
+  /** Shas a recorded rewrite replaced; a local branch they cover is
+   * archived as a producer so restoration never moves the branch to it. */
+  replaced?: string[]
+  local?: boolean
 }): Promise<WorkspacePreservationHead[]> {
   const git = async (args: string[], optional = false) => {
     const result = await input.exec(['git', ...args], { cwd: input.workspacePath })
@@ -42,20 +108,41 @@ export async function preserveGitCommits(input: {
     if (commits.length === 0) continue
     const remoteRef = `refs/autobuild/archive/${input.slug}/${sha}`
     await input.archive({ workspacePath: input.workspacePath, ref: remoteRef, sha })
-    heads.push({ sha, remoteRef, role: sha === branchSha ? 'branch' : 'producer', commits })
+    const superseded =
+      sha === branchSha &&
+      !!input.replaced?.length &&
+      (await supersedingReplacedHead({
+        exec: input.exec,
+        workspacePath: input.workspacePath,
+        sha,
+        replaced: input.replaced,
+        archivePrefix: `refs/autobuild/archive/${input.slug}/`,
+        local: input.local,
+      })) !== undefined
+    heads.push({
+      sha,
+      remoteRef,
+      role: sha === branchSha && !superseded ? 'branch' : 'producer',
+      commits,
+    })
   }
   return heads
 }
 
 /** Fetch only recorded immutable refs. Attaching an unpublished branch is safe
- * only over an ancestor; detached producer objects never move the branch. */
+ * only over an ancestor; detached producer objects never move the branch.
+ * Branch heads the branch contains, or that a replaced head in the bounded
+ * record covers, are classified before any mutation and skipped. */
 export async function restoreGitCommits(input: {
   exec: Exec
   workspacePath: string
   branch: string
   heads: WorkspacePreservationHead[]
+  /** The build's bounded replaced-head record, newest last. */
+  replaced?: string[]
   local?: boolean
-}): Promise<void> {
+}): Promise<{ skipped: RestorationSkip[] }> {
+  const skipped: RestorationSkip[] = []
   const git = async (args: string[], optional = false) => {
     const result = await input.exec(['git', ...args], { cwd: input.workspacePath })
     if (result.exitCode !== 0 && !optional)
@@ -85,9 +172,27 @@ export async function restoreGitCommits(input: {
     if (head.role !== 'branch') continue
     const ref = `refs/heads/${input.branch}`
     const current = (await git(['rev-parse', '--verify', ref])).stdout.trim()
-    if (current === head.sha) continue
-    const preservedAncestor = await git(['merge-base', '--is-ancestor', head.sha, current], true)
-    if (preservedAncestor.exitCode === 0) continue
+    const preservedAncestor =
+      current === head.sha ||
+      (await git(['merge-base', '--is-ancestor', head.sha, current], true)).exitCode === 0
+    if (preservedAncestor) {
+      skipped.push({ sha: head.sha, reason: 'contained' })
+      continue
+    }
+    if (
+      input.replaced?.length &&
+      (await supersedingReplacedHead({
+        exec: input.exec,
+        workspacePath: input.workspacePath,
+        sha: head.sha,
+        replaced: input.replaced,
+        archivePrefix: head.remoteRef.slice(0, -head.sha.length),
+        local: input.local,
+      })) !== undefined
+    ) {
+      skipped.push({ sha: head.sha, reason: 'superseded' })
+      continue
+    }
     const currentAncestor = await git(['merge-base', '--is-ancestor', current, head.sha], true)
     if (currentAncestor.exitCode !== 0)
       throw new Error('workspace restoration would overwrite divergent branch work')
@@ -97,6 +202,7 @@ export async function restoreGitCommits(input: {
     const attached = (await git(['symbolic-ref', '--quiet', 'HEAD'], true)).stdout.trim()
     if (attached === ref) await git(['reset', '--hard', head.sha])
   }
+  return { skipped }
 }
 
 /** Trusted exact-resource probe shared by hosted and local recovery. */
