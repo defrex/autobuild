@@ -292,10 +292,7 @@ describe('plugin SDK package surface', () => {
         dependencies: { '@defrex/autobuild': `file:${archive}` },
       }),
     )
-    const install = await installPackedDistribution(['--linker', 'isolated'], consumer)
-    if (install.exitCode !== 0) {
-      throw new Error(`packed consumer install failed:\n${install.stdout}${install.stderr}`)
-    }
+    await installPackedDistribution(['--linker', 'isolated'], consumer)
 
     await writeFile(
       join(consumer, 'verify.ts'),
@@ -428,12 +425,7 @@ describe('plugin SDK package surface', () => {
     // declares a patchedDependencies entry for a package the consumer tree
     // contains, so this install only succeeds while the packed manifest
     // carries no patchedDependencies field.
-    const install = await installPackedDistribution([], consumer)
-    if (install.exitCode !== 0) {
-      throw new Error(
-        `packed distribution install next to better-auth failed:\n${install.stdout}${install.stderr}`,
-      )
-    }
+    await installPackedDistribution([], consumer)
     expect(
       await Bun.file(join(consumer, 'node_modules', 'better-auth', 'package.json')).exists(),
     ).toBe(true)
@@ -509,7 +501,9 @@ describe('plugin SDK package surface', () => {
         },
       }),
     )
-    const failing = await installPackedDistribution([], negativeConsumer)
+    const failing = await installPackedDistribution([], negativeConsumer, {
+      allowFailure: true,
+    })
     if (failing.exitCode === 0) {
       throw new Error(
         `the consumed-manifest negative control installed successfully — the patchedDependencies strip no longer guards the failure it exists for:\n${failing.stdout}${failing.stderr}`,
