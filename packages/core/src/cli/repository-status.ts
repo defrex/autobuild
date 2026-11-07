@@ -2,7 +2,12 @@ import { repositoryReadFactsReducer } from '../kernel/read-facts'
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { OPERATOR_PRESENCE_TTL_MS, type OperatorPresence } from '../store/operator-presence'
 import { migrationIdentity } from '../kernel/ticket-migrations'
-import { dispatchUpgradeReducer, type DispatchUpgradeState } from '../kernel/dispatch-upgrade'
+import {
+  dispatchUpgradeReducer,
+  upgradeRunRecency,
+  type DispatchUpgradeState,
+  type UpgradeRun,
+} from '../kernel/dispatch-upgrade'
 import { formatRuntimeIdentity } from '../events/runtime'
 import {
   dispatchCapacity,
@@ -45,11 +50,117 @@ export type RepositoryOperatorStatus =
   | { presence: 'loaded'; registrations: Array<OperatorPresence & { heartbeatAgeMs: number }> }
   | { presence: 'unavailable'; reason: string }
 
+type UpgradeOutcome = NonNullable<
+  UpgradeRun['completed' | 'failure' | 'handoff' | 'request' | 'prepared' | 'detected']
+>
+
+/** One run's upgrade condition. `superseded` marks a failure that later
+ * evidence (a different resolved target or a later generation) replaced. */
+export interface UpgradeStatusEntry {
+  run: string
+  resolved?: NonNullable<UpgradeRun['resolved']>['payload']['target']
+  outcome?: UpgradeOutcome
+  superseded?: true
+}
+
+/** The current, actionable upgrade condition: at most the live handoff, the
+ * current generation, and the latest settled outcome from an earlier one. */
+export interface RepositoryUpgradeStatus {
+  handoff?: {
+    run: string
+    successor: string
+    from: string
+    to: string
+    mode: string
+    takenOver: boolean
+    draining: Record<string, string>
+    deadline?: string
+  }
+  current?: UpgradeStatusEntry
+  previous?: UpgradeStatusEntry
+}
+
+export function projectUpgradeStatus(
+  upgrades: DispatchUpgradeState,
+  dispatcher: DispatcherLiveness,
+): RepositoryUpgradeStatus {
+  const runs = Object.entries(upgrades.runs)
+  let live: [string, UpgradeRun] | undefined
+  for (const entry of runs) {
+    const state = entry[1]
+    if (!state.handoff || !state.request || state.completed) continue
+    if (!live || state.handoff.seq > live[1].handoff!.seq) live = entry
+  }
+  const currentRun =
+    (dispatcher.holder ?? dispatcher.expiredHolder ?? dispatcher.latestRun)?.run ??
+    upgrades.authoritativeRun ??
+    runs.reduce<[string, UpgradeRun] | undefined>(
+      (newest, entry) =>
+        !newest || upgradeRunRecency(entry[1]) > upgradeRunRecency(newest[1]) ? entry : newest,
+      undefined,
+    )?.[0]
+  const state = currentRun === undefined ? undefined : upgrades.runs[currentRun]
+  const outcome =
+    state &&
+    (state.completed ??
+      state.failure ??
+      state.handoff ??
+      state.request ??
+      state.prepared ??
+      state.detected)
+  let previous: [string, NonNullable<UpgradeRun['completed' | 'failure']>] | undefined
+  for (const [run, entry] of runs) {
+    const settled = entry.completed ?? entry.failure
+    if (!settled || run === currentRun || run === live?.[0]) continue
+    if (!previous || settled.seq > previous[1].seq) previous = [run, settled]
+  }
+  return {
+    ...(live && {
+      handoff: {
+        run: live[0],
+        successor: live[1].request!.payload.successor,
+        from: live[1].handoff!.payload.from.version,
+        to: live[1].handoff!.payload.to.version,
+        mode: live[1].request!.payload.mode,
+        takenOver: live[1].takeover !== undefined,
+        draining: { ...live[1].outstanding },
+        ...(live[1].deadline === undefined ? {} : { deadline: live[1].deadline }),
+      },
+    }),
+    ...(state &&
+      currentRun !== undefined && {
+        current: {
+          run: currentRun,
+          ...(state.resolved && { resolved: state.resolved.payload.target }),
+          ...(outcome && { outcome }),
+          // A failure stays recorded until a preparation or handoff clears it;
+          // a later resolution of a different target supersedes it for status.
+          ...(outcome?.type === 'dispatcher.upgrade-failed' &&
+            state.resolved &&
+            state.resolved.seq > outcome.seq &&
+            state.resolved.payload.target.key !== outcome.payload.target.key && {
+              superseded: true as const,
+            }),
+        },
+      }),
+    ...(previous && {
+      previous: {
+        run: previous[0],
+        outcome: previous[1],
+        // A later generation exists, so an earlier failure is never current.
+        ...(previous[1].type === 'dispatcher.upgrade-failed' && { superseded: true as const }),
+      },
+    }),
+  }
+}
+
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
   operator: RepositoryOperatorStatus
   repo: string
+  /** Bounded retention window; full history stays in the repository journal. */
   upgrades: DispatchUpgradeState
+  upgradeStatus: RepositoryUpgradeStatus
   rollbackHold?: DispatchUpgradeState['lastRollback']
   capacity?: DispatchCapacity
   /** Dispatcher startup warnings, then forge readiness warnings. */
@@ -150,6 +261,7 @@ export function projectRepositoryStatus(
     repo,
     operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: dispatchUpgradeReducer.reduce(events),
+    upgradeStatus: projectUpgradeStatus(dispatchUpgradeReducer.reduce(events), dispatcher),
     rollbackHold: effectiveRollbackHold(dispatchUpgradeReducer.reduce(events), dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
     ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
@@ -192,6 +304,7 @@ export function repositoryStatusFromFacts(
     repo,
     operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
     upgrades: facts.upgrades,
+    upgradeStatus: projectUpgradeStatus(facts.upgrades, dispatcher),
     rollbackHold: effectiveRollbackHold(facts.upgrades, dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
     ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
@@ -240,6 +353,38 @@ function formatRepositoryDispatcherIdentity(
   return `${formatDispatcherIdentity(run)}; ${formatRuntimeIdentity(run.runtime)}`
 }
 
+function renderUpgradeOutcome(entry: UpgradeStatusEntry): string[] {
+  const event = entry.outcome
+  if (!event) return []
+  const target = event.payload.target
+  const type = `${event.type.slice('dispatcher.'.length)}${entry.superseded ? ' (superseded)' : ''}`
+  return [
+    `upgrade ${entry.run}: ${type}; ${target.mode} ${target.version ?? target.source}; source ${target.source}${target.sha ? ` at ${target.sha}` : ''}${event.type === 'dispatcher.upgrade-failed' ? `; ${event.payload.reason}` : ''}`,
+  ]
+}
+
+function renderUpgradeStatus({ handoff, current, previous }: RepositoryUpgradeStatus): string[] {
+  const resolved = current?.resolved
+  return [
+    ...(handoff
+      ? [
+          `handoff ${handoff.run} (${handoff.from}) → ${handoff.successor} (${handoff.to}): ${handoff.mode}; ${handoff.takenOver ? 'taken over' : 'awaiting takeover'}; draining ${
+            Object.entries(handoff.draining)
+              .map(([slug, instance]) => `${slug} (${instance})`)
+              .join(', ') || 'none'
+          }; deadline ${handoff.deadline ?? 'unknown'}`,
+        ]
+      : []),
+    ...(current && resolved
+      ? [
+          `resolved target ${current.run}: ${resolved.mode}; base ${resolved.base ?? '-'}; source ${resolved.source}${resolved.sha ? ` at ${resolved.sha}` : ''}`,
+        ]
+      : []),
+    ...(current ? renderUpgradeOutcome(current) : []),
+    ...(previous ? renderUpgradeOutcome(previous) : []),
+  ]
+}
+
 export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const tick = (
     status.dispatcher.holder ??
@@ -269,38 +414,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
           `held runtime: ${status.rollbackHold.payload.failed.version}; target ${status.rollbackHold.payload.target.key}`,
         ]
       : []),
-    ...Object.entries(status.upgrades.runs).flatMap(([run, state]) => {
-      const event =
-        state.completed ??
-        state.failure ??
-        state.handoff ??
-        state.request ??
-        state.prepared ??
-        state.detected
-      const resolved = state.resolved?.payload.target
-      const lines = resolved
-        ? [
-            `resolved target ${run}: ${resolved.mode}; base ${resolved.base ?? '-'}; source ${resolved.source}${resolved.sha ? ` at ${resolved.sha}` : ''}`,
-          ]
-        : []
-      if (!event) return lines
-      const target = event.payload.target
-      const overlap =
-        state.handoff && state.request && !state.completed
-          ? [
-              `handoff ${run} (${state.handoff.payload.from.version}) → ${state.request.payload.successor} (${state.handoff.payload.to.version}): ${state.request.payload.mode}; ${state.takeover ? 'taken over' : 'awaiting takeover'}; draining ${
-                Object.entries(state.outstanding)
-                  .map(([slug, instance]) => `${slug} (${instance})`)
-                  .join(', ') || 'none'
-              }; deadline ${state.deadline ?? 'unknown'}`,
-            ]
-          : []
-      return [
-        ...lines,
-        ...overlap,
-        `upgrade ${run}: ${event.type.slice('dispatcher.'.length)}; ${target.mode} ${target.version ?? target.source}; source ${target.source}${target.sha ? ` at ${target.sha}` : ''}${event.type === 'dispatcher.upgrade-failed' ? `; ${event.payload.reason}` : ''}`,
-      ]
-    }),
+    ...renderUpgradeStatus(status.upgradeStatus),
     requests
       ? `forge requests: ${requests.total}${requests.restPrimary === undefined ? '' : `; REST primary ${requests.restPrimary}`}${requests.restNotModified === undefined ? '' : `; REST 304 ${requests.restNotModified}`}${requests.graphql === undefined ? '' : `; GraphQL ${requests.graphql}`} (${requests.unattributed} unattributed)${hotspot ? `; hotspot ${hotspot}` : ''}`
       : 'forge requests: unavailable',

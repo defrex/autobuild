@@ -90,6 +90,7 @@ describe('ab repository status', () => {
       operator: { presence: 'loaded', registrations: [] },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
+      upgradeStatus: {},
       publications: [],
     })
     expect(getRepoStateEvents).toBe(0)
@@ -124,6 +125,7 @@ describe('ab repository status', () => {
         operator: { presence: 'loaded', registrations: [] },
         sandboxes: [],
         upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
+        upgradeStatus: {},
         publications: [],
       })
       expect(await store.getRepoEvents(REPO)).toEqual(before)
