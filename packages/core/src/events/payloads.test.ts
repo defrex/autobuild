@@ -993,6 +993,30 @@ describe('publication.lost loss-record protocol', () => {
   })
 })
 
+describe('session.started prompt field', () => {
+  const base = { session: 's_prompted', role: 'plan', runner: 'claude', phase: 'plan', round: 1 }
+
+  test('accepts an optional non-empty prompt and replays payloads without one', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { ...base, prompt: '/ab-plan Run this skill' },
+      }).payload,
+    ).toMatchObject({ prompt: '/ab-plan Run this skill' })
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'session.started', payload: base }).payload,
+    ).not.toHaveProperty('prompt')
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { ...base, prompt: '' },
+      }),
+    ).toThrow(/prompt/)
+  })
+})
+
 describe('session.started stream field (SPEC §9)', () => {
   const base = {
     session: 's_streamed',
