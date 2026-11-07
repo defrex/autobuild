@@ -13,6 +13,7 @@ import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
 import {
   buildRegistry,
   controlHarvestRun,
+  RegistryError,
   setRepositorySetting,
   toggleHarvestGate,
   toggleRepositorySetting,
@@ -47,7 +48,11 @@ function fetchFor(server: { fetch(req: Request): Promise<Response> }): typeof fe
     )) as typeof fetch
 }
 
-function api(store: BuildStore, ticketBackend?: OperatorTicketBackend): OperatorApiClient {
+function api(
+  store: BuildStore,
+  ticketBackend?: OperatorTicketBackend,
+  onInternalError?: (error: unknown) => void,
+): OperatorApiClient {
   return new OperatorApiClient({
     url: 'http://operator.test',
     token: mintToken(SECRET, {
@@ -62,6 +67,7 @@ function api(store: BuildStore, ticketBackend?: OperatorTicketBackend): Operator
         ticketBackend,
         secret: SECRET,
         clock,
+        ...(onInternalError === undefined ? {} : { onInternalError }),
       }),
     ),
   })
@@ -161,6 +167,29 @@ async function assertBuildParity(
   )
 }
 
+/** A finalized leaf build with a decided candidate, ready to land. */
+async function landSeed(store: MemoryBuildStore): Promise<void> {
+  await store.append(SLUG, {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: {
+      pr: { number: 1, url: 'https://forge/1', headSha: 'head' },
+    },
+  })
+  await store.append(SLUG, {
+    actor: DISPATCHER,
+    type: 'landing.decided',
+    payload: {
+      candidate: { head: 'head', parent: 'base', cycle: '1' },
+      from: 'leaf',
+      into: { kind: 'root' },
+      labels: [],
+      mode: 'consent',
+      rule: { default: true },
+    },
+  })
+}
+
 /** A finalized node build with one merged contribution, ready to land. */
 async function readyNode(): Promise<MemoryBuildStore> {
   const store = await makeStore({ active: false, ticket: true, ticketSource: 'fake' })
@@ -246,27 +275,7 @@ describe('operator behavioral parity contract', () => {
     },
     {
       name: 'land',
-      seed: async (store) => {
-        await store.append(SLUG, {
-          actor: KERNEL,
-          type: 'finalize.completed',
-          payload: {
-            pr: { number: 1, url: 'https://forge/1', headSha: 'head' },
-          },
-        })
-        await store.append(SLUG, {
-          actor: DISPATCHER,
-          type: 'landing.decided',
-          payload: {
-            candidate: { head: 'head', parent: 'base', cycle: '1' },
-            from: 'leaf',
-            into: { kind: 'root' },
-            labels: [],
-            mode: 'consent',
-            rule: { default: true },
-          },
-        })
-      },
+      seed: landSeed,
       direct: { kind: 'land' },
       request: { action: 'land' },
     },
@@ -366,15 +375,146 @@ describe('operator behavioral parity contract', () => {
       }),
     }
     const openStore = await readyNode()
-    // The registry maps the plain incompleteness error to its generic refusal.
-    await expect(
-      buildRegistry({ store: openStore, tickets: unset, clock }).call(
-        'builds.control',
-        { repo: REPO, slug: SLUG, action: 'merge' },
-        { identity: USER },
-      ),
-    ).rejects.toThrow()
+    const toolError = await buildRegistry({ store: openStore, tickets: unset, clock })
+      .call('builds.control', { repo: REPO, slug: SLUG, action: 'merge' }, { identity: USER })
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+    expect(toolError).toBeInstanceOf(RegistryError)
+    expect((toolError as RegistryError).body).toMatchObject({
+      kind: 'refusal',
+      code: 'node-incomplete',
+    })
+    expect((toolError as Error).message).toContain('open children: AUT-2')
     expect(await landed(openStore)).toHaveLength(0)
+
+    const httpOpenStore = await readyNode()
+    const httpError = await api(httpOpenStore, unset)
+      .controlBuild(REPO, SLUG, { action: 'land' })
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+    expect(httpError).toMatchObject({ status: 409, kind: 'refusal', code: 'node-incomplete' })
+    expect((httpError as Error).message).toContain('open children: AUT-2')
+    expect(await landed(httpOpenStore)).toHaveLength(0)
+  })
+
+  test('node land keeps source diagnostics a refusal and a failing backend a server error', async () => {
+    const landed = async (store: MemoryBuildStore) =>
+      (await store.getEvents(SLUG)).filter((e) => e.type === 'build.land-requested')
+    const backend = (listAll: () => Promise<unknown>): OperatorTicketBackend => ({
+      contextFor: async (repo) => ({
+        repo,
+        teamKey: 'test',
+        tickets: { source: 'file', readyState: 'ready' },
+      }),
+      sourceFor: () =>
+        ({ name: 'fake', integrationTree: true, listAll }) as unknown as TicketSource,
+      statesFor: () => [],
+    })
+
+    // A partial enumeration the source reports as data is build state to resolve.
+    const partial = backend(async () => ({
+      tickets: [],
+      diagnostics: ['ticket AUT-9 has an unreadable target'],
+    }))
+    const partialStore = await readyNode()
+    const refusal = await api(partialStore, partial)
+      .controlBuild(REPO, SLUG, { action: 'land' })
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+    expect(refusal).toMatchObject({ status: 409, kind: 'refusal', code: 'node-incomplete' })
+    expect(await landed(partialStore)).toHaveLength(0)
+
+    // observeIntegration catches the outage and returns normally; it must not
+    // be classified as incompleteness.
+    const offline = backend(async () => {
+      throw new Error('ticket service offline')
+    })
+    const internal: unknown[] = []
+    const httpStore = await readyNode()
+    const failure = await api(httpStore, offline, (error) => internal.push(error))
+      .controlBuild(REPO, SLUG, { action: 'land' })
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+    expect(failure).toMatchObject({ status: 500, kind: 'internal' })
+    expect((failure as Error).message).toBe('operator API is unavailable')
+    expect(internal).toHaveLength(1)
+    expect((internal[0] as Error).message).toBe('ticket service offline')
+    expect(await landed(httpStore)).toHaveLength(0)
+
+    const toolStore = await readyNode()
+    const toolFailure = await buildRegistry({ store: toolStore, tickets: offline, clock })
+      .call('builds.control', { repo: REPO, slug: SLUG, action: 'merge' }, { identity: USER })
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+    expect(toolFailure).toBeInstanceOf(RegistryError)
+    expect((toolFailure as RegistryError).body.kind).toBe('internal')
+    expect(await landed(toolStore)).toHaveLength(0)
+  })
+
+  test('HTTP and MCP refuse a leaf land that is not ready with a typed 409', async () => {
+    const landed = async (store: MemoryBuildStore) =>
+      (await store.getEvents(SLUG)).filter((e) => e.type === 'build.land-requested')
+    const paused = async (store: MemoryBuildStore) => {
+      await landSeed(store)
+      await store.append(SLUG, {
+        actor: { kind: 'human', user: 'earlier' },
+        type: 'build.pause-requested',
+        payload: {},
+      })
+      await store.append(SLUG, { actor: KERNEL, type: 'build.paused', payload: {} })
+    }
+    const cases: Array<{ seed: (store: MemoryBuildStore) => Promise<void>; reason: string }> = [
+      { seed: async () => {}, reason: 'no merge candidate has been decided yet' },
+      { seed: paused, reason: 'the build is paused' },
+      {
+        seed: async (store) => {
+          await landSeed(store)
+          await raise(store)
+        },
+        reason: 'the build has open escalations to answer',
+      },
+    ]
+    for (const item of cases) {
+      const httpStore = await makeStore()
+      await item.seed(httpStore)
+      const before = (await httpStore.getEvents(SLUG)).length
+      const error = await api(httpStore)
+        .controlBuild(REPO, SLUG, { action: 'land' })
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        )
+      expect(error).toMatchObject({ status: 409, kind: 'refusal', code: 'merge-not-ready' })
+      expect((error as Error).message).toStartWith('Merge is not ready:')
+      expect((error as Error).message).toContain(item.reason)
+      expect(await landed(httpStore)).toHaveLength(0)
+      expect((await httpStore.getEvents(SLUG)).length).toBe(before)
+
+      const toolStore = await makeStore()
+      await item.seed(toolStore)
+      const toolError = await buildRegistry({ store: toolStore, clock })
+        .call('builds.control', { repo: REPO, slug: SLUG, action: 'merge' }, { identity: USER })
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        )
+      expect(toolError).toBeInstanceOf(RegistryError)
+      expect((toolError as RegistryError).body).toMatchObject({
+        kind: 'refusal',
+        code: 'merge-not-ready',
+      })
+      expect(await landed(toolStore)).toHaveLength(0)
+    }
   })
 
   test('blocked resume returns answer-required and writes nothing on both surfaces', async () => {
@@ -705,6 +845,11 @@ describe('operator behavioral parity contract', () => {
         },
         direct: (store) => cliBuild(store, { kind: 'pause' }),
         remote: (client) => client.controlBuild(REPO, SLUG, { action: 'pause' }),
+      },
+      {
+        seed: async () => {},
+        direct: (store) => cliBuild(store, { kind: 'land' }),
+        remote: (client) => client.controlBuild(REPO, SLUG, { action: 'land' }),
       },
       {
         seed: async (store) => {
