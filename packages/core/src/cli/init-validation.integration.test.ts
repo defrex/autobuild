@@ -11,6 +11,8 @@ import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { builtinWorkspaceProviderCapabilities } from '../ports/workspace/builtin-capabilities'
 import {
   validateVercelSandbox,
+  VERCEL_BUN_EXECUTABLE,
+  VERCEL_BUN_VERSION,
   type VercelSandboxFacade,
   type VercelSnapshotInfo,
   type VercelSandboxHandle,
@@ -36,6 +38,13 @@ import type { TicketSource } from '../ports/types'
 // repository root — resolving the real probe from here keeps the suite
 // runnable from any working directory (see bin-ab.integration.test.ts for the same idiom).
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..')
+
+/** A fake guest's stdout: the pinned Bun answers `--version`, else nothing. */
+function bunVersionOutput(params: { cmd: string; args?: string[] }): string {
+  return params.cmd === VERCEL_BUN_EXECUTABLE && params.args?.[0] === '--version'
+    ? `${VERCEL_BUN_VERSION}\n`
+    : ''
+}
 
 const roots: string[] = []
 afterEach(async () => {
@@ -850,7 +859,7 @@ readyState = "ready"
           stdout: async () =>
             probe
               ? 'AB_INIT_READINESS_V1={"checks":[{"name":"ok","status":"pass","detail":"ready"}]}\n'
-              : '',
+              : bunVersionOutput(params),
           stderr: async () => '',
         }
       },
@@ -1121,7 +1130,11 @@ readyState = "ready"
     const sandbox: VercelSandboxHandle = {
       getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
       name: 'snapshot-leak-sandbox',
-      runCommand: async () => ({ exitCode: 0, stdout: async () => '', stderr: async () => '' }),
+      runCommand: async (params) => ({
+        exitCode: 0,
+        stdout: async () => bunVersionOutput(params),
+        stderr: async () => '',
+      }),
       writeFiles: async () => {},
       stop: async () => {},
       delete: async () => {},
@@ -1286,7 +1299,7 @@ readyState = "ready"
             stderr: async () => `registry rejected ${secret}`,
           }
         }
-        return { exitCode: 0, stdout: async () => '', stderr: async () => '' }
+        return { exitCode: 0, stdout: async () => bunVersionOutput(params), stderr: async () => '' }
       },
       writeFiles: async () => {},
       stop: async () => {},
@@ -1374,7 +1387,7 @@ readyState = "ready"
           exitCode: 0,
           wait: async () => ({ exitCode: 0 }),
           kill: async () => {},
-          stdout: async () => (probe ? 'not a readiness marker' : ''),
+          stdout: async () => (probe ? 'not a readiness marker' : bunVersionOutput(params)),
           stderr: async () => '',
         }
       },

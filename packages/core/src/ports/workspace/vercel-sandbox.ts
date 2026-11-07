@@ -68,7 +68,7 @@ export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
  * instead of resuming a stale distribution that the hosted store would
  * reject. */
 export const VERCEL_DISTRIBUTION_VERSION_MARKER = `${VERCEL_AUTOBUILD_PATH}/.distribution-version`
-export const VERCEL_BUN_VERSION = '1.4.0'
+export const VERCEL_BUN_VERSION = '1.4.4'
 export const VERCEL_BUN_PREFIX = '/opt/autobuild-runtime'
 export const VERCEL_BUN_BIN_PATH = `${VERCEL_BUN_PREFIX}/node_modules/.bin`
 export const VERCEL_BUN_EXECUTABLE = `${VERCEL_BUN_BIN_PATH}/bun`
@@ -651,6 +651,31 @@ function bunProvisioningError(image: string, operation: string, error: unknown):
   )
 }
 
+/** The trimmed `bun --version` output of the provisioned executable, or
+ * undefined when it cannot run or prints nothing. */
+async function reportedBunVersion(
+  sandbox: VercelSandboxHandle,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  try {
+    const version = (
+      await readableCommand(sandbox, {
+        cmd: VERCEL_BUN_EXECUTABLE,
+        args: ['--version'],
+        ...(signal === undefined ? {} : { signal }),
+      })
+    ).trim()
+    return version === '' ? undefined : version
+  } catch (error) {
+    if (signal?.aborted) throw error
+    return undefined
+  }
+}
+
+function describeBunVersion(version: string | undefined): string {
+  return version === undefined ? 'no version' : version
+}
+
 async function provisionBun(
   sandbox: VercelSandboxHandle,
   image: string,
@@ -665,14 +690,15 @@ async function provisionBun(
   } catch (error) {
     throw bunProvisioningError(image, 'provision', error)
   }
-  try {
-    await commandOrThrow(sandbox, {
-      cmd: VERCEL_BUN_EXECUTABLE,
-      args: ['--version'],
-      ...(signal === undefined ? {} : { signal }),
-    })
-  } catch (error) {
-    throw bunProvisioningError(image, 'verify provisioned', error)
+  const reported = await reportedBunVersion(sandbox, signal)
+  if (reported !== VERCEL_BUN_VERSION) {
+    throw bunProvisioningError(
+      image,
+      'verify provisioned',
+      new Error(
+        `vercel-sandbox provisioned Bun reports ${describeBunVersion(reported)} but the pin is ${VERCEL_BUN_VERSION} on image ${JSON.stringify(image)}`,
+      ),
+    )
   }
 }
 
@@ -769,12 +795,26 @@ async function runSystemProvisioning(
   return completed
 }
 
-async function preflightBun(sandbox: VercelSandboxHandle, image: string): Promise<void> {
+/** Bring a reused sandbox's Bun to exactly the pin before any guest command
+ * runs with it. A matching `bun --version` costs one command; any other
+ * report (a stale pin, a missing or unrunnable executable) is reinstalled at
+ * the pin with the provisioning recipe. The comparison is exact, so a partly
+ * applied upgrade is never accepted by this or any later preflight. */
+async function ensurePinnedBun(
+  sandbox: VercelSandboxHandle,
+  image: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const reported = await reportedBunVersion(sandbox, signal)
+  if (reported === VERCEL_BUN_VERSION) return
   try {
-    await commandOrThrow(sandbox, { cmd: VERCEL_BUN_EXECUTABLE, args: ['--version'] })
+    await provisionBun(sandbox, image, signal)
   } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error
     throw new Error(
-      `vercel-sandbox Bun ${VERCEL_BUN_VERSION} preflight failed on image ${JSON.stringify(image)}; release and reprovision this sandbox before retrying the build`,
+      `vercel-sandbox Bun preflight on image ${JSON.stringify(image)} found ${describeBunVersion(reported)} (pin ${VERCEL_BUN_VERSION}) and could not bring it to the pin: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }; release and reprovision this sandbox before retrying the build`,
       { cause: error },
     )
   }
@@ -1479,6 +1519,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           // without a marker — is refreshed in place. Any refresh failure
           // deletes the sandbox so the next pass rematerializes cleanly.
           try {
+            await ensurePinnedBun(sandbox, this.options.config.image, this.operationSignal())
             const archive = await this.archiveBytes()
             await installDistribution(
               sandbox,
@@ -1826,7 +1867,16 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // stranded by a protocol-only bump or a missing/unreadable marker — is
     // refreshed before the runner starts, or the hosted store would 409 its
     // heartbeat and the build would strand. Refresh failure retains the
-    // sandbox for dispatcher-owned preservation and cleanup.
+    // sandbox for dispatcher-owned preservation and cleanup. Bun is brought
+    // to the pin first, because the refresh and the runner both run with it.
+    try {
+      await ensurePinnedBun(sandbox, this.options.config.image, this.operationSignal())
+    } catch (error) {
+      throw new WorkspaceCleanupRequired(
+        { provider: this.name, ref, path: VERCEL_WORKSPACE_PATH, branch: `ab/${input.slug}` },
+        error,
+      )
+    }
     const distributionIdentity = await this.identityStamp()
     const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
     if (installed !== distributionIdentity) {
@@ -1840,7 +1890,6 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         )
       }
     }
-    await preflightBun(sandbox, this.options.config.image)
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
@@ -2006,6 +2055,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
         if (installed !== distributionIdentity) {
           try {
+            await ensurePinnedBun(sandbox, this.options.config.image, this.operationSignal())
             const archive = await this.archiveBytes()
             await installDistribution(
               sandbox,
@@ -2129,8 +2179,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }
     }
     this.origins.set(name, origin)
-    // Launch: reassert the normal network policy and preflight exactly as the
-    // build start path does, then one detached guest runner command.
+    // Launch: reassert the normal network policy, bring Bun to the pin and
+    // preflight exactly as the build start path does, then one detached guest
+    // runner command. A sandbox that cannot reach the pin is reaped.
     const { policy } = await this.normalNetworkPolicy(name)
     await sandbox.update({ networkPolicy: policy }, { signal: this.operationSignal() })
     if (this.uncertain.has(name)) {
@@ -2139,7 +2190,20 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       await sandbox.stop({ signal: this.operationSignal() })
       this.uncertain.delete(name)
     }
-    await preflightBun(sandbox, this.options.config.image)
+    try {
+      await ensurePinnedBun(sandbox, this.options.config.image, this.operationSignal())
+    } catch (error) {
+      try {
+        this.sessions.set(name, sandbox)
+        await this.reap(name)
+      } catch (deleteError) {
+        throw new AggregateError(
+          [error, deleteError],
+          `harvest sandbox ${name} Bun pin refresh failed and its environment could not be confirmed deleted`,
+        )
+      }
+      throw error
+    }
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
@@ -2359,8 +2423,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   }
 
   /** Provision-or-resume. A persistent sandbox auto-resumes on the first SDK
-   * call that needs a running session, so the reuse path re-checks the
-   * distribution marker exactly as the build reuse path does and then leaves
+   * call that needs a running session, so the reuse path brings Bun to the
+   * pin and re-checks the distribution marker as the build paths do, then leaves
    * the session running for the tool call. A fresh provision runs the same
    * chain as a build workspace and ends by running the repository's setup
    * command; it leaves the environment running too (the tool call follows
@@ -2385,6 +2449,26 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await sandbox.delete({ signal: this.operationSignal() })
         sandbox = null
       } else {
+        // Bun is brought to the pin before anything runs with it; a reused
+        // environment that cannot reach the pin is deleted.
+        try {
+          await ensurePinnedBun(sandbox, this.options.config.image, this.operationSignal())
+        } catch (error) {
+          try {
+            this.sessions.set(name, sandbox)
+            await this.reap(name)
+          } catch (deleteError) {
+            throw new AggregateError(
+              [error, deleteError],
+              `operator sandbox ${name} Bun pin refresh failed and its environment could not be confirmed deleted`,
+            )
+          }
+          throw new SandboxOperationError(
+            'provision',
+            error instanceof Error ? error.message : String(error),
+            { cause: error },
+          )
+        }
         const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
         if (installed !== distributionIdentity) {
           // A reused environment whose installed distribution disagrees with
