@@ -213,7 +213,8 @@ three words of the kebab-cased title, so the proposal never blocks dispatch.
 The branch check is not optional: if a remote lookup fails, or the base and its
 `-2` … `-100` suffixes are all taken, the claim fails, no build is created, and
 the ticket is handed back to ready for a later tick. The slug
-and `ab/<slug>` branch are chosen once; existing builds are never renamed.
+and `ab/<slug>` (or `ab-node/<slug>` for a node) branch are chosen once;
+existing builds are never renamed.
 Naming inherits `[roles.default]` and can be overridden by `[roles.slug]`.
 
 ## Who does what
