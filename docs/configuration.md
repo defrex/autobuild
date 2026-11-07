@@ -3659,7 +3659,12 @@ configuration or unavailable journals fail with recovery guidance. Fresh init
 uses the no-rules fallback.
 
 Native auto-merge is reconciled on every janitor poll against durable desired
-merge state. It is disabled while held, unauthorized, unready, or replacement
+merge state. While a consented request is armed and the build is eligible, each
+poll also reads the forge's armed merge method and message (one GraphQL query
+on GitHub). A request with a different method, headline, body or
+`Autobuild-Build` trailer, including one a human enabled, is replaced under the
+consent and gate guards before it counts as applied. A matching request costs
+no mutation, consent read or event. It is disabled while held, unauthorized, unready, or replacement
 publication is pending or just completed; enabling binds to the current head
 through the forge's expected-head guard. Every replacement publication confirms
 cancellation first, and its first following poll re-reads and reconciles native
