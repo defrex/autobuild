@@ -50,7 +50,7 @@
     "title": "The dispatcher and durable state",
     "group": "concepts",
     "description": "How Autobuild claims ready tickets, runs isolated builds within capacity, and resumes from its event log.",
-    "textHash": "eaec1a3cecbf41cfa6b86b00e6b1399353cb55358c148d19abbf45be4b784fce",
+    "textHash": "985c6198c1c2dbdf767d0a4a74368134c61740f8ffecc8fa64c7c6e906bac48a",
     "headings": [
       "Watch a dispatcher running elsewhere",
       "Ready work becomes a build",
@@ -86,7 +86,7 @@
     "title": "Tickets and specs",
     "group": "concepts",
     "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-    "textHash": "9bd958b1ff15ac3a3f385e60ac13d9965e8945f3efaa0fc34b68fb2ec38dff23",
+    "textHash": "cec3a6059b3868997ef79f8859e1bdcad0ac954b10b99853f0b3a6204e347d54",
     "headings": [
       "Choose a source",
       "Groom a buildable spec",
@@ -97,6 +97,7 @@
     "code": [
       "[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
       "bun ab ticket create \"Close stale sandboxes\" --body spec.md --issues 824,820:refs",
+      "bun ab ticket update AUT-12 --priority urgent",
       "bun ab ticket move AUT-12 --role backlog",
       "bun ab answer <slug> --revise-spec-from-ticket"
     ]

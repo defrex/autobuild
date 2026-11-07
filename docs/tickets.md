@@ -48,6 +48,12 @@ A build freezes the links when it claims the ticket. On GitHub, a leaf build tha
 bun ab ticket create "Close stale sandboxes" --body spec.md --issues 824,820:refs
 ```
 
+When a ticket must go next, such as a fix for a stuck build, mark it urgent instead of moving other tickets out of ready: `--priority urgent` on `ab ticket create` or `ab ticket update`. `--priority normal` removes it. The `file` source stores priority; `hosted` and `linear` refuse urgent and name the source. See [Ticket sources](ticket-sources.md#shipped-adapters).
+
+```sh
+bun ab ticket update AUT-12 --priority urgent
+```
+
 
 ## Backlog and rejected
 
@@ -70,6 +76,8 @@ The dispatcher claims only tickets in the ready state with the required labels a
 
 - **Blockers.** Unresolved prerequisite tickets keep it queued; they don't create a blocked build. With nodes, prerequisites with builds must be present at the sampled destination; see [integration and blocker presence](integration-overview.md).
 - **Destination and capacity.** Its target must accept new work, and a capacity slot must be free.
+
+When a slot is free, the dispatcher takes urgent ready tickets first, then normal ones, each in the source's order. Priority changes only that order: a blocked urgent ticket waits like any other while normal work proceeds, and an urgent ticket never stops or pauses a running build.
 
 Before ready filing, the agent checks `ab repository status --json`. With live
 `operator.registrations`, it records intent, rejected alternatives and out-of-scope
