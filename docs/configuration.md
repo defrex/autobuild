@@ -1276,10 +1276,13 @@ configuration load because their package tools, libc/CPU, and filesystem
 contract have not been validated. The universal image must retain working
 Node/npm, `sh`, and the ordinary writable filesystem layout. Autobuild does not
 rely on image-preinstalled Bun: on each fresh sandbox it uses npm to install the
-pinned `bun@1.4.0` package under `/opt/autobuild-runtime`, verifies that exact
-executable with `--version`, and uses it for Autobuild and Bun-lockfile
-dependency installation. Package-registry network access is therefore required
-during provisioning. The child launch prepends the adapter-owned Bun directory
+pinned `bun@1.4.4` package under `/opt/autobuild-runtime`, verifies that the
+executable's `--version` reports exactly that version, and uses it for Autobuild
+and Bun-lockfile dependency installation. A reused sandbox whose Bun reports
+another version, or none, is reinstalled at the pin before any distribution
+refresh, runtime preflight, or runner launch; a sandbox that cannot reach the pin
+is released through the cleanup path and never launched. Package-registry
+network access is therefore required during provisioning. The child launch prepends the adapter-owned Bun directory
 to `PATH`, so setup, checks, agents, and their descendants resolve the same Bun.
 
 `provisioning` is repository-owned declarative data; Autobuild never evaluates
