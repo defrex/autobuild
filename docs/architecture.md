@@ -1456,15 +1456,15 @@ revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
-kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
+kind, target, id, blockers, issue links, priority, creation key and reference comments are read-only. It saves only
 changed fields with the opening revision. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links. Reverting identical
-content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links and urgent priority.
+Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File comments
 change the body and revision; separate hosted comments do not. Hosted revisions
@@ -1506,6 +1506,10 @@ configured rejected role on top (`markRejected` in `processes/dispatcher.ts`).
 
 Ticket integration metadata lives in `ports/tickets/tree.ts`: source compatibility
 normalization, capability refusal, graph validation and the pure tree projection.
+Ticket priority lives in `ports/tickets/priority.ts`: the `priority` capability's
+typed refusal, the normal no-op strip and `urgentFirst`, the stable partition the
+dispatcher applies to its ready listing. Normalized tickets carry only `urgent`,
+so strict hosted wire schemas never see a priority key.
 File/fake/Linear adapters validate metadata at write boundaries; `operations.ts`
 and CLI/operator source opening wrap injected or plugin sources with the same
 compatibility facade. Metadata is excluded from hosted persistence/protocols.

@@ -327,6 +327,13 @@ filed from a forge issue carries it with `--issues N` (`closes`), or
 ticket into the ready state sends it to dispatch — do that only when the
 ticket genuinely conforms and the human's intent is clear.
 
+The dispatcher claims urgent ready tickets before normal ones, each in source
+order. To expedite a ticket, such as a fix for a stuck build, mark it urgent
+with `--priority urgent` on create or update; never move other ready tickets
+out of ready to make room. Urgency never preempts a running build, and a blocked
+urgent ticket still waits on its blockers. A source that cannot store priority
+refuses `urgent` and names itself; tell the human.
+
 Move tickets by lifecycle role rather than by native state name:
 `ab ticket move <id> --role triage|ready|backlog|rejected`. "Ice it",
 "icebox" and "backlog" mean `--role backlog` (deferred work); "reject" and
@@ -396,9 +403,12 @@ that does the job, and say what you are doing before you do it:
 - `tickets.create` — file a new ticket from a conversation. A ticket filed
   from a forge issue carries it in `issueLinks` as `{issue}` (intent `closes`,
   the default) or `{issue, intent: "refs"}` when the work only partly
-  addresses it.
+  addresses it. `priority: "urgent"` dispatches it before normal ready work.
 - `tickets.update`, `tickets.block`, `tickets.unblock` — edit fields and
-  blocker relations. `issueLinks` on update replaces the whole set.
+  blocker relations. `issueLinks` on update replaces the whole set;
+  `priority` (`urgent` or `normal`) expedites a ticket instead of moving other
+  ready tickets aside, and a source that cannot store it refuses `urgent` with
+  `code: "priority-unsupported"`.
 - `tickets.move` — move a ticket between workflow states, by native `state`
   or by lifecycle `role` (`triage`, `ready`, `backlog`, `rejected`; give
   exactly one). Use `role` for deferring and declining work, with the same
