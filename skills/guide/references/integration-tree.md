@@ -103,28 +103,8 @@ source targets, while build status shows the effective destination.
 
 ## Collect, verify and merge
 
-Node `verify:*` context additionally exposes `nodeVerification`: the frozen
-range, a JSON index path, contribution build slugs, preparation-time stored ticket
-identities, event-authorized spec revisions and spec paths, and their commits.
-The index maps every commit in the range using build identity trailers,
-including earlier-cycle contributions and merge side history. Commits without
-an identity are listed as unattributed (a mechanical classification). The manifest
-and index also expose `handPushedCommits: [{sha, originalSha, message}]` for owned
-hand-pushed commits in the frozen range, preserving original identity across restacks.
-Their full messages express maintainer-authorized intent: judge quality and
-consistency, and never fail them solely for lacking a covering spec. Other node
-changes are authorized when covered by the current event-authorized node spec or the spec
-of the contribution introducing it; use the commit mapping to find that spec.
-The dispatcher collects these inputs with repository authority before launching
-verification and atomically deposits a node-owned `node-verification-context`
-artifact cited by exact revision in `integration.prepared`. Contributor specs
-freeze at preparation; resumed and concurrent verifiers read the same cycle input.
-Hydration reads only that node-owned artifact and grants no general contributor
-read authority. Missing or ambiguous provenance prevents preparation; missing,
-corrupt or mismatched prepared inputs fail hydration. Historical agent cycles
-without a citation require a new integration cycle. Leaf context is unchanged.
-See [iterating inside a node](#iterating-inside-a-node) for authoring and evolving
-these sources of intent.
+Node `verify:*` sessions receive frozen contribution provenance; see
+[node verification context](#node-verification-context).
 
 Create a node and direct work into it (replace ids with those returned by your
 source):
@@ -179,6 +159,58 @@ paused or unverified. The janitor records human provenance and whether the actua
 merged head was verified, then completes the ticket. Closing without merge or
 aborting closes admission and returns the ticket to triage; already claimed
 children retain their frozen destination.
+
+### Node verification context
+
+In node `verify:*` context, `nodeVerification` in the manifest identifies the
+frozen `range`, `indexPath`, `contributions`, `handPushedCommits` and
+`unattributedCommits`. Each contribution has `build`, its preparation-time
+stored `ticket` identity, `spec: {kind: 'spec', rev}` (the event-authorized
+revision), `specPath` and `commits`. The JSON index repeats this metadata and
+adds the exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are
+workspace-relative and reflect scratch allocation, including legacy
+tracked-file collisions. Contribution specs normally live at
+`$AB_CONTEXT_DIR/contributions/<build>/spec.md` and the index at
+`$AB_CONTEXT_DIR/node-verification.json`; both are marked `derived` in
+`materialized`, with their source build and revision recorded in the metadata.
+Read them through the manifest's allocated paths.
+
+Membership comes from build identity trailers on every commit reachable in the
+frozen parent-to-head range, including earlier-cycle contributions and merge
+side history. Commits without an identity are listed as unattributed, a
+mechanical absence of a trailer rather than an authorization verdict.
+`handPushedCommits: [{sha, originalSha, message}]`, in the manifest and the
+index, identifies node-owned hand-pushed commits in the frozen range. Ownership
+uses the durable first-parent contribution boundary; inherited and merge-side
+history are not automatically owned. Confirmed rewrite aliases preserve
+original identity across restacks, and `message` is the full commit message.
+
+Hand-pushed messages express maintainer-authorized intent: judge quality and
+consistency, and never fail these commits solely for lacking a covering spec.
+Other node changes are authorized when covered by the current event-authorized
+node spec or the spec of the contribution introducing it; use the commit
+mapping to find that spec.
+
+The dispatcher collects these inputs with repository authority while preparing
+the exact cycle head, before launching verification, and atomically deposits a
+versioned node-owned `node-verification-context` artifact cited by exact
+revision in `integration.prepared`. Specs use the event-authorized revision at
+preparation, never an unsanctioned latest deposit or mutable ticket body.
+Contributor specs freeze at preparation; resumed and concurrent verifiers read
+the same cycle input, and a new cycle collects fresh contributor identities and
+specs.
+
+Hydration reads only that cited artifact, validates its cycle and range, and
+allocates the public paths. It grants no general contributor read authority and
+performs no Git provenance discovery; session and build scope permissions are
+unchanged. Unknown identities, ambiguous or invalid trailers, and missing
+source data prevent preparation; missing, corrupt or mismatched prepared inputs
+fail hydration without publishing a manifest. Historical agent cycles without a
+citation require a new prepared cycle; check-only cycles need no contributor
+inputs. Leaf verification omits node provenance; leaf context is unchanged.
+
+See [iterating inside a node](#iterating-inside-a-node) for authoring and
+evolving these sources of intent.
 
 ## Iterating inside a node
 
