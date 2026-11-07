@@ -380,3 +380,10 @@ Completed ticket imports record `tickets.migration-recorded` in the selected
 BuildStore repository journal, with export identity, origin/destination adapter
 names and the actual complete ID mapping. Requested-ID preservation alone does
 not establish continuity for in-flight builds; see the migration procedure.
+
+## Priority
+
+The hosted ticket protocol does not carry ticket priority: no request or response
+has a `priority` field. The hosted client refuses a create or update naming
+`urgent` with `TicketPriorityUnsupported` before any request, and drops `normal`,
+sending nothing when no other field remains. Hosted tickets read as normal.

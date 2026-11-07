@@ -1,7 +1,8 @@
 import { normalizeTicket } from './tree'
 import { hostedRequestedIds } from './requested-id'
-import { TicketRevisionConflict } from './revision'
+import { checkTicketRevision, TicketRevisionConflict } from './revision'
 import { TicketIssueLinksUnsupported } from './issue-links'
+import { withoutUnsupportedPriority } from './priority'
 import { ticketLifecycle } from './lifecycle'
 import type { TicketsConfig } from '../../config/schema'
 import type {
@@ -243,13 +244,16 @@ export class HostedTicketSource implements TicketSource {
     await this.request('transition', { id, state }, successWireSchema)
   }
 
+  // The hosted wire does not carry priority: urgent is refused before any
+  // request and normal is dropped, so requests stay byte-identical.
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
+    const write = withoutUnsupportedPriority(this, draft)
     return this.project(
       await this.request(
         'create',
-        { draft, options },
+        { draft: write, options },
         ticketWireSchema,
-        draft.issueLinks !== undefined,
+        write.issueLinks !== undefined,
       ),
     )
   }
@@ -259,6 +263,18 @@ export class HostedTicketSource implements TicketSource {
     expectedRevision: string,
     mutation: TicketMutation,
   ): Promise<void> {
+    if (mutation.kind === 'update') {
+      const patch = withoutUnsupportedPriority(this, mutation.patch)
+      if (mutation.patch.priority !== undefined && Object.keys(patch).length === 0) {
+        // Nothing to send, but a stale revision is still refused.
+        if (!expectedRevision.trim()) throw new Error('expected revision must be nonblank')
+        const current = await this.get(id)
+        if (!current) throw new Error(`hosted ticket source: unknown ticket "${id}"`)
+        checkTicketRevision(current, expectedRevision)
+        return
+      }
+      mutation = { kind: 'update', patch }
+    }
     await this.request(
       'mutate-if-revision',
       { id, expectedRevision, mutation },
@@ -268,7 +284,14 @@ export class HostedTicketSource implements TicketSource {
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
-    await this.request('update', { id, patch }, successWireSchema, patch.issueLinks !== undefined)
+    const write = withoutUnsupportedPriority(this, patch)
+    if (patch.priority !== undefined && Object.keys(write).length === 0) return
+    await this.request(
+      'update',
+      { id, patch: write },
+      successWireSchema,
+      write.issueLinks !== undefined,
+    )
   }
 
   async addBlocker(id: string, blockerId: string): Promise<void> {

@@ -273,6 +273,7 @@ export async function mutateOperatorTicket(opts: {
         state?: string
         blockedBy?: string[]
         issueLinks?: IssueLinkInput[]
+        priority?: import('../ports/types').TicketPriority
       }
     | {
         kind: 'update'

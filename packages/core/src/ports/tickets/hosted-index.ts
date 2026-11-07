@@ -28,6 +28,13 @@ export {
   mutateTicketIfRevision,
 } from './revision'
 export { TicketIssueLinksUnsupported, refuseUnsupportedIssueLinks } from './issue-links'
+export {
+  TicketPriorityUnsupported,
+  refuseUnsupportedPriority,
+  withoutUnsupportedPriority,
+  urgentFirst,
+  type TicketPriority,
+} from './priority'
 
 export {
   hostedTicketPolicySchema,

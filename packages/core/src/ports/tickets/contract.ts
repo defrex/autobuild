@@ -1,5 +1,8 @@
 import { createTicket, updateTicket, moveTicket, changeBlockers } from './operations'
 import { TicketIssueLinksUnsupported } from './issue-links'
+import { TicketPriorityUnsupported } from './priority'
+import { compatibleTicketSource } from './tree'
+import { TicketRevisionConflict } from './revision'
 import { describe, expect, test } from 'bun:test'
 import type {
   DependencyState,
@@ -350,6 +353,98 @@ export function describeTicketSourceContract(
             patch: { issueLinks: [{ issue: 3, intent: 'closes' }] },
           })
           expect((await source.get(id))?.issueLinks).toEqual([{ issue: 3, intent: 'closes' }])
+        }
+      })
+    })
+
+    test('urgent priority persists when declared and is refused otherwise', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        const ready = harness.states.ready
+        if (!source.priority) {
+          const title = contractTicketTitle('refused priority')
+          const refusedCreate = await createTicket(source, {
+            title,
+            body: CONTRACT_TICKET_BODY,
+            state: ready,
+            priority: 'urgent',
+          }).catch((error: unknown) => error)
+          expect(refusedCreate).toBeInstanceOf(TicketPriorityUnsupported)
+          expect((refusedCreate as TicketPriorityUnsupported).source).toBe(source.name)
+          expect(
+            (await source.listReady({ state: ready })).tickets.some((t) => t.title === title),
+          ).toBe(false)
+          const created = await createTracked(
+            harness,
+            { title: contractTicketTitle('normal'), body: CONTRACT_TICKET_BODY },
+            { state: ready },
+          )
+          const refusedUpdate = await updateTicket(source, created.ref.id, {
+            priority: 'urgent',
+          }).catch((error: unknown) => error)
+          expect(refusedUpdate).toBeInstanceOf(TicketPriorityUnsupported)
+          expect((refusedUpdate as TicketPriorityUnsupported).source).toBe(source.name)
+          if (source.mutateIfRevision) {
+            const refusedGuarded = await updateTicket(
+              source,
+              created.ref.id,
+              { priority: 'urgent' },
+              false,
+              created.revision,
+            ).catch((error: unknown) => error)
+            expect(refusedGuarded).toBeInstanceOf(TicketPriorityUnsupported)
+          }
+          const unchanged = await source.get(created.ref.id)
+          expect(unchanged?.revision).toBe(created.revision)
+          expect(unchanged?.title).toBe(created.title)
+          // Normal is the value an unsupported source already holds: a no-op.
+          await compatibleTicketSource(source).update(created.ref.id, { priority: 'normal' })
+          expect((await source.get(created.ref.id))?.revision).toBe(created.revision)
+          return
+        }
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('urgent'),
+            body: CONTRACT_TICKET_BODY,
+            priority: 'urgent',
+          },
+          { state: ready },
+        )
+        const id = created.ref.id
+        expect(created.priority).toBe('urgent')
+        expect((await source.get(id))?.priority).toBe('urgent')
+        expect(
+          (await source.listReady({ state: ready })).tickets.find((t) => t.ref.id === id)?.priority,
+        ).toBe('urgent')
+        if (source.listAll)
+          expect((await source.listAll()).tickets.find((t) => t.ref.id === id)?.priority).toBe(
+            'urgent',
+          )
+
+        await source.update(id, { priority: 'normal' })
+        const normal = await source.get(id)
+        expect(normal && 'priority' in normal).toBe(false)
+        expect(normal?.revision).not.toBe(created.revision)
+
+        await source.update(id, { priority: 'urgent' })
+        const urgent = await source.get(id)
+        expect(urgent?.priority).toBe('urgent')
+        expect(urgent?.revision).toBe(created.revision)
+
+        if (source.mutateIfRevision) {
+          await expect(
+            source.mutateIfRevision(id, normal!.revision, {
+              kind: 'update',
+              patch: { priority: 'normal' },
+            }),
+          ).rejects.toBeInstanceOf(TicketRevisionConflict)
+          expect((await source.get(id))?.priority).toBe('urgent')
+          await source.mutateIfRevision(id, urgent!.revision, {
+            kind: 'update',
+            patch: { priority: 'normal' },
+          })
+          expect((await source.get(id))?.revision).toBe(normal!.revision)
         }
       })
     })

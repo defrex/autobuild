@@ -37,6 +37,7 @@ export async function editTicket(
     labels: [...ticket.labels],
     blockedBy: [...(ticket.blockedBy ?? [])],
     ...(ticket.issueLinks?.length ? { issueLinks: ticket.issueLinks } : {}),
+    ...(ticket.priority === 'urgent' ? { priority: ticket.priority } : {}),
     ...(ticket.creationKey !== undefined ? { idempotencyKey: ticket.creationKey } : {}),
   }
   // Reference comments remain part of the frontmatter, outside the editable keys.
@@ -69,9 +70,12 @@ export async function editTicket(
         parsed.front.id !== id ||
         parsed.front.idempotencyKey !== front.idempotencyKey ||
         JSON.stringify(parsed.front.blockedBy ?? []) !== JSON.stringify(front.blockedBy) ||
-        JSON.stringify(parsed.front.issueLinks ?? []) !== JSON.stringify(front.issueLinks ?? [])
+        JSON.stringify(parsed.front.issueLinks ?? []) !== JSON.stringify(front.issueLinks ?? []) ||
+        (parsed.front.priority === 'urgent') !== (front.priority === 'urgent')
       )
-        throw new Error('kind, target, id, idempotencyKey, blockedBy and issueLinks are read-only')
+        throw new Error(
+          'kind, target, id, idempotencyKey, blockedBy, issueLinks and priority are read-only',
+        )
       const patch: TicketUpdate = {}
       if (parsed.front.title !== ticket.title) patch.title = parsed.front.title
       if (parsed.body !== ticket.body) patch.body = parsed.body
