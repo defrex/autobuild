@@ -41,6 +41,10 @@ export async function preserveWorkspaceBeforeRelease(deps: {
   const handle = { ...source.payload, path: source.payload.path ?? source.payload.ref }
   const execution = current.value.state.executions.at(-1)
   const executionSeq = execution?.workspaceRef === source.payload.ref ? execution.seq : 0
+  // Any execution on this ref, not only the latest, keeps a reused ref strict.
+  const neverExecuted = !current.value.state.executions.some(
+    (started) => started.workspaceRef === source.payload.ref,
+  )
   const record = await deps.store.getBuild(deps.slug)
   if (
     current.value.open !== null &&
@@ -115,6 +119,7 @@ export async function preserveWorkspaceBeforeRelease(deps: {
       base: source.payload.base.sha,
       candidates,
       replaced: current.value.replacedHeads,
+      neverExecuted,
     })
   } else {
     const rewrite = deps.forge.kernelRewrite ?? deps.forge.rewrite
@@ -149,7 +154,18 @@ export async function preserveWorkspaceBeforeRelease(deps: {
         archive: rewrite.archive,
         replaced: current.value.replacedHeads,
         local: deps.forge.name === 'local-git',
+        neverExecuted,
       }),
+    }
+  }
+  // A never-executed environment holds no unpublished work, but the latest
+  // receipt drives restoration: earlier archived heads it could not see stay
+  // restorable under their immutable refs.
+  if (neverExecuted && preserved.outcome === 'preserved' && prior) {
+    const found = new Set(preserved.heads.map((head) => head.sha))
+    preserved = {
+      outcome: 'preserved',
+      heads: [...preserved.heads, ...prior.heads.filter((head) => !found.has(head.sha))],
     }
   }
   if (

@@ -14514,6 +14514,119 @@ test('workspace preservation refuses a live execution lease before any provider 
   )
 })
 
+describe('workspace preservation of a never-executed environment', () => {
+  function recordingProvider(preserve: NonNullable<WorkspaceProvider['preservation']>) {
+    const inputs: Parameters<typeof preserve>[0][] = []
+    const provider: WorkspaceProvider = {
+      name: 'never-executed-fixture',
+      preservation: async (input) => {
+        inputs.push(input)
+        return preserve(input)
+      },
+      recovery: {
+        fence: async () => ({ outcome: 'confirmed' }),
+        reap: async () => {
+          throw new Error('unexpected reap')
+        },
+      },
+      provision: async () => {
+        throw new Error('unexpected provision')
+      },
+      release: async () => {
+        throw new Error('unexpected release')
+      },
+    }
+    return { provider, inputs }
+  }
+  const sha = '9'.repeat(40)
+
+  test('carries earlier preserved heads forward when the checkout has none', async () => {
+    const { preserveWorkspaceBeforeRelease } = await import('./workspace-preservation')
+    const { provider, inputs } = recordingProvider(async () => ({
+      outcome: 'preserved',
+      heads: [],
+    }))
+    const h = harness({ workspaceProvider: provider })
+    const slug = await seedBuild(h, { workspaceProvider: provider.name, workspaceRef: 'source' })
+    const head = {
+      role: 'branch' as const,
+      sha,
+      remoteRef: `refs/autobuild/archive/${slug}/${sha}`,
+      commits: [sha],
+    }
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.commits-preserved',
+      payload: {
+        workspace: 1,
+        execution: 0,
+        ref: 'earlier',
+        branch: `ab/${slug}`,
+        phase: 'implement',
+        round: 1,
+        heads: [head],
+      },
+    })
+    await preserveWorkspaceBeforeRelease({
+      store: h.store,
+      slug,
+      owner: provider,
+      forge: h.forge,
+      exec: async () => {
+        throw new Error('unexpected Git')
+      },
+      reason: 'replacement',
+      now: h.clock(),
+    })
+    expect(inputs.map((input) => input.neverExecuted)).toEqual([true])
+    const receipts = (await h.store.getEvents(slug)).filter(
+      (event) => event.type === 'workspace.commits-preserved',
+    )
+    expect(receipts.at(-1)?.payload).toMatchObject({ ref: 'source', heads: [head] })
+  })
+
+  test('an executed environment stays strict and records no receipt on failure', async () => {
+    const { preserveWorkspaceBeforeRelease } = await import('./workspace-preservation')
+    const { provider, inputs } = recordingProvider(async () => {
+      throw new Error(
+        'workspace preservation git cat-file -e b5c4^{commit} failed: fatal: Not a valid object name',
+      )
+    })
+    const h = harness({ workspaceProvider: provider })
+    const slug = await seedBuild(h, { workspaceProvider: provider.name, workspaceRef: 'source' })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: provider.name, workspaceRef: 'source', instance: 'ended' },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: provider.name, workspaceRef: 'other', instance: 'later' },
+    })
+    await expect(
+      preserveWorkspaceBeforeRelease({
+        store: h.store,
+        slug,
+        owner: provider,
+        forge: h.forge,
+        exec: async () => {
+          throw new Error('unexpected Git')
+        },
+        reason: 'replacement',
+        now: h.clock(),
+      }),
+    ).rejects.toThrow('cat-file')
+    expect(inputs.map((input) => input.neverExecuted)).toEqual([false])
+    expect(
+      (await h.store.getEvents(slug)).some(
+        (event) =>
+          event.type === 'workspace.commits-preserved' || event.type === 'workspace.commits-lost',
+      ),
+    ).toBe(false)
+  })
+})
+
 describe('node issue links (SPEC "Forge issue links")', () => {
   type Link = { issue: number; intent: 'closes' | 'refs' }
   async function seedNode(h: Harness, slug: string, target?: string) {
