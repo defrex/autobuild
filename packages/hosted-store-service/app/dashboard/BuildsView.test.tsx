@@ -403,3 +403,45 @@ test('a project with no dispatcher run shows the one factual line above the empt
   expect(html).toContain('no active builds')
   expect(html).not.toContain('0/0')
 })
+
+function renderCapacity(capacity: DashboardModel['capacity']): string {
+  return renderToStaticMarkup(
+    <BuildsView
+      repo="owner/repo"
+      model={{ ...model(pinnedBuild({})), ...(capacity ? { capacity } : {}) }}
+      now={0}
+      onActivate={noop}
+      onHoverPreview={noop}
+      onOpenBuild={noop}
+      onRowBuildControl={noop}
+      onRowHarvest={noop}
+    />,
+  )
+}
+
+test('a node waiting for a slot alone opens the capacity notice', () => {
+  const html = renderCapacity({
+    configured: 2,
+    occupied: 2,
+    effective: 2,
+    borrowingNodes: [],
+    waitingNodes: [{ slug: 'release-node', request: 'verification' }],
+  })
+  expect(html).toContain('class="messages"')
+  expect(html).toContain('capacity-notice')
+  expect(html).toContain('1 node waiting for a slot ahead of new ticket claims: release-node')
+})
+
+test('no borrowed or waiting nodes renders no capacity notice; a legacy projection still borrows', () => {
+  const quiet = renderCapacity({ configured: 2, occupied: 1, effective: 2, borrowingNodes: [] })
+  expect(quiet).not.toContain('capacity-notice')
+  expect(quiet).not.toContain('class="messages"')
+  const legacy = renderCapacity({
+    configured: 2,
+    occupied: 3,
+    effective: 3,
+    borrowingNodes: ['website-node'],
+  })
+  expect(legacy).toContain('capacity-notice')
+  expect(legacy).toContain('using descendant-held slots: website-node')
+})
