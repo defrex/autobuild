@@ -87,7 +87,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   after exact build-ownership readback. Unresolved attempts stay withheld and
   retry before intake, even at full capacity or with intake disabled. Unsafe
   ownership or externally changed/missing tickets end automatic recovery with
-  a diagnostic `abandoned` resolution, leaving the ticket unchanged. See
+  a diagnostic `abandoned` resolution, reported once in that tick's dispatcher
+  diagnostics, leaving the ticket unchanged. See
   [Ticket preparation recovery](references/restacking.md#ticket-preparation-before-build-creation).
 - **Ticket assets** — files or folders attached to a ticket (see
   [Ticket assets](#ticket-assets)) are frozen into the build at claim and

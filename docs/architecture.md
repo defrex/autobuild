@@ -1251,7 +1251,12 @@ external ticket state, missing ticket/state, or conflicting slug ownership termi
 automatic recovery with an `abandoned` resolution and diagnostic reason. The
 ticket is left unchanged; an operator can leave it finished or cancelled, or
 inspect ownership and explicitly return it to Ready for another attempt. These
-cases stop provider polling and diagnostic appends. Recovery failures are
+cases stop provider polling and further durable diagnostic appends. The tick
+that records the abandonment reports one dispatcher diagnostic naming the
+ticket and attempt, whether the claim was confirmed or its provider outcome is
+unknown, and the recorded reason. If that tick fails for any reason, its
+failure error carries the diagnostics instead. Later ticks do not repeat it.
+Recovery failures are
 reported without preventing janitor, lease sweep, or other dispatch recovery.
 This is not general process
 crash recovery. Confirmed Ready/Triage transitions settle idempotently, so a
