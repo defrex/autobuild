@@ -1973,7 +1973,9 @@ elsewhere without taking a lease or starting any dispatch work. The optional
 `viewer · dispatched by <label>`. Plain/non-TTY output prints the same at startup
 and emits state changes. `--once` reads one snapshot; `--interval <s>` sets the
 viewer polling cadence. Startup intake flags and explicit `--repository` are
-rejected. Without a durable effective configuration the viewer waits.
+rejected. With no recorded dispatcher run the viewer says no dispatcher has run
+for this project yet; with a run whose effective configuration is not yet
+durable it waits.
 
 Viewer uses the dispatch frontend with canonical repository facts for status,
 settings, harvest and migrations, bypassing the dispatch presentation event feed

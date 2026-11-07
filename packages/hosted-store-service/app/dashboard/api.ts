@@ -16,6 +16,8 @@ export class WebOperatorError extends Error {
     readonly kind: string,
     message: string,
     readonly progress?: unknown,
+    /** The refusal's typed code, when the server named one. */
+    readonly code?: string,
   ) {
     super(message)
   }
@@ -36,12 +38,14 @@ export async function webRequest<T>(repo: string, path: string, init?: RequestIn
       kind?: string
       error?: string
       progress?: unknown
+      code?: string
     }
     throw new WebOperatorError(
       response.status,
       value.kind ?? 'error',
       value.error ?? `request failed (${response.status})`,
       value.progress,
+      value.code,
     )
   }
   return response.json() as Promise<T>

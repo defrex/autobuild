@@ -291,6 +291,24 @@ describe('operator HTTP API', () => {
     expect((await client.dashboard(repo)).model.builds).toContainEqual(build.dashboardRow!)
   })
 
+  test('a registered project with no dispatcher run opens its dashboard; build detail refuses typed', async () => {
+    const store = await runningStore()
+    await store.ensureRepo(repo)
+    const server = createOperatorServer({ projects: testProjects([repo]), store, secret, clock })
+    const fetchFn = fetchFor(server)
+    const token = mintToken(secret, {
+      version: 1,
+      internalOperator: { user: 'Ada', repo: repo },
+      exp: now.getTime() + 60_000,
+    })
+    const client = new OperatorApiClient({ url: 'http://operator.test', token, fetchFn })
+    const snapshot = await client.dashboard(repo)
+    expect(snapshot.model).toMatchObject({ configuration: 'no-dispatcher-run', builds: [] })
+    const error = await client.getBuild(repo, 'demo').catch((caught) => caught)
+    expect(error).toBeInstanceOf(OperatorApiError)
+    expect(error).toMatchObject({ status: 409, kind: 'conflict', code: 'no-dispatcher-run' })
+  })
+
   test('cross-repository builds are consistently hidden and retry rejects text', async () => {
     const store = await runningStore()
     const client = new OperatorApiClient({

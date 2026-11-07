@@ -52,7 +52,11 @@ export type BuildListScope = 'active' | 'queued' | 'all'
 
 export class OperatorQueryError extends Error {
   constructor(
-    readonly code: 'not-found' | 'effective-config-unavailable' | 'external-ticket-source',
+    readonly code:
+      | 'not-found'
+      | 'effective-config-unavailable'
+      | 'no-dispatcher-run'
+      | 'external-ticket-source',
     message: string,
   ) {
     super(message)
@@ -136,11 +140,13 @@ export async function effectiveConfig(
 }> {
   const repositoryEvents = journal ?? (await readRepositoryFacts(store, repo)).value
   const status = repositoryEvents.status
-  if (status?.effectiveConfig === undefined)
+  if (status?.effectiveConfig === undefined) {
+    if (repositoryEvents.config.run === undefined) throw noDispatcherRunError(repo)
     throw new OperatorQueryError(
       'effective-config-unavailable',
-      `effective config unavailable for repository "${repo}"${repositoryEvents.config.run === undefined ? ': no dispatcher run is recorded' : ''}`,
+      `effective config unavailable for repository "${repo}"`,
     )
+  }
   const ref = status.effectiveConfig!
   const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
   if (artifact === null) {
@@ -154,6 +160,15 @@ export async function effectiveConfig(
     repositoryEvents,
     status,
   }
+}
+
+/** No `dispatcher.run-started` is recorded: pipeline configuration is not
+ * merely unreadable, it has never existed. */
+export function noDispatcherRunError(repo: string): OperatorQueryError {
+  return new OperatorQueryError(
+    'no-dispatcher-run',
+    `effective config unavailable for repository "${repo}": no dispatcher run is recorded`,
+  )
 }
 
 function latestDispatchConfigStatus(repositoryEvents: RepositoryEvent[]) {
@@ -171,12 +186,7 @@ export function findEffectiveConfigRef(repositoryEvents: RepositoryEvent[]) {
 
 export function selectEffectiveConfig(repositoryEvents: RepositoryEvent[], repo: string) {
   const status = latestDispatchConfigStatus(repositoryEvents)
-  if (status === undefined) {
-    throw new OperatorQueryError(
-      'effective-config-unavailable',
-      `effective config unavailable for repository "${repo}": no dispatcher run is recorded`,
-    )
-  }
+  if (status === undefined) throw noDispatcherRunError(repo)
   if (status.effectiveConfig === undefined) {
     throw new OperatorQueryError(
       'effective-config-unavailable',
@@ -367,11 +377,12 @@ async function dashboardFromView(
   view: RepoViewStore,
   opts: { repo: string; clock: Clock },
 ): Promise<OperatorDashboardSnapshot> {
-  const { config, repositoryEvents, status } = await effectiveConfig(
-    view,
-    opts.repo,
-    view.repositoryFacts(),
-  )
+  const facts = view.repositoryFacts()
+  // Only the absence of any run is an empty state; a run whose configuration
+  // is missing or unreadable still fails below. This branch reads nothing
+  // more: no build can exist before a dispatcher claims one.
+  if (facts.config.run === undefined) return noDispatcherRunSnapshot(opts.repo, facts, opts.clock)
+  const { config, repositoryEvents, status } = await effectiveConfig(view, opts.repo, facts)
   const records = await view.listBuilds()
   // One digest read covers every build of the repository (AUT-487): the
   // row gate (a `done` digest means no row) needs no per-build histories, so
@@ -453,8 +464,26 @@ async function dashboardFromView(
     },
     repositoryEvents,
   )
+  return dashboardSnapshot(model, opts.clock)
+}
+
+/** The dashboard of a repository with no recorded dispatcher run: repository
+ * controls reduce from the journal, pipeline configuration is unknown. */
+function noDispatcherRunSnapshot(
+  repo: string,
+  facts: RepositoryReadFacts,
+  clock: Clock,
+): OperatorDashboardSnapshot {
+  const model: DashboardModel = {
+    ...buildDashboardFromProjected([], { repo, queued: 0, activeCount: 0, capacity: 0 }, facts),
+    configuration: 'no-dispatcher-run',
+  }
+  return dashboardSnapshot(model, clock)
+}
+
+function dashboardSnapshot(model: DashboardModel, clock: Clock): OperatorDashboardSnapshot {
   return {
-    generatedAt: opts.clock().toISOString(),
+    generatedAt: clock().toISOString(),
     model,
     settingsHeader: {
       intake: !model.drained,

@@ -2709,3 +2709,37 @@ export async function replacedHeadsReadBudget(opts: {
     }
   }
 }
+
+/** A repository with no dispatcher run answers its dashboard poll from the
+ * saved reduction: zero event rows once warm, at any journal length. */
+export async function noDispatcherRunDashboardBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  for (const size of [10, 300]) {
+    const store = new MemoryBuildStore({ clock: () => new Date(1000) })
+    await store.ensureRepo(repo)
+    const toggle = async (count: number) => {
+      for (let i = 0; i < count; i++)
+        await store.appendRepo(repo, {
+          actor: humanActor('operator'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: i % 2 === 1 },
+        })
+    }
+    await toggle(size)
+    const counter = memoryRepositoryReadCounter(store, repo)
+    const poll = () => getOperatorDashboard({ store, repo, clock: () => new Date(1000) })
+    const warm = await poll()
+    expect(warm.model.configuration).toBe('no-dispatcher-run')
+    counter.reset()
+    for (let i = 0; i < 3; i++) await poll()
+    expect(counter.rows).toBe(0)
+    // New facts advance the saved value by their delta only.
+    await toggle(4)
+    counter.reset()
+    expect((await poll()).settingsHeader.intake).toBe(true)
+    expect(counter.rows).toBeLessThanOrEqual(4)
+    counter.reset()
+    await poll()
+    expect(counter.rows).toBe(0)
+  }
+}

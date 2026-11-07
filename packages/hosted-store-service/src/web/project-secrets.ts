@@ -1,5 +1,5 @@
 import type { BuildStore } from '@defrex/autobuild/store-adapter'
-import { effectiveConfig } from '@defrex/autobuild/operator'
+import { effectiveConfig, OperatorQueryError } from '@defrex/autobuild/operator'
 import {
   decodeSecretMetadata,
   ProjectSecretError,
@@ -66,7 +66,7 @@ export function createWebProjectSecretsHandler(options: {
           }))
         } catch (error) {
           configuration =
-            error instanceof Error && error.message.endsWith(': no dispatcher run is recorded')
+            error instanceof OperatorQueryError && error.code === 'no-dispatcher-run'
               ? 'no-dispatcher'
               : 'unavailable'
         }
