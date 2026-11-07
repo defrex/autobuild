@@ -1083,7 +1083,9 @@ describe('controlBuild — shared durable controls', () => {
       }),
     ).rejects.toMatchObject({
       code: 'no-open-escalations',
-      message: expect.stringContaining('ab resume'),
+      message: expect.stringContaining(
+        'If a spec revision was already recorded, the build remains paused; run ab resume',
+      ),
     })
     expect(await store.getEvents(SLUG)).toEqual(before)
     await store.close()

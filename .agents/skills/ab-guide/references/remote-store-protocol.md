@@ -687,7 +687,7 @@ seconds (the stream/session wait ceiling) and 25 seconds. A held request's authe
 are identical to the immediate form: a `401`, `403`, or `409` identity failure
 is answered immediately, never held.
 
-The parameter is purely additive in the version it merged in (protocol `2`,
+The parameter is purely additive in the protocol version that introduced it (protocol `2`,
 where the event-wait rules were introduced): a server
 that ignores `wait` remains conforming — its immediate empty answers only raise
 the client's request rate — and a client that sends `wait` to such a server
@@ -1121,7 +1121,7 @@ by this rule (their retention belongs to the open archival thread), and open
 streams are never pruned. A read of a stream whose chunks were pruned returns
 no chunks, `status: "closed"`, and the artifact reference.
 
-These additions were purely additive in the version they merged in (protocol
+These additions were purely additive in the protocol version that introduced them (protocol
 `2`, where the stream routes were introduced), and a
 conforming server implements the stream routes together with this document's
 rules exactly as it does for the event and artifact routes.
