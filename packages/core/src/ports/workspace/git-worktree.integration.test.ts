@@ -1706,3 +1706,129 @@ test('private checkpoint retains two unpublished branch commits and detached wor
     }),
   ).rejects.toThrow('immutable archive')
 })
+
+describe('preserved branch heads superseded by a recorded rewrite', () => {
+  /** base ← A ← P (replaced, archived) and base ← Q (the current branch). */
+  async function history() {
+    const { gitRewrite } = await import('../forge/git-rewrite')
+    const root = await mkdtemp(join(tmpdir(), 'ab-superseded-'))
+    const origin = join(root, 'origin.git')
+    const repo = join(root, 'repo')
+    await initRepo(repo)
+    await run(['git', 'init', '-q', '--bare', origin], root)
+    await run(['git', 'remote', 'add', 'origin', origin], repo)
+    await run(['git', 'push', '-q', 'origin', 'main'], repo)
+    const base = await run(['git', 'rev-parse', 'HEAD'], repo)
+    const tree = await run(['git', 'rev-parse', 'HEAD^{tree}'], repo)
+    const commit = (parent: string, message: string) =>
+      run(['git', ...GIT_ID, 'commit-tree', tree, '-p', parent, '-m', message], repo)
+    const a = await commit(base, 'preserved')
+    const p = await commit(a, 'replaced')
+    const q = await commit(base, 'rewritten')
+    const c = await commit(p, 'unpublished over replaced')
+    const archive = (sha: string) => `refs/autobuild/archive/x/${sha}`
+    const head = (sha: string) => ({
+      sha,
+      remoteRef: archive(sha),
+      role: 'branch' as const,
+      commits: [sha],
+    })
+    return { gitRewrite, root, origin, repo, base, a, p, q, c, archive, head }
+  }
+
+  test('release archives a covered local branch as a producer', async () => {
+    const { preserveGitCommits } = await import('./commit-preservation')
+    const h = await history()
+    const preserve = async (branchAt: string, replaced: string[]) => {
+      await run(['git', 'update-ref', 'refs/heads/ab/x', branchAt], h.repo)
+      const heads = await preserveGitCommits({
+        exec: spawnExec,
+        workspacePath: h.repo,
+        branch: 'ab/x',
+        slug: 'x',
+        base: h.base,
+        candidates: [],
+        archive: h.gitRewrite(spawnExec, true).archive,
+        replaced,
+        local: true,
+      })
+      return heads.find((head) => head.sha === branchAt)?.role
+    }
+    expect(await preserve(h.p, [h.p])).toBe('producer')
+    await run(['git', 'update-ref', h.archive(h.p), h.p], h.repo)
+    expect(await preserve(h.a, [h.p])).toBe('producer')
+    expect(await preserve(h.a, [])).toBe('branch')
+    expect(await preserve(h.c, [h.p])).toBe('branch')
+  })
+
+  test('restoration classifies branch heads before any branch mutation', async () => {
+    const { restoreGitCommits } = await import('./commit-preservation')
+    const h = await history()
+    for (const sha of [h.a, h.p, h.c]) await run(['git', 'update-ref', h.archive(sha), sha], h.repo)
+    const restore = async (branchAt: string, heads: string[], replaced: string[]) => {
+      await run(['git', 'update-ref', 'refs/heads/ab/x', branchAt], h.repo)
+      const result = await restoreGitCommits({
+        exec: spawnExec,
+        workspacePath: h.repo,
+        branch: 'ab/x',
+        heads: heads.map(h.head),
+        replaced,
+        local: true,
+      })
+      return { ...result, branch: await run(['git', 'rev-parse', 'refs/heads/ab/x'], h.repo) }
+    }
+    // (d) a legacy divergent ancestor of a replaced head is skipped.
+    expect(await restore(h.q, [h.a], [h.p])).toEqual({
+      skipped: [{ sha: h.a, reason: 'superseded' }],
+      branch: h.q,
+    })
+    // (e) supersession wins over the fast-forward path.
+    expect(await restore(h.base, [h.a], [h.p])).toEqual({
+      skipped: [{ sha: h.a, reason: 'superseded' }],
+      branch: h.base,
+    })
+    // (f) divergent work outside the record is refused as before.
+    await expect(restore(h.q, [h.a], [])).rejects.toThrow(
+      'workspace restoration would overwrite divergent branch work',
+    )
+    await expect(restore(h.q, [h.c], [h.p])).rejects.toThrow(
+      'workspace restoration would overwrite divergent branch work',
+    )
+    // (g) a head outside the record still fast-forwards.
+    expect(await restore(h.base, [h.a], [h.q])).toEqual({ skipped: [], branch: h.a })
+    // (h) an already-contained head is reported as contained.
+    expect(await restore(h.p, [h.a], [])).toEqual({
+      skipped: [{ sha: h.a, reason: 'contained' }],
+      branch: h.p,
+    })
+  })
+
+  test('a remote workspace fetches only missing replaced archives to classify', async () => {
+    const { restoreGitCommits } = await import('./commit-preservation')
+    const h = await history()
+    await run(
+      ['git', 'push', '-q', 'origin', `${h.q}:refs/heads/ab/x`, `${h.a}:${h.archive(h.a)}`],
+      h.repo,
+    )
+    const workspace = join(h.root, 'workspace')
+    await run(['git', 'clone', '-q', '--branch', 'ab/x', h.origin, workspace], h.root)
+    const restore = () =>
+      restoreGitCommits({
+        exec: spawnExec,
+        workspacePath: workspace,
+        branch: 'ab/x',
+        heads: [h.head(h.a)],
+        replaced: [h.p],
+      })
+    // Without the replaced archive the head is not covered: the refusal stands.
+    await expect(restore()).rejects.toThrow(
+      'workspace restoration would overwrite divergent branch work',
+    )
+    expect(
+      (await spawnExec(['git', 'cat-file', '-e', `${h.p}^{commit}`], { cwd: workspace })).exitCode,
+    ).not.toBe(0)
+    await run(['git', 'push', '-q', 'origin', `${h.p}:${h.archive(h.p)}`], h.repo)
+    expect(await restore()).toEqual({ skipped: [{ sha: h.a, reason: 'superseded' }] })
+    expect(await run(['git', 'rev-parse', 'HEAD'], workspace)).toBe(h.q)
+  })
+})

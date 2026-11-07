@@ -118,6 +118,13 @@ confirmed, absent, or unknown without deleting an environment or its snapshots.
 Only dispatcher-authorized reap follows the durable fence and preservation/loss
 receipt. `provision` accepts exact `restoration` heads; branch ancestry must be
 verified, and detached producer objects must never overwrite the named branch.
+`preserve` receives `replaced`, and `provision` receives `restorationReplaced`:
+the build's bounded record of the latest 64 shas recorded rewrites replaced.
+A branch head equal to or contained in one of them is superseded. Preserve
+archives it only as a producer; provision skips it before any branch mutation
+and reports each skipped head, as `contained` or `superseded`, in the result's
+`restorationSkipped`. The dispatcher demotes exact matches itself, so a
+provider that ignores these fields stays safe.
 Provision/start failures signal `WorkspaceCleanupRequired` rather than deleting
 or implicitly recreating an existing checkout. A confirmed `snapshot_not_found`
 lookup establishes filesystem absence, while retaining the stale name for
