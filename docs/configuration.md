@@ -695,7 +695,7 @@ An ordered list of strict merge rules. Predicates within one rule are ANDed;
 the first matching rule wins. Omitted predicates match everything. With no
 matching rule, leaves default to `auto` and nodes to `consent`.
 
-The deprecated `[[landing]]` spelling accepts identical rules and emits a warning.
+The deprecated `[[landing]]` spelling accepts identical rules and emits a migration warning.
 Do not declare both spellings, even as empty arrays. `ab upgrade` migrates the
 old key without changing policy values or order. See [deprecated spellings](merge-policy.md#deprecated-spellings).
 
