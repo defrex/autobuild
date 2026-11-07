@@ -1495,8 +1495,8 @@ write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
-File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links and urgent priority.
+File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets,
+state and urgent priority; file revisions also cover nonempty issue links.
 Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File comments
@@ -1542,7 +1542,9 @@ normalization, capability refusal, graph validation and the pure tree projection
 Ticket priority lives in `ports/tickets/priority.ts`: the `priority` capability's
 typed refusal, the normal no-op strip and `urgentFirst`, the stable partition the
 dispatcher applies to its ready listing. Normalized tickets carry only `urgent`,
-so strict hosted wire schemas never see a priority key.
+so strict hosted wire schemas never see a priority key. The Linear adapter maps
+its native Urgent priority (1) to `urgent` and, on `normal`, clears only a
+current Urgent.
 File/fake/Linear adapters validate metadata at write boundaries; `operations.ts`
 and CLI/operator source opening wrap injected or plugin sources with the same
 compatibility facade. Metadata is excluded from hosted persistence/protocols.
