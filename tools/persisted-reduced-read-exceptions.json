@@ -323,14 +323,6 @@
     "kind": "reduction",
     "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
   },
-  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/refresh::getRepoStateEvents": {
-    "kind": "raw",
-    "reason": "Explicitly excluded interactive frontend repository feed; retains its prerequisite read design."
-  },
-  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/refresh::reduce": {
-    "kind": "reduction",
-    "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
-  },
   "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/refresh::getRepoEvents": {
     "kind": "raw",
     "reason": "Explicitly excluded interactive frontend repository feed; retains its prerequisite read design."
@@ -342,6 +334,10 @@
   "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/remember::advance": {
     "kind": "reduction",
     "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/canonicalSeed::advance": {
+    "kind": "reduction",
+    "reason": "Frontend presentation fold over at most two dispatcher.run-started facts taken from the persisted canonical repositoryReadFacts value; performs no journal read."
   },
   "packages/core/src/cli/harvest.ts::projectHarvestStatus::reduceHarvest": {
     "kind": "reduction",
@@ -577,10 +573,6 @@
   "packages/core/src/cli/repository-status.ts::projectRepositoryStatus::reduce": {
     "kind": "reduction",
     "reason": "Pure presentation/reference overload over caller-supplied repository events; current production callers use persisted repository facts."
-  },
-  "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend/readFrame::reduce": {
-    "kind": "reduction",
-    "reason": "Pure frontend presentation fold over the cursor-bounded retained repository feed, which persists its own snapshot and includes durable migration facts; no additional Store read or kernel state decision."
   },
   "packages/core/src/cli/status.ts::detail::reduce": {
     "kind": "reduction",
