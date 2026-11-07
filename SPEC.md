@@ -2632,12 +2632,14 @@ independent of the destination's reachable commit count and of repository histor
 While the head is unchanged and the probe covers the current questions, current
 confirmed landings and aliases from only the destination's accepted ancestry are
 reapplied without Git; unrelated merged history and ready-set changes neither
-invalidate it nor append events. A moved head, a newly relevant landing, or a new
-question requires a fresh Git sample. Observations without a probe, including
-older full-history witnesses, are never trusted for admission: they refresh once
-from Git, and an unavailable sample leaves the dependent queued; neither replays
-repository history. Current readiness and newest-generation checks still apply
-before claim.
+invalidate it nor append events. A moved head requires a fresh Git sample. A
+newly relevant landing or a new question needs only a new probe: a dispatcher
+still holding the full in-memory witness for that branch and head compacts one
+without Git, and otherwise samples Git once. Observations without a probe,
+including older full-history witnesses, are never trusted for admission: they
+are re-derived once the same way, and an unavailable sample leaves the dependent
+queued; neither replays repository history. Current readiness and
+newest-generation checks still apply before claim.
 
 Demand-driven restacking supplies ancestor changes to descendants. Sibling changes
 wait for their node to merge in the common ancestor and presence demand into the target;
