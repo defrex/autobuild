@@ -181,8 +181,9 @@ then to `done/` on merge or back to `triage/` if the build aborts or the spec
 bounces. A caught failure before build creation returns it to configured Ready
 after safe ownership checks; unfinished recovery stays durably tracked and
 withheld from another claim. Uncertain ownership or externally changed/missing
-tickets end automatic recovery with an `abandoned` resolution, leaving the
-ticket unchanged for operator inspection. See [preparation recovery](../ab-guide/references/restacking.md#ticket-preparation-before-build-creation).
+tickets end automatic recovery with an `abandoned` resolution, reported once
+in that tick's dispatcher diagnostics, leaving the ticket unchanged for
+operator inspection. See [preparation recovery](../ab-guide/references/restacking.md#ticket-preparation-before-build-creation).
 
 **Don't hand-move anything out of `doing/`** — dispatch preparation or a build owns it. If you need to
 stop a build, that's `ab` (or a human), not `mv`.
