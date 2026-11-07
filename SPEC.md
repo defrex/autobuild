@@ -3745,11 +3745,16 @@ completion. This evidence does not change reduction or display semantics.
 
 A node-target child merge instead fast-forwards its already canonical
 single-change commit, preserving exactly one terminal source-build identity.
-The guarded destination write is authoritative: its pushed SHA and identity
-produce the durable merge receipt independently of forge PR state. PR
-acknowledgement is best-effort: observe a provider-reported merge, or comment
-with the merged SHA and close a still-open review. Acknowledgement failure never
-retries or fails the merge.
+The guarded destination write is authoritative once confirmed: the durable
+merge receipt, carrying the candidate SHA and identity, is recorded only after
+exact authoritative readback of the destination shows that candidate, or from
+the durable receipt of an accepted write overtaken before readback,
+independently of forge PR state. A different observed head is contention and
+records no merge; a failed readback records nothing and is retried; recovery of
+an interrupted merge uses the same exact readback. PR acknowledgement is
+best-effort: observe a provider-reported merge, or comment with the merged SHA
+and close a still-open review. Acknowledgement failure never retries or fails
+the merge.
 
 GitHub uses its authoritative viewer squash headline and body with an expected
 head guard. Native auto-merge messages are checked against fresh server defaults
