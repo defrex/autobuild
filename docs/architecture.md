@@ -1427,7 +1427,9 @@ Dispatch prepares harvest claims using `HarvestRunner.run(true)` before issuing
 an execution grant. `harvest.execution.authorized` binds the selected run,
 execution and adopted lease holder; the guest resumes only that prepared run.
 Local completion records `harvest.execution.ended`; hosted completion retains
-its provider release fact. Recovery controls remain trusted dispatcher work.
+its provider release fact. While an observable hosted execution is open, the
+dispatcher withholds harvest launch, so runner loss on its open session is
+judged only after its release fact. Recovery controls remain trusted dispatcher work.
 Execution launch auth is transient and separate from serialized identity. Runners
 request exact phase grants after session-start facts and before runtime calls.
 Workspace plugin factories receive an exchange callback and a scrubbed environment,

@@ -13,6 +13,7 @@ import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transp
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext } from '../kernel/engine'
 import { publicationPending } from './publication-state'
+import { RepoViewStore } from './repo-view'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   effectiveBuildConfigContent,
@@ -7539,6 +7540,96 @@ describe('Dispatcher harvest execution settlement', () => {
     const events = await h.store.getRepoEvents(REPO)
     expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
   })
+
+  // AUT-1017: a live foreign execution owns its run's open session, so the
+  // dispatcher withholds harvest launch (and with it the runner-loss
+  // judgment) until settlement journals the release.
+  describe('harvest launch gate', () => {
+    async function gateFixture(
+      observe: Parameters<typeof harvestProvider>[0],
+      opts: { commandId?: string | null; active?: ReadonlySet<string>; seed?: boolean } = {},
+    ) {
+      const { provider } = harvestProvider(observe)
+      const starts: number[] = []
+      const h = harness({
+        workspaceProvider: provider,
+        startHarvest: () => {
+          starts.push(starts.length)
+        },
+        ...(opts.active !== undefined ? { activeHarvestExecutions: () => opts.active! } : {}),
+      })
+      await h.store.ensureRepo(REPO)
+      if (opts.seed !== false)
+        await seedExecution(h, opts.commandId !== undefined ? { commandId: opts.commandId } : {})
+      await h.store.appendRepo(REPO, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'harvest-open',
+          observations: [{ build: 'origin', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      const released = async () =>
+        (await h.store.getRepoEvents(REPO)).filter(
+          (event) => event.type === 'harvest.execution.released',
+        ).length
+      return { h, starts, released }
+    }
+
+    test('a running execution suppresses launch across ticks', async () => {
+      const { h, starts, released } = await gateFixture(async () => ({ state: 'running' }))
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      expect(starts).toHaveLength(0)
+      expect(await released()).toBe(0)
+    })
+
+    for (const observation of [
+      { state: 'lost' as const },
+      { state: 'ended' as const, exitCode: 1 },
+    ]) {
+      test(`a ${observation.state} execution is released and launch proceeds the same tick`, async () => {
+        const { h, starts, released } = await gateFixture(async () => observation)
+        await h.dispatcher.tick()
+        expect(await released()).toBe(1)
+        expect(starts).toHaveLength(1)
+      })
+    }
+
+    test('an observation error is conservative: no launch, no release', async () => {
+      const { h, starts, released } = await gateFixture(async () => {
+        throw new Error('provider unavailable')
+      })
+      await h.dispatcher.tick()
+      expect(starts).toHaveLength(0)
+      expect(await released()).toBe(0)
+    })
+
+    test('an unobservable execution never blocks launch', async () => {
+      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
+        commandId: null,
+      })
+      await h.dispatcher.tick()
+      expect(starts).toHaveLength(1)
+    })
+
+    test('an execution this process supervises is left to the loop single-flight', async () => {
+      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
+        active: new Set(['host-harvest-i1']),
+      })
+      await h.dispatcher.tick()
+      expect(starts).toHaveLength(1)
+    })
+
+    test('no open execution launches as before', async () => {
+      const { h, starts } = await gateFixture(async () => ({ state: 'running' }), {
+        seed: false,
+      })
+      await h.dispatcher.tick()
+      expect(starts).toHaveLength(1)
+    })
+  })
 })
 
 // ── AUT-328: publication requests must complete or be recorded lost before a
@@ -8568,6 +8659,78 @@ describe('Dispatcher incremental view reads (AUT-647)', () => {
     expect(store.drainRows()).toBe(0)
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drainRows()).toBe(0)
+  })
+
+  test('a live foreign harvest execution withholds launch with zero idle rows, one observe per tick, and no extra facts sample', async () => {
+    let observes = 0
+    const provider = {
+      name: 'fake-harvest',
+      provision: async () => {
+        throw new Error('not used')
+      },
+      release: async () => {},
+      harvestExecution: {
+        observe: async () => {
+          observes += 1
+          return { state: 'running' as const }
+        },
+      },
+    } as unknown as WorkspaceProvider
+    // Per-tick `repositoryFacts()` calls, counted on the view the dispatcher
+    // samples; the gate must reuse the sample `triggerHarvest` already takes.
+    const factsPerTick = async (open: boolean) => {
+      const rows = new RowCountingStore({ clock: manualClock() })
+      const view = new RepoViewStore(rows, { repo: REPO })
+      let samples = 0
+      const sample = view.repositoryFacts.bind(view)
+      view.repositoryFacts = () => {
+        samples += 1
+        return sample()
+      }
+      let starts = 0
+      const h = harness({
+        store: view,
+        workspaceProvider: provider,
+        startHarvest: () => {
+          starts += 1
+        },
+      })
+      await view.ensureRepo(REPO)
+      if (open)
+        await view.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'harvest.execution.started',
+          payload: {
+            execution: 'host-harvest-i1',
+            provider: 'fake-harvest',
+            environmentId: 'autobuild-harvest-abc1234567',
+            commandId: 'cmd-1',
+          },
+        })
+      await view.appendRepo(REPO, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'harvest-open',
+          observations: [{ build: 'origin', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await h.dispatcher.tick({ acceptNewWork: false })
+      rows.drainRows()
+      observes = 0
+      samples = 0
+      const ticks = 3
+      for (let i = 0; i < ticks; i += 1) await h.dispatcher.tick({ acceptNewWork: false })
+      return { rows: rows.drainRows(), samples: samples / ticks, starts, observes, ticks }
+    }
+    const baseline = await factsPerTick(false)
+    expect(baseline.starts).toBeGreaterThan(0)
+    const live = await factsPerTick(true)
+    expect(live.rows).toBe(0)
+    expect(live.starts).toBe(0)
+    expect(live.observes).toBe(live.ticks)
+    expect(live.samples).toBe(baseline.samples)
   })
 
   test('--once style: a fresh dispatcher reads each work build once and no more than its history', async () => {
