@@ -150,8 +150,20 @@ export interface ConfigSnapshot {
 
 export type ConfigReloadOutcome =
   | { kind: 'unchanged' }
-  | { kind: 'rejected'; error: string; notify: boolean }
-  | { kind: 'publication-failed'; error: string }
+  | {
+      kind: 'rejected'
+      error: string
+      notify: boolean
+      /** Deprecation lines of a candidate that parsed but failed validation
+       * afterwards; non-empty only on the first evaluation of that content. */
+      deprecations?: readonly string[]
+    }
+  | {
+      kind: 'publication-failed'
+      error: string
+      /** As for `rejected`: non-empty only on first evaluation of the content. */
+      deprecations: readonly string[]
+    }
   | {
       kind: 'adopted'
       snapshot: ConfigSnapshot
@@ -171,11 +183,18 @@ export type ConfigReloadPublisher = (input: {
  * Process-local owner of the dispatcher's effective config. A candidate is
  * published only after parsing, eager route validation, and durable journal
  * publication all succeed. Callers capture `current()` once per boundary.
+ *
+ * Parsing never writes: deprecation lines are collected. `deprecations()`
+ * holds the accepted content's lines, and a candidate that parses but is not
+ * adopted returns its lines on the outcome once per distinct content, so a
+ * re-evaluated pending file stays quiet on later ticks.
  */
 export class LiveConfig {
   private snapshot: ConfigSnapshot
   private acceptedContent: string
   private rejectedContent: string | undefined
+  private acceptedDeprecations: readonly string[]
+  private noticedCandidate: string | undefined
 
   constructor(
     private readonly source: string,
@@ -183,8 +202,10 @@ export class LiveConfig {
     startupContent: string,
     private readonly runtimes: RuntimeRegistry,
     private readonly publish: ConfigReloadPublisher,
+    startupDeprecations: readonly string[] = [],
   ) {
     this.acceptedContent = startupContent
+    this.acceptedDeprecations = startupDeprecations
     this.snapshot = {
       config: startup,
       resolver: createRuntimeResolver(
@@ -199,6 +220,11 @@ export class LiveConfig {
 
   current(): ConfigSnapshot {
     return this.snapshot
+  }
+
+  /** Deprecation lines of the accepted content (startup or last adoption). */
+  deprecations(): readonly string[] {
+    return this.acceptedDeprecations
   }
 
   async refreshFromDisk(): Promise<ConfigReloadOutcome> {
@@ -236,18 +262,23 @@ export class LiveConfig {
   async refresh(content: string): Promise<ConfigReloadOutcome> {
     if (content === this.acceptedContent) {
       this.rejectedContent = undefined
+      this.noticedCandidate = undefined
       return { kind: 'unchanged' }
     }
 
     let candidate: Config
+    const deprecations: string[] = []
     try {
-      candidate = parseConfig(content, this.source)
+      candidate = parseConfig(content, this.source, (line) => deprecations.push(line))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const notify = this.rejectedContent !== content
       this.rejectedContent = content
       return { kind: 'rejected', error: message, notify }
     }
+
+    const candidateDeprecations = this.noticedCandidate === content ? [] : deprecations
+    this.noticedCandidate = content
 
     const config = composeReloadedConfig(this.startup, candidate)
     let resolver: RuntimeResolver
@@ -268,7 +299,7 @@ export class LiveConfig {
       const message = error instanceof Error ? error.message : String(error)
       const notify = this.rejectedContent !== content
       this.rejectedContent = content
-      return { kind: 'rejected', error: message, notify }
+      return { kind: 'rejected', error: message, notify, deprecations: candidateDeprecations }
     }
 
     const restartRequired = restartRequiredChanges(this.startup, candidate)
@@ -279,11 +310,14 @@ export class LiveConfig {
       return {
         kind: 'publication-failed',
         error: error instanceof Error ? error.message : String(error),
+        deprecations: candidateDeprecations,
       }
     }
 
     this.acceptedContent = content
+    this.acceptedDeprecations = deprecations
     this.rejectedContent = undefined
+    this.noticedCandidate = undefined
     this.snapshot = {
       config,
       resolver,
