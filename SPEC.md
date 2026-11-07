@@ -2734,7 +2734,7 @@ deduplicated `node.parent-rejected` diagnostics when invalid, preserving effecti
 ancestry. Restoring the effective target records `node.parent-rejection-cleared`,
 removing the current refusal while retaining its historical fact. Rejection deduplication
 compares revision, target and reason independently of persistence key order.
-Missing source reads withhold parent acceptance; ordinary cascade and PR handling
+Missing source reads withhold parent acceptance; ordinary demand-driven restack and PR handling
 continue against durable effective ancestry. Accepted moves finish their reserved
 Git and PR effects independently of tracker availability. A PR merged or closed
 by a human follows ordinary terminal handling. Changing a claimed work ticket's target is
