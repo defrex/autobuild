@@ -697,39 +697,70 @@ export const ticketSourceHealthEventPayloadSchemas = {
   }),
 } as const
 
+const presenceSha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+const presenceIdentity = z
+  .string()
+  .regex(/^(?:build:[a-z0-9][a-z0-9-]*|foreign:[0-9a-f]{40}(?:[0-9a-f]{24})?)$/)
+const presenceBuild = z.templateLiteral(['build:', z.string().regex(/^[a-z0-9][a-z0-9-]*$/)])
+const sortedUnique = <T extends z.ZodType<string>>(item: T, name: string) =>
+  z
+    .array(item)
+    .refine(
+      (ids) => ids.every((id, index) => index === 0 || ids[index - 1]! < id),
+      `${name} must be sorted and unique`,
+    )
+
+/** Historical v1 full-history witness. Still decoded, no longer written. */
 const presenceWitnessSchema = z.strictObject({
   version: z.literal(1),
-  commits: z
-    .array(z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/))
-    .refine(
-      (ids) => ids.every((id, index) => index === 0 || ids[index - 1]! < id),
-      'commits must be sorted and unique',
-    ),
-  identities: z
-    .array(z.templateLiteral(['build:', z.string().regex(/^[a-z0-9][a-z0-9-]*$/)]))
-    .refine(
-      (ids) => ids.every((id, index) => index === 0 || ids[index - 1]! < id),
-      'identities must be sorted and unique',
-    ),
+  commits: sortedUnique(presenceSha, 'commits'),
+  identities: sortedUnique(presenceBuild, 'identities'),
 })
 
-/** Head-bound admission evidence. Historical observations remain append-only. */
+/** Query-scoped probe: only the proof closure of `questions` is recorded. */
+const presenceProbeSchema = z
+  .strictObject({
+    version: z.literal(1),
+    questions: sortedUnique(presenceIdentity, 'questions'),
+    commits: sortedUnique(presenceSha, 'commits'),
+    reachable: sortedUnique(presenceSha, 'reachable'),
+    builds: sortedUnique(presenceBuild, 'builds'),
+    trailers: sortedUnique(presenceBuild, 'trailers'),
+  })
+  .superRefine((probe, ctx) => {
+    const commits = new Set(probe.commits)
+    if (!probe.reachable.every((sha) => commits.has(sha)))
+      ctx.addIssue({ code: 'custom', path: ['reachable'], message: 'reachable must be tested' })
+    const builds = new Set<string>(probe.builds)
+    if (!probe.trailers.every((id) => builds.has(id)))
+      ctx.addIssue({ code: 'custom', path: ['trailers'], message: 'trailers must be tested' })
+  })
+
+/** Head-bound admission evidence. New observations carry a query-scoped
+ * `probe`, so payload size is bounded by the queried proof closure rather
+ * than the destination's history; `witness` is historical v1 evidence.
+ * Historical observations remain append-only. */
 export const changePresenceEventPayloadSchemas = {
-  'change-presence.observed': z.strictObject({
-    witness: presenceWitnessSchema.optional(),
-    branch: z.string().min(1),
-    destination: z.string().min(1),
-    head: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
-    evidence: z.string().min(1),
-    identities: z
-      .array(
-        z.string().regex(/^(?:build:[a-z0-9][a-z0-9-]*|foreign:[0-9a-f]{40}(?:[0-9a-f]{24})?)$/),
-      )
-      .refine(
-        (ids) => ids.every((id, index) => index === 0 || ids[index - 1]! < id),
-        'identities must be sorted and unique',
-      ),
-  }),
+  'change-presence.observed': z
+    .strictObject({
+      witness: presenceWitnessSchema.optional(),
+      probe: presenceProbeSchema.optional(),
+      branch: z.string().min(1),
+      destination: z.string().min(1),
+      head: presenceSha,
+      evidence: z.string().min(1),
+      identities: sortedUnique(presenceIdentity, 'identities'),
+    })
+    .superRefine((payload, ctx) => {
+      if (!payload.probe) return
+      const questions = new Set<string>(payload.probe.questions)
+      if (!payload.identities.every((id) => questions.has(id)))
+        ctx.addIssue({
+          code: 'custom',
+          path: ['identities'],
+          message: 'identities must be probe questions',
+        })
+    }),
 } as const
 
 export const forgeHealthEventPayloadSchemas = {
