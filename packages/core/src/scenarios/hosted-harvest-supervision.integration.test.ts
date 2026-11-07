@@ -23,7 +23,7 @@ import type {
   HarvestExecutionStart,
 } from '../ports/workspace/harvest-execution'
 import { HarvestRunner } from '../processes/harvest-runner'
-import { CONFIG_TOML, makeHarness, type E2eHarness } from './harness'
+import { CONFIG_TOML, makeHarness } from './harness'
 
 const LOSS = 'harvest agent interrupted by runner loss'
 
