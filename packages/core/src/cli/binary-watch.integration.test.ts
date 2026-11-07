@@ -27,60 +27,67 @@ async function fixture(
   timeout = '0',
 ): Promise<void> {
   const repo = await mkdtemp(join(tmpdir(), 'ab-watch-termination-'))
-  const state = join(repo, 'state')
-  const git = Bun.spawnSync(['git', 'init', '--quiet', repo])
-  expect(git.exitCode).toBe(0)
-  const store = openLocalStore(state)
-  await store.ensureRepo(repo)
-  const env: NodeJS.ProcessEnv = { ...process.env }
-  for (const key of Object.keys(env)) if (key.startsWith('AB_')) delete env[key]
-  const child = spawn(
-    process.execPath,
-    [
-      entry,
-      'watch',
-      '--operator',
-      '--repository',
-      '--event',
-      '*',
-      '--json',
-      '--timeout',
-      timeout,
-      '--interval',
-      '1s',
-      '--store',
-      state,
-    ],
-    {
-      cwd: repo,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  )
-  let output = ''
-  let errors = ''
-  child.stdout!.on('data', (chunk) => {
-    output += chunk.toString()
-  })
-  child.stderr!.on('data', (chunk) => {
-    errors += chunk.toString()
-  })
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.once('error', reject)
-      child.once('close', (code, signal) => resolve({ code, signal }))
-    },
-  )
+  // Remove the repository even when setup, child shutdown or store closure throws.
   try {
-    await waitFor(async () => {
-      if (child.exitCode !== null) throw new Error(`watch exited early: ${errors}`)
-      return (await store.listOperatorPresence(repo)).length === 1
-    })
-    await run({ child, exited, store, repo, output: () => output, errors: () => errors })
+    const state = join(repo, 'state')
+    const git = Bun.spawnSync(['git', 'init', '--quiet', repo])
+    expect(git.exitCode).toBe(0)
+    const store = openLocalStore(state)
+    try {
+      await store.ensureRepo(repo)
+      const env: NodeJS.ProcessEnv = { ...process.env }
+      for (const key of Object.keys(env)) if (key.startsWith('AB_')) delete env[key]
+      const child = spawn(
+        process.execPath,
+        [
+          entry,
+          'watch',
+          '--operator',
+          '--repository',
+          '--event',
+          '*',
+          '--json',
+          '--timeout',
+          timeout,
+          '--interval',
+          '1s',
+          '--store',
+          state,
+        ],
+        {
+          cwd: repo,
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
+      let output = ''
+      let errors = ''
+      child.stdout!.on('data', (chunk) => {
+        output += chunk.toString()
+      })
+      child.stderr!.on('data', (chunk) => {
+        errors += chunk.toString()
+      })
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          child.once('error', reject)
+          child.once('close', (code, signal) => resolve({ code, signal }))
+        },
+      )
+      try {
+        await waitFor(async () => {
+          if (child.exitCode !== null) throw new Error(`watch exited early: ${errors}`)
+          return (await store.listOperatorPresence(repo)).length === 1
+        })
+        await run({ child, exited, store, repo, output: () => output, errors: () => errors })
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+        await exited
+      }
+    } finally {
+      await store.close()
+    }
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
-    await exited
-    await store.close()
     await rm(repo, { recursive: true, force: true })
   }
 }
