@@ -82,8 +82,6 @@ event log handling, state reducer. No I/O opinions — no ticket tracker, no
 telemetry vendor, no terminal.
 
 ### 3.2 Ports
-Ticket sources may optionally provide native `listPage(criteria, page)` windows with a matching total. Paged operator reads use it when present, otherwise slice the exhaustive listing; unpaged and dispatcher reads remain exhaustive.
-
 
 Interfaces to the world, each with swappable adapters:
 
@@ -95,6 +93,8 @@ Interfaces to the world, each with swappable adapters:
 | `Forge` | git + PR plumbing | GitHub; local Git; third-party in-process registrations |
 | `TelemetrySource` | production signals | Sentry; later log streams |
 | `BuildStore` | per-build streams plus repository journals: events, artifacts, transcripts, leases (see §7) | local; remote HTTP |
+
+Ticket sources may optionally provide native `listPage(criteria, page)` windows with a matching total. Paged operator reads use it when present, otherwise slice the exhaustive listing; unpaged and dispatcher reads remain exhaustive.
 
 #### 3.2.1 In-process adapter plugins
 

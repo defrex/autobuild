@@ -725,7 +725,7 @@ dispatch is tolerated. `Ticket.creationKey` is the optional stable external
 create/adoption correlation, distinct from `Ticket.ref.id`; Linear projects its
 issue UUID and file/fake preserve their idempotency metadata through create,
 adoption, get, and list paths. Legacy/plugin tickets may omit it and dispatch
-unchanged.
+unchanged. The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
 
 **Workspace, execution, and review base selection.**
 `packages/core/src/ports/workspace/create.ts` resolves `[workspace].provider` against the
@@ -2104,8 +2104,7 @@ fresh connection starts empty and resets hosted ticket numbering. `ab disconnect
 revokes credentials only; admin `projects remove` unregisters without purging.
 See [project deletion protocol](operator-api.md#permanent-project-deletion).
 
-The ticket-source port optionally exposes `listPage(criteria, page)` for paged operator reads. PostgreSQL counts matches and applies SQL LIMIT/OFFSET; other sources retain exhaustive-read slicing. CLI and dispatcher reads stay exhaustive. See [ticket source contract](ticket-sources.md#writing-your-own).
-
+### Hosted event reads
 
 Hosted event reads use the bounded capabilities in `store/event-reads.ts`:
 repository cursors must be at least `max(0, head - 1000)`, and build pages
