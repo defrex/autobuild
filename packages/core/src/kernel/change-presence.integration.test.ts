@@ -13,6 +13,7 @@ import {
   missingChanges,
   observePresence,
   ownedContribution,
+  type LandingEvidence,
   type PresenceBuild,
 } from './change-presence'
 import type { NodeGit } from './node-restack'
@@ -218,7 +219,7 @@ test('immutable witnesses reproject late, nested and withdrawn facts without Git
   expect(projectPresence(witness, [], aliases)).not.toContain('build:leaf')
   expect(projectPresence(witness, [{ slug: 'empty', sha: head, contribution: [] }])).toEqual(before)
   const questions = ['build:direct', 'build:leaf'] as const
-  const answer = (facts: typeof landings, factAliases = aliases) => {
+  const answer = (facts: LandingEvidence[], factAliases = aliases) => {
     const probe = compactProbe(witness, questions, facts, factAliases)
     const identities = projectProbe(probe, facts, factAliases)
     return { probe, identities, evidence: probeEvidence(probe, identities) }

@@ -296,7 +296,7 @@ interface PresenceObservation {
   branch: string
   destination: string
   head: string
-  identities: string[]
+  identities: ChangeIdentity[]
   probe: PresenceProbe
 }
 export interface DependencyVerdict {
@@ -5542,6 +5542,7 @@ export class Dispatcher {
       }
       verdicts.set(ticket.ref.id, verdict)
     }
+    await this.recordDestinationPresence(destinationHeads)
     if (this.outOfBudget(opts)) return
     if (failed.size === 0) {
       await this.sourceCondition(undefined, 'dependency-check')
@@ -6700,8 +6701,19 @@ export class Dispatcher {
       probe = compactProbe(witness, questions, inputs.landings, aliases)
     }
     const identities = projectProbe(probe, inputs.landings, aliases)
-    const evidence = probeEvidence(probe, identities)
-    if (cached?.head !== head || cached.branch !== branch || cached.evidence !== evidence) {
+    const observed = { branch, destination, head, identities, probe }
+    observations.set(destination, observed)
+    return observed
+  }
+
+  /** Persist each destination's final in-tick probe once, after every ticket
+   * has added its questions, and only when it differs from the durable one. */
+  private async recordDestinationPresence(observations: Map<string, PresenceObservation>) {
+    for (const { branch, destination, head, identities, probe } of observations.values()) {
+      const evidence = probeEvidence(probe, identities)
+      const cached = this.store.repositoryFacts().presence[destination]
+      if (cached?.head === head && cached.branch === branch && cached.evidence === evidence)
+        continue
       await this.store.ensureRepo(this.deps.repo)
       await this.store.appendRepo(this.deps.repo, {
         actor: DISPATCHER,
@@ -6709,9 +6721,6 @@ export class Dispatcher {
         payload: { branch, destination, head, evidence, identities, probe },
       })
     }
-    const observed = { branch, destination, head, identities, probe }
-    observations.set(destination, observed)
-    return observed
   }
 
   /** One snapshot of the destination at `head` and its full in-memory witness. */
