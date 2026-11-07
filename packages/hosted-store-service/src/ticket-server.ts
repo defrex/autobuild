@@ -35,6 +35,8 @@ import {
   TICKET_COMMENTS_CAPABILITY,
   TICKET_ISSUE_LINKS_HEADER,
   TICKET_ISSUE_LINKS_CAPABILITY,
+  TICKET_PRIORITY_HEADER,
+  TICKET_PRIORITY_CAPABILITY,
   TICKET_DEPENDENCY_STATE_HEADER,
   TICKET_DEPENDENCY_STATE_CAPABILITY,
   TICKET_POLICY_ROLES_HEADER,
@@ -42,6 +44,10 @@ import {
   projectTicketPolicy,
   TicketIssueLinksUnsupported,
   refuseUnsupportedIssueLinks,
+  TicketPriorityUnsupported,
+  refuseUnsupportedPriority,
+  ticketPriority,
+  urgentFirst,
   type HostedTicketContext,
   type HostedTicketOperation,
 } from '@defrex/autobuild/hosted-tickets'
@@ -212,6 +218,7 @@ export function createTicketServer(options: TicketServerOptions): {
         revision: _revision,
         comments: _comments,
         issueLinks: _issueLinks,
+        priority: _priority,
         ...base
       } = ticket
       // Capabilities are independent: released strict decoders receive neither field.
@@ -233,6 +240,9 @@ export function createTicketServer(options: TicketServerOptions): {
         ...(req.headers.get(TICKET_ISSUE_LINKS_HEADER) === TICKET_ISSUE_LINKS_CAPABILITY &&
         ticket.issueLinks?.length
           ? { issueLinks: ticket.issueLinks }
+          : {}),
+        ...(req.headers.get(TICKET_PRIORITY_HEADER) === TICKET_PRIORITY_CAPABILITY
+          ? { priority: ticketPriority(ticket) }
           : {}),
       }
       if (client.major !== 0 || client.minor > 10) return projected
@@ -261,8 +271,10 @@ export function createTicketServer(options: TicketServerOptions): {
       }
       case 'mutate-if-revision': {
         const { input } = hostedTicketRequestSchemas['mutate-if-revision'].parse(raw)
-        if (input.mutation.kind === 'update')
+        if (input.mutation.kind === 'update') {
           refuseUnsupportedIssueLinks(source, input.mutation.patch)
+          refuseUnsupportedPriority(source, input.mutation.patch)
+        }
         await mutateTicketIfRevision(source, input.id, input.expectedRevision, input.mutation)
         return json(200, { ok: true })
       }
@@ -292,7 +304,9 @@ export function createTicketServer(options: TicketServerOptions): {
       case 'list-ready': {
         const request = hostedTicketRequestSchemas['list-ready'].parse(raw)
         const listing = await source.listReady(request.input)
-        return json(200, { ...listing, tickets: listing.tickets.map(ticketResponse) })
+        // Urgent first for every client and backing source; a stable in-memory
+        // pass over rows already read, idempotent over an ordered listing.
+        return json(200, { ...listing, tickets: urgentFirst(listing.tickets).map(ticketResponse) })
       }
       case 'get': {
         const request = hostedTicketRequestSchemas.get.parse(raw)
@@ -315,6 +329,7 @@ export function createTicketServer(options: TicketServerOptions): {
       case 'create': {
         const request = hostedTicketRequestSchemas.create.parse(raw)
         refuseUnsupportedIssueLinks(source, request.input.draft)
+        refuseUnsupportedPriority(source, request.input.draft)
         return json(
           201,
           ticketResponse(await source.create(request.input.draft, request.input.options)),
@@ -323,6 +338,7 @@ export function createTicketServer(options: TicketServerOptions): {
       case 'update': {
         const request = hostedTicketRequestSchemas.update.parse(raw)
         refuseUnsupportedIssueLinks(source, request.input.patch)
+        refuseUnsupportedPriority(source, request.input.patch)
         await source.update(request.input.id, request.input.patch)
         return json(200, { ok: true })
       }
@@ -496,6 +512,12 @@ export function createTicketServer(options: TicketServerOptions): {
             error: error.message,
             code: 'issue-links-unsupported',
           })
+        if (error instanceof TicketPriorityUnsupported)
+          return json(409, {
+            kind: 'conflict',
+            error: error.message,
+            code: 'priority-unsupported',
+          })
         if (error instanceof OperatorQueryError)
           return json(409, { kind: 'conflict', error: error.message, code: error.code })
         if (error instanceof MachineAuthError || error instanceof AccessError)
@@ -540,13 +562,14 @@ export function createTicketServer(options: TicketServerOptions): {
     },
   }
   return {
-    // Every ticket response, failures included, advertises issue-link and
-    // policy-role support so a current client can recognize an older server's
-    // strict-schema refusal.
+    // Every ticket response, failures included, advertises issue-link,
+    // priority and policy-role support so a current client can recognize an
+    // older server's strict-schema refusal.
     async fetch(req: Request): Promise<Response> {
       const response = await server.fetch(req)
       const headers = new Headers(response.headers)
       headers.set(TICKET_ISSUE_LINKS_HEADER, TICKET_ISSUE_LINKS_CAPABILITY)
+      headers.set(TICKET_PRIORITY_HEADER, TICKET_PRIORITY_CAPABILITY)
       headers.set(TICKET_POLICY_ROLES_HEADER, TICKET_POLICY_ROLES_CAPABILITY)
       return new Response(response.body, { status: response.status, headers })
     },

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { ticketRefSchema } from '../../ontology'
 import { refineUniqueIssues } from './issue-links'
 import { holdsState } from './lifecycle'
+import { ticketPrioritySchema } from './priority'
 
 /** Explicit opt-in: released clients through 0.12 use strict decoders without revisions.
  * Source checkouts can share their release version, so version alone is insufficient. */
@@ -27,6 +28,13 @@ export const TICKET_COMMENTS_CAPABILITY = '1'
  * older server's strict-schema refusal from an ordinary validation failure. */
 export const TICKET_ISSUE_LINKS_HEADER = 'x-autobuild-ticket-issue-links'
 export const TICKET_ISSUE_LINKS_CAPABILITY = '1'
+
+/** Explicit opt-in: published 1.2–1.4 clients decode tickets strictly without
+ * priority. Servers answer `priority` on every ticket only to clients sending
+ * it and echo it on every ticket response, so a client can tell an older
+ * server's strict-schema refusal from an ordinary validation failure. */
+export const TICKET_PRIORITY_HEADER = 'x-autobuild-ticket-priority'
+export const TICKET_PRIORITY_CAPABILITY = '1'
 
 /** Explicit opt-in: released clients decode dependency states strictly without
  * `state`. Servers include each blocker's native state name only for clients
@@ -73,6 +81,7 @@ export const ticketWireSchema = z.strictObject({
   blockersResolved: z.boolean().optional(),
   blockedBy: z.array(z.string()).optional(),
   issueLinks: issueLinksWireSchema.optional(),
+  priority: ticketPrioritySchema.optional(),
 })
 export const ticketListingWireSchema = z.strictObject({
   tickets: z.array(ticketWireSchema),
@@ -106,6 +115,7 @@ const draftSchema = z.strictObject({
   labels: z.array(z.string()).optional(),
   blockedBy: z.array(z.string()).optional(),
   issueLinks: issueLinksWireSchema.optional(),
+  priority: ticketPrioritySchema.optional(),
 })
 const createOptionsSchema = z.strictObject({
   requestedId: z.string().min(1).optional(),
@@ -124,6 +134,7 @@ const updateSchema = z
     body: z.string().optional(),
     labels: z.array(z.string()).optional(),
     issueLinks: issueLinksWireSchema.optional(),
+    priority: ticketPrioritySchema.optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'update must name at least one field')
 
