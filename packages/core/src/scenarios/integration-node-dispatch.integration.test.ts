@@ -477,6 +477,154 @@ for (const waiting of ['blocked', 'paused'] as const)
     }
   }, 30_000)
 
+for (const freed of ['same-tick', 'earlier-tick'] as const)
+  test(`a node awaiting verification takes a slot freed ${freed === 'same-tick' ? 'in its request tick' : 'after its request'} ahead of a new ticket`, async () => {
+    const { dispatchCapacity, slotWaitText } = await import('../kernel/dispatch-capacity')
+    const { readBuildFacts } = await import('../store/reduced-reads')
+    const { renderSummaries, summarizeFrom } = await import('../cli/status')
+    const { DISPATCHER: actor } = await import('../events/envelope')
+    const h = await makeHarness({
+      localGitForge: true,
+      // Root leaves wait for a human merge; the child lands in the node.
+      configToml: `${CONFIG_TOML}\n[[merge]]\ninto = "root"\nfrom = "leaf"\nmode = "consent"\n`,
+      handlers: happyHandlers(),
+      tickets: [
+        { ...readyTicket('NODE', { title: 'Release node' }), kind: 'node' },
+        { ...readyTicket('CHILD', { title: 'Release child' }), target: 'NODE' },
+        readyTicket('LEAF', { title: 'Unrelated leaf' }),
+      ],
+    })
+    const waiting = async (slug: string) => {
+      const builds = []
+      for (const record of await h.store.listBuilds()) {
+        const state = reduceBuild(await h.events(record.slug))
+        if (state.status === 'done' || state.status === 'aborted') continue
+        const facts = (await readBuildFacts(h.store, record.slug)).value
+        builds.push({
+          record,
+          state,
+          workspace: facts.workspace !== null,
+          provisioning: facts.provisionMarker !== undefined,
+        })
+      }
+      return dispatchCapacity(builds, 2, h.clock()).waitingNodes?.find((n) => n.slug === slug)
+    }
+    const bySlug = async (id: string) =>
+      (await h.store.listBuilds()).find((record) => record.ticket?.id === id)
+    const run = async (slug: string) => {
+      const entry = h.launched.find((candidate) => candidate.slug === slug)!
+      try {
+        await entry.runner.run()
+      } finally {
+        await h.store.releaseLease(entry.slug, entry.instance)
+      }
+    }
+    try {
+      for (let i = 0; i < 3 && !(await bySlug('CHILD')); i++) {
+        await h.dispatcher.tick()
+        h.clock.advance(60_000)
+      }
+      const node = (await bySlug('NODE'))!
+      const child = (await bySlug('CHILD'))!
+      const leaf = (await bySlug('LEAF'))!
+      await run(child.slug)
+      // The leaf awaits its human merge and a second leaf holds the other slot.
+      await run(leaf.slug)
+      await h.store.createBuild({
+        slug: 'slot-holder',
+        repo: h.origin,
+        ticket: { source: 'fake', id: 'slot-holder' },
+        created: {
+          actor,
+          type: 'build.created',
+          payload: {
+            repo: h.origin,
+            baseBranch: 'main',
+            ticket: { source: 'fake', id: 'slot-holder' },
+          },
+        },
+      })
+      await h.store.append('slot-holder', {
+        actor: { kind: 'kernel' },
+        type: 'runner.attached',
+        payload: { instance: 'slot-holder', host: 'test' },
+      })
+      const childState = reduceBuild(await h.events(child.slug))
+      await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+        buildSlug: child.slug,
+      })
+      for (let i = 0; i < 4; i++) {
+        if (ofType(await h.events(node.slug), 'integration.prepared').length) break
+        await h.dispatcher.tick()
+      }
+      expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(1)
+      expect(h.launched.some((entry) => entry.slug === node.slug)).toBe(false)
+      expect((await readBuildFacts(h.store, node.slug)).value.workspace).toBeNull()
+      expect(await waiting(node.slug)).toEqual({
+        slug: node.slug,
+        request: 'verification',
+      })
+      const summary = summarizeFrom(
+        node,
+        reduceBuild(await h.events(node.slug)),
+        h.clock(),
+        'verification',
+      )
+      expect(renderSummaries([summary], h.clock(), '').join('\n')).toContain(
+        slotWaitText('verification'),
+      )
+      if (freed === 'earlier-tick') {
+        // Quiet ticks move the node into idle polling: the janitor stops
+        // visiting it except every nodeIdlePollSeconds. Stop on the tick that
+        // records an idle checkpoint, so the next tick is not due to visit it.
+        let idle = false
+        for (let i = 0; i < 20 && !idle; i++) {
+          h.clock.advance(60_000)
+          const before = ofType(await h.events(node.slug), 'node.poll-checked').length
+          await h.dispatcher.tick()
+          const checks = ofType(await h.events(node.slug), 'node.poll-checked')
+          idle =
+            checks.length > before &&
+            h.clock().getTime() - Date.parse(checks.at(-1)!.payload.unchangedSince) >= 600_000
+        }
+        expect(idle).toBe(true)
+        expect(h.launched.some((entry) => entry.slug === node.slug)).toBe(false)
+      }
+      // The leaf's PR closes without moving main; the janitor settles it
+      // inside the next tick, after it has already visited the node, and
+      // intake runs in the same tick.
+      await h.forgeAdapter.closePr!(h.origin, reduceBuild(await h.events(leaf.slug)).pr!.number)
+      h.tickets.add(readyTicket('COMPETITOR', { title: 'New ticket must wait' }))
+      await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+      expect(reduceBuild(await h.events(leaf.slug)).status).toBe('done')
+      const held = (await readBuildFacts(h.store, node.slug)).value
+      expect(
+        h.launched.some((entry) => entry.slug === node.slug) ||
+          held.workspace !== null ||
+          held.provisionMarker !== undefined,
+      ).toBe(true)
+      expect(await bySlug('COMPETITOR')).toBeUndefined()
+      expect(await waiting(node.slug)).toBeUndefined()
+      // The reservation resolves: once the node verifies, its slot returns to intake.
+      if (!h.launched.some((entry) => entry.slug === node.slug)) await h.dispatcher.tick()
+      await run(node.slug)
+      await h.store.append('slot-holder', {
+        actor,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      h.clock.advance(60_000)
+      for (let i = 0; i < 3 && !(await bySlug('COMPETITOR')); i++) await h.dispatcher.tick()
+      const verified = reduceBuild(await h.events(node.slug))
+      expect(verified.verify.results.some((result) => result.outcome === 'pass')).toBe(true)
+      expect(await waiting(node.slug)).toBeUndefined()
+      expect(await bySlug('COMPETITOR')).toBeDefined()
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+
 test('node-target consent lands the canonical leaf without native auto-merge', async () => {
   const { git } = await import('./harness')
   const { humanActor } = await import('../events/envelope')
