@@ -442,6 +442,17 @@ test('human repository status explains actual, configured and descendant-held ca
     'capacity: 6/6 effective; 5 configured; 1 node using descendant-held slots: website-node',
   )
   expect(JSON.parse(JSON.stringify(status)).capacity).toEqual(status.capacity)
+  status.capacity = {
+    configured: 2,
+    occupied: 2,
+    effective: 2,
+    borrowingNodes: [],
+    waitingNodes: [{ slug: 'release-node', request: 'verification' }],
+  }
+  expect(renderRepositoryStatus(status)).toContain(
+    'capacity: 2/2 effective; 2 configured; 0 nodes using descendant-held slots; 1 node waiting for a slot ahead of new ticket claims: release-node (verification)',
+  )
+  expect(JSON.parse(JSON.stringify(status)).capacity).toEqual(status.capacity)
 })
 
 test.each([false, true])(

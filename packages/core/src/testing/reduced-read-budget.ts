@@ -1821,6 +1821,10 @@ export async function nodePollingReadBudget(opts: {
   /** Seed every 10th event as a recorded child's issue links: 10 children at
    * 100 events and 10,000 at 100,000, over a bounded issue set. */
   issueLinkChildren?: boolean
+  /** Proves the node still waits for a runner slot after each measured tick,
+   * so the every-tick admission stage is measured on its waiting path. Its
+   * own reads are excluded from the measurement. */
+  slotWaiting?: () => Promise<boolean>
 }) {
   const { store, slug } = opts
   const checkpoint = (await readBuildFacts(store, slug)).value.state.nodePolling!
@@ -1889,6 +1893,8 @@ export async function nodePollingReadBudget(opts: {
         expect(rows).toBeLessThanOrEqual(8)
         if (elapsed === 10_000) expect(rows).toBe(0)
         costs.push(rows, calls)
+        if (opts.slotWaiting) expect(await opts.slotWaiting()).toBe(true)
+        history = 0
       }
     } finally {
       Reflect.deleteProperty(events, 'slice')
