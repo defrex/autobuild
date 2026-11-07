@@ -48,7 +48,7 @@ A build freezes the links when it claims the ticket. On GitHub, a leaf build tha
 bun ab ticket create "Close stale sandboxes" --body spec.md --issues 824,820:refs
 ```
 
-When a ticket must go next, such as a fix for a stuck build, mark it urgent instead of moving other tickets out of ready: `--priority urgent` on `ab ticket create` or `ab ticket update`. `--priority normal` removes it. The `file` and `hosted` sources store priority; `linear` refuses urgent and names the source. See [Ticket sources](ticket-sources.md#shipped-adapters).
+When a ticket must go next, such as a fix for a stuck build, mark it urgent instead of moving other tickets out of ready: `--priority urgent` on `ab ticket create` or `ab ticket update`. `--priority normal` removes it. The `file`, `hosted` and `linear` sources store priority. See [Ticket sources](ticket-sources.md#shipped-adapters).
 
 ```sh
 bun ab ticket update AUT-12 --priority urgent
