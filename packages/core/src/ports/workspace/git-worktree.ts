@@ -328,13 +328,15 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   ): Promise<WorkspaceProvisionResult> {
     const handle = await this.provisionCore(opts)
     if (opts.restoration?.length) {
-      await restoreGitCommits({
+      const { skipped } = await restoreGitCommits({
         exec: this.exec,
         workspacePath: handle.path,
         branch: opts.branch,
         heads: opts.restoration,
+        replaced: opts.restorationReplaced,
         local: true,
       })
+      if (skipped.length) handle.restorationSkipped = skipped
       handle.base = {
         source: 'existing',
         sha: await this.resolveCommit(handle.path, `refs/heads/${opts.branch}`),

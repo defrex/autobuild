@@ -7,7 +7,7 @@ import {
   type MissingAccountCredential,
 } from '../accounts/availability'
 
-import { preserveWorkspaceBeforeRelease } from './workspace-preservation'
+import { preserveWorkspaceBeforeRelease, supersedeRestorationHeads } from './workspace-preservation'
 import { WorkspaceCleanupRequired } from '../ports/types'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import type { TicketPreparation } from '../kernel/ticket-preparation'
@@ -2074,6 +2074,9 @@ export class Dispatcher {
           remote: workspaces.publication !== undefined,
           branch: handle.branch,
           base: handle.base,
+          ...(handle.restorationSkipped?.length
+            ? { restorationSkipped: handle.restorationSkipped }
+            : {}),
         },
       } satisfies EventWrite<'workspace.provisioned'>)
       // Release before the launch: the launcher re-claims the lease under the
@@ -4105,11 +4108,21 @@ export class Dispatcher {
     input: Parameters<WorkspaceProvider['provision']>[0],
   ) {
     const facts = (await readBuildFacts(this.store, slug)).value
+    const { restoration, superseded } = supersedeRestorationHeads(
+      facts.workspacePreservation?.payload.heads,
+      facts.replacedHeads,
+    )
     try {
-      return await this.deps.workspaces.provision({
+      const handle = await this.deps.workspaces.provision({
         ...input,
-        restoration: facts.workspacePreservation?.payload.heads,
+        restoration,
+        ...(facts.replacedHeads.length ? { restorationReplaced: facts.replacedHeads } : {}),
       })
+      const skipped = [
+        ...superseded.map((sha) => ({ sha, reason: 'superseded' as const })),
+        ...(handle.restorationSkipped ?? []).filter((skip) => !superseded.includes(skip.sha)),
+      ]
+      return skipped.length ? { ...handle, restorationSkipped: skipped } : handle
     } catch (error) {
       if (error instanceof WorkspaceCleanupRequired) {
         await this.store.append(slug, {
@@ -4570,6 +4583,9 @@ export class Dispatcher {
             remote: this.deps.workspaces.publication !== undefined,
             branch: handle.branch,
             base: handle.base,
+            ...(handle.restorationSkipped?.length
+              ? { restorationSkipped: handle.restorationSkipped }
+              : {}),
           },
         } satisfies EventWrite<'workspace.provisioned'>)
         events = (await readBuildFacts(store, record.slug)).value
@@ -6189,6 +6205,9 @@ export class Dispatcher {
                 remote: false,
                 branch: handle.branch,
                 base: handle.base,
+                ...(handle.restorationSkipped?.length
+                  ? { restorationSkipped: handle.restorationSkipped }
+                  : {}),
               },
             })
           }
@@ -6435,6 +6454,9 @@ export class Dispatcher {
           remote: false,
           branch: handle.branch,
           base: handle.base,
+          ...(handle.restorationSkipped?.length
+            ? { restorationSkipped: handle.restorationSkipped }
+            : {}),
         },
       })
     }
