@@ -1311,13 +1311,15 @@ but reported as skipped: live provider access requires credentials/resources
 and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 
-The two remote clients get client-only integration coverage in core itself:
-`RemoteBuildStore` (`store/remote/client.integration.test.ts`, which also pins scoped-token
-minting/verification) and `HostedTicketSource` (`ports/tickets/remote.test.ts`)
-run against an injected `fetchFn` with responses built from the protocol's wire
-schemas. The full over-the-wire seam suites (client → HTTP → server) live in
-`packages/hosted-store-service` (`*.seam.integration.test.ts`) and run with the
-client tests in `bun run test:integration`.
+The two remote clients get client-only coverage in core itself, against an
+injected `fetchFn` with responses built from the protocol's wire schemas.
+`HostedTicketSource` (`ports/tickets/remote.test.ts`) is in-memory unit
+coverage that runs in `bun run test`. `RemoteBuildStore`
+(`store/remote/client.integration.test.ts`, which also pins scoped-token
+minting/verification) is integration coverage. The full over-the-wire seam
+suites (client → HTTP → server) live in `packages/hosted-store-service`
+(`*.seam.integration.test.ts`) and run with the `RemoteBuildStore` client tests
+in `bun run test:integration`.
 
 To run the Linear contract manually against a destructive scratch target:
 
