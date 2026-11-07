@@ -103,6 +103,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
     labels: over.labels ?? ['autobuild'],
     ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
     ...(over.issueLinks !== undefined ? { issueLinks: over.issueLinks } : {}),
+    ...(over.priority !== undefined ? { priority: over.priority } : {}),
   }
 }
 
@@ -746,6 +747,72 @@ describe('build slug helpers', () => {
     }
     expect(validateSlugCandidate(null)).toBeNull()
   })
+})
+
+// ── Urgent intake order (AUT-1027) ───────────────────────────────────────────
+
+describe('Dispatcher urgent intake order', () => {
+  const CAPACITY = (n: number) =>
+    `capacity = ${n}\n[tickets]\nsource = "file"\nreadyState = "Ready"`
+
+  test('urgent ready work is claimed first, each class in source order', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('N1', { title: 'First normal work' }),
+        readyTicket('N2', { title: 'Second normal work' }),
+        readyTicket('U1', { title: 'Urgent work filed last', priority: 'urgent' }),
+      ],
+      toml: CAPACITY(2),
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dispatched).toBe(2)
+    expect(h.tickets.claims).toEqual(['U1', 'N1'])
+    expect((await h.tickets.get('N2'))?.state).toBe('Ready')
+  })
+
+  test('a blocked urgent ticket does not hold back normal work', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('N1', { title: 'First normal work' }),
+        readyTicket('N2', { title: 'Second normal work' }),
+        readyTicket('U1', { title: 'Blocked urgent work', priority: 'urgent', blockedBy: ['B1'] }),
+        readyTicket('B1', { title: 'Unfinished blocker', state: 'Triage' }),
+      ],
+      toml: CAPACITY(2),
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyDiagnostics).toEqual(['ticket U1 blocked by B1 (not complete)'])
+    expect(h.tickets.claims).toEqual(['N1', 'N2'])
+  })
+
+  test('marking a ticket urgent never preempts a running build', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('N1', { title: 'Running normal work' }),
+        readyTicket('N2', { title: 'Later normal work' }),
+      ],
+      toml: CAPACITY(1),
+    })
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(h.tickets.claims).toEqual(['N1'])
+    const [build] = await h.store.listBuilds()
+    const before = (await h.store.getEvents(build!.slug)).map((event) => event.type)
+    await h.tickets.update('N2', { priority: 'urgent' })
+    h.clock.advance(60_000)
+    const report = await h.dispatcher.tick()
+    expect(report.dispatched).toBe(0)
+    expect(h.tickets.claims).toEqual(['N1'])
+    const after = (await h.store.getEvents(build!.slug)).map((event) => event.type)
+    expect(after).toEqual(before)
+    expect(after.some((type) => /pause|abort|stop/.test(type))).toBe(false)
+  })
+
+  test('the intake scan reads the same with and without urgent tickets', async () => {
+    const { urgentIntakeReadBudget } = await import('../testing/reduced-read-budget')
+    const calls = await urgentIntakeReadBudget()
+    expect(calls.listReady).toBe(1)
+  }, 60_000)
 })
 
 // ── Dispatch (§12, §6.3) ─────────────────────────────────────────────────────

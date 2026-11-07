@@ -163,6 +163,12 @@ export {
 } from '../ports/tickets/revision'
 export { TicketIssueLinksUnsupported, normalizeIssueLinks } from '../ports/tickets/issue-links'
 export {
+  TicketPriorityUnsupported,
+  refuseUnsupportedPriority,
+  withoutUnsupportedPriority,
+  urgentFirst,
+} from '../ports/tickets/priority'
+export {
   issueKeywordLines,
   landingMessage,
   neutralizeClosingReferences,

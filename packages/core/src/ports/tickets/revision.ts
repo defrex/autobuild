@@ -6,7 +6,15 @@ import { normalizeIssueLinks } from './issue-links'
 export function ticketRevision(
   ticket: Pick<
     Ticket,
-    'title' | 'body' | 'labels' | 'state' | 'blockedBy' | 'kind' | 'target' | 'issueLinks'
+    | 'title'
+    | 'body'
+    | 'labels'
+    | 'state'
+    | 'blockedBy'
+    | 'kind'
+    | 'target'
+    | 'issueLinks'
+    | 'priority'
   > & {
     comments?: Ticket['comments']
     attachments?: unknown
@@ -31,6 +39,9 @@ export function ticketRevision(
         ...(issueLinks.length > 0
           ? [['issueLinks', issueLinks.map((link) => [link.issue, link.intent])]]
           : []),
+        // Appended only when urgent, for the same reason: normal tickets keep
+        // the revisions they had before priority existed.
+        ...(ticket.priority === 'urgent' ? [['priority', 'urgent']] : []),
       ]),
     )
     .digest('hex')

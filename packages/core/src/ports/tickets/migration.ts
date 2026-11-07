@@ -9,6 +9,7 @@ import { parseTicketFile, serializeTicketFile } from './file-codec'
 import { validateFileTicketId } from './requested-id'
 import { normalizeStateName } from './states'
 import { TicketIssueLinksUnsupported } from './issue-links'
+import { TicketPriorityUnsupported } from './priority'
 import { encodePortableAsset, decodePortableAsset, type PortableAsset } from './portable-assets'
 
 export const MANIFEST = '.ab-migration.json'
@@ -186,6 +187,7 @@ export async function exportTickets(opts: MigrationOptions): Promise<void> {
           labels: ticket.labels,
           blockedBy: ticket.blockedBy,
           issueLinks: ticket.issueLinks,
+          ...(ticket.priority === 'urgent' ? { priority: ticket.priority } : {}),
           idempotencyKey: key,
           ...(ticket.comments !== undefined ? { comments: ticket.comments } : {}),
           attachments: await currentAssets(
@@ -250,6 +252,8 @@ export async function importTickets(opts: MigrationOptions): Promise<MigrationRe
     throw new Error('target source cannot preserve kind/target metadata')
   if (!opts.source.issueLinks && tickets.some((t) => t.issueLinks?.length))
     throw new TicketIssueLinksUnsupported(opts.source.name)
+  if (!opts.source.priority && tickets.some((t) => t.priority === 'urgent'))
+    throw new TicketPriorityUnsupported(opts.source.name)
   const bundles = new Map<string, PortableAsset[]>()
   for (const ticket of tickets) {
     const path = join(dir, ticket.state!, `${ticket.ref.id}.md`)
@@ -384,6 +388,9 @@ export async function importTickets(opts: MigrationOptions): Promise<MigrationRe
             ...(opts.source.integrationTree ? { kind: ticket.kind ?? 'work' } : {}),
             ...(opts.source.issueLinks && ticket.issueLinks?.length
               ? { issueLinks: ticket.issueLinks }
+              : {}),
+            ...(opts.source.priority && ticket.priority === 'urgent'
+              ? { priority: ticket.priority }
               : {}),
           },
           {

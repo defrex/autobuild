@@ -107,6 +107,7 @@ import { readBuildSelector, readBuildFacts, type CurrentBuildFacts } from '../st
 import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { holdsState, ticketLifecycle } from '../ports/tickets/lifecycle'
+import { urgentFirst } from '../ports/tickets/priority'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import type { TicketSourceDegradation } from '../kernel/ticket-source-health'
 /**
@@ -5372,11 +5373,14 @@ export class Dispatcher {
         creation,
       ]),
     )
-    const ready = listing.tickets.filter(
+    const eligible = listing.tickets.filter(
       (ticket) =>
         !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`) &&
         !this.preparing(ticket.ref.source, ticket.ref.id),
     )
+    // Urgent first, each class in source order (stable). Every gate below is
+    // unchanged; a source without the priority capability is all normal.
+    const ready = this.deps.tickets.priority ? urgentFirst(eligible) : eligible
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
     report.queued = ready.length

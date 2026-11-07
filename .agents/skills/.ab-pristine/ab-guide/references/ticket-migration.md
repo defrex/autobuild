@@ -62,7 +62,7 @@ timestamps remain in the export; imported comments use the target's metadata.
 
 Portable records use TOML frontmatter between `+++` fences and an unchanged
 Markdown body. Alongside `id`, `title`, `labels`, `blockedBy` and `idempotencyKey`,
-optional `issueLinks` contain `issue` and `intent` (`closes` or `refs`), optional `comments` contain `body`, `createdAt` and optional `author`. Optional
+optional `issueLinks` contain `issue` and `intent` (`closes` or `refs`), optional `priority` is `"urgent"` (absent means normal), optional `comments` contain `body`, `createdAt` and optional `author`. Optional
 `attachments` contain `kind`, `name`, `layout` (`file` or `tree`) and `entries`:
 `{ type = "dir", path = "empty" }` or
 `{ type = "file", path = "image.png", base64 = "…" }`. Common asset limits and
@@ -78,8 +78,8 @@ no continuous sync, assignee migration, state history or build-history migration
 
 Integration-tree `kind` and `target` are preserved in portable frontmatter.
 Import validates the complete target graph before changing the destination and
-refuses a destination that cannot preserve metadata. Issue links are preserved
-the same way, and a destination that cannot store them is refused before any write. It creates or adopts every
+refuses a destination that cannot preserve metadata. Issue links and urgent
+priority are preserved the same way, and a destination that cannot store them is refused before any write. It creates or adopts every
 identity, establishes node kinds, then applies targets using the durable id map,
 just like blockers. Input order does not matter. Resuming also restores edges on
 adopted tickets; normal destination validation still guards existing graphs and

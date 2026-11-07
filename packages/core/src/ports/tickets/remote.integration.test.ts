@@ -40,6 +40,7 @@ import {
   type HostedTicketPolicy,
 } from './remote-protocol'
 import { HostedTicketSource, hostedTicketPolicy, type HostedTicketFetch } from './remote'
+import type { TicketSource } from '../types'
 import { ticketsSchema } from '../../config/schema'
 
 // ── The fake fetch ───────────────────────────────────────────────────────────
@@ -578,4 +579,30 @@ test('a service predating the roles is named only when the policy maps one', asy
   const ok = makeSource([{ body: OK }])
   await ok.source.synchronizePolicy(policy())
   expect(ok.calls[0]!.body.input).toEqual(policy())
+})
+
+test('hosted priority: urgent is refused before any request and normal sends nothing', async () => {
+  const { source, calls } = makeSource([{ body: OK }, { body: TICKET }])
+  expect((source as TicketSource).priority).toBeUndefined()
+  const urgent = await rejectionOf(
+    source.create({ title: 'Hotfix', body: 'spec', priority: 'urgent' }),
+  )
+  expect(urgent.name).toBe('TicketPriorityUnsupported')
+  await expect(source.update('ENG-42', { priority: 'urgent' })).rejects.toThrow(
+    'cannot store ticket priority',
+  )
+  await expect(
+    source.mutateIfRevision('ENG-42', 'fixture', { kind: 'update', patch: { priority: 'urgent' } }),
+  ).rejects.toThrow('cannot store ticket priority')
+  expect(calls).toHaveLength(0)
+
+  await source.update('ENG-42', { priority: 'normal' })
+  expect(calls).toHaveLength(0)
+  await source.update('ENG-42', { title: 'Renamed', priority: 'normal' })
+  expect(calls[0]!.body.input).toEqual({ id: 'ENG-42', patch: { title: 'Renamed' } })
+  // A normal-only guarded update sends no write but still checks the revision.
+  await expect(
+    source.mutateIfRevision('ENG-42', 'stale', { kind: 'update', patch: { priority: 'normal' } }),
+  ).rejects.toThrow('changed: expected revision stale')
+  expect(calls[1]!.url.endsWith('/tickets/get')).toBe(true)
 })
