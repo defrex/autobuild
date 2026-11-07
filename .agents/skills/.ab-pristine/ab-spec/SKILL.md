@@ -118,10 +118,16 @@ addresses it. Separate several with commas. A source that cannot store issue
 links refuses the create and names itself; file again without `--issues` and
 keep the Evidence citation.
 
+When grooming established that the ticket must go next — for example a fix
+that unblocks a stuck build — create it with `--priority urgent` so the
+dispatcher claims it before normal ready work. Otherwise omit the flag; normal
+is the default. A source that cannot store priority refuses the create and
+names itself; file it normal and tell the human so the operator can expedite it.
+
 When the explicitly named destination equals `[tickets].readyState`, tell the
 human in the completion response that the ticket may be claimed by the next
 dispatch once the repository's label, dependency, intake, capacity, and other
-readiness gates are satisfied. Before ready filing, follow
+readiness gates are satisfied, after any urgent ready tickets. Before ready filing, follow
 [After filing: check operator presence](#after-filing-check-operator-presence):
 with a live operator, say the existing operator will pick it up; without one,
 say you will operate it. The human's explicit instructions override either default.

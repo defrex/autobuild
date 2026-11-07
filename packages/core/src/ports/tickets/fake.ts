@@ -36,6 +36,7 @@ function cloneTicket(ticket: Ticket, doneState: string): Ticket {
     ...(ticket.issueLinks?.length
       ? { issueLinks: ticket.issueLinks.map((link) => ({ ...link })) }
       : {}),
+    ...(ticket.priority === 'urgent' ? { priority: 'urgent' as const } : {}),
   }
 }
 
@@ -44,6 +45,7 @@ export class FakeTicketSource implements TicketSource {
   readonly name = 'fake'
   readonly integrationTree = true
   readonly issueLinks = true
+  readonly priority = true
 
   async listAll(): Promise<TicketListing> {
     return {
@@ -179,6 +181,7 @@ export class FakeTicketSource implements TicketSource {
         ? { blockedBy: [...draft.blockedBy] }
         : {}),
       ...(draft.issueLinks?.length ? { issueLinks: normalizeIssueLinks(draft.issueLinks) } : {}),
+      ...(draft.priority === 'urgent' ? { priority: 'urgent' as const } : {}),
     }
     this.tickets.set(id, ticket)
     if (opts.idempotencyKey !== undefined) {
@@ -229,6 +232,8 @@ export class FakeTicketSource implements TicketSource {
     if (validated.labels !== undefined) ticket.labels = [...validated.labels]
     if (validated.issueLinks?.length) ticket.issueLinks = validated.issueLinks
     else if (validated.issueLinks !== undefined) delete ticket.issueLinks
+    if (validated.priority === 'urgent') ticket.priority = 'urgent'
+    else if (validated.priority !== undefined) delete ticket.priority
 
     this.updates.push({ id, patch: cloneUpdate(validated) })
   }
@@ -289,5 +294,6 @@ function cloneUpdate(patch: TicketUpdate): TicketUpdate {
     ...(patch.issueLinks !== undefined
       ? { issueLinks: patch.issueLinks.map((link) => ({ ...link })) }
       : {}),
+    ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
   }
 }
