@@ -157,6 +157,8 @@ canonical changed-outcome scan event by sequence and stores only its scheduling
 baseline, mode and input fingerprints. It is disposable coordination metadata,
 not a reducer snapshot or authoritative outcome; loss permits a safe extra scan.
 Keyed reads and atomic upserts have constant cost and never read journal rows.
+The dispatcher skips the keyed read entirely while the recorded fact alone
+proves the scan interval has not elapsed.
 
 **Reducer snapshots.** The `BuildStore` port can keep, per scope (one build log
 or the repository journal) and registered reducer, that reducer's accumulator as

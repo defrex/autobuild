@@ -219,6 +219,7 @@ export async function reducedReadBudget(opts: {
     costs.bytes = 0
   }
   let repositoryBytes: number | undefined
+  let deferredScanProbe: { metadata: number; bytes: number } | undefined
   for (const length of [32, 256]) {
     for (let i = 0; i < length; i++) {
       await store.append(slug, {
@@ -414,10 +415,18 @@ export async function reducedReadBudget(opts: {
         launchRunner: async () => 'scheduled',
       })
     await dispatcher().observeReady()
+    // A fresh journal anchor per length keeps the cadence counts identical.
+    const latest = (await readRepositoryFacts(cold, repo)).value.scan
+    if (latest === undefined) throw new Error('missing ticket scan fact')
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-scan-completed',
+      payload: { ...latest, startedAt: new Date(scanTime).toISOString() },
+    })
     const scanSeq = (await readRepositoryFacts(cold, repo)).value.scanSeq
     let cadenceReads = 0
     let cadenceWrites = 0
-    for (let interval = 0; interval < 3; interval++) {
+    const countedHandle = async () => {
       const freshHandle = await opts.fresh()
       const counted = new Proxy(freshHandle, {
         get(target, key) {
@@ -435,19 +444,56 @@ export async function reducedReadBudget(opts: {
           return typeof value === 'function' ? value.bind(target) : value
         },
       })
-      const observe = () =>
-        new Dispatcher({
-          store: counted,
-          repo,
-          config,
-          tickets: new FakeTicketSource([]),
-          workspaces: new FakeWorkspaceProvider({ root: '/budget-workspaces', mode: 'logical' }),
-          forge: new FakeForge(),
-          ids: sequentialIds(),
-          clock: () => new Date(scanTime),
-          exec,
-          launchRunner: async () => 'scheduled',
-        }).observeReady()
+      return { freshHandle, counted }
+    }
+    const scanDispatcher = (counted: BuildStore) =>
+      new Dispatcher({
+        store: counted,
+        repo,
+        config,
+        tickets: new FakeTicketSource([]),
+        workspaces: new FakeWorkspaceProvider({ root: '/budget-workspaces', mode: 'logical' }),
+        forge: new FakeForge(),
+        ids: sequentialIds(),
+        clock: () => new Date(scanTime),
+        exec,
+        launchRunner: async () => 'scheduled',
+      })
+    // While the journal measurement alone proves the scan is not due, fresh
+    // processes make no cadence request and read no event rows.
+    const anchorTime = scanTime
+    let deferred: { metadata: number; bytes: number } | undefined
+    for (let k = 1; k < 6; k++) {
+      scanTime = anchorTime + k * 10_000
+      const { freshHandle, counted } = await countedHandle()
+      reset()
+      await scanDispatcher(counted).observeReady()
+      deferred ??= { metadata: costs.metadata, bytes: costs.bytes }
+      expect(costs.events).toBe(0)
+      expect(cadenceReads).toBe(0)
+      expect((await readRepositoryFacts(freshHandle, repo)).value.scanSeq).toBe(scanSeq)
+    }
+    if (deferredScanProbe === undefined) deferredScanProbe = deferred
+    else {
+      // Flat with history: the repository facts value is bounded, as above.
+      expect(deferred!.metadata).toBe(deferredScanProbe!.metadata)
+      expect(deferred!.bytes).toBeLessThan(deferredScanProbe!.bytes + 512)
+    }
+    // At the interval the row is consulted; the unchanged scan advances only it.
+    scanTime = anchorTime + 60_000
+    {
+      const { freshHandle, counted } = await countedHandle()
+      reset()
+      await scanDispatcher(counted).observeReady()
+      expect(costs.events).toBe(0)
+      expect(cadenceReads).toBe(1)
+      expect(cadenceWrites).toBe(1)
+      expect(deferred!.metadata).toBeLessThan(costs.metadata)
+      expect((await readRepositoryFacts(freshHandle, repo)).value.scanSeq).toBe(scanSeq)
+    }
+    for (let interval = 0; interval < 3; interval++) {
+      const { freshHandle, counted } = await countedHandle()
+      const observe = () => scanDispatcher(counted).observeReady()
       scanTime += 30_000
       reset()
       await observe()
@@ -460,8 +506,8 @@ export async function reducedReadBudget(opts: {
       expect(costs.metadata).toBeLessThan(100)
       expect((await readRepositoryFacts(freshHandle, repo)).value.scanSeq).toBe(scanSeq)
     }
-    expect(cadenceReads).toBe(6)
-    expect(cadenceWrites).toBe(3)
+    expect(cadenceReads).toBe(7)
+    expect(cadenceWrites).toBe(4)
     await dispatcher().tick({ acceptNewWork: false })
     await getOperatorDashboard({ store: cold, repo, clock: () => new Date(1000) })
     reset()

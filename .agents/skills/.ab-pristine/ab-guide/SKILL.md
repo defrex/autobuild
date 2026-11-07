@@ -463,6 +463,14 @@ by sequence. It contains scheduling metadata only, never counts or lifecycle
 state, and is distinct from reducer checkpoints. Missing or stale metadata
 falls back to the recorded fact and can cause one safe extra scan without
 reconstructing history. Successful unchanged scans advance this cache only.
+While less than one interval has elapsed since the recorded fact's
+measurement, with unchanged readiness and criteria fingerprints and no
+admission following an observation measurement, a tick defers without reading
+the cache, because the cache only acknowledges that measurement or a later one.
+If the wall clock moved backwards, a cache entry dated later than the current
+clock is therefore consulted only once that window ends, at most one scan
+interval after the recorded measurement; the dispatcher then treats it as a
+clock rollback, rescans, and resets the cache to the current clock.
 
 
 ### Root scalars
