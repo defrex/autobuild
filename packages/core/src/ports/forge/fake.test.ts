@@ -58,6 +58,9 @@ const fakeForgeContractFactory: ForgeContractFactory = async (opts = {}) => {
         forge.comments.some((comment) => comment.number === number && comment.body === body),
       mergeSha: async () => landingSha,
       trackPr: () => {},
+      editPr: (number, edit) => forge.editPr(number, edit),
+      armMergeCommitAutoMerge: (number) =>
+        forge.armAutoMerge(number, { method: 'MERGE', headline: 'Merge pull request', body: '' }),
     },
   }
 }
@@ -517,4 +520,137 @@ test('fake models immutable build identity and actual landing messages independe
   expect(await forge.containsBuild('/ws/a', 'base', 'immutable-slug')).toBe(true)
   expect(await forge.containsBuild('/ws/a', 'base', 'immutable')).toBe(false)
   await expect(forge.containsBuild('/ws/a', 'missing', 'immutable-slug')).rejects.toThrow()
+})
+
+describe('FakeForge armed native identity', () => {
+  const slug = 'build-x'
+  const options = { buildSlug: slug, baseBranch: 'main' }
+  const trailer = `Autobuild-Build: ${slug}`
+  const trailers = (body: string) =>
+    body.split('\n').filter((line) => line.startsWith('Autobuild-Build:'))
+  const seeded = () => {
+    const forge = new FakeForge()
+    forge.setPrState(1, { state: 'open', mergeable: true })
+    return forge
+  }
+  const lastCall = (forge: FakeForge) => forge.autoMergeCalls.at(-1)!
+
+  test('a setPrState-only PR arms with seeded defaults and the trailer', async () => {
+    const forge = seeded()
+    expect(await forge.setAutoMerge('/ws', 1, true, options)).toEqual({ kind: 'applied' })
+    const armed = forge.armedAutoMerge(1)!
+    expect(armed.method).toBe('SQUASH')
+    expect(armed.headline).toBe('Fake PR #1 (#1)')
+    expect(trailers(armed.body)).toEqual([trailer])
+    expect(lastCall(forge).armed).toEqual(armed)
+    expect(forge.identityReads).toEqual([])
+  })
+
+  test('a current message is only read', async () => {
+    const forge = seeded()
+    await forge.setAutoMerge('/ws', 1, true, options)
+    const armed = forge.armedAutoMerge(1)
+    expect(await forge.setAutoMerge('/ws', 1, true, options)).toEqual({ kind: 'applied' })
+    expect(lastCall(forge).changed).toBe(false)
+    expect(forge.armedAutoMerge(1)).toEqual(armed)
+    expect(forge.identityReads).toEqual([1])
+  })
+
+  test('a title edit replaces the headline and keeps the body', async () => {
+    const forge = seeded()
+    await forge.setAutoMerge('/ws', 1, true, options)
+    const before = forge.armedAutoMerge(1)!
+    forge.editPr(1, { title: 'Edited' })
+    expect(forge.armedAutoMerge(1)).toEqual(before)
+    expect(await forge.setAutoMerge('/ws', 1, true, options)).toEqual({ kind: 'applied' })
+    expect(lastCall(forge).changed).toBe(true)
+    expect(forge.armedAutoMerge(1)).toEqual({ ...before, headline: 'Edited (#1)' })
+  })
+
+  test('a body edit replaces the body and keeps the headline', async () => {
+    const forge = seeded()
+    await forge.setAutoMerge('/ws', 1, true, options)
+    const before = forge.armedAutoMerge(1)!
+    forge.editPr(1, { body: 'New description' })
+    expect(await forge.setAutoMerge('/ws', 1, true, options)).toEqual({ kind: 'applied' })
+    const armed = forge.armedAutoMerge(1)!
+    expect(armed.headline).toBe(before.headline)
+    expect(armed.body.startsWith('New description')).toBe(true)
+    expect(trailers(armed.body)).toEqual([trailer])
+    expect(armed.body.trimEnd().endsWith(trailer)).toBe(true)
+  })
+
+  test('a merge-commit request is replaced with the identity squash', async () => {
+    const forge = seeded()
+    forge.armAutoMerge(1, { method: 'MERGE', headline: 'Fake PR #1 (#1)', body: `\n\n${trailer}` })
+    expect(await forge.setAutoMerge('/ws', 1, true, options)).toEqual({ kind: 'applied' })
+    expect(forge.armedAutoMerge(1)).toEqual(forge.expectedIdentity(1, options))
+    expect(lastCall(forge).changed).toBe(true)
+  })
+
+  test('a missing or wrong trailer is replaced with exactly one correct trailer', async () => {
+    for (const body of ['', 'Autobuild-Build: other']) {
+      const forge = seeded()
+      forge.armAutoMerge(1, { method: 'SQUASH', headline: 'Fake PR #1 (#1)', body })
+      expect(await forge.setAutoMerge('/ws', 1, true, options)).toEqual({ kind: 'applied' })
+      expect(trailers(forge.armedAutoMerge(1)!.body)).toEqual([trailer])
+    }
+  })
+
+  test('revoked consent or a gate deferral leaves the stale request armed', async () => {
+    const stale = { method: 'MERGE' as const, headline: 'Merge', body: '' }
+    const revoked = seeded()
+    revoked.armAutoMerge(1, stale)
+    expect(
+      await revoked.setAutoMerge('/ws', 1, true, { ...options, canApply: async () => false }),
+    ).toEqual({ kind: 'deferred' })
+    expect(revoked.armedAutoMerge(1)).toEqual(stale)
+
+    const gated = seeded()
+    gated.armAutoMerge(1, stale)
+    gated.setGateProbeError(1, 'gate unreadable')
+    let consulted = false
+    const result = await gated.setAutoMerge('/ws', 1, true, {
+      ...options,
+      canApply: async () => (consulted = true),
+    })
+    expect(result.kind).toBe('deferred')
+    expect(consulted).toBe(false)
+    expect(gated.armedAutoMerge(1)).toEqual(stale)
+  })
+
+  test('fresh defaults come from the edited PR body, never the merge message', async () => {
+    const forge = new FakeForge()
+    await forge.openPr(prOpts({ mergeMessage: 'Deposited merge message' }))
+    forge.setPrState(1, { state: 'open', mergeable: true })
+    await forge.setAutoMerge('/ws', 1, true, options)
+    expect(forge.armedAutoMerge(1)!.body.startsWith('Body text')).toBe(true)
+    forge.editPr(1, { body: 'Edited body' })
+    await forge.setAutoMerge('/ws', 1, true, options)
+    const armed = forge.armedAutoMerge(1)!
+    expect(armed.headline).toBe('Fix login (#1)')
+    expect(armed.body.startsWith('Edited body')).toBe(true)
+    expect(armed.body).not.toContain('Deposited merge message')
+  })
+
+  test('a seeded legacy arm reads as matching; a modelled arm never does', async () => {
+    const legacy = seeded()
+    legacy.setAutoMergeState(1, true)
+    expect(legacy.armedAutoMerge(1)).toBeUndefined()
+    expect(await legacy.setAutoMerge('/ws', 1, true, options)).toEqual({ kind: 'applied' })
+    expect(lastCall(legacy).changed).toBe(false)
+
+    const modelled = seeded()
+    modelled.armAutoMerge(1, { method: 'SQUASH', headline: 'wrong', body: trailer })
+    await modelled.setAutoMerge('/ws', 1, true, options)
+    expect(lastCall(modelled).changed).toBe(true)
+    expect(modelled.armedAutoMerge(1)).toEqual(modelled.expectedIdentity(1, options))
+  })
+
+  test('disabling clears the modelled request', async () => {
+    const forge = seeded()
+    await forge.setAutoMerge('/ws', 1, true, options)
+    await forge.setAutoMerge('/ws', 1, false)
+    expect(forge.armedAutoMerge(1)).toBeUndefined()
+  })
 })

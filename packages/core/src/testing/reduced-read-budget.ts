@@ -2592,3 +2592,73 @@ export async function ticketRoleTickBudget(
   for (const costs of rest) expect(costs).toEqual(baseline!)
   return baseline!
 }
+
+/** Native identity maintenance (SPEC §15.7) adds one forge identity read per
+ * armed, eligible poll and nothing else: a fresh dispatcher's quiet
+ * maintenance tick reads no history, spends exactly the store reads of the same
+ * tick with the native block skipped, appends nothing, and costs the same at
+ * 100 and 10,000 events. */
+export async function nativeMaintenanceReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  slug: string
+  forge: FakeForge
+  tick: () => Promise<unknown>
+}) {
+  const { store, slug, forge } = opts
+  const events = buildEventRows(store, slug)
+  let baseline: number[] | undefined
+  for (const length of [100, 10_000]) {
+    let filler = 0
+    while (events.length < length)
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: { id: `obs_budget_${length}_${filler++}`, kind: 'followup', summary: 'filler' },
+      })
+    // Warm the saved reduced values past the filler before measuring.
+    await opts.tick()
+    const boundary = events.at(-1)!.seq
+    const metrics = { historicalRows: 0, tailRows: 0 }
+    let calls = 0
+    const getReduced = store.getReducerValue.bind(store)
+    store.getReducerValue = async (...args) => {
+      calls++
+      return getReduced(...args)
+    }
+    const restore = instrumentBuildRows(store, slug, () => boundary, metrics)
+    const getPrState = forge.getPrState.bind(forge)
+    const measure = async () => {
+      metrics.historicalRows = metrics.tailRows = calls = 0
+      const reads = forge.identityReads.length
+      await opts.tick()
+      expect(metrics.historicalRows).toBe(0)
+      return {
+        rows: metrics.tailRows,
+        calls,
+        identityReads: forge.identityReads.length - reads,
+      }
+    }
+    try {
+      const maintenance = await measure()
+      forge.getPrState = async (...args) => {
+        const { nativeAutoMerge: _omitted, ...state } = (await getPrState(...args)) as PrStateLike
+        return state
+      }
+      const skipped = await measure()
+      expect(maintenance.identityReads).toBe(1)
+      expect(skipped.identityReads).toBe(0)
+      expect(maintenance.calls).toBe(skipped.calls)
+      expect(maintenance.rows).toBe(skipped.rows)
+      expect(events.at(-1)!.seq).toBe(boundary)
+      const costs = [maintenance.rows, maintenance.calls]
+      if (baseline) expect(costs).toEqual(baseline)
+      baseline = costs
+    } finally {
+      restore()
+      store.getReducerValue = getReduced
+      Reflect.deleteProperty(forge, 'getPrState')
+    }
+  }
+}
+
+type PrStateLike = Awaited<ReturnType<FakeForge['getPrState']>> & { nativeAutoMerge?: boolean }

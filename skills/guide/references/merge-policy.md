@@ -120,8 +120,11 @@ a merged-SHA comment and closing an unacknowledged open review.
 
 Native application receipts bind to exact candidates; consent does not. Every
 replacement confirms cancellation first; the next poll reconciles native state
-before other actions. Stale enables are repaired by polling. This bounded model
-requires replacement-head checks to take far longer than a poll interval. It
+before other actions. Stale enables are repaired by polling. An
+already-enabled native request counts as applied only after the forge confirms
+its squash method and identity message. Each eligible poll re-reads an armed
+request and repairs it when PR edits or a human arm left it stale. This bounded
+model requires replacement-head checks to take far longer than a poll interval. It
 has no durable native-effect reservation. Human forge merges record whether a
 hold was overridden; possible stale-enable merges raise operator attention.
 No result is undone by rewriting the target.

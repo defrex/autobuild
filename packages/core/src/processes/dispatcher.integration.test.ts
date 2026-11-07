@@ -29,7 +29,7 @@ import { join } from 'node:path'
 import { bulkControlRepository } from '../cli/bulk-control'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
-import type { EventEnvelope, EventWrite } from '../events/catalog'
+import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { RepositoryEvent } from '../events/repository'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
@@ -3775,9 +3775,16 @@ describe('Dispatcher janitor', () => {
     expect(applied?.actor).toEqual(DISPATCHER)
     expect(applied?.payload).toMatchObject({ commandSeq: command.seq })
 
-    // An applied candidate stays quiet until its readiness or command changes.
+    // An applied candidate only gets the identity readback while its message
+    // still matches (SPEC §15.7): no mutation and no second receipt.
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
-    expect(h.forge.autoMergeCalls).toHaveLength(1)
+    expect(h.forge.autoMergeCalls).toHaveLength(2)
+    expect(h.forge.autoMergeCalls.at(-1)).toMatchObject({
+      number: 1,
+      enabled: true,
+      changed: false,
+    })
+    expect(h.forge.identityReads).toEqual([1])
     expect(
       (await h.store.getEvents(slug)).filter(
         (e) => e.type === 'landing.native-applied' && e.payload.enabled,
@@ -10598,9 +10605,11 @@ describe('stable merged-build evidence and native maintenance', () => {
     h.forge.setAutoMerge = async (_path, _number, enabled, options) => {
       if (!enabled) return { kind: 'applied' }
       expect(options?.buildSlug).toBe(slug)
-      expect(await options?.canApply?.()).toBe(true)
       attempts++
+      // The second attempt is the non-mutating identity readback: it never
+      // reaches the consent check.
       if (attempts === 1) {
+        expect(await options?.canApply?.()).toBe(true)
         h.forge.setPrState(1, { state: 'open', mergeable: true, nativeAutoMerge: true })
         return { kind: 'applied' }
       }
@@ -10608,7 +10617,7 @@ describe('stable merged-build evidence and native maintenance', () => {
     }
     await h.dispatcher.tick()
     await h.dispatcher.tick()
-    expect(attempts).toBe(1)
+    expect(attempts).toBe(2)
     expect(h.forge.squashMergeCalls).toEqual([])
     expect(
       (await h.store.getEvents(slug)).filter(
@@ -11374,7 +11383,15 @@ describe('declarative merge reconciliation', () => {
       const calls = h.forge.autoMergeCalls.length
       for (let i = 0; i < 3; i++) await h.poll()
       expect(await h.store.getEvents(h.slug)).toEqual(before)
-      if (!deferred) expect(h.forge.autoMergeCalls).toHaveLength(calls)
+      // An enabled request gets only the non-mutating identity readback.
+      if (!deferred) {
+        expect(h.forge.identityReads).toEqual([1, 1, 1])
+        expect(h.forge.autoMergeCalls.slice(calls)).toMatchObject([
+          { enabled: true, changed: false },
+          { enabled: true, changed: false },
+          { enabled: true, changed: false },
+        ])
+      }
       expect((await h.state()).landing?.nativeEnablePending).toBeUndefined()
     }
   })
@@ -14619,3 +14636,236 @@ test('a kernel Git outage has bounded reads on fresh dispatchers at 100 and 1000
     (await h.store.getEvents(node.slug)).filter((event) => event.type.startsWith('build.janitor')),
   ).toEqual([])
 }, 60_000)
+
+describe('native identity (AUT-812/AUT-821)', () => {
+  const trailers = (body: string) =>
+    body.split('\n').filter((line) => line.startsWith('Autobuild-Build:'))
+  const enabledReceipts = (events: readonly AbEvent[]) =>
+    events.filter((e) => e.type === 'landing.native-applied' && e.payload.enabled)
+
+  /** A green, decided leaf without consent yet, so a human arm survives to
+   * the authorized enable that adopts it. */
+  async function decided() {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setGatePresence(1, 'present')
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect((await h.store.getEvents(slug)).some((e) => e.type === 'landing.decided')).toBe(true)
+    const options = { buildSlug: slug, baseBranch: 'main' }
+    const consent = () =>
+      h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
+    const poll = () => h.dispatcher.tick({ acceptNewWork: false })
+    const events = () => h.store.getEvents(slug)
+    return { ...h, slug, options, consent, poll, events }
+  }
+
+  /** A consented leaf armed and acknowledged through a normal poll. */
+  async function acknowledged() {
+    const h = await decided()
+    await h.consent()
+    await h.poll()
+    expect(h.forge.armedAutoMerge(1)).toEqual(h.forge.expectedIdentity(1, h.options))
+    expect(h.forge.armedAutoMerge(1)?.headline).toBe('Fake PR #1 (#1)')
+    expect(enabledReceipts(await h.events())).toHaveLength(1)
+    return h
+  }
+
+  test.each([
+    ['merge-commit method', { method: 'MERGE' as const }],
+    ['missing trailer', { body: '' }],
+    ['wrong trailer', { body: 'Autobuild-Build: other-slug' }],
+  ])('adoption replaces a %s request before acknowledging it', async (_name, override) => {
+    const h = await decided()
+    h.forge.armAutoMerge(1, { ...h.forge.expectedIdentity(1, h.options), ...override })
+    expect(h.forge.armedAutoMerge(1)).toBeDefined()
+    const before = (await h.events()).length
+    await h.consent()
+    await h.poll()
+    // Replaced through the identity readback, not a cancel-and-re-enable.
+    expect(h.forge.identityReads).toEqual([1])
+    expect(h.forge.autoMergeCalls.some((call) => !call.enabled)).toBe(false)
+    expect(h.forge.armedAutoMerge(1)).toEqual(h.forge.expectedIdentity(1, h.options))
+    expect(trailers(h.forge.armedAutoMerge(1)!.body)).toEqual([`Autobuild-Build: ${h.slug}`])
+    const written = (await h.events()).slice(before)
+    const started = written.findIndex((e) => e.type === 'landing.native-enable-started')
+    const receipts = enabledReceipts(written)
+    expect(started).toBeGreaterThanOrEqual(0)
+    expect(receipts).toHaveLength(1)
+    expect(written.indexOf(receipts[0]!)).toBeGreaterThan(started)
+    expect(receipts[0]!.payload).toMatchObject({ enableSeq: written[started]!.seq })
+  })
+
+  test('adoption acknowledges a matching request once without a mutation', async () => {
+    const h = await decided()
+    h.forge.armAutoMerge(1, h.forge.expectedIdentity(1, h.options))
+    const calls = h.forge.autoMergeCalls.length
+    const before = (await h.events()).length
+    await h.consent()
+    await h.poll()
+    const written = (await h.events()).slice(before)
+    expect(enabledReceipts(written)).toHaveLength(1)
+    expect(written.some((e) => e.type === 'landing.native-enable-started')).toBe(false)
+    expect(h.forge.autoMergeCalls.slice(calls)).toEqual([
+      expect.objectContaining({ enabled: true, changed: false }),
+    ])
+    expect(h.forge.identityReads).toEqual([1])
+  })
+
+  test('revocation before the poll cancels an incompatible request without acknowledging it', async () => {
+    const h = await decided()
+    h.forge.armAutoMerge(1, { method: 'MERGE', headline: 'Merge', body: '' })
+    await h.consent()
+    await h.store.append(h.slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    })
+    await h.poll()
+    expect(enabledReceipts(await h.events())).toHaveLength(0)
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+    expect(h.forge.identityReads).toEqual([])
+  })
+
+  test('revocation during the repair defers without acknowledging the stale request', async () => {
+    const h = await decided()
+    const stale = { method: 'MERGE' as const, headline: 'Merge', body: '' }
+    h.forge.armAutoMerge(1, stale)
+    await h.consent()
+    const realSet = h.forge.setAutoMerge.bind(h.forge)
+    h.forge.setAutoMerge = async (path, number, enabled, options) =>
+      realSet(
+        path,
+        number,
+        enabled,
+        options && {
+          ...options,
+          canApply: async () => {
+            await h.store.append(h.slug, {
+              actor: humanActor('operator'),
+              type: 'build.auto-merge-cancelled',
+              payload: {},
+            })
+            return (await options.canApply?.()) ?? true
+          },
+        },
+      )
+    await h.poll()
+    expect(enabledReceipts(await h.events())).toHaveLength(0)
+    expect(h.forge.autoMergeCalls.some((call) => call.enabled && call.changed)).toBe(false)
+  })
+
+  test('a gate failure before the repair records one deferral and no acknowledgement', async () => {
+    const h = await decided()
+    h.forge.armAutoMerge(1, { method: 'MERGE', headline: 'Merge', body: '' })
+    h.forge.setGateProbeError(1, 'ruleset probe forbidden')
+    const command = await h.consent()
+    await h.poll()
+    await h.poll()
+    const events = await h.events()
+    expect(enabledReceipts(events)).toHaveLength(0)
+    expect(
+      events.filter(
+        (e) =>
+          e.type === 'observation.recorded' &&
+          e.payload.refs?.includes(`auto-merge-gate:pr:1:command:${command.seq}`),
+      ),
+    ).toHaveLength(1)
+    expect(h.forge.armedAutoMerge(1)?.method).toBe('MERGE')
+  })
+
+  test('title and body edits after acknowledgement re-arm with fresh defaults', async () => {
+    const h = await acknowledged()
+    const trailer = `Autobuild-Build: ${h.slug}`
+    const repair = async () => {
+      const before = (await h.events()).length
+      await h.poll()
+      const written = (await h.events()).slice(before)
+      expect(written.map((e) => e.type)).toEqual([
+        'landing.native-enable-started',
+        'landing.native-applied',
+      ])
+      expect(written[1]!.payload).toMatchObject({ enabled: true, enableSeq: written[0]!.seq })
+      return h.forge.armedAutoMerge(1)!
+    }
+
+    const original = h.forge.armedAutoMerge(1)!
+    h.forge.editPr(1, { title: 'Edited' })
+    const titled = await repair()
+    expect(titled.headline).toBe('Edited (#1)')
+    expect(titled.body).toBe(original.body)
+    expect(trailers(titled.body)).toEqual([trailer])
+
+    h.forge.editPr(1, { body: 'New description' })
+    const bodied = await repair()
+    expect(bodied.headline).toBe('Edited (#1)')
+    expect(bodied.body.startsWith('New description')).toBe(true)
+    expect(bodied.body.trimEnd().endsWith(trailer)).toBe(true)
+    expect(trailers(bodied.body)).toEqual([trailer])
+  })
+
+  test('quiet maintenance polls read the identity and write nothing', async () => {
+    const h = await acknowledged()
+    const before = await h.events()
+    const reads = h.forge.identityReads.length
+    const calls = h.forge.autoMergeCalls.length
+    for (let i = 0; i < 3; i++) await h.poll()
+    expect(h.forge.identityReads.length - reads).toBe(3)
+    expect(h.forge.autoMergeCalls.slice(calls).some((call) => call.changed)).toBe(false)
+    expect(await h.events()).toEqual(before)
+  })
+
+  test.each(['held', 'revoked', 'escalated'] as const)(
+    '%s polls cancel without the identity readback',
+    async (kind) => {
+      const h = await acknowledged()
+      if (kind === 'held')
+        await h.store.append(h.slug, {
+          actor: humanActor('operator'),
+          type: 'build.hold-requested',
+          payload: {},
+        })
+      else if (kind === 'revoked')
+        await h.store.append(h.slug, {
+          actor: humanActor('operator'),
+          type: 'build.auto-merge-cancelled',
+          payload: {},
+        })
+      else
+        await h.store.append(h.slug, {
+          actor: KERNEL,
+          type: 'escalation.raised',
+          payload: { id: 'e_unready', phase: 'implement', source: 'stall', question: 'why?' },
+        })
+      const reads = h.forge.identityReads.length
+      await h.poll()
+      await h.poll()
+      expect(h.forge.identityReads).toHaveLength(reads)
+      expect(h.forge.isAutoMergeEnabled(1)).toBe(false)
+      expect(
+        (await h.events()).findLast((e) => e.type === 'landing.native-applied')?.payload,
+      ).toMatchObject({ enabled: false })
+    },
+  )
+
+  test('maintenance adds one identity read and no store reads at 100 and 10000 events', async () => {
+    const h = await acknowledged()
+    const { nativeMaintenanceReadBudget } = await import('../testing/reduced-read-budget')
+    await nativeMaintenanceReadBudget({
+      store: h.store as MemoryBuildStore,
+      slug: h.slug,
+      forge: h.forge,
+      tick: () =>
+        harness({
+          store: h.store,
+          clock: h.clock,
+          wrapTickets: () => h.tickets,
+          forge: h.forge,
+        }).dispatcher.tick({ acceptNewWork: false }),
+    })
+  }, 60_000)
+})
