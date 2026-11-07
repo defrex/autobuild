@@ -1056,17 +1056,25 @@ adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
 Startup restores a validated `dispatchFrontend` checkpoint incrementally only
-when its cursor is within the 1,000-event repository tail window. Older caches
-use the repository-state recovery seed instead. Startup catch-up and prelaunch
-boundary reads enforce that window at selection, including concurrent appends;
-cursor expiry permits one additional seed recovery, never historical gap replay.
-Transfer is bounded by the existing state seed plus a fixed number of windowed
-tails, independently of discarded history (the seed itself retains durable facts
-and the latest run tail). High water is sampled before the sparse seed so later
-updates remain consumable. Steady-state reads and save cadence are unchanged.
+when its cursor is within the 1,000-event repository tail window. A missing,
+invalid, unreadable or stale checkpoint, and cursor expiry, instead reseed from
+the canonical `repositoryReadFacts` value: its latest run start and the sampled
+holder's start become the retained identities, and its cursor starts one
+windowed tail. That value is the store's saved reduction, advanced
+incrementally on the server, so transfer is a fixed number of requests
+independent of journal and current-run length. Startup never falls back to
+`getRepoStateEvents` or a journal read from zero; a failed canonical read
+leaves the feed unready, and the next poll retries the same bounded read.
+Startup catch-up and prelaunch boundary reads enforce the tail window at
+selection, including concurrent appends; cursor expiry permits one additional
+canonical reseed, never historical gap replay. Steady-state reads and save
+cadence are unchanged.
 
 The frontend's `dispatchFrontend` checkpoint retains dashboard facts plus only
 the latest run-started fact and the sampled lease holder's start (deduplicated).
+Its dashboard facts are a cache of facts after the feed's restoration point,
+not presentation authority: settings, Harvest, handoffs and upgrades, ticket
+migrations and missing accounts all render from canonical repository facts.
 Identity history is always partial, including normalized legacy version-4
 caches; a missing holder is resolved through the bounded per-run reduced read.
 Successful lease samples select or clear the retained holder; failed metadata

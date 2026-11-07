@@ -1,5 +1,5 @@
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
-import { migrationIdentity, ticketMigrationsReducer } from '../kernel/ticket-migrations'
+import { migrationIdentity } from '../kernel/ticket-migrations'
 import type { DispatchUpgradeState } from '../kernel/dispatch-upgrade'
 import { releaseDispatchPresentation } from './dispatch-presentation-ownership'
 import {
@@ -526,12 +526,7 @@ export class DispatchFrontend {
           snapshot.capacityBuilds ?? [],
           config.capacity,
           this.clock(),
-          migrationIdentity(
-            this.opts.viewer
-              ? repositoryFacts.ticketMigrations
-              : ticketMigrationsReducer.reduce(repositoryEvents),
-            config.tickets.source,
-          ),
+          migrationIdentity(repositoryFacts.ticketMigrations, config.tickets.source),
         ),
         // A viewer shows only its own read; headless ticks publish no count.
         ...(this.opts.viewer
