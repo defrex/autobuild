@@ -52,10 +52,19 @@ const BASE = 'b'.repeat(40)
 
 /** Composes dispatch, the Vercel provider, remote park facts, exact-SHA
  * settlement, and PR creation without any host worktree or local child. The
- * fake guest writes only Store facts; SDK output is deliberately empty. */
-test.each(['legacy', 'mixed', 'same-provider'] as const)(
-  'fake Vercel SDK lifecycle reaches PR creation across publication parks (%s)',
-  async (billing) => {
+ * fake guest writes only Store facts; SDK output is deliberately empty apart
+ * from `bun --version`. The `bun` axis models a reused guest whose Bun drifts
+ * to 1.4.0 after implement: `stale` is refreshed to the pin before the next
+ * runner, `stuck` cannot reach the pin and is never launched again. */
+test.each([
+  ['legacy', 'pinned'],
+  ['mixed', 'pinned'],
+  ['same-provider', 'pinned'],
+  ['legacy', 'stale'],
+  ['legacy', 'stuck'],
+] as const)(
+  'fake Vercel SDK lifecycle reaches PR creation across publication parks (%s, Bun %s)',
+  async (billing, bun) => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-vercel-composed-'))
     const repo = join(tmp, 'repo')
     const accounts: Accounts =
@@ -92,6 +101,10 @@ test.each(['legacy', 'mixed', 'same-provider'] as const)(
       deleted = false
       /** Simulated `/opt/autobuild/.distribution-version` marker content. */
       distributionVersion: string | undefined
+      /** The version the guest's provisioned Bun reports. */
+      bunVersion = 'none'
+      /** The version a pinned `npm install bun@X` yields; defaults to X. */
+      bunInstallVersion: string | undefined
       /** Exit code of the most recent detached command, for `getCommand`
        * re-observation. The plain lookup reports `null` until some wait has
        * observed an exit — exactly the provider's behavior — and a wait while
@@ -115,6 +128,17 @@ test.each(['legacy', 'mixed', 'same-provider'] as const)(
 
       async runCommand(params: Record<string, unknown>) {
         commands.push(params)
+        if (
+          params.cmd === VERCEL_BUN_EXECUTABLE &&
+          (params.args as string[] | undefined)?.[0] === '--version'
+        ) {
+          return { exitCode: 0, stdout: async () => `${this.bunVersion}\n` }
+        }
+        if (params.cmd === 'npm') {
+          const requested = (params.args as string[]).find((arg) => arg.startsWith('bun@'))
+          if (requested !== undefined)
+            this.bunVersion = this.bunInstallVersion ?? requested.slice('bun@'.length)
+        }
         if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
         if (params.cmd === 'touch') this.provisioned = true
         if (
@@ -479,7 +503,42 @@ test.each(['legacy', 'mixed', 'same-provider'] as const)(
       }
 
       await dispatchUntil(requested('implement')) // provision + implementation publication request
+      expect(sandbox.bunVersion).toBe('1.4.4')
+      const launchesBeforeDrift = commands.filter((command) => command.detached === true).length
+      if (bun !== 'pinned') sandbox.bunVersion = '1.4.0'
+      if (bun === 'stuck') {
+        sandbox.bunInstallVersion = '1.4.0'
+        const commandsBeforeDrift = commands.length
+        // The start failure takes the existing cleanup-pending route.
+        await dispatchUntil((events) =>
+          events.some(
+            (event) =>
+              event.type === 'infrastructure.failed' &&
+              event.payload.operation === 'start' &&
+              event.payload.cleanupPending === true &&
+              String(event.payload.error).includes('found 1.4.0 (pin 1.4.4)'),
+          ),
+        )
+        // The refresh was attempted, and no runner ever started on the old Bun.
+        expect(commands.slice(commandsBeforeDrift).some((command) => command.cmd === 'npm')).toBe(
+          true,
+        )
+        expect(commands.filter((command) => command.detached === true)).toHaveLength(
+          launchesBeforeDrift,
+        )
+        return
+      }
+      const commandsBeforeDrift = commands.length
       await dispatchUntil(requested('finalize-step')) // settles implement; verification request
+      if (bun === 'stale') {
+        // The reused guest was reinstalled at the pin before its next runner.
+        const since = commands.slice(commandsBeforeDrift)
+        const refresh = since.findIndex((command) => command.cmd === 'npm')
+        expect(refresh).toBeGreaterThanOrEqual(0)
+        expect(since[refresh]!.args).toContain('bun@1.4.4')
+        expect(refresh).toBeLessThan(since.findIndex((command) => command.detached === true))
+        expect(sandbox.bunVersion).toBe('1.4.4')
+      }
       await dispatchUntil(requested('finalize')) // settles the finalize step; PR publication request
 
       const build = (await store.listBuilds())[0]!
@@ -529,13 +588,16 @@ test.each(['legacy', 'mixed', 'same-provider'] as const)(
         cmd: 'npm',
         args: ['install', '--prefix', VERCEL_BUN_PREFIX, '--no-save', `bun@${VERCEL_BUN_VERSION}`],
       })
+      expect(commands.filter((command) => command.cmd === 'npm')).toHaveLength(
+        bun === 'stale' ? 2 : 1,
+      )
       expect(
         commands.filter(
           (command) =>
             command.cmd === VERCEL_BUN_EXECUTABLE &&
             (command.args as string[] | undefined)?.[0] === '--version',
         ),
-      ).toHaveLength(6)
+      ).toHaveLength(bun === 'stale' ? 7 : 6)
       for (const launch of detached) {
         expect(launch).toMatchObject({
           cmd: 'sh',
@@ -592,6 +654,10 @@ for (const upgrading of [false, true])
       deleted = false
       /** Simulated `/opt/autobuild/.distribution-version` marker content. */
       distributionVersion: string | undefined
+      /** The version the guest's provisioned Bun reports. */
+      bunVersion = 'none'
+      /** The version a pinned `npm install bun@X` yields; defaults to X. */
+      bunInstallVersion: string | undefined
       /** Observed exit per command id: what the plain lookup reports, `null`
        * until some wait has observed an exit — the provider's behavior. */
       readonly observed = new Map<string, number | null>()
@@ -647,6 +713,17 @@ for (const upgrading of [false, true])
 
       async runCommand(params: Record<string, unknown>) {
         commands.push(params)
+        if (
+          params.cmd === VERCEL_BUN_EXECUTABLE &&
+          (params.args as string[] | undefined)?.[0] === '--version'
+        ) {
+          return { exitCode: 0, stdout: async () => `${this.bunVersion}\n` }
+        }
+        if (params.cmd === 'npm') {
+          const requested = (params.args as string[]).find((arg) => arg.startsWith('bun@'))
+          if (requested !== undefined)
+            this.bunVersion = this.bunInstallVersion ?? requested.slice('bun@'.length)
+        }
         if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
         if (params.cmd === 'touch') this.provisioned = true
         if (
