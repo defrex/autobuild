@@ -290,7 +290,8 @@ snapshot of fields, blockers and revision.
 
 `POST /tickets/mutate-if-revision` accepts the usual authenticated context and
 `input: { id, expectedRevision, mutation }`. Mutation is one of
-`{ kind: "update", patch: { title?, body?, labels?, kind?, target? } }`,
+`{ kind: "update", patch: { title?, body?, labels?, kind?, target?,
+priority?: "urgent" | "normal" } }`,
 `{ kind: "transition", state }`, or
 `{ kind: "blockers", operation: "block" | "unblock", ids: string[] }`.
 Unknown keys and empty patches are refused. Success returns `{ ok: true }`.
