@@ -9,25 +9,33 @@ import {
 
 /** The deterministic part of land's guard. Live completeness and CAS remain at the write boundary. */
 export function landPreconditions(state: BuildState, restack: LeafRestackState): boolean {
+  return landRefusalReason(state, restack) === undefined
+}
+
+/** Why land's deterministic guard refuses, naming the first unmet clause, or
+ * undefined when it passes. */
+export function landRefusalReason(
+  state: BuildState,
+  restack: LeafRestackState,
+): string | undefined {
   const decision = state.landing?.decision
-  return (
-    !!decision &&
-    (state.kind !== 'node' || integrationCycleCurrent(state)) &&
-    state.status !== 'paused' &&
-    !state.currentPhase &&
-    !state.openEscalations.length &&
-    !state.pendingCommands.length &&
-    state.prState === 'open' &&
-    (state.kind === 'node' ? state.integration?.cycle?.head : state.pr?.headSha) ===
-      decision.candidate.head &&
-    !(
-      state.kind !== 'node' &&
-      restack.target &&
-      restack.target.sha !== decision.candidate.parent
-    ) &&
-    !restack.active &&
-    !state.nodeRestack?.active
+  if (!decision) return 'no merge candidate has been decided yet'
+  if (state.kind === 'node' && !integrationCycleCurrent(state))
+    return "the node's integration cycle is not current"
+  if (state.status === 'paused') return 'the build is paused'
+  if (state.currentPhase) return `phase ${state.currentPhase} is still running`
+  if (state.openEscalations.length) return 'the build has open escalations to answer'
+  if (state.pendingCommands.length) return 'earlier controls are awaiting acknowledgement'
+  if (state.prState !== 'open') return `the pull request is ${state.prState ?? 'not open'}`
+  if (
+    (state.kind === 'node' ? state.integration?.cycle?.head : state.pr?.headSha) !==
+    decision.candidate.head
   )
+    return "the merge candidate's head is stale"
+  if (state.kind !== 'node' && restack.target && restack.target.sha !== decision.candidate.parent)
+    return "the merge candidate's base is stale"
+  if (restack.active || state.nodeRestack?.active) return 'a restack is in progress'
+  return undefined
 }
 
 /** Read eligibility is deliberately stricter than a command's historical acceptance guard. */

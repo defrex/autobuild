@@ -56,8 +56,10 @@ export async function observeIntegration(
   slug: string,
   inputs?: () => Promise<IntegrationObservationInputs>,
   /** The configured rejected role: a child ticket in it no longer keeps the
-   * node incomplete. Unset means no such role. */
-  options: { rejectedState?: string } = {},
+   * node incomplete. Unset means no such role. `onFailure` reports an
+   * enumeration or observation failure that is recorded as a diagnostic, so a
+   * caller can tell it apart from incompleteness; it is never persisted. */
+  options: { rejectedState?: string; onFailure?: (error: unknown) => void } = {},
 ): Promise<EventPayload<'integration.observed'>> {
   const record = await store.getBuild(slug)
   const state = (await readBuildFacts(store, slug)).value.state
@@ -214,6 +216,7 @@ export async function observeIntegration(
     )
   } catch (error) {
     observation.diagnostics.push(error instanceof Error ? error.message : String(error))
+    options.onFailure?.(error)
   }
   observation.openChildren = [...children].sort()
   observation.diagnostics.sort()
