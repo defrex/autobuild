@@ -1010,7 +1010,9 @@ export class Dispatcher {
   private readonly continuations = new Map<string, ProvisionContinuation>()
 
   // Batched confirmed landing evidence is shared across nodes for this tick.
-  // Only durable availability facts authorize the shortcut after restart.
+  // Only durable availability facts authorize the shortcut after restart. The
+  // batch includes mixed-version deferred builds' durable landing facts so its
+  // fingerprint matches the one the node transaction records.
   private availabilityLandings?: ReturnType<typeof confirmedLandings>
   private availabilityLandingKey?: string
   private availabilityEntries?: ReturnType<Dispatcher['repoBuildDigests']>
@@ -6045,7 +6047,9 @@ export class Dispatcher {
         forge.remoteBranchSha(state.baseBranch),
         forge.remoteBranchSha(record.branch),
       ])
-      this.availabilityEntries ??= this.repoBuildDigests()
+      // Landing evidence must match runNodeTransaction, which reads every
+      // repository build; reading a deferred digest decides nothing for it.
+      this.availabilityEntries ??= this.repoBuildDigests(true)
       const entries = await this.availabilityEntries
       this.availabilityLandings ??= confirmedLandings(entries)
       this.availabilityLandingKey ??= restackLandingKey(this.availabilityLandings)
