@@ -2575,8 +2575,10 @@ normal. Urgent ready work is claimed before normal ready work (§12) and nothing
 else changes. Sources declare support. The file source stores
 `priority = "urgent"` in its frontmatter, writes no key for normal, and covers
 urgent priority in its revisions; the in-memory fake behaves the same way.
-The hosted and Linear sources do not store priority, nor do plugins without
-the capability: they read every ticket as normal and refuse a create or
+The hosted source stores priority in the hosted ticket store, covers it in its
+revision, and lists urgent ready tickets first; an update that omits priority
+never changes it. The Linear source does not store priority, nor do plugins
+without the capability: they read every ticket as normal and refuse a create or
 update naming `urgent` with a typed error naming the source, before anything is
 written. Naming `normal` on such a source is a successful no-op. `ab ticket
 create` and `update` take `--priority urgent|normal`; operator and MCP ticket

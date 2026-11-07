@@ -14,7 +14,7 @@ import { compatibleTicketSource, normalizeSourceTicket, normalizeTicket } from '
 import { validateTicketUpdate } from './update'
 
 const supported = { name: 'file', priority: true }
-const unsupported = { name: 'hosted' }
+const unsupported = { name: 'linear' }
 
 describe('ticket priority', () => {
   test('urgentFirst is a stable partition that leaves its input alone', () => {
@@ -42,7 +42,7 @@ describe('ticket priority', () => {
       TicketPriorityUnsupported,
     )
     expect(() => refuseUnsupportedPriority(unsupported, { priority: 'urgent' })).toThrow(
-      'hosted ticket source cannot store ticket priority; nothing was written',
+      'linear ticket source cannot store ticket priority; nothing was written',
     )
     refuseUnsupportedPriority(unsupported, { priority: 'normal' })
     refuseUnsupportedPriority(unsupported, {})

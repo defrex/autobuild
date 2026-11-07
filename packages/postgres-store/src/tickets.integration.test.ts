@@ -3,6 +3,7 @@ import { SQL } from 'bun'
 import { describeTicketSourceContract } from '@defrex/autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
 import { openPostgresTicketDatabase } from './tickets'
+import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
@@ -244,6 +245,65 @@ if (testUrl) {
     }
   })
 }
+if (testUrl)
+  test('priority persists, is revisioned, survives omitting updates, and orders the ready listing', async () => {
+    const isolated = await isolatedDatabase()
+    const database = await openPostgresTicketDatabase(isolated.url)
+    const source = database.source({
+      repo: 'https://github.com/acme/priority',
+      teamKey: 'ENG',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    })
+    try {
+      expect(source.priority).toBe(true)
+      const n1 = await source.create({ title: 'N1', body: 'Body' }, { state: 'Ready' })
+      const n2 = await source.create({ title: 'N2', body: 'Body' }, { state: 'Ready' })
+      const u1 = await source.create(
+        { title: 'U1', body: 'Body', priority: 'urgent' },
+        { state: 'Ready' },
+      )
+      expect(u1.priority).toBe('urgent')
+      expect('priority' in n1).toBe(false)
+      const ready = await source.listReady({ state: 'Ready' })
+      expect(ready.tickets.map((ticket) => ticket.title)).toEqual(['U1', 'N1', 'N2'])
+      expect((await source.get(u1.ref.id))?.priority).toBe('urgent')
+      expect('priority' in ((await source.get(n1.ref.id)) ?? {})).toBe(false)
+
+      const id = n2.ref.id
+      await source.update(id, { priority: 'urgent' })
+      const urgent = (await source.get(id))!
+      expect(urgent.priority).toBe('urgent')
+      expect(BigInt(urgent.revision)).toBe(BigInt(n2.revision) + 1n)
+      await source.update(id, { priority: 'urgent' })
+      expect((await source.get(id))?.revision).toBe(urgent.revision)
+
+      await source.update(id, { title: 'N2 renamed' })
+      const renamed = (await source.get(id))!
+      expect(renamed.priority).toBe('urgent')
+      expect(
+        (await source.listReady({ state: 'Ready' })).tickets.map((ticket) => ticket.title),
+      ).toEqual(['N2 renamed', 'U1', 'N1'])
+
+      await expect(
+        source.mutateIfRevision(id, urgent.revision, {
+          kind: 'update',
+          patch: { priority: 'normal' },
+        }),
+      ).rejects.toBeInstanceOf(TicketRevisionConflict)
+      expect((await source.get(id))?.priority).toBe('urgent')
+      await source.mutateIfRevision(id, renamed.revision, {
+        kind: 'update',
+        patch: { priority: 'normal' },
+      })
+      const cleared = (await source.get(id))!
+      expect('priority' in cleared).toBe(false)
+      expect(BigInt(cleared.revision)).toBe(BigInt(renamed.revision) + 1n)
+    } finally {
+      await database.close()
+      await isolated.cleanup()
+    }
+  })
+
 if (testUrl)
   test('revision checks serialize independent clients, batches roll back, and bigint versions stay exact', async () => {
     const isolated = await isolatedDatabase()
@@ -1023,7 +1083,9 @@ if (testUrl)
             new Proxy(q, {
               apply(target, receiver, args) {
                 if (
-                  (args[0] as TemplateStringsArray).join('').includes('ORDER BY created_at, id')
+                  (args[0] as TemplateStringsArray)
+                    .join('')
+                    .includes("ORDER BY (priority = 'urgent') DESC, created_at, id")
                 ) {
                   return (async () => {
                     arrived()

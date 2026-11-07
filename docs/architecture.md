@@ -1536,13 +1536,18 @@ column that every listing already selects. Dependency states carry each blocker'
 native `state` for clients that send `x-autobuild-ticket-dependency-state: 1`,
 read from the row each lookup already loads; the dispatcher applies the
 configured rejected role on top (`markRejected` in `processes/dispatcher.ts`).
+Priority follows the issue-link pattern with `x-autobuild-ticket-priority: 1`,
+stored in the `ab_tickets.priority` column that every listing already selects;
+the ready listing orders urgent first in its existing statement, and the ticket
+server applies the same stable partition to every `list-ready` response.
 
 Ticket integration metadata lives in `ports/tickets/tree.ts`: source compatibility
 normalization, capability refusal, graph validation and the pure tree projection.
 Ticket priority lives in `ports/tickets/priority.ts`: the `priority` capability's
 typed refusal, the normal no-op strip and `urgentFirst`, the stable partition the
-dispatcher applies to its ready listing. Normalized tickets carry only `urgent`,
-so strict hosted wire schemas never see a priority key.
+dispatcher applies to its ready listing. Normalized tickets carry only `urgent`;
+the hosted service answers `priority` only to clients sending its capability
+header, so published strict wire schemas never see the key.
 File/fake/Linear adapters validate metadata at write boundaries; `operations.ts`
 and CLI/operator source opening wrap injected or plugin sources with the same
 compatibility facade. Metadata is excluded from hosted persistence/protocols.
