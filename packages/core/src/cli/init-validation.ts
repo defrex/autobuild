@@ -44,6 +44,9 @@ import { diagnosePlugins, loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
 import { LinearTicketSource } from '../ports/tickets/linear'
+import { GitHubTicketSource } from '../ports/tickets/github'
+import { representableState } from '../ports/tickets/github-issues'
+import { STATE_NAME_RULE } from '../ports/tickets/states'
 import { holdsState } from '../ports/tickets/lifecycle'
 import type { TicketSource } from '../ports/types'
 import { inspectLocalStoreSnapshot } from '../store/local/store'
@@ -68,6 +71,27 @@ const OPTIONAL_ROLES = [
   { role: 'backlog', key: 'backlogState', recommended: 'backlog' },
   { role: 'rejected', key: 'rejectedState', recommended: 'rejected' },
 ] as const
+
+/** GitHub holds every open state as an `autobuild:<state>` label, so each
+ * configured state other than done and rejected (closing reasons) must follow
+ * the label rule. Throws naming the first offending key. */
+export function assertGitHubStateLabels(tickets: TicketsConfig): void {
+  const keys = [
+    'readyState',
+    'claimedState',
+    'createState',
+    'triageState',
+    'proposalState',
+    'backlogState',
+  ] as const
+  for (const key of keys) {
+    const name = tickets[key]
+    if (name !== undefined && !representableState(name))
+      throw new Error(
+        `[tickets].${key} "${name}" cannot be a GitHub state label (autobuild:<state>) — ${STATE_NAME_RULE}`,
+      )
+  }
+}
 
 /**
  * Advisory findings for the optional backlog and rejected roles. An unset role
@@ -626,8 +650,15 @@ async function validateInitReadinessInner(opts: {
         state.localStateRoot,
         hostPlugins,
       ))
+    if (config.tickets.source === 'github') assertGitHubStateLabels(config.tickets)
     if (config.tickets.source !== 'file') {
       const ticketSource = await openTicketSource()
+      if (ticketSource instanceof GitHubTicketSource) await ticketSource.validateAccess()
+      // Who the assignee gate names, before the read it narrows, so an
+      // unresolvable value fails with the source's own remediation.
+      const assignee = config.tickets.readyAssignee
+      if (assignee !== undefined && ticketSource.describeReadyAssignee !== undefined)
+        assigneeLine = `Ticket assignee gate: ${await ticketSource.describeReadyAssignee(assignee)}`
       await ticketSource.listReady({
         ...(config.tickets.readyLabels !== undefined ? { labels: config.tickets.readyLabels } : {}),
         state: config.tickets.readyState,
@@ -635,18 +666,6 @@ async function validateInitReadinessInner(opts: {
           ? { assignee: config.tickets.readyAssignee }
           : {}),
       })
-      const assignee = config.tickets.readyAssignee
-      if (assignee !== undefined && ticketSource instanceof LinearTicketSource) {
-        const user = await ticketSource.resolveAssignee(assignee)
-        if (user === null) {
-          throw new Error(
-            assignee === 'me'
-              ? '[tickets].readyAssignee = "me" but LINEAR_API_KEY did not resolve to a Linear user — check the key'
-              : `[tickets].readyAssignee "${assignee}" matches no user in the Linear workspace — check the address or use "me"`,
-          )
-        }
-        assigneeLine = `Ticket assignee gate: ${assignee} → ${user.name} <${user.email}>`
-      }
     }
     roles = await ticketRoleReadiness(config.tickets, openTicketSource)
   } catch (error) {

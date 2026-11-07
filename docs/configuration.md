@@ -2681,6 +2681,8 @@ project-scoped transactional validation. Linear maps kind to the exact `node`
 label and target to a parent carrying that label. Ordinary grouping parents do
 not impose targets; explicit clear removes the parent relation. Node demotion
 with targeting children and cycles are refused regardless of child state.
+GitHub also maps kind to the exact `node` label, and target to the sub-issue
+relation with a node's issue; other parents are grouping and stay untouched.
 See [integration trees](integration-tree.md) for admission, lifecycle and commands.
 
 ### Source configuration
@@ -2705,7 +2707,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Ticket source and lifecycle vocabulary. Omitting the table supplies source=file but still requires readyState.
 
-**Constraints:** readyState is required except for hosted, whose omitted value resolves to ready. url is forbidden for file and linear; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.
+**Constraints:** readyState is required except for hosted and github, whose omitted value resolves to ready. url is forbidden for file, linear and github; hosted URLs must be absolute HTTPS (loopback HTTP allowed), without credentials, query or fragment, and are normalized.
 
 #### `tickets.url`
 
@@ -2718,7 +2720,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Ticket service independent of [store] url and AB_STORE. Required with local builds.
 
-**Constraints:** Forbidden for file and linear. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.
+**Constraints:** Forbidden for file, linear and github. Hosted omission uses the selected remote BuildStore URL; with a local BuildStore an explicit hosted URL is required.
 
 #### `tickets.source`
 
@@ -2744,7 +2746,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Require every listed label in addition to the state gate.
 
-**Constraints:** Omission uses source readiness defaults (Linear: autobuild label; file: none). Explicit [] disables label gating.; Each item: minimum length 1
+**Constraints:** Omission uses source readiness defaults (Linear and GitHub: autobuild label; file: none). Explicit [] disables label gating.; Each item: minimum length 1
 
 #### `tickets.readyState`
 
@@ -2752,7 +2754,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 - **Type:** `string`
 - **Default:** `omitted`
-- **Required:** Required unless source = "hosted"; hosted omission resolves to "ready".
+- **Required:** Required unless source = "hosted" or "github"; omission there resolves to "ready". GitHub states are `autobuild:<state>` labels.
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
 **Description:** The one workflow state eligible for dispatch.
@@ -2768,9 +2770,9 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Require the ticket to be assigned to one Linear user, in addition to the state and label gates.
+**Description:** Require the ticket to be assigned to one user, in addition to the state and label gates.
 
-**Constraints:** [tickets].readyAssignee must be "me" (the owner of the API key) or a user email address (e.g. "person@example.com"); Allowed only for linear.
+**Constraints:** [tickets].readyAssignee must be a nonblank value with no surrounding whitespace; Allowed for sources that can filter by assignee: linear ("me" or an email), github ("me" or a GitHub username, including managed-user logins such as mona_acme), and plugin sources that declare readyAssignee. Refused for file and hosted.
 
 #### `tickets.teamKey`
 
@@ -2778,7 +2780,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 - **Type:** `string`
 - **Default:** `omitted`
-- **Required:** Required for linear and hosted; forbidden for file; optional for plugins.
+- **Required:** Required for linear and hosted; forbidden for file and github; optional for plugins.
 - **Reload:** Dispatcher restart required; startup adapters retain their configuration. A running invocation keeps its captured values.
 
 **Description:** Backend team key such as `"ENG"`, or an existing plugin config field.
@@ -2796,7 +2798,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Workflow state entered when a ticket is claimed.
 
-**Constraints:** minimum length 1; state must be nonblank; Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted.
+**Constraints:** minimum length 1; state must be nonblank; Forbidden for file. Resolution uses In Progress for direct Linear, doing for hosted and github.
 
 #### `tickets.doneState`
 
@@ -2809,7 +2811,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Project completion state and merged-ticket transition.
 
-**Constraints:** minimum length 1; state must be nonblank; Hosted resolution uses done when omitted.
+**Constraints:** minimum length 1; state must be nonblank; Hosted and github resolution uses done when omitted. A github ticket is done when its issue is closed as completed.
 
 #### `tickets.createState`
 
@@ -2822,7 +2824,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Default state for newly created tickets when `ab ticket create` omits `--state`.
 
-**Constraints:** minimum length 1; state must be nonblank; Omission uses the source creation state (Linear team default; file Triage).
+**Constraints:** minimum length 1; state must be nonblank; Omission uses the source creation state (Linear team default; file Triage; github triage).
 
 #### `tickets.triageState`
 
@@ -2835,7 +2837,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** State used for spec-gate bounces, aborts, and closed-unmerged PRs.
 
-**Constraints:** minimum length 1; state must be nonblank; Omission resolves to Backlog for Linear, triage for hosted, Triage for file/plugin sources.
+**Constraints:** minimum length 1; state must be nonblank; Omission resolves to Backlog for Linear, triage for hosted and github, Triage for file/plugin sources.
 
 #### `tickets.proposalState`
 
@@ -2861,7 +2863,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** State that holds deliberately deferred work (the backlog role). Optional and recommended; unset means the role does not exist.
 
-**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).
+**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default; `ab init` writes it for new configurations. Must differ from the ready, claimed, done, triage and proposal states and from rejectedState (case-insensitive).
 
 #### `tickets.rejectedState`
 
@@ -2874,7 +2876,7 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** State that holds considered-and-declined work (the rejected role). A rejected ticket never resolves a blocker and never keeps a node incomplete. Optional and recommended.
 
-**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
+**Constraints:** minimum length 1; state must be nonblank; Optional for every source, no default; `ab init` writes it for new configurations. On github it maps to an issue closed as not planned. Must differ from the ready, claimed, done, triage and proposal states and from backlogState (case-insensitive).
 
 #### `tickets.dir`
 
@@ -2887,20 +2889,35 @@ state. Within a present table, `source` is required; hosted tickets default `rea
 
 **Description:** Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository.
 
-**Constraints:** minimum length 1; Forbidden for linear and hosted. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.
+**Constraints:** minimum length 1; Forbidden for linear, hosted and github. File omission resolves to the selected local state root tickets directory; plugin omission remains omitted.
 
 <!-- configuration-reference:/tickets -->
 
-`readyAssignee = "me"` resolves to the Linear user who owns `LINEAR_API_KEY`,
-so one committed value makes each person's local dispatcher take only the work
-assigned to them; an email names a specific user, for a shared or bot key. The
-gate is conjunctive with `readyState` and `readyLabels`, and a ticket with no
-assignee is never ready while it is set. It applies to every ready surface
+`readyAssignee` narrows readiness to tickets assigned to one user, so one
+committed `readyAssignee = "me"` makes each person's local dispatcher take only
+the work assigned to them. It is a ticket-source capability: `linear`, `github`
+and plugin sources that declare it accept it, each with its own value forms.
+
+- **Linear:** `"me"` is the user who owns `LINEAR_API_KEY`; an email names a
+  specific user, for a shared or bot key.
+- **GitHub:** `"me"` is the login that owns the GitHub credential the source
+  authenticates with; a GitHub username, including an Enterprise Managed User
+  login such as `mona_acme`, names a specific user. An issue with several
+  assignees is ready when the user is any one of them.
+
+The gate is conjunctive with `readyState` and `readyLabels`, and a ticket with
+no assignee is never ready while it is set. It applies to every ready surface
 (dispatch, the queued count, and `ab ticket list` without filters); blockers
-still prevent claim. It is empty or blank, or neither `"me"` nor an email,
-fails validation. `ab init --validate` prints the user the gate resolves to and
-fails when an email matches no workspace user. The field reloads without a
-restart.
+still prevent claim. A blank value, or one outside the source's forms, fails
+validation. `file`, `hosted` and plugin sources that don't declare the
+capability refuse it: startup and `ab init --validate` fail with an error that
+names the source. `ab init --validate` prints the user the gate resolves to
+and fails when it names nobody: a Linear email that matches no workspace user,
+a GitHub `"me"` whose credential has no user (a GitHub App installation
+token), or a GitHub user who can't be assigned issues in the repository. The
+field reloads without a restart; a reload that names it for a source without
+the capability, or a GitHub `"me"` the startup credential couldn't resolve, is
+rejected and the previous configuration stays active.
 
 When `readyLabels` is absent, direct Linear uses `["autobuild"]`; hosted, file,
 and plugin sources use `[]`, meaning no host-imposed label gate. An explicit value always

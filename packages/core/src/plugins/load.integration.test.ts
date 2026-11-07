@@ -27,7 +27,7 @@ describe('loadPlugins', () => {
   test('an empty list performs no resolution and returns builtin reservations', async () => {
     const repo = await fixture()
     const registry = await loadPlugins([], repo)
-    expect([...registry.ticketSources.keys()]).toEqual(['file', 'hosted', 'linear'])
+    expect([...registry.ticketSources.keys()]).toEqual(['file', 'github', 'hosted', 'linear'])
   })
 
   test('loads a repository-relative default manifest', async () => {
@@ -177,7 +177,7 @@ describe('loadPlugins', () => {
     expect(diagnosis.reports[2]).toMatchObject({
       resolutionKind: 'repo-path',
       pluginName: 'good',
-      api: { hostVersion: '1.9.0', status: 'compatible' },
+      api: { hostVersion: '1.10.0', status: 'compatible' },
     })
   })
 
@@ -209,7 +209,7 @@ describe('loadPlugins', () => {
       `export default { name: 'future-plugin', apiVersion: '^2.0.0' }\n`,
     )
     await expect(loadPlugins(['./future.ts'], repo)).rejects.toThrow(
-      /future\.ts.*future-plugin.*\^2\.0\.0.*1\.9\.0/,
+      /future\.ts.*future-plugin.*\^2\.0\.0.*1\.10\.0/,
     )
 
     await write(
@@ -367,7 +367,7 @@ describe('loadPlugins', () => {
       `export default { name: 'guest-future', apiVersion: '^2.0.0' }\n`,
     )
     await expect(loadPlugins(['./guest-future.ts'], repo, { guest: true })).rejects.toThrow(
-      /guest-future\.ts.*\^2\.0\.0.*1\.9\.0/,
+      /guest-future\.ts.*\^2\.0\.0.*1\.10\.0/,
     )
   })
 

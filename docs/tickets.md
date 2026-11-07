@@ -13,11 +13,12 @@ A ticket says what change to make and why. The tracker is the input; the build's
 
 ## Choose a source
 
-Autobuild ships three ticket sources; plugins can register more through the same port:
+Autobuild ships four ticket sources; plugins can register more through the same port:
 
 - **File** stores tickets in lifecycle directories.
 - **Linear** (direct) uses your team's workflow.
 - **Hosted** is its own project-scoped service, not a Linear proxy.
+- **GitHub** uses the repository's own issues, with states as labels.
 
 The source supplies content, workflow states, labels, and blockers; configuration picks the source and ready gate. Everything else is source-agnostic.
 
@@ -42,7 +43,7 @@ Your operator agent grooms the ticket with you using `ab-spec`, then moves it to
 
 When the work comes from a forge issue, record it on the ticket: `--issues 824` when the ticket fully resolves issue #824 (`closes`, the default), or `--issues 820:refs` when it only partly addresses it. `ab ticket update --issues` replaces the set and `--issues ''` clears it. Sources that can't store issue links refuse the write and name the source.
 
-A build freezes the links when it claims the ticket. On GitHub, a leaf build that targets the default branch writes `Closes #824` or `Refs #820` lines at the end of its PR body and before the trailers of its landed commit, so merging closes each fully resolved issue and back-links the rest. A leaf that targets a node branch writes no lines of its own; its links ride up to the root node's PR into the default branch, so they close when the node lands. A build that turns out to only partly resolve an issue downgrades it to `refs` with a recorded reason.
+A build freezes the links when it claims the ticket. On GitHub, a leaf build that targets the default branch writes `Closes #824` or `Refs #820` lines at the end of its PR body and before the trailers of its landed commit, so merging closes each fully resolved issue and back-links the rest. A leaf that targets a node branch writes only `Refs` lines into its PR body, which never close anything, and none into its landed commit; its links ride up to the root node's PR into the default branch, together with the node's own links, so they close when the node lands. A build that turns out to only partly resolve an issue downgrades it to `refs` with a recorded reason.
 
 ```sh
 bun ab ticket create "Close stale sandboxes" --body spec.md --issues 824,820:refs
@@ -62,7 +63,7 @@ Two optional lifecycle roles sit beside triage, ready, claimed and done:
 - **Backlog** holds work you deferred on purpose. Nothing dispatches from it.
 - **Rejected** holds work you considered and declined. A rejected ticket never unblocks the tickets it blocks, and a rejected child no longer holds its node open.
 
-Both roles are recommended. Map each to a native state with `[tickets].backlogState` and `[tickets].rejectedState`; `ab init` writes `backlog` and `rejected` for the file source, and a Linear team might use `Icebox` and `Canceled`. With a key unset, that role doesn't exist. Your operator agent moves tickets by role, so it never needs your native names:
+Both roles are recommended. Map each to a native state with `[tickets].backlogState` and `[tickets].rejectedState`; `ab init` writes `backlog` and `rejected` for the file, hosted and GitHub sources, and a Linear team might use `Icebox` and `Canceled`. With a key unset, that role doesn't exist. Your operator agent moves tickets by role, so it never needs your native names:
 
 ```sh
 bun ab ticket move AUT-12 --role backlog

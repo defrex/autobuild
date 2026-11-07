@@ -10,6 +10,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TicketsConfig } from '../config/schema'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { GitHubTicketSource } from '../ports/tickets/github'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
 import type {
   Ticket,
   TicketCreateOptions,
@@ -1145,6 +1147,63 @@ describe('runCli — ticket routing', () => {
     expect(await store.getRepoEvents(migrationRepo)).toHaveLength(1)
   })
 
+  test('import --states refuses to leave an unfinished build behind; export refuses --states', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const { exportTickets } = await import('../ports/tickets/migration')
+    const { MemoryBuildStore } = await import('../store/memory')
+    const original = new FileTicketSource({ dir: join(tmp, 'old') })
+    await original.create(
+      { title: 'Ready', body: 'spec' },
+      { requestedId: 'OLD-1', state: 'ready' },
+    )
+    await original.create(
+      { title: 'Doing', body: 'spec' },
+      { requestedId: 'OLD-2', state: 'doing' },
+    )
+    const dir = join(tmp, 'export')
+    await exportTickets({ source: original, repo: 'https://example.test/owner/repo', dir })
+    const store = new MemoryBuildStore()
+    const ensure = store.ensureRepo.bind(store)
+    store.ensureRepo = async (repo) => {
+      const record = await ensure(repo)
+      if (!(await store.getBuild('b-1')))
+        await store.createBuild({ slug: 'b-1', repo, ticket: { source: 'file', id: 'OLD-2' } })
+      return record
+    }
+    const target = new FileTicketSource({ dir: join(tmp, 'tickets') })
+    let writes = 0
+    target.create = async () => {
+      writes++
+      throw new Error('unexpected write')
+    }
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      exec: async (cmd: string[]) => ({
+        stdout: cmd.includes('remote.origin.url')
+          ? 'https://example.test/org/repo.git'
+          : `${join(tmp, '.git')}\n${join(tmp, '.git')}\n${tmp}\n`,
+        stderr: '',
+        exitCode: 0,
+      }),
+      stdout: () => {},
+      stderr: () => {},
+      openStore: () => store,
+      sourceFactory: () => target,
+    }
+    await expect(abTicket(['import', dir, '--states', 'ready'], opts)).rejects.toThrow(
+      'build b-1 is unfinished for ticket OLD-2, which --states excludes',
+    )
+    expect(writes).toBe(0)
+    await expect(
+      abTicket(['export', join(tmp, 'again'), '--states', 'ready'], opts),
+    ).rejects.toThrow('--states selects what to import')
+    await expect(abTicket(['import', dir, '--states', ','], opts)).rejects.toThrow(
+      '--states needs at least one state',
+    )
+  })
+
   test('direct export recording accepts new tickets in the configured tracker and still checks every original ID', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const { FileTicketSource } = await import('../ports/tickets/file')
@@ -2079,6 +2138,76 @@ describe('ticket metadata CLI', () => {
     expect((await source.get(node.ref.id))!.kind).toBe('work')
   })
 
+  test('kind and target commands and tree JSON work against the github source', async () => {
+    await writeRepo('baseBranch = "trunk"\n[tickets]\nsource = "github"\n')
+    const body = join(tmp, 'spec.md')
+    await writeFile(body, 'spec')
+    const issues = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: issues.transport,
+      repository: issues.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    const out: string[] = []
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      stdout: (line: string) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+    }
+    await abTicket(['create', 'Node', '--body', body, '--kind', 'node', '--json'], opts)
+    const node = JSON.parse(out.pop()!)
+    expect(node.kind).toBe('node')
+    expect(issues.issue(Number(node.ref.id))?.labels).toEqual(['node'])
+    await abTicket(['create', 'Other node', '--body', body, '--kind', 'node', '--json'], opts)
+    const other = JSON.parse(out.pop()!)
+    await abTicket(['create', 'Child', '--body', body, '--target', node.ref.id, '--json'], opts)
+    const child = JSON.parse(out.pop()!)
+    expect(child.target).toBe(node.ref.id)
+    expect(issues.subIssues(Number(node.ref.id))).toEqual([Number(child.ref.id)])
+    const group = issues.fileIssue({ title: 'Grouping' })
+    await abTicket(['create', 'Grouped', '--body', body, '--json'], opts)
+    const grouped = JSON.parse(out.pop()!)
+    issues.uiAddSubIssue(group, Number(grouped.ref.id))
+
+    await abTicket(['tree', '--json'], opts)
+    const tree = JSON.parse(out.pop()!)
+    expect(tree.root).toBe('trunk')
+    const roots = tree.children.map(
+      (entry: { ticket: { ref: { id: string } } }) => entry.ticket.ref.id,
+    )
+    expect(roots).toEqual([node.ref.id, other.ref.id, String(group), grouped.ref.id].sort())
+    const nodeEntry = tree.children.find(
+      (entry: { ticket: { ref: { id: string } } }) => entry.ticket.ref.id === node.ref.id,
+    )
+    expect(nodeEntry.ticket.kind).toBe('node')
+    expect(
+      nodeEntry.children.map((entry: { ticket: { ref: { id: string } } }) => entry.ticket.ref.id),
+    ).toEqual([child.ref.id])
+
+    await abTicket(['update', child.ref.id, '--target', other.ref.id, '--json'], opts)
+    expect(JSON.parse(out.pop()!).target).toBe(other.ref.id)
+    expect(issues.subIssues(Number(other.ref.id))).toEqual([Number(child.ref.id)])
+    await expect(abTicket(['update', other.ref.id, '--kind', 'work'], opts)).rejects.toThrow(
+      `cannot change node ${other.ref.id} to work: ticket ${child.ref.id} targets it`,
+    )
+    await abTicket(['update', child.ref.id, '--no-target', '--json'], opts)
+    expect(JSON.parse(out.pop()!).target).toBeUndefined()
+    expect(issues.subIssues(Number(other.ref.id))).toEqual([])
+    await abTicket(['update', other.ref.id, '--kind', 'work'], opts)
+    expect((await source.get(other.ref.id))!.kind).toBe('work')
+    expect(issues.issue(Number(other.ref.id))?.labels).toEqual([])
+  })
+
   test('invalid kind, blank ids and conflicting flags fail before writes', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const source = new FakeTicketSource()
@@ -2130,5 +2259,40 @@ describe('ticket issue links on a source without support', () => {
       }),
     ).rejects.toThrow('fake ticket source cannot store issue links')
     expect(created.update).toBeUndefined()
+  })
+})
+
+describe('ab ticket edit', () => {
+  test('edits a github ticket, which has no guarded writes', async () => {
+    await writeRepo('[tickets]\nsource = "github"\n')
+    const issues = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: issues.transport,
+      repository: issues.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    const ticket = await source.create({ title: 'Original', body: 'spec\n' })
+    const out: string[] = []
+    await abTicket(['edit', ticket.ref.id], {
+      targetRepo: tmp,
+      env: { EDITOR: 'editor' },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+      editorRunner: async (_, path) => {
+        await writeFile(path, (await readFile(path, 'utf8')).replace('Original', 'Edited'))
+        return 0
+      },
+    })
+    expect(out).toEqual([`ticket edit complete: github:${ticket.ref.id}`])
+    expect(issues.issue(Number(ticket.ref.id))?.title).toBe('Edited')
   })
 })

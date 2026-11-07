@@ -8,7 +8,8 @@ import type { TicketSource } from '../types'
 import type { PluginFactoryContext } from '../../plugins/manifest'
 import { PluginRegistry } from '../../plugins/registry'
 import { describeTicketSourceContract } from './contract'
-import { createTicketSource } from './create'
+import { createTicketSource, githubCoordinates } from './create'
+import { GitHubTicketSource } from './github'
 import { FakeTicketSource } from './fake'
 import { FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
@@ -59,6 +60,53 @@ describe('createTicketSource — hosted', () => {
         REPO,
       ),
     ).rejects.toThrow('teamKey')
+  })
+})
+
+describe('createTicketSource — github', () => {
+  const config = { source: 'github', readyState: 'ready' }
+
+  test('takes coordinates from AB_REPOSITORY and keeps validators under the state root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-create-github-'))
+    const source = await createTicketSource(
+      config,
+      { AB_REPOSITORY: 'https://github.com/acme/widgets.git', GITHUB_TOKEN: 'token' },
+      REPO,
+      root,
+    )
+    expect(source).toBeInstanceOf(GitHubTicketSource)
+    expect(source.name).toBe('github')
+  })
+
+  test('constructs with readyAssignee, which github declares', async () => {
+    const source = await createTicketSource(
+      { ...config, readyAssignee: 'me' },
+      { AB_REPOSITORY: 'acme/widgets', GITHUB_TOKEN: 'token' },
+      REPO,
+    )
+    expect(source.readyAssignee).toBe(true)
+  })
+
+  test('refuses an origin that is not on github.com', async () => {
+    await expect(
+      createTicketSource(config, { AB_REPOSITORY: 'https://gitlab.com/acme/widgets' }, REPO),
+    ).rejects.toThrow(
+      '[tickets].source = "github" needs an origin on github.com; origin is https://gitlab.com/acme/widgets',
+    )
+  })
+
+  test('github coordinates accept slugs, https and ssh spellings only on github.com', () => {
+    expect(githubCoordinates('acme/widgets')).toEqual({ owner: 'acme', name: 'widgets' })
+    expect(githubCoordinates('git@github.com:acme/widgets.git')).toEqual({
+      owner: 'acme',
+      name: 'widgets',
+    })
+    expect(githubCoordinates('https://GitHub.com/acme/widgets')).toEqual({
+      owner: 'acme',
+      name: 'widgets',
+    })
+    expect(githubCoordinates('https://ghe.example.com/acme/widgets')).toBeNull()
+    expect(githubCoordinates('/srv/git/widgets')).toBeNull()
   })
 })
 
@@ -210,7 +258,33 @@ describe('createTicketSource — plugin', () => {
     const registry = pluginRegistry(() => new FakeTicketSource())
     await expect(
       createTicketSource({ source: 'missing', readyState: 'Open' }, {}, REPO, undefined, registry),
-    ).rejects.toThrow(/unknown ticket source "missing".*file, hosted, jira, linear/)
+    ).rejects.toThrow(/unknown ticket source "missing".*file, github, hosted, jira, linear/)
+  })
+
+  test('readyAssignee needs the constructed source to declare the capability', async () => {
+    const config = { source: 'jira', readyState: 'Open', readyAssignee: 'me' }
+    await expect(
+      createTicketSource(
+        config,
+        {},
+        REPO,
+        undefined,
+        pluginRegistry(() => new FakeTicketSource()),
+      ),
+    ).rejects.toThrow(
+      'ticket source "jira" from plugin "acme-tracker" cannot filter ready tickets by assignee',
+    )
+    const capable = new FakeTicketSource()
+    Object.defineProperty(capable, 'readyAssignee', { value: true })
+    const source = await createTicketSource(
+      config,
+      {},
+      REPO,
+      undefined,
+      pluginRegistry(() => capable),
+    )
+    // The facade forwards the declaration.
+    expect(source.readyAssignee).toBe(true)
   })
 
   test('factory failures retain cause and identify source ownership', async () => {

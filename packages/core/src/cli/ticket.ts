@@ -5,7 +5,9 @@ import { createForge } from '../ports/forge/create'
 import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/tree'
 import { formatIssueLinks, parseIssueLinkList } from '../ports/tickets/issue-links'
 import { parsePriorityFlag, ticketPriority } from '../ports/tickets/priority'
-import { readBuildFacts } from '../store/reduced-reads'
+import { parseIssueId, rejectedStateOf } from '../ports/tickets/github-issues'
+import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
+import type { TicketRef } from '../ontology'
 import { exportTickets, importTickets, directMigration } from '../ports/tickets/migration'
 import { composeTicketAssets } from '../store/ticket-assets'
 import { editTicket, type TicketEditorRunner } from './ticket-editor'
@@ -24,8 +26,10 @@ import type { PluginRegistry } from '../plugins/registry'
 import { createTicketSource } from '../ports/tickets/create'
 import {
   holdsState,
+  type LifecycleRole,
   TICKET_MOVE_ROLES,
   ticketLifecycle,
+  type TicketLifecycle,
   type TicketMoveRole,
 } from '../ports/tickets/lifecycle'
 import {
@@ -520,7 +524,7 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
   const ticket = await requireTicket(source, opts.id)
   // An asset-listing failure fails the command rather than hiding the assets.
   const assets = await withTicketAssets(opts, source, ({ store, repo }) =>
-    store.listTicketAssets(repo, opts.id),
+    store.listTicketAssets(repo, assetTicketId(source.name, opts.id)),
   )
   // One batched read, only when the ticket declares blockers.
   const rejectedName = ticketLifecycle(config.tickets).rejected
@@ -583,6 +587,15 @@ function withTicketStore<T>(
   )
 }
 
+/** The id ticket assets are keyed by. GitHub accepts `123` and `#123` for one
+ * issue, and the dispatcher reads assets by `ref.id`, so both spellings key by
+ * the issue number. Other sources key by the id as given. */
+export function assetTicketId(source: string, id: string): string {
+  if (source !== 'github') return id
+  const number = parseIssueId(id)
+  return number === null ? id : String(number)
+}
+
 function withTicketAssets<T>(
   opts: TicketCommandOpts,
   source: TicketSource,
@@ -594,6 +607,38 @@ function withTicketAssets<T>(
   return withTicketStore(opts, ({ store, repo }) =>
     use({ store: composeTicketAssets(source, store), buildStore: store, repo }),
   )
+}
+
+/** The lifecycle export records as roles and import lands them in. The file
+ * adapter always claims into `doing/` (see `stateRoles`). GitHub issues closed
+ * as not planned are rejected work even without a configured rejected state;
+ * the github source itself refuses to import into that unmovable state. */
+export function migrationLifecycle(tickets: TicketsConfig): TicketLifecycle {
+  const lifecycle = ticketLifecycle(tickets)
+  if (tickets.source === 'file') return { ...lifecycle, doing: 'doing' }
+  if (tickets.source === 'github') return { ...lifecycle, rejected: rejectedStateOf(lifecycle) }
+  return lifecycle
+}
+
+/**
+ * The ticket and target refs of this repo's unfinished builds, so an import
+ * selection cannot leave in-flight work behind. Runs once per explicit
+ * `ab ticket import --states`: one build listing, one digest batch and one
+ * saved reduced read per unfinished build; never a log read.
+ */
+export async function unfinishedBuildTickets(
+  store: BuildStore,
+  repo: string,
+): Promise<{ build: string; ticket: TicketRef }[]> {
+  const digests = await readBuildDigests(store, repo)
+  const refs: { build: string; ticket: TicketRef }[] = []
+  for (const record of await store.listBuildsForRepo(repo)) {
+    if (digests.get(record.slug)?.terminal !== undefined) continue
+    if (record.ticket) refs.push({ build: record.slug, ticket: record.ticket })
+    const target = (await readBuildFacts(store, record.slug)).value.state.target?.ticket
+    if (target) refs.push({ build: record.slug, ticket: target })
+  }
+  return refs
 }
 
 /** Slugs of this repo's non-terminal builds for the ticket. A build freezes its
@@ -629,8 +674,9 @@ function warnActiveBuilds(
  * asset, then leave a note on the ticket in its source. Order matters: the
  * source is asked first, so an unknown id stores nothing; the note follows the
  * store write, so it never points at nothing. */
-export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
-  const { source } = await resolveTicketCommand(opts, 'attach')
+export async function abTicketAttach(given: TicketAttachOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(given, 'attach')
+  const opts = { ...given, id: assetTicketId(source.name, given.id) }
   await requireTicket(source, opts.id)
   const walk = await walkAssetPath(opts.path)
   const name = opts.name ?? walk.basename
@@ -673,8 +719,9 @@ export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
 
 /** `ab ticket asset get <id> <kind> <name> <dest>` — exact bytes at the
  * latest or a named revision. */
-export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> {
-  const resolved = await resolveTicketConfig(opts, 'ab ticket asset get')
+export async function abTicketAssetGet(given: TicketAssetGetOpts): Promise<void> {
+  const resolved = await resolveTicketConfig(given, 'ab ticket asset get')
+  const opts = { ...given, id: assetTicketId(resolved.config.tickets.source, given.id) }
   const readAsset = ({ store, repo }: { store: TicketAssetStore; repo: string }) =>
     store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev)
   const asset =
@@ -704,8 +751,9 @@ export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> 
 
 /** `ab ticket asset rm <id> <kind> <name>` — remove from the current assets
  * (earlier revisions stay retrievable) and note the removal on the ticket. */
-export async function abTicketAssetRm(opts: TicketAssetRmOpts): Promise<void> {
-  const { source } = await resolveTicketCommand(opts, 'asset rm')
+export async function abTicketAssetRm(given: TicketAssetRmOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(given, 'asset rm')
+  const opts = { ...given, id: assetTicketId(source.name, given.id) }
   const { removed, active } = await withTicketAssets(
     opts,
     source,
@@ -751,15 +799,7 @@ export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
   opts.stdout(`ticket moved: ${ticketSummary(moved)}`)
 }
 
-export type TicketStateRole =
-  | 'create'
-  | 'ready'
-  | 'claimed'
-  | 'triage'
-  | 'proposal'
-  | 'done'
-  | 'backlog'
-  | 'rejected'
+export type TicketStateRole = LifecycleRole
 
 /** Workflow order: placements sit beside triage, the role they default to. */
 const STATE_ROLE_ORDER: readonly TicketStateRole[] = [
@@ -792,10 +832,20 @@ export function stateRoles(
   const named: Array<[TicketStateRole, string]> = [
     ['create', tickets.createState ?? 'triage'],
     ['ready', tickets.readyState],
-    ['claimed', tickets.source === 'hosted' ? (tickets.claimedState ?? 'doing') : 'doing'],
+    [
+      'claimed',
+      tickets.source === 'hosted' || tickets.source === 'github'
+        ? (tickets.claimedState ?? 'doing')
+        : 'doing',
+    ],
     ['triage', triage],
     ['proposal', tickets.proposalState ?? triage],
-    ['done', tickets.source === 'hosted' ? (tickets.doneState ?? 'done') : 'done'],
+    [
+      'done',
+      tickets.source === 'hosted' || tickets.source === 'github'
+        ? (tickets.doneState ?? 'done')
+        : 'done',
+    ],
   ]
   if (tickets.backlogState !== undefined) named.push(['backlog', tickets.backlogState])
   if (tickets.rejectedState !== undefined) named.push(['rejected', tickets.rejectedState])
@@ -902,7 +952,7 @@ const STATES_USAGE = 'usage: ab ticket states [--json] (§8.8)'
 const STATE_CREATE_USAGE = 'usage: ab ticket state create <name> [--about <text>] [--json] (§8.8)'
 export const TICKET_USAGE = [
   'usage: ab ticket export <dir> [--store <ref>]',
-  'usage: ab ticket import <dir> [--store <ref>]',
+  'usage: ab ticket import <dir> [--states <state,...>] [--store <ref>]',
   'usage: ab ticket migration record <dir> [--store <ref>]',
   'usage: ab ticket tree [--json]',
   CREATE_USAGE,
@@ -943,18 +993,43 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     case 'import': {
       const tail = command === 'migration' ? args.slice(1) : args
       if (command === 'migration' && args[0] !== 'record') throw new Error(TICKET_USAGE)
-      const parsed = parseArgs(tail, { store: 'value' }, TICKET_USAGE)
+      const parsed = parseArgs(tail, { store: 'value', states: 'value' }, TICKET_USAGE)
       const [dir, ...extra] = parsed.positionals
       if (!dir?.trim() || extra.length) throw new Error(TICKET_USAGE)
+      const selected = stringFlag(parsed, 'states')
+      if (selected !== undefined && command !== 'import')
+        throw new Error(`--states selects what to import; ${TICKET_USAGE}`)
+      const states = selected === undefined ? undefined : commaList(selected)
+      if (states?.length === 0)
+        throw new Error(`--states needs at least one state; ${TICKET_USAGE}`)
       const migrationOpts = { ...opts, storeRef: stringFlag(parsed, 'store') ?? opts.storeRef }
-      const { source } = await resolveTicketCommand(migrationOpts, command)
+      const { config, source } = await resolveTicketCommand(migrationOpts, command)
       await withTicketAssets(migrationOpts, source, async ({ store, buildStore, repo }) => {
-        const input = { source, assets: store, repo, dir, print: opts.stdout, signal: opts.signal }
+        const input = {
+          source,
+          assets: store,
+          repo,
+          dir,
+          print: opts.stdout,
+          signal: opts.signal,
+          lifecycle: migrationLifecycle(config.tickets),
+        }
         if (command === 'export') return exportTickets(input)
         await buildStore.ensureRepo(repo)
-        await readTicketMigrations(buildStore, repo)
+        const migrations = await readTicketMigrations(buildStore, repo)
         const result =
-          command === 'import' ? await importTickets(input) : await directMigration(input)
+          command === 'import'
+            ? await importTickets({
+                ...input,
+                ...(states === undefined
+                  ? {}
+                  : {
+                      states,
+                      inFlight: await unfinishedBuildTickets(buildStore, repo),
+                      migrations,
+                    }),
+              })
+            : await directMigration(input)
         try {
           await recordTicketMigration(
             buildStore,

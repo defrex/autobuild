@@ -87,7 +87,7 @@ Interfaces to the world, each with swappable adapters:
 
 | Port | Duty | Initial adapters |
 |---|---|---|
-| `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; third-party in-process registrations; later GitHub Issues |
+| `TicketSource` | list/claim/comment/transition/create/update tickets; add, remove, and resolve declared dependencies | file-based (default directory); Linear; hosted; GitHub Issues; third-party in-process registrations |
 | `AgentRunner` | run agent sessions (see §9) | Claude Code CLI (headless); Codex CLI (`exec --json`); local pi CLI (`--mode rpc`, minimum 0.84.3); third-party in-process registrations |
 | `Workspace` | provision isolated working copies | git worktree; third-party in-process registrations; later remote sandbox |
 | `Forge` | git + PR plumbing | GitHub; local Git; third-party in-process registrations |
@@ -95,6 +95,7 @@ Interfaces to the world, each with swappable adapters:
 | `BuildStore` | per-build streams plus repository journals: events, artifacts, transcripts, leases (see §7) | local; remote HTTP |
 
 Ticket sources may optionally provide native `listPage(criteria, page)` windows with a matching total. Paged operator reads use it when present, otherwise slice the exhaustive listing; unpaged and dispatcher reads remain exhaustive.
+Integration-tree sources may optionally provide `listTargeting(nodeId)`, every ticket targeting one node in every state, equal to the exhaustive listing filtered by target. Integration observation uses it when present, otherwise `listAll`.
 
 #### 3.2.1 In-process adapter plugins
 
@@ -229,7 +230,8 @@ configuration, independent of the viewer's operator correlation identity. With n
 configuration the display waits, polling bounded canonical state. Fresh viewers
 reuse saved server reductions; missing presentation caches never trigger event
 history reconstruction. Idle polls read zero event rows. Its one ticket-source
-read is the header's triage count, sampled at most once per 10 s.
+read is the header's triage count, sampled at most once per 60 s, outside
+dispatcher ticks.
 
 Every frame reserves a row for `viewer`, optionally `viewer · dispatched by
 <label>` from explicit `--dispatched-by` input. Plain output states the mode at
@@ -945,7 +947,7 @@ ticket's other durable data and never expire on their own.
 Hosted ticket assets live in the ticket service's repository-keyed storage,
 regardless of where builds run or which BuildStore is selected. File tickets use
 native portable storage composed with legacy BuildStore attachments; Linear
-tickets retain BuildStore storage. Existing service assets need no migration;
+and GitHub tickets retain BuildStore storage. Existing service assets need no migration;
 old local hosted-ticket attachments are not moved or used as a fallback.
 
 Each put creates a new increasing **revision**; earlier revisions stay retrievable.
@@ -1850,7 +1852,8 @@ implementer:  ab context   (findings.json now materialized) → …
 
 Human/pre-build ticket grooming uses one configured-source namespace
 (`ab ticket create|update|block|unblock|list|show|move`, plus the ticket-asset
-forms below). Migration adds `ab ticket export <dir>` and `ab ticket import <dir>`,
+forms below). Migration adds `ab ticket export <dir>` and
+`ab ticket import <dir> [--states <state,…>]`,
 plus `ab ticket migration record <dir>`
 (see [Ticket source migration](#ticket-source-migration)). These commands are
 sessionless, source-agnostic, and never available as a mid-build spec
@@ -2475,12 +2478,37 @@ blockers, creation-key deduplication and assets are isolated by repository.
 Independent project ticket policy supplies hosted lifecycle names: triage, ready,
 doing, done (`doneState`), and create/proposal equal to triage by default, plus
 the optional backlog and rejected roles. Hosted
-readyState defaults to ready; other sources require it. Legacy clients without
+and GitHub readyState defaults to ready; other sources require it. Legacy clients without
 independent policy use uploaded dispatcher config and its old defaults. Configured roles may overlap,
 except the backlog and rejected roles below.
 The service has no Linear backend and never relays external ticket sources.
-Projects using Linear, files or plugins keep their direct dispatcher connection;
+Projects using Linear, GitHub, files or plugins keep their direct dispatcher connection;
 service ticket surfaces refuse with project/source feedback instead of empty data.
+
+**GitHub tickets are the forge repository's issues.** `[tickets] source = "github"`
+selects the issues of the GitHub repository `origin` names and authenticates as the
+`github` forge does: `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI login.
+Ticket ids are issue numbers, and pull requests are never tickets. Lifecycle
+defaults are triage, ready, doing and done, with create and proposal equal to
+triage and `readyLabels` defaulting to `["autobuild"]`. A state is an
+`autobuild:<state>` label on an open issue; an open issue with no state label is
+in triage, and one with two or more is excluded with a diagnostic. Closing
+reasons carry the terminal states: closed as completed (or with no recorded
+reason) is done; closed as not planned or duplicate is the rejected role's
+state, or a fixed `not-planned` state, never ready and never resolving a
+blocker, when no rejected role is configured. Reopening an issue on GitHub
+returns it to triage, and the adapter strips a stale pre-reopen state label the
+first time it reads the issue. Blockers are GitHub's native issue dependencies,
+and a blocker in another repository never resolves. Assets live in the
+BuildStore, with notes posted as issue comments, and `get` carries no comment
+history; export and import read it explicitly. A ticket's own issue is an implicit `closes` link. A node is an issue
+with the exact `node` label, and a ticket targets a node by being a sub-issue
+of the node's issue (§13.1). The source has no guarded writes. Export and import are supported (see
+[Ticket source migration](#ticket-source-migration)). Dispatcher reads are
+conditional requests whose validators live only under the local state root, so
+an unchanged repository costs a tick no primary rate-limit budget; display-only
+state counts are one fresh GraphQL request per call, plus one per further
+page of 100 `autobuild:` labels, and are never cached.
 
 
 The TicketSource **initiates and receives projections; it is never consulted
@@ -2500,7 +2528,7 @@ replacing, or removing an asset instead leaves a note on the ticket through the
 existing `comment()` port — the outward projection every source, including the
 plugin surface, already supports. The note names the asset, its revision, file
 count, and size, and gives the `ab ticket asset get` command that fetches it, so
-a person reading the ticket in Linear, the hosted service, or a local file knows
+a person reading the ticket in Linear, GitHub, the hosted service, or a local file knows
 the asset exists. The note is a projection outward only; nothing reads it back,
 and existing sources and plugins need no asset capability.
 
@@ -2562,8 +2590,11 @@ as `{issue, intent}`: `issue` is a positive issue number and `intent` is
 only partly addresses it). Issue numbers are unique within a ticket and reads
 return links sorted by number; absent means none. Create sets links; update
 replaces the whole set, and an empty set clears it. Sources declare support.
-The file and hosted sources store links; the Linear source refuses them,
-because Linear links GitHub issues natively through its own integration.
+The file and hosted sources store links. The GitHub source stores each link to
+another issue as an `autobuild-link:<intent> #<n>` label and always reports the
+ticket's own issue as a `closes` link that cannot be removed. The Linear source
+refuses them, because Linear links GitHub issues natively through its own
+integration.
 A source that cannot store links refuses any create or update that names
 them, including an empty set, with a typed error naming the source, before
 anything is written; it never drops them. Writes that name no links are
@@ -2609,36 +2640,50 @@ body or landing message, including `owner/name#N` and issue URLs for the
 adapter's own repository, is rewritten to `refs`. A forge without the
 capability records links without emitting them.
 
-A leaf targeting a node writes no keywords into its own PR or landed commit,
-because only the default branch closes issues. Its links travel to the node
-instead. When a child of node N, a leaf or a nested node, reaches `pr.merged`
+A leaf targeting a node cannot close anything, because only the default
+branch closes issues. Its PR body still ends with one `Refs #N` line per linked
+issue, ascending by number, whatever each link's intent, so each issue shows
+the PR, and every closing keyword aimed at a linked issue in its title or body
+is rewritten to `refs`. Its landed commit carries no keyword lines. Its links
+travel to the node. When a child of node N, a leaf or a nested node, reaches `pr.merged`
 by kernel landing, human merge or abort cleanup, the dispatcher appends
 `node.issue-links-recorded {build, issueLinks}` to N before the child completes.
 Until that fact exists, a merged child with links that has not completed stays
 one of N's open children, even when it is aborted or its ticket no longer
 targets N, so N cannot verify or land without its contribution. The payload is the child's contribution: a leaf's effective links, with
 `downgraded: true` where a downgrade applied before its seal, or a nested node's
-own union. Every contributing child gets its own fact, even when the union does
+set: its own effective links, with the same downgrade provenance, merged with
+its union. Every contributing child gets its own fact, even when the union does
 not change, and N's reducer keeps the recorded child slugs so a retry never
 records twice. N's reducer folds contributions into a running union, never
 re-reading child history. Per issue, a downgrade by any child makes it `refs`;
 otherwise any `closes` makes it `closes`; an issue every child only references
-stays `refs`. A node ticket's own links are not part of the union.
+stays `refs`.
 
-Only a root node's PR into the default branch carries the union, and only
-through a forge with both `closesIssues` and `updatePrIssueLinks`. The PR opens
-with the union, and each later contribution rewrites the body's keyword lines
-through `updatePrIssueLinks`, which preserves prose, writes only on change and
-confirms by readback. `node.issue-links-published {pr, issueLinks}` records the
-confirmed lines, so a poll compares reduced state and calls the forge only when
-the union or PR changed. Before the kernel lands a root node it refreshes the
-body to the final union and confirms the readback, whatever was published; a
-failure stops the attempt before any merge request. Merging the node PR, by the
+A node's set is its own effective links merged with its union under the same
+per-issue rules. A root node's PR into the default branch carries the set, and
+only through a forge with both `closesIssues` and `updatePrIssueLinks`. The PR
+opens with the set, and each later contribution rewrites the body's keyword
+lines through `updatePrIssueLinks`, which preserves prose, neutralizes closing
+references to `refs` issues in the title, writes only on change and confirms by
+readback. `node.issue-links-published {pr, issueLinks}` records the confirmed
+lines, so a poll compares reduced state and calls the forge only when the set
+or PR changed. An open root PR whose confirmed lines predate the node's own
+links gains them on its next sync. Before the kernel lands a root node it
+refreshes the body to the final set and confirms the readback, whatever was
+published; a failure stops the attempt before any merge request. Merging the node PR, by the
 kernel's rebase landing or a human, closes every fully resolved issue. Landed
 child commits keep their own messages and carry no keywords, so one child's
-`Closes` cannot override another child's downgrade. A nested node's PR never
-carries keywords. A forge lacking either capability records the union and
-emits nothing.
+`Closes` cannot override another child's downgrade. A nested node's PR into its
+parent carries its set as refs-only lines, kept current the same way. A forge
+lacking either capability records the union and emits nothing.
+
+When a `closesIssues` adapter's `openPr` adopts an existing open PR for the
+head with links, it converges that PR as a fresh one would be composed: it
+neutralizes the kept title, recomposes the body's keyword lines, writes only on
+change and confirms by readback. The title, prose and merge message are never
+replaced, so a retry, re-finalize, reconcile or hand-opened PR carries the same
+lines as the first publication, never duplicated.
 
 In repositories with integration nodes, a blocker that has a build resolves only
 when its change identity is present in the dependent's sampled target head
@@ -2687,7 +2732,12 @@ that support idempotent creation preserve it through create, adoption, get, and
 ready listing. The reservation fact precedes the external side effect — that
 ordering, not provider behavior, is what makes filing crash-safe. Dispatch
 uses the key only to withhold unfinished Autobuild creates; its absence fails
-open for legacy/plugin tickets and introduces no new readiness gate.
+open for legacy/plugin tickets and introduces no new readiness gate. A keyed
+create may also carry `idempotencyKeyReservedAt`, the earliest time the key could
+first have been used, which callers repeat unchanged on every retry. A source
+whose key lookup is bounded by time, such as GitHub, refuses a keyed create
+without it; harvest passes its reservation fact's time, and migration import
+passes the time its migration identity was first saved.
 
 ### 13.1 Node tickets and targets
 
@@ -2719,8 +2769,8 @@ metadata changes. Missing, unopened, merged, closed or aborted targets remain
 queued with a diagnostic. The newest generation wins; a closed generation never
 falls back to an older open one. Blockers remain a separate graph.
 
-A node is complete when exhaustive native ticket enumeration finds no unresolved
-ticket targeting it, no unsettled frozen child claim remains, and a merged
+A node is complete when exhaustive native enumeration of the tickets targeting
+it (the optional `listTargeting`, else `listAll`) finds no unresolved one, no unsettled frozen child claim remains, and a merged
 contribution is durably known. Triage, backlog and ready children keep it open;
 done and cancelled children do not. Listing diagnostics fail closed. Completeness
 is sampled again before verification and publication. Source edits cannot be
@@ -2738,8 +2788,9 @@ Merge refuses incomplete nodes and names open children; `ab hold` remains availa
 Node parents and local-git roots receive guarded fast-forwards, preserving one
 commit and identity trailer per contributing build. GitHub shared roots use the
 PR rebase endpoint guarded on verified head, after a final parent freshness read.
-A root node's PR body carries its landed children's issue links and is refreshed
-before landing, so merging it closes them (see Forge issue links).
+A root node's PR body carries the node's own issue links and its landed
+children's, and is refreshed before landing, so merging it closes them (see
+Forge issue links).
 Authoritative enforced up-to-date protection records fenced merge; uncertainty
 records unfenced merge and triggers immutable merged-tree comparison. A mismatch
 raises operator attention and never rewrites the shared parent.
@@ -2925,6 +2976,18 @@ the parent relation. Label replacements can demote nodes and receive the same
 guards; explicit kind and label instructions must agree about `node`. Label
 and parent connections are fully paginated. Linear still refuses guarded writes.
 
+GitHub uses the exact `node` issue label for kind and the sub-issue relation for
+target, only when the parent issue carries that label and is in the same
+repository. Any other parent is grouping: it imposes no target, never blocks
+dispatch and is never removed or replaced. A target write on a sub-issue of a
+grouping parent is refused, naming the parent; a target clear leaves grouping
+alone; setting a target replaces a node parent. Sub-issue and label changes
+made on GitHub read back the same as `ab ticket` writes. Demotion checks the
+node's fully paginated sub-issue list. A repository label that differs from
+`node` only by case is refused before any write. Integration observation reads
+the node issue and its sub-issues conditionally, so its cost follows the
+node's children, not the repository. GitHub refuses guarded writes.
+
 Hosted sources support kind and target with project-scoped transactional validation.
 Existing tickets default to work with no target. Metadata changes increment the
 revision once; equivalent aliases and unchanged values do not. Node demotion
@@ -3041,9 +3104,10 @@ facts.
 Successful dispatcher ticks with no effects, counters, diagnostics, queue change,
 sampled triage-count change, or attention transition append no tick boundary
 events. Only a dispatcher feeding an interactive dashboard samples the triage
-count, once per tick from the ticket source's state counts. A viewer
+count, at most once per 60 s, outside dispatcher ticks, from the ticket
+source's state counts; each tick publishes the last good sample. A viewer
 (`ab dispatch --viewer`, or the default viewer placement for hosted dispatch)
-reads the configured triage state's count itself, at most once per 10 s while
+reads the configured triage state's count itself, at most once per 60 s while
 its dashboard runs, through the ticket source's bounded state-count answer
 (`countStates`, the hosted `state-counts` operation). It never lists tickets
 or reads events for it, and its header shows only its own last successful
@@ -4498,20 +4562,24 @@ Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
 `move`, `block` and `unblock`. A stale write fails without changing anything and
 reports the current revision. Omission preserves unguarded behavior. Blocker
 checks cover the entire batch. Dispatcher moves remain unguarded and change the
-revision. Sources without guarded writes, including Linear, refuse supplied
-revisions rather than ignoring them.
+revision. Sources without guarded writes, including Linear and GitHub, refuse
+supplied revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
 kind, target, id, blockers, issue links, priority, creation key and reference comments are read-only. It saves only
-changed fields with the opening revision. Unchanged or formatting-only edits
+changed fields with the opening revision. Sources without guarded writes,
+including Linear and GitHub, re-read the ticket immediately before an
+unguarded write and refuse a changed revision, with the no-lock race window of file checks. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links and urgent priority.
-Reverting identical content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links and urgent priority. GitHub revisions
+fingerprint kind, target, title, body, canonical label/blocker sets, state and issue links,
+including the ticket's own issue; GitHub tickets carry no comments. Reverting
+identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
 cover structured comments and portable attachments. Legacy file comments change
@@ -4539,7 +4607,8 @@ journals remain exclusively in the selected BuildStore.
 portable file tracker atomically to an absent or empty destination.
 `ab ticket import <dir>` preflights the entire tracker and target inventory, then
 creates or adopts tickets, maps blockers, deduplicates comments by exact body and
-restores current attachments. Both run sessionless without forge access.
+restores current attachments. Both run sessionless without forge access. File,
+hosted and GitHub sources support import; every built-in source supports export.
 
 TicketCreateOptions includes optional `requestedId`. Unsupported sources reject
 it. File keeps safe ids exactly; hosted preserves canonical own-team positive
@@ -4547,6 +4616,27 @@ numbers and advances its counter above every occupied number. Creation-key
 adoption precedes collision checks. Known kept-number clashes stop import before
 any target mutation. Stable migration identities and atomic mapping files make
 interrupted imports resumable without content-based adoption.
+
+A source whose ids cannot be chosen declares `allocatesIds`; GitHub does. Import
+then plans no requested ids and runs no target inventory: every ticket is created
+without `requestedId`, remapped to the id the source returns, and adopted on
+resume by its creation key inside `create`. Optional `readComments(id)` returns
+comment history for export and import only, never on a recurring path, so `get`
+may stay comment-free. Optional `importProblems` reports every destination
+refusal (unrepresentable states, colliding labels, unusable creation keys)
+before any write, together with import's own preflight problems. Issue links are
+rewritten through the mapping only for an export from GitHub, whose issue
+numbers are the exported tickets.
+
+The export manifest records `roles`: each state directory's lifecycle roles under
+the exporting configuration. Import lands a role-holding state in the
+destination's state for its first role in the order done, rejected, claimed,
+ready, backlog, triage, proposal, create, and refuses when the destination
+configures no state for that role. `ab ticket import <dir> --states <a,b>`
+imports only tickets in the named states. A blocker on an excluded ticket in the
+done role is dropped as resolved; any other blocker, target or GitHub issue link
+naming an excluded ticket, and any unfinished build whose ticket or target is
+excluded, is refused before any write.
 
 File frontmatter additionally supports optional structured `comments` (body,
 createdAt, optional author) and `attachments` (kind, name, layout, entries with
@@ -4557,8 +4647,9 @@ assets. Build claims and spec re-pins freeze native assets into durable snapshot
 
 State normalization and the complete operator procedure are documented in
 [Ticket migration](docs/ticket-migration.md). The same reference is delivered in
-the installed guide. Export keeps lifecycle membership without inferring roles;
-import reuses unique case-insensitive states and creates normalized missing ones.
+the installed guide. Export keeps each ticket's state and records the configured
+roles each state held; import maps role-holding states by role, reuses unique
+case-insensitive states for the rest and creates normalized missing ones.
 
 
 Completed `ab ticket import <dir> [--store <ref>]` records a durable repository

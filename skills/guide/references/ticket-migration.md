@@ -2,7 +2,9 @@
 
 Export and import use the ordinary file ticket layout. They operate on tickets
 and current attachments through the ticket source; neither command contacts the
-forge. File and hosted sources support import. Linear supports export only.
+forge, except that a GitHub source reads and writes the repository's issues.
+File, hosted and GitHub sources support import. Every built-in source supports
+export.
 
 1. Pause intake and quiesce build-related ticket writes and other ticket writers
    for the cutover. In-flight builds need not be aborted. Import preflight does
@@ -13,8 +15,8 @@ forge. File and hosted sources support import. Linear supports export only.
    directory only after all reads succeed. Back up the target tracker too.
 3. Configure the new `[tickets]` source, or use `ab connect --tickets URL` for a
    hosted ticket service. Keep the export directory intact.
-4. Run `ab ticket import /path/to/export`. Inspect its printed ticket and state
-   mappings and `/path/to/export/.ab-import-map.json`.
+4. Run `ab ticket import /path/to/export [--states <state,…>]`. Inspect its
+   printed ticket and state mappings and `/path/to/export/.ab-import-map.json`.
 5. Import records a durable source/ID mapping in the same BuildStore and repository
    that hold the existing builds, after tickets, metadata and assets finish.
    Keep that BuildStore/repository identity through the cutover.
@@ -37,12 +39,39 @@ through export when file or Linear tickets have attachments there.
 State directory names use lowercase letters, digits and hyphens, start with a
 letter and contain at most forty characters. Export maps `In Progress` to
 `in-progress`, `Backlog` to `backlog`, and `Done` to `done`. It retains each ticket's
-state rather than assigning lifecycle roles. Distinct names that collapse to the
+state, and the manifest records which lifecycle roles each state held under the
+exporting configuration: triage, ready, claimed, done, backlog, rejected, and the
+create and proposal placements. Distinct names that collapse to the
 same directory fail before publication. The hidden `.ab-migration.json` records
 original display names and the state map. Import also accepts ordinary legacy
 file layouts: it reuses exact or unique case-insensitive target states before
 normalizing new names. A seeded `done` satisfies `Done`; absent `In Progress`
 creates `in-progress`. Ambiguous matches and colliding state maps fail preflight.
+
+A state that held a role lands in the destination's state for the same role,
+whatever either source calls it. For example, an `icebox` backlog lands in a
+`later` backlog, and Linear's `Backlog` triage lands in `triage`. A state holding
+several roles takes the first of done, rejected, claimed, ready, backlog, triage,
+proposal and create. If the destination configures no backlog or rejected state
+for such a state, import refuses and names the `[tickets]` key to set. States
+without a role, and exports made before roles were recorded, map by name as above.
+
+## Importing selected states
+
+`ab ticket import <dir> --states triage,ready,icebox` imports only the tickets in
+the named states and creates only those states. Teams moving to a new tracker
+often take their open work and leave closed history behind. A name matches an
+export directory exactly, then by unique case-insensitive match, then by the
+original display name the manifest recorded (`In Progress` for `in-progress`).
+An unknown name is refused, and the refusal lists the export's states.
+
+A blocker on a left-out ticket in the done role is dropped as resolved. Any other
+reference to a left-out ticket is reported before any write, and nothing is
+imported. That covers a blocker in another state, an integration-tree target, and
+an issue link to a left-out issue in an export from GitHub. Import also refuses a
+selection that leaves out a ticket an unfinished build is working on or targets.
+The refusal names the build and the ticket, so in-flight work keeps its continuity.
+Without `--states`, every ticket is imported.
 
 File targets retain source ids. Hosted targets keep canonical own-team ids:
 `AUT-706` imported into team `AUT` stays `AUT-706`. Other ids receive numbers above
@@ -52,7 +81,8 @@ Content similarity and stale mapping files never establish identity.
 
 Creation keys establish identity. Exports retain existing keys and assign keys to
 legacy tickets. Importing an ordinary file layout first saves a hidden migration
-identity and keys in that input directory. Preserve this file and the input across
+identity and keys in that input directory. The identity also records when it was
+first saved, and that time is passed as the creation keys' reservation time. Preserve this file and the input across
 retries. After interruption, rerun the same command: committed creates are adopted
 by key even if their mapping write failed. Adopted bodies and other fields are not
 overwritten. Missing blockers and comments are replayed, and unchanged attachments
@@ -84,6 +114,36 @@ identity, establishes node kinds, then applies targets using the durable id map,
 just like blockers. Input order does not matter. Resuming also restores edges on
 adopted tickets; normal destination validation still guards existing graphs and
 node demotion. Older work-only exports remain valid.
+
+## GitHub
+
+GitHub chooses issue numbers, so import into a `github` source remaps every
+ticket. Check the printed mapping and `.ab-import-map.json`, which list each
+original id with its new issue number. Blockers are rewritten through that
+mapping and become native issue dependencies. Comments become issue comments,
+and attachments go to the BuildStore under the new number. States become
+`autobuild:<state>` labels. The done role closes the issue as completed, the
+rejected role closes it as not planned, and triage leaves it open without a state
+label. Each issue carries a creation key in a hidden marker, so an interrupted
+import resumes with the same command and adopts the issues it already opened.
+Resuming never duplicates an issue, and it replays missing blockers, comments and
+assets.
+
+Before any write, import reports every problem together: states that cannot be
+`autobuild:` labels (for example `proposal`, or names that are not lowercase),
+a rejected state when `[tickets].rejectedState` is unset, and ticket labels that
+start with `autobuild:` or `autobuild-link:`. Node kinds become the exact `node`
+label, and targets become sub-issue relationships to the remapped node issues.
+Issue links are kept. They are rewritten through the mapping only when the export
+came from GitHub, because only then do they name the exported tickets.
+
+Export from a `github` source covers every issue, closed ones included. It records
+comment history with authors and timestamps, kinds, targets, blockers and issue links, and skips
+pull requests. An issue it cannot read as a ticket, such as one with two state
+labels, fails the export. Issues closed as not planned export in the rejected
+role even when `[tickets].rejectedState` is unset. Export and import read comment
+history explicitly. The GitHub source still lists no comment history in
+`ab ticket show`, and dispatcher ticks never read it.
 
 ## In-flight builds
 

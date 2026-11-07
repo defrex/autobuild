@@ -3,6 +3,9 @@ import { readFile, writeFile, rm, mkdtemp } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { tmpdir } from 'node:os'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
+import { GitHubTicketSource } from '../ports/tickets/github'
+import { TicketRevisionConflict } from '../ports/tickets/revision'
 import { editTicket, runTicketEditor } from './ticket-editor'
 
 async function fixture() {
@@ -100,13 +103,9 @@ describe('ticket editor', () => {
     }
   })
 
-  test('missing editor and unsupported sources refuse before opening', async () => {
+  test('a missing editor refuses before opening', async () => {
     const { source, id } = await fixture()
     await expect(editTicket(source, id, {}, () => {})).rejects.toThrow('VISUAL or EDITOR')
-    Object.defineProperty(source, 'mutateIfRevision', { value: undefined })
-    await expect(editTicket(source, id, { EDITOR: 'editor' }, () => {})).rejects.toThrow(
-      'does not support',
-    )
   })
 })
 
@@ -230,3 +229,109 @@ test.each(['add', 'remove'])(
     }
   },
 )
+
+describe('ticket editor on a source without guarded writes', () => {
+  function github() {
+    const issues = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: issues.transport,
+      repository: issues.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    return { issues, source }
+  }
+
+  test('saves changed fields after confirming the opening revision', async () => {
+    const { issues, source } = github()
+    const ticket = await source.create({ title: 'Original', body: '# Body\n', labels: ['one'] })
+    const id = ticket.ref.id
+    let opened = false
+    await editTicket(
+      source,
+      id,
+      { EDITOR: 'editor' },
+      () => {},
+      async (_, path) => {
+        opened = true
+        await writeFile(path, (await readFile(path, 'utf8')).replace('Original', 'Edited'))
+        return 0
+      },
+    )
+    expect(opened).toBe(true)
+    expect((await source.get(id))?.title).toBe('Edited')
+    expect((await source.get(id))?.body).toBe('# Body\n')
+    expect(issues.issue(Number(id))?.title).toBe('Edited')
+  })
+
+  test('a change made on GitHub while editing refuses and keeps the buffer', async () => {
+    const { issues, source } = github()
+    const ticket = await source.create({ title: 'Original', body: '# Body\n' })
+    const id = ticket.ref.id
+    let kept = ''
+    try {
+      const refused = await editTicket(
+        source,
+        id,
+        { EDITOR: 'editor' },
+        () => {},
+        async (_, path) => {
+          kept = path
+          await writeFile(path, (await readFile(path, 'utf8')).replace('Original', 'Mine'))
+          issues.uiEditBody(Number(id), 'Theirs')
+          issues.resetRequests()
+          return 0
+        },
+      ).catch((error: unknown) => error)
+      expect(refused).toBeInstanceOf(Error)
+      expect((refused as Error).cause).toBeInstanceOf(TicketRevisionConflict)
+      expect((refused as Error).message).toContain('edited text kept at /')
+      expect(issues.writes()).toEqual([])
+      expect(issues.issue(Number(id))?.title).toBe('Original')
+    } finally {
+      if (kept) await rm(dirname(kept), { recursive: true, force: true })
+    }
+  })
+
+  test.each(['kind', 'target'])(
+    'shows a github %s read-only and refuses editing it',
+    async (field) => {
+      const { issues, source } = github()
+      const node = await source.create({ title: 'Node', body: 'spec', kind: 'node' })
+      const child = await source.create({ title: 'Child', body: 'spec', target: node.ref.id })
+      const before = structuredClone(issues.issue(Number(child.ref.id)))
+      let kept = ''
+      try {
+        await expect(
+          editTicket(
+            source,
+            child.ref.id,
+            { EDITOR: 'editor' },
+            () => {},
+            async (_, path) => {
+              kept = path
+              let raw = await readFile(path, 'utf8')
+              expect(raw).toContain('kind = "work"')
+              expect(raw).toContain(`target = "${node.ref.id}"`)
+              if (field === 'kind') raw = raw.replace('kind = "work"', 'kind = "node"')
+              else raw = raw.replace(`target = "${node.ref.id}"`, 'target = "elsewhere"')
+              await writeFile(path, raw)
+              return 0
+            },
+          ),
+        ).rejects.toThrow('read-only')
+        expect(issues.issue(Number(child.ref.id))).toEqual(before)
+        expect(issues.subIssues(Number(node.ref.id))).toEqual([Number(child.ref.id)])
+      } finally {
+        if (kept) await rm(dirname(kept), { recursive: true })
+      }
+    },
+  )
+})

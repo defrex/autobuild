@@ -55,7 +55,7 @@ Declare served model prefixes and a default. Optional tool-free `oneShot` sits b
 - Kernel-owned regular pushes, idempotent PR opening, PR-state projection, gated and ungated auto-merge, head-guarded squash merge, and comments. Agents never receive forge credentials or push.
 - API 1.2: optional idempotent `closePr` and `deleteBranch` for abort cleanup. `closePr` must preserve a racing merge. Without them, cleanup stays visibly pending.
 - Optional `prAttachments` hosts images; the text-only path must work without it.
-- Optional `closesIssues: true` declares that closing keywords reaching the default branch close issues. Only then, and only for a leaf aimed at the default branch, the kernel passes the build's sealed `issueLinks` (`{ issue, intent }[]`) to `openPr` and in `BuildLandingOptions` to `setAutoMerge` and `squashMerge`. Compose them with the SDK helpers: `neutralizeClosingReferences(title, links, { repository })` for the PR title and squash headline, `withIssueKeywords(body, links, { repository, trailers: false })` for the PR body so it ends with the `Closes #N` / `Refs #N` lines, and `landingMessage(message, buildSlug, links, { repository })` for the landed message, which puts the keyword paragraph before the trailer block. `repository` is `owner/name`, so qualified references to other repositories are left alone. Compare an already-applied landing request against the same composition, or auto-merge churns. The kernel calls `setAutoMerge(…, true, options)` on every eligible poll while a request is armed: return `applied` without mutating when the armed method and message match, and call `options.canApply()` before any mutation that repairs them. Without the flag no links are passed and none are written. A root node's PR also receives its landed children's union as `issueLinks` in `openPr`. To keep that PR current, implement the optional `updatePrIssueLinks(workspacePath, number, issueLinks)`: read the PR body, compose it with `withIssueKeywords(body, links, { repository, trailers: false })`, write only when it changed, re-read and throw when the readback disagrees or the PR is not open. Without the method a node's union is recorded but never written.
+- Optional `closesIssues: true` declares that closing keywords reaching the default branch close issues. Only then does the kernel pass `issueLinks` (`{ issue, intent }[]`). For a leaf aimed at the default branch it passes the build's sealed links to `openPr` and in `BuildLandingOptions` to `setAutoMerge` and `squashMerge`. Compose them with the SDK helpers: `neutralizeClosingReferences(title, links, { repository })` for the PR title and squash headline, `withIssueKeywords(body, links, { repository, trailers: false })` for the PR body so it ends with the `Closes #N` / `Refs #N` lines, and `landingMessage(message, buildSlug, links, { repository })` for the landed message, which puts the keyword paragraph before the trailer block. `repository` is `owner/name`, so qualified references to other repositories are left alone. Compare an already-applied landing request against the same composition, or auto-merge churns. The kernel calls `setAutoMerge(…, true, options)` on every eligible poll while a request is armed: return `applied` without mutating when the armed method and message match, and call `options.canApply()` before any mutation that repairs them. Without the flag no links are passed and none are written. A leaf aimed at a node passes its links to `openPr` with every intent `refs` (and none to the landing calls), a root node's PR receives the node's own links merged with its landed children's union, and a nested node's PR receives that set with every intent `refs`. When `openPr` adopts an existing open PR for the head and links are present, converge it: neutralize the existing title, recompose the existing body with `withIssueKeywords`, write only the fields that changed, and confirm by readback, without replacing the title, prose or merge message. To keep a node's PR current, implement the optional `updatePrIssueLinks(workspacePath, number, issueLinks)`: read the PR, neutralize its title and compose its body with `withIssueKeywords(body, links, { repository, trailers: false })`, write only when either changed, re-read and throw when the readback disagrees or the PR is not open. Without the method a node's set is recorded but never written.
 
 ### Reconcile rewrites
 
@@ -206,6 +206,7 @@ A plugin relying on a capability declares an `apiVersion` range containing its v
 - **1.7** Workspace factory seams.
 - **1.8** Forge failure classification and request observers.
 - **1.9** Optional native ticket-source paging (`listPage`); older sources retain operator slicing.
+- **1.10** Optional ticket-source ready-assignee capability (`readyAssignee`, with `prepareReadyAssignee`, `readyAssigneeRefusal` and `describeReadyAssignee`); sources without it refuse `[tickets].readyAssignee`. Also optional targeted ticket listing (`listTargeting`); older tree sources are observed through `listAll`.
 
 ## 2. Create a repository-local module
 
@@ -492,6 +493,8 @@ An adapter opts in with `integrationTree: true` and must:
 - before writing any mixed patch, including revision-checked writes, validate same-source existence, node kind, self and ancestor cycles, corrupt chains, and demotion of a node with children
 - expose kind and target in revisions
 
+Optionally (API 1.10), implement `listTargeting(nodeId: string): Promise<TicketListing>`: every ticket in every state whose target is `nodeId`, exhausting pagination and propagating infrastructure failures. It must equal `listAll()` filtered by `target === nodeId`, with diagnostics only for excluded records it read. Integration observation prefers it, so a node's completeness read can cost what its children cost instead of a full scan; a failure never falls back to `listAll`. The shared `describeTicketSourceContract` suite checks the equality for any source that declares it.
+
 Don't opt in unless the source preserves these semantics. Legacy sources get ordinary CRUD; the compatibility facade refuses metadata writes before legacy methods run, and unsupported sources should also refuse metadata at their own write boundary.
 
 ## Optional issue links capability
@@ -517,6 +520,31 @@ compatibility facade refuses a write naming `urgent` with
 `TicketPriorityUnsupported` before your methods run, drops a `normal` no-op
 (skipping the call when nothing else remains), and strips priority from reads.
 
+## Optional ready assignee capability
+
+An adapter opts in to `[tickets].readyAssignee` with `readyAssignee: true` and
+must then honour `criteria.assignee` in `listReady` (and `listPage`, if
+implemented): only tickets assigned to that user are ready, and an unassigned
+ticket is never ready while it is set. `"me"` means the owner of the source's
+credential; any other value's forms are the source's to define and enforce.
+Without the flag, dispatcher startup, `ab init --validate` and live reloads
+refuse a configured `readyAssignee` with an error naming the source and plugin.
+
+Three optional methods support it:
+
+- `prepareReadyAssignee(): Promise<void>` is called once at dispatcher startup,
+  before the loop and never in a tick, whether or not `readyAssignee` is set.
+  Resolve whatever `"me"` needs and memoize it. A credential with no user is a
+  recorded result, not a throw; throw only for infrastructure failures, which
+  fail startup when `readyAssignee` is set and are otherwise a warning.
+- `readyAssigneeRefusal(value): string | undefined` is synchronous and makes no
+  request. Return why the value can't be honoured from what was prepared, or
+  `undefined`. Startup and every reload call it, so a refused reload keeps the
+  previous configuration.
+- `describeReadyAssignee(value): Promise<string>` serves `ab init --validate`:
+  return a one-line summary of who the value names, such as `me → @octocat`,
+  or throw an error that says how to fix a value that names nobody.
+
 ## Optional ticket paging capability
 
 Native paging is an optional API 1.9 ticket-source capability:
@@ -534,7 +562,7 @@ Only paged operator listings select this capability. Sources without it retain
 the full-read/reverse/slice fallback; native errors propagate. Unpaged operator
 listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
 `listReady`/`listAll`. The hosted PostgreSQL source counts matches without
-bodies and reads only the SQL-bounded window. File, Linear and the remote
+bodies and reads only the SQL-bounded window. File, Linear, GitHub and the remote
 `HostedTicketSource` retain fallback; the POST list-ready protocol stays exhaustive.
 
 Hosted cooldown recording rejects observed reset deadlines beyond the 24-hour

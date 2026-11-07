@@ -215,13 +215,15 @@ import { settlePublicationFactsBeforeRelease } from './publication-loss'
  *
  * The only per-source difference left is the *label* default. Linear has no
  * `ready/` directory, so a label is the only thing that can mark a ticket
- * dispatchable: the historical `["autobuild"]` default. The file tracker's gate
+ * dispatchable: the historical `["autobuild"]` default. GitHub shares it, so
+ * an issue anyone can file still needs the opt-in label. The file tracker's gate
  * is otherwise the directory, so it defaults to no label gate. Plugin sources
  * likewise receive no host-imposed label convention. An explicit
  * `readyLabels` wins for every source.
  *
- * `[tickets].readyAssignee` (Linear only) adds a third conjunctive gate: the
- * ticket must be assigned to that user.
+ * `[tickets].readyAssignee` adds a third conjunctive gate for any source: the
+ * ticket must be assigned to that user. Only sources declaring the capability
+ * get this far (`config/ready-assignee.ts`).
  */
 export function readyCriteria(config: Config): {
   labels: string[]
@@ -229,14 +231,12 @@ export function readyCriteria(config: Config): {
   assignee?: string
 } {
   const { readyLabels, readyState, readyAssignee } = config.tickets
-  if (config.tickets.source === 'linear') {
-    return {
-      labels: readyLabels ?? ['autobuild'],
-      state: readyState,
-      ...(readyAssignee !== undefined ? { assignee: readyAssignee } : {}),
-    }
+  const source = config.tickets.source
+  return {
+    labels: readyLabels ?? (source === 'github' || source === 'linear' ? ['autobuild'] : []),
+    state: readyState,
+    ...(readyAssignee !== undefined ? { assignee: readyAssignee } : {}),
   }
-  return { labels: readyLabels ?? [], state: readyState }
 }
 
 /**
@@ -1018,7 +1018,7 @@ export class Dispatcher {
   private get doneState(): string {
     return (
       this.deps.opts?.doneState ??
-      (this.deps.config.tickets.source === 'hosted'
+      (this.deps.config.tickets.source === 'hosted' || this.deps.config.tickets.source === 'github'
         ? ticketLifecycle(this.deps.config.tickets).done
         : undefined) ??
       'Done'
@@ -3431,10 +3431,11 @@ export class Dispatcher {
         throw new Error('node-target native auto-merge cancellation unconfirmed')
       nativeCancelled = true
     }
-    // Keep a root node's PR body on its children's union. A pure comparison
-    // with the last confirmed readback: no forge call while nothing changed.
+    // Keep a node PR's keyword lines on its set (refs-only into a parent). A
+    // pure comparison with the last confirmed readback: no forge call while
+    // nothing changed.
     const issueLinksPending =
-      integration && !nodeTarget && prState.state === 'open' && !executionLeaseLive
+      integration && prState.state === 'open' && !executionLeaseLive
         ? nodeIssueLinksSyncPending(state, forge)
         : undefined
     if (issueLinksPending) {
@@ -6570,8 +6571,9 @@ export class Dispatcher {
     )
       return
     let pr: Awaited<ReturnType<typeof forge.openPr>>
-    // A root node's PR carries its landed children's union from the start;
-    // checkPr keeps it current as later children land.
+    // A node's PR carries its set (its own links and its landed children's
+    // union) from the start, refs-only into a parent; checkPr keeps it
+    // current as later children land.
     const issueLinks = nodeIssueLinksForForge(state, forge)
     try {
       pr = await forge.openPr({
