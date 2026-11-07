@@ -109,9 +109,10 @@ invariant makes it material.
 Approve when the implementation satisfies the spec and is sound — not when
 it is the diff you would have written. Known immaterial defects are not a
 reason to withhold approval — record them with `ab observe` and approve.
-Escalate only genuine judgment calls a human must make (the spec itself is
-wrong, a security tradeoff outside your authority). Out-of-scope discoveries
-are `ab observe`, never findings.
+Escalate only genuine judgment calls that need external judgment from the
+operator agent or a human (the spec itself is wrong, a security tradeoff
+outside your authority). Out-of-scope discoveries are `ab observe`, never
+findings.
 
 Read the manifest path printed by `ab context`. Its `materialized` keys are
 relative to `contextDir`: join them to locate collision-adjusted inputs.

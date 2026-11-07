@@ -742,8 +742,9 @@ slug and its `ab/<slug>` branch are recorded once and never renamed.
 explicit operator revision protocol (leaf escalation or the node exception below). Every downstream reviewer approves
 conformance *to it*; a drifting spec silently converts approvals into
 approvals-of-something-else. A phase discovering the spec itself is wrong
-raises an `escalation`; a human uses `ab answer --revise-spec` (or
-`--revise-spec-from-ticket`), the spec gets rev N+1, and the leaf restarts
+raises an `escalation`; the operator agent or a human answers with
+`ab answer --revise-spec` (or `--revise-spec-from-ticket`), the spec gets
+rev N+1, and the leaf restarts
 from `plan` (cheap — downstream was invalidated anyway).
 
 If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
@@ -1552,7 +1553,7 @@ sessions need no separate global installation.
 | `ab observe --kind <followup\|refactor\|latent-bug> …` | structured observation, any phase, any time | no |
 | `ab done` | complete a producer phase (validates, then runs phase plumbing) | **yes** |
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> …` | complete a review/verify phase | **yes** |
-| `ab escalate <question>` | park the build for human input | **yes** |
+| `ab escalate <question>` | park the build for external judgment | **yes** |
 | `ab mcp [--store <ref>] [--repo <id>]` | serve the agent tool registry as an MCP server over stdio; fails closed inside a phase | no |
 
 The read-only `ab builds`, `ab build status`, and `ab artifact download` forms
@@ -2245,7 +2246,7 @@ converge<A>(
   reviewer marks persistence — judgment; the kernel applies the threshold —
   determinism).
 - **Round ceiling:** `policy.maxReviewRounds` is the default absolute cap for
-  each loop. Once its `review-round-limit` escalation is open, a human may
+  each loop. Once its `review-round-limit` escalation is open, the operator agent or a human may
   answer it with an optional positive `reviewRoundCeiling`. That value replaces
   the configured cap for only the escalation's plan or code loop and current
   spec revision. It is absolute, durable, and cleared by `spec.revised`; the
@@ -3491,8 +3492,8 @@ setup under the claimed lease before announcing another attachment. Another
 failure appends only a new failure fact; success appends `runner.attached
 {resumedFromSeq}` and clears the current error projection. After
 `policy.maxSetupAttempts`, the kernel raises one policy escalation targeted at
-`setup`; lease sweeps and fresh dispatcher startup leave it parked until a human
-answer re-arms the setup budget. Its exhaustion guard considers only setup-targeted
+`setup`; lease sweeps and fresh dispatcher startup leave it parked until an answer
+from the operator agent or a human re-arms the setup budget. Its exhaustion guard considers only setup-targeted
 policy raises, independently of phase-policy exhaustion. After claiming the lease,
 however, a runner honors an engine-selected pause or abort acknowledgement before
 setup-failure gating, even while that escalation is open. This control-only path
@@ -3897,7 +3898,7 @@ committer are Git's ordinary resolved repository identity, exactly as for a plai
 local commit; commit signing remains disabled. Before offering the candidate,
 the adapter resolves both identities through Git. If either is unavailable,
 consent remains pending and one reason-bearing follow-up names the missing
-`user.name` / `user.email` configuration; later polls retry after the operator
+`user.name` / `user.email` configuration; later polls retry after the user
 configures it. When the base branch is checked out, Git's two-tree
 `read-tree -m -u` transition preflights and merges the old-to-squash tree:
 tracked/index changes on untouched paths and
@@ -3905,8 +3906,8 @@ untracked non-colliding files survive, while a tracked or untracked overwrite
 leaves consent pending and records one path-bearing follow-up instead of failing
 the dispatcher. Its durable pending-merge record is written before moving the
 base ref. A poll after a crash retries that same old-to-merged transition without
-rolling back the ref or overwriting operator work; the PR remains open and
-retryable until checkout repair succeeds. No merge is ever assumed: a build
+rolling back the ref or overwriting local work in the checkout; the PR remains
+open and retryable until checkout repair succeeds. No merge is ever assumed: a build
 reaches `merged` only when a later poll observes the merge and any required
 checkout synchronization. Without authorization, the local branch and PR record
 remain open for inspection with ordinary Git.
