@@ -2691,6 +2691,7 @@ region = "overseas"
       runCommand: async (params) => {
         const probe = params.args?.some((arg) => arg.includes('ab-init-probe'))
         if (probe) probes.push(params.env)
+        const bunVersion = params.cmd === VERCEL_BUN_EXECUTABLE && params.args?.[0] === '--version'
         return {
           exitCode: 0,
           wait: async () => ({ exitCode: 0 }),
@@ -2698,7 +2699,9 @@ region = "overseas"
           stdout: async () =>
             probe
               ? 'AB_INIT_READINESS_V1={"checks":[{"name":"ok","status":"pass","detail":"ready"}]}\n'
-              : '',
+              : bunVersion
+                ? `${VERCEL_BUN_VERSION}\n`
+                : '',
           stderr: async () => '',
         }
       },
