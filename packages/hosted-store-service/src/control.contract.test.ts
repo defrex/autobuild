@@ -24,6 +24,8 @@ import { createOperatorServer } from './operator-server'
 import { mintToken } from '@defrex/autobuild/remote-store'
 
 const REPO = '/repo'
+// The default local root, pinned so store selection never reads `autobuild.toml`.
+const STORE_REF = '/repo/.autobuild'
 const SLUG = 'contract-build'
 const USER = 'contract-operator'
 const SECRET = 'contract-secret'
@@ -141,6 +143,7 @@ async function rejectedMessage(call: () => Promise<unknown>): Promise<string> {
 async function cliBuild(store: BuildStore, action: BuildControlAction) {
   return abBuildControl({
     targetRepo: REPO,
+    storeRef: STORE_REF,
     env: { USER },
     exec: noGit,
     slug: SLUG,
@@ -643,6 +646,7 @@ describe('operator behavioral parity contract', () => {
     )
     await abBuildControl({
       targetRepo: REPO,
+      storeRef: STORE_REF,
       env: { USER },
       exec: noGit,
       slug: SLUG,
@@ -768,6 +772,7 @@ describe('operator behavioral parity contract', () => {
       const apiBuildSince = (await apiStore.getEvents(SLUG)).length
       await abBulkControl({
         targetRepo: REPO,
+        storeRef: STORE_REF,
         env: { USER },
         exec: noGit,
         direction,

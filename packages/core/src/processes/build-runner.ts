@@ -18,7 +18,7 @@ import { contextDirectory } from '../context-directory'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
 import type { RuntimeIdentity } from '../events/runtime'
 import { relaunchTarget } from './execution-relaunch'
-import { RUNTIME_IDENTITY } from '../runtime-identity'
+import { runtimeIdentity } from '../runtime-identity'
 import { publishExact } from '../kernel/publication'
 import {
   deferMixedVersion,
@@ -957,7 +957,7 @@ export class BuildRunner {
       store: withDrainingExecution(
         deps.store,
         deps.instance,
-        deps.runtimeIdentity ?? RUNTIME_IDENTITY,
+        deps.runtimeIdentity ?? runtimeIdentity(),
       ),
     }
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
@@ -1099,7 +1099,7 @@ export class BuildRunner {
       payload: {
         instance,
         attachedSeq: attached.seq,
-        runtime: this.deps.runtimeIdentity ?? RUNTIME_IDENTITY,
+        runtime: this.deps.runtimeIdentity ?? runtimeIdentity(),
       },
     })
   }
@@ -1429,7 +1429,7 @@ export class BuildRunner {
     const request = relaunchTarget(
       facts.state,
       this.deps.instance,
-      this.deps.runtimeIdentity ?? RUNTIME_IDENTITY,
+      this.deps.runtimeIdentity ?? runtimeIdentity(),
     )
     if (!request) return false
     if (
