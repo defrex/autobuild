@@ -27,7 +27,7 @@ import {
   type RenderOpts,
 } from './render'
 import type { DashboardBuild, DashboardHarvest, DashboardModel, PipelineStep } from './model'
-import { autoMergeConsentReason } from './model'
+import { autoMergeConsentReason, NO_DISPATCHER_RUN_LINE } from './model'
 
 /** A fixed render clock. Most tests carry no running timing, so the value is
  * irrelevant to them; the ticking tests pass `now` explicitly. */
@@ -3457,4 +3457,29 @@ test('viewer row persists through every view, composer and confirmation within t
         }
       }
     }
+})
+
+describe('renderDashboard: a repository with no dispatcher run', () => {
+  test('the summary shows a dash for Active and the one factual line once', () => {
+    const lines = rd(
+      {
+        ...model([]),
+        triage: undefined,
+        queued: 0,
+        active: { current: 0, limit: 0 },
+        configuration: 'no-dispatcher-run',
+      },
+      WIDE,
+    ).map(stripAnsi)
+    expect(lines[0]).toContain('active –')
+    expect(lines[0]).not.toContain('0/0')
+    expect(lines.filter((line) => line.includes(NO_DISPATCHER_RUN_LINE))).toHaveLength(1)
+    expect(lines.join('\n')).toContain('no active builds')
+  })
+
+  test('a model with a recorded run renders no such line', () => {
+    const lines = rd(model([]), WIDE).map(stripAnsi)
+    expect(lines[0]).toContain('active 0/5')
+    expect(lines.join('\n')).not.toContain(NO_DISPATCHER_RUN_LINE)
+  })
 })

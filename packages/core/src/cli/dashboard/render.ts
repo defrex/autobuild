@@ -3,6 +3,7 @@ import { formatHandoff } from './handoff'
 import { handPushedLabel, handPushedText } from './hand-pushed'
 import { integrationBarCells } from './integration-row'
 import { capacityExplanation } from '../../kernel/dispatch-capacity'
+import { NO_DISPATCHER_RUN_LINE, activeCounterText } from './configuration'
 import { treeVocabulary, consentQueue } from './tree'
 /**
  * The dashboard's other pure half: model → `string[]`. No terminal, no state,
@@ -1625,7 +1626,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
       displayText(basename(model.repo)),
       paint(
         `triage ${model.triage ?? '–'} | queue ${model.queued} | ` +
-          `active ${model.active.current}/${model.active.limit}${capacityExplanation(model.capacity)}`,
+          `active ${activeCounterText(model)}${model.configuration === 'no-dispatcher-run' ? '' : capacityExplanation(model.capacity)}`,
         'dim',
         color,
       ),
@@ -1653,6 +1654,9 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
     summary,
     toggles,
     ...standbyLine(model, color, width),
+    ...(model.configuration === 'no-dispatcher-run'
+      ? [truncate(paint(`  ${NO_DISPATCHER_RUN_LINE}`, 'dim', color), width)]
+      : []),
     ...(upgradeNotice === undefined ? [] : [upgradeNotice]),
     ...runtimeNoticeLines(model, color, width),
     ...warnings,

@@ -391,7 +391,7 @@ test('public viewer bypasses the immutable launcher and execution config in non-
       const chunk = await reader.read()
       if (chunk.done) break
       output += decoder.decode(chunk.value, { stream: true })
-      if (!stopped && output.includes('Waiting for dispatcher configuration')) {
+      if (!stopped && output.includes('No dispatcher has run for this project yet.')) {
         stopped = true
         await Bun.sleep(30)
         expect(child.exitCode).toBeNull()
@@ -408,7 +408,7 @@ test('public viewer bypasses the immutable launcher and execution config in non-
   expect(code).toBe(0)
   expect(stderr).toBe('')
   expect(stdout).toContain('viewer · dispatched by app.autobuild.run')
-  expect(stdout).toContain('Waiting for dispatcher configuration')
+  expect(stdout).toContain('No dispatcher has run for this project yet.')
   await expect(access(join(cwd, '.autobuild/runtime'))).rejects.toThrow()
 })
 
@@ -471,7 +471,7 @@ for (const fail of [false, true])
           const chunk = await reader.read()
           if (chunk.done) return result
           result += new TextDecoder().decode(chunk.value)
-          if (result.includes('Waiting for dispatcher configuration')) child.kill('SIGINT')
+          if (result.includes('No dispatcher has run for this project yet.')) child.kill('SIGINT')
         }
       })()
       const [code, stdout, stderr] = await Promise.all([

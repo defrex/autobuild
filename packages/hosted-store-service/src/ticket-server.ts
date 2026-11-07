@@ -496,7 +496,8 @@ export function createTicketServer(options: TicketServerOptions): {
             error: error.message,
             code: 'issue-links-unsupported',
           })
-        if (error instanceof OperatorQueryError) return failure(409, 'conflict', error.message)
+        if (error instanceof OperatorQueryError)
+          return json(409, { kind: 'conflict', error: error.message, code: error.code })
         if (error instanceof MachineAuthError || error instanceof AccessError)
           return failure(error.status, 'auth', error.message)
         if (error instanceof TicketRequestError) {
