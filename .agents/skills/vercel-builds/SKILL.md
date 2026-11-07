@@ -23,7 +23,7 @@ operator API — exactly as a local dispatcher's activity is. Expect the journal
 roughly one `dispatcher-effective-config` artifact per minute per repository; retention is not
 yet implemented, so that growth is a documented property, not a fault. The full contract —
 bounding, overlap, missed ticks, sandbox authentication — is documented in
-[the hosted dispatcher procedure](../../../docs/hosted-dispatcher.md) and
+[the self-hosting guide's dispatcher-enabled deployment section](../../../packages/hosted-store-service/SELF-HOSTING.md#dispatcher-enabled-deployment) and
 [the hosted dispatcher README](../../../packages/hosted-dispatcher/README.md).
 
 ## Pausing and resuming
