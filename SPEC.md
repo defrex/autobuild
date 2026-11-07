@@ -2418,6 +2418,11 @@ event-level mechanics live in the repository catalog and reducer tests):
   ordinary parked run and clears every exhaustion barrier. It never
   resurrects a terminal run. Completed and escalated runs are irrevocable; a
   deliberate escalation consumes its snapshot and is never auto-recovered.
+- **A live hosted execution owns its run.** While a `harvest.execution.started`
+  has no release and its provider reports it running (or cannot answer),
+  dispatch launches no harvest and never judges its open session. Only after
+  settlement records the release does the next launch record an interrupted
+  session, once, and recovery proceeds.
 - **The harvester only proposes.** It never claims, grooms, or dispatches a
   proposal, and it files every one into the same configured state rather than
   ranking them. Humans own Triage → Ready by default. A repository that points

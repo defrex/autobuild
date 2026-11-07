@@ -9,6 +9,7 @@ import {
 
 import { preserveWorkspaceBeforeRelease, supersedeRestorationHeads } from './workspace-preservation'
 import { WorkspaceCleanupRequired } from '../ports/types'
+import type { OpenHarvestExecution } from './harvest-execution-state'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
 import type { TicketPreparation } from '../kernel/ticket-preparation'
 import { sampleTargetDistance } from '../kernel/target-distance'
@@ -698,7 +699,9 @@ export interface DispatcherDeps {
   authorSpec?: (ticket: Ticket) => Promise<string | null>
   /** Start the repository-scoped observation workflow without awaiting it.
    * The owner must single-flight and track the promise; Dispatcher invokes
-   * this after ready-ticket dispatch, independent of drain/build capacity. */
+   * this after ready-ticket dispatch, independent of drain/build capacity.
+   * Withheld while a foreign, provider-observable hosted-harvest execution is
+   * still open: its guest owns the run's open session. */
   startHarvest?: () => void
   /** Optional one-shot judgment over the final conforming spec. The dispatcher
    * supplies cancellation and treats every absence/failure/invalid result as a
@@ -1568,8 +1571,11 @@ export class Dispatcher {
       return
     }
     // Bounded subset (AUT-489): the harvest reducer consumes durable types only.
-    const state = this.store.repositoryFacts().harvest
-    if (decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !== 'park') {
+    const facts = this.store.repositoryFacts()
+    // A live guest owns its open session; launching would judge that session
+    // as runner loss and start a duplicate guest beside it.
+    if (this.liveForeignHarvestExecution(facts.openHarvest)) return
+    if (decideHarvestControl(facts.harvest, this.maxHarvestRecoveryAttempts).kind !== 'park') {
       start()
     }
   }
@@ -1684,10 +1690,12 @@ export class Dispatcher {
    * owning provider. `lost`/`ended` reaps the disposable environment and
    * journals the close fact with the snapshot purge outcome; `running`
    * leaves it — the guest is the live supervisor and holds the adopted
-   * repository lease, and the next pass reaps it after it ends. The run
-   * itself needs no settlement here: an interrupted run stays open in the
-   * journal and the next threshold-triggered harvest resumes it under the
-   * repository lease. */
+   * repository lease, and the next pass reaps it after it ends. Until the
+   * release is journaled, an open observable execution also suppresses
+   * harvest launch (`liveForeignHarvestExecution`). The run itself needs no
+   * settlement here: an interrupted run stays open in the journal, and the
+   * next launch after the release records its interrupted session and
+   * resumes it under the repository lease. */
   private async settleHarvestExecutions(opts: TickOpts = {}): Promise<void> {
     const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
     const facts = this.store.repositoryFacts()
@@ -1772,6 +1780,22 @@ export class Dispatcher {
         // settlement stage; the next tick retries it.
       }
     }
+  }
+
+  /** A foreign hosted-harvest execution still open after this tick's
+   * settlement, and observable by its owning provider: the guest is the live
+   * supervisor of its run, so no launch (and so no runner-loss judgment on
+   * its open session) may happen until settlement journals its release. An
+   * unobservable execution never blocks — settlement could never release it. */
+  private liveForeignHarvestExecution(open: readonly OpenHarvestExecution[]): boolean {
+    if (open.length === 0) return false
+    const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
+    return open.some(
+      (execution) =>
+        !active.has(execution.execution) &&
+        execution.commandId !== undefined &&
+        this.executionOwner(execution.provider)?.harvestExecution?.observe !== undefined,
+    )
   }
 
   /** Durable idle settlement for operator sandboxes (AUT-340), staged after
