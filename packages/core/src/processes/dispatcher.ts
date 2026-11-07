@@ -1609,6 +1609,13 @@ export class Dispatcher {
       const branch = facts.lastCreated.payload.baseBranch
       await this.observeTarget(slug, branch, undefined, report)
     }
+    return this.startRunner(slug, report)
+  }
+
+  /** The one guarded runner start. Every dispatcher path that starts a runner
+   * goes through here, so the no-progress policy cannot depend on which path
+   * runs. */
+  private async startRunner(slug: string, report: TickReport): Promise<LaunchRunnerResult> {
     if (
       !(await ensureExecutionProgress(
         this.store,
@@ -2085,7 +2092,7 @@ export class Dispatcher {
       const queued = (await readBuildFacts(store, slug)).value.state.status === 'queued'
       boundary = input.tail === 'dispatch' || queued ? 'dispatch' : 'launch'
       if (boundary === 'dispatch') await this.completeDispatchBoundaries(record, input.seed)
-      else if (this.accountsAvailable()) await this.deps.launchRunner(slug)
+      else if (this.accountsAvailable()) await this.startRunner(slug, emptyTickReport())
     } catch (error) {
       // Dispatch boundaries own their failure facts and exhaustion repair.
       // A failed tail read/write leaves durable unfinished work for the next
@@ -4698,7 +4705,7 @@ export class Dispatcher {
         return 'parked'
       }
       if (!this.accountsAvailable()) return 'parked'
-      if (launched === undefined) await this.deps.launchRunner(record.slug)
+      if (launched === undefined) await this.startRunner(record.slug, report ?? emptyTickReport())
       else await this.launch(record.slug, launched, report)
       if (authored && report !== undefined) report.authored += 1
       return 'completed'

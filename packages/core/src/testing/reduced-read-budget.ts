@@ -34,6 +34,7 @@ import { KERNEL, DISPATCHER, humanActor } from '../events/envelope'
 import {
   readBuildFacts,
   readBuildStreamSeed,
+  readDispatchBudget,
   readRepositoryFacts,
   readForgeHealth,
   readRepositoryAttention,
@@ -1395,6 +1396,134 @@ export async function flaggedWorkspaceSweepReadBudget(opts: {
     reducedReadsPerSweep: perTick[100_000]![0],
     historicalRows: 0,
     idleRows: 0,
+  })
+}
+
+/** A provision continuation that reaches its launch for a build at the
+ * no-progress limit applies the guard instead of starting a runner. Each
+ * continuation is a recurring invocation (every re-provision, every remote
+ * dispatch), so it must read no seeded history and the same reduced values,
+ * artifacts and tail rows at 100 and 100,000 events, both in the whole tick
+ * and in the guarded launch window after `workspace.provisioned`. */
+export async function provisionContinuationGuardReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  /** Seeds a fresh build whose next tick kicks a remote provision
+   * continuation with `tail`, and returns its slug. Called before filler. */
+  seed: (tail: 'launch' | 'dispatch', length: number) => Promise<string>
+  /** A fresh dispatcher per measured invocation: no per-process cache. */
+  dispatcher: () => Dispatcher
+  advance: () => void
+  launches: () => number
+}) {
+  const { store } = opts
+  const configKind = 'build-runner-effective-config'
+  type Counts = { reduced: Record<string, number>; configReads: number; tailRows: number }
+  const results: Record<string, { tick: Counts; launchWindow: Counts }> = {}
+  for (const tail of ['launch', 'dispatch'] as const) {
+    for (const length of [100, 100_000]) {
+      const slug = await opts.seed(tail, length)
+      // Filler is a progress fact, so it precedes the no-progress streak.
+      await seedBuildFiller(store, slug, length)
+      for (const instance of ['empty-a', 'empty-b', 'empty-c']) {
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { instance, provider: 'remote-test', workspaceRef: 'sandbox-g0' },
+        })
+        await store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance, workspaceRef: 'sandbox-g0', outcome: 'completed', exitCode: 0 },
+        })
+      }
+      // Materialize every build-scoped value the tick reads once, without a
+      // tick, which would itself kick the continuation being measured. A
+      // first reduction per key is canonical; the measured tick must only
+      // advance saved values over its own tail.
+      expect((await readBuildFacts(store, slug)).value.executionNoProgress.count).toBe(3)
+      for (const reducer of ['buildDigest', 'baseBranchValue', 'publishedBranchHeadValue'])
+        await store.getReducerValue({ kind: 'build', slug }, { reducer })
+      // The remote provider is recovery-capable, so it owns the workspace.
+      await readDispatchBudget(store, slug, true)
+      const boundary = buildEventRows(store, slug).at(-1)!.seq
+      const rows = { historicalRows: 0, tailRows: 0 }
+      const counts = (): Counts => ({ reduced: {}, configReads: 0, tailRows: 0 })
+      const tick = counts()
+      let atProvision: Counts | undefined
+      const getReducerValue = store.getReducerValue.bind(store)
+      store.getReducerValue = async (scope, request) => {
+        if (scope.kind === 'build' && scope.slug === slug)
+          tick.reduced[request.reducer] = (tick.reduced[request.reducer] ?? 0) + 1
+        return getReducerValue(scope, request)
+      }
+      const getArtifact = store.getArtifact.bind(store)
+      store.getArtifact = async (...args) => {
+        if (args[0] === slug && args[1] === configKind) tick.configReads++
+        return getArtifact(...args)
+      }
+      const append = store.append.bind(store)
+      store.append = (async (...args: Parameters<typeof append>) => {
+        const result = await append(...args)
+        if (args[0] === slug && args[1].type === 'workspace.provisioned')
+          atProvision = { ...structuredClone(tick), tailRows: rows.tailRows }
+        return result
+      }) as typeof store.append
+      const restoreRows = instrumentBuildRows(store, slug, () => boundary, rows)
+      const launchesBefore = opts.launches()
+      try {
+        opts.advance()
+        const dispatcher = opts.dispatcher()
+        await dispatcher.tick({ acceptNewWork: false })
+        await dispatcher.drainProvisioning()
+      } finally {
+        restoreRows()
+        Reflect.deleteProperty(store, 'getReducerValue')
+        Reflect.deleteProperty(store, 'getArtifact')
+        Reflect.deleteProperty(store, 'append')
+      }
+      tick.tailRows = rows.tailRows
+      const appended = buildEventRows(store, slug).at(-1)!.seq - boundary
+      expect(rows.historicalRows).toBe(0)
+      expect(atProvision).toBeDefined()
+      const launchWindow: Counts = {
+        reduced: Object.fromEntries(
+          Object.entries(tick.reduced).map(([reducer, n]) => [
+            reducer,
+            n - (atProvision!.reduced[reducer] ?? 0),
+          ]),
+        ),
+        configReads: tick.configReads - atProvision!.configReads,
+        tailRows: tick.tailRows - atProvision!.tailRows,
+      }
+      const events = buildEventRows(store, slug).filter((event) => event.seq > boundary)
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'escalation.raised' &&
+            event.payload.policyCause === 'execution-no-progress',
+        ),
+      ).toHaveLength(1)
+      expect(opts.launches()).toBe(launchesBefore)
+      // The guarded launch window reads the reduced build facts twice on
+      // either tail: the continuation's own queued check, and the guard's
+      // read after its refresh. The dispatch tail's completion boundaries
+      // already add three on main: the mixed-version check, the discard
+      // check, and the pre-launch re-read. The guard's decision reads the
+      // pinned config once (the fixture carries no verify pin).
+      expect(launchWindow.reduced.buildReadFacts).toBe(tail === 'launch' ? 2 : 5)
+      expect(launchWindow.configReads).toBe(1)
+      // Tail rows are only rows this invocation appended (each read at most
+      // once per reduced read that advances over it).
+      expect(launchWindow.tailRows).toBeLessThanOrEqual(appended * tick.reduced.buildReadFacts!)
+      results[`${tail}:${length}`] = { tick, launchWindow }
+    }
+    expect(results[`${tail}:100`]).toEqual(results[`${tail}:100000`]!)
+  }
+  console.log('provision continuation guard read budget', {
+    histories: [100, 100_000],
+    launch: results['launch:100000'],
+    dispatch: results['dispatch:100000'],
+    historicalRows: 0,
   })
 }
 
