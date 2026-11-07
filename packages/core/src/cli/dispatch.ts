@@ -208,7 +208,7 @@ import {
   type TickReport,
 } from '../processes/dispatcher'
 import { RepoViewStore } from '../processes/repo-view'
-import { triageStateCount } from '../ports/tickets/states'
+import { boundedStateCount } from '../ports/tickets/states'
 import {
   BuildControlError,
   buildControlUser,
@@ -1376,14 +1376,13 @@ class DispatchLoop {
   }
 
   /** Display-only triage count for interactive dashboards: one bounded
-   * ticket-source state-count read, never an event read. Sources without
-   * state discovery, failed reads and unmatched states retain the last value. */
+   * `countStates([triage])` request, never a listing and never an event read.
+   * A source without bounded counts makes no request and stays unknown (`–`);
+   * failed reads and unmatched states retain the last value. */
   private async sampleTriageCount(): Promise<void> {
-    const tickets = this.wiring.tickets
-    if (!tickets.listStates) return
     try {
-      const count = triageStateCount(
-        await tickets.listStates(),
+      const count = await boundedStateCount(
+        this.wiring.tickets,
         defaultTriageState(this.currentConfig().config),
       )
       if (count !== undefined) this.triageCount = count
