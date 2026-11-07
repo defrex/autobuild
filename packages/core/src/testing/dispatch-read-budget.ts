@@ -907,7 +907,8 @@ async function upgradeGenerationReadBudget(): Promise<void> {
 /** Measure real ticket-source operations through an injected statement boundary.
  * Each fixture is fresh, so a source-local cache cannot conceal target reads.
  * Listed rows carry one `closes #1` issue link on even-titled tickets and none
- * on odd ones; statement counts must not change with links.
+ * on odd ones, and `priority` urgent on titles divisible by 3 and normal
+ * otherwise; statement counts must not change with links or priority.
  *
  * With `triageState`, also measure the interactive dispatcher's triage sample
  * (one bounded `countStates` read, never a listing): it answers the fixture's
@@ -968,6 +969,9 @@ export async function ticketListReadBudget(
             if (Number(ticket.title) % 2 === 0)
               expect(ticket.issueLinks).toEqual([{ issue: 1, intent: 'closes' }])
             else expect(ticket).not.toHaveProperty('issueLinks')
+            // Priority arrives on the listed row too.
+            if (Number(ticket.title) % 3 === 0) expect(ticket.priority).toBe('urgent')
+            else expect(ticket).not.toHaveProperty('priority')
           }
         }
       }

@@ -108,3 +108,11 @@ away for these clients and their strict request schemas never carry them.
 Current services echo that header on every ticket response, so a current client
 recognizes a published service's strict-schema refusal of `issueLinks` as
 `TicketIssueLinksUnsupported`. Contracts exercise both directions.
+
+Ticket priority likewise requires the explicit `x-autobuild-ticket-priority: 1`
+capability. The service projects `priority` away for published 1.2.0 through
+1.4.2 clients, whose strict request schemas never carry it; their updates omit
+it and so never clear an urgent ticket. Current services echo the header on
+every ticket response, so a current client recognizes a published service's
+strict-schema refusal of `priority` as `TicketPriorityUnsupported`.
+`tickets-v1.2.ts` stays unchanged.

@@ -430,7 +430,8 @@ export function describeTicketSourceContract(
         await source.update(id, { priority: 'urgent' })
         const urgent = await source.get(id)
         expect(urgent?.priority).toBe('urgent')
-        expect(urgent?.revision).toBe(created.revision)
+        // Revisions may be content hashes or counters: only change is required.
+        expect(urgent?.revision).not.toBe(normal?.revision)
 
         if (source.mutateIfRevision) {
           await expect(
@@ -444,7 +445,9 @@ export function describeTicketSourceContract(
             kind: 'update',
             patch: { priority: 'normal' },
           })
-          expect((await source.get(id))?.revision).toBe(normal!.revision)
+          const cleared = await source.get(id)
+          expect(cleared && 'priority' in cleared).toBe(false)
+          expect(cleared?.revision).not.toBe(urgent!.revision)
         }
       })
     })

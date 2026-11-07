@@ -11,6 +11,8 @@ export {
   TICKET_COMMENTS_CAPABILITY,
   TICKET_ISSUE_LINKS_HEADER,
   TICKET_ISSUE_LINKS_CAPABILITY,
+  TICKET_PRIORITY_HEADER,
+  TICKET_PRIORITY_CAPABILITY,
   TICKET_DEPENDENCY_STATE_HEADER,
   TICKET_DEPENDENCY_STATE_CAPABILITY,
   TICKET_POLICY_ROLES_HEADER,
@@ -32,6 +34,7 @@ export {
   TicketPriorityUnsupported,
   refuseUnsupportedPriority,
   withoutUnsupportedPriority,
+  ticketPriority,
   urgentFirst,
   type TicketPriority,
 } from './priority'
