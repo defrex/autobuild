@@ -37,7 +37,8 @@ and revision commands; it does not provide a spec editor.
 
 Restarting `ab dispatch` or running `ab dispatch --once` is not an answer or a
 retry action. Every open escalation, including every policy and setup cause,
-survives dispatcher startup until a human uses one of the paths above. Startup
+survives dispatcher startup until your operator agent, within your instructions
+and authority, or you answer through one of the paths above. Startup
 still recovers unblocked work and acknowledges pending operator commands.
 
 ## Widening an exhausted review loop

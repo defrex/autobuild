@@ -656,8 +656,8 @@ likes.
 `setup` is special by convention: it runs after workspace provision and after a
 sandbox rehydrate. Failures are durable, remain visible in build status and the
 dashboard, and retry up to `[policy].maxSetupAttempts`; exhaustion raises a
-setup-targeted escalation without manufacturing a pipeline phase or verdict. A
-human answer re-arms the budget, and a later successful `runner.attached` clears
+setup-targeted escalation without manufacturing a pipeline phase or verdict. An
+answer from your operator agent or you re-arms the budget, and a later successful `runner.attached` clears
 the current error. Values are never evaluated as config — they are handed to a
 shell as written.
 
@@ -1852,8 +1852,8 @@ assets are not moved and are not a fallback. Each has a kind and a name.
   Hosted revisions are copied into immutable snapshots in the build store,
   preserving revision numbers and allowing reads without the ticket service.
   Old pins without snapshots keep reading their original ticket rows. A
-  later attach or remove leaves a running build alone; a human answer with
-  `--revise-spec-from-ticket` pins again. `ab build asset get <slug> <kind>
+  later attach or remove leaves a running build alone; an answer from your operator
+  agent or you with `--revise-spec-from-ticket` pins again. `ab build asset get <slug> <kind>
   <name> <dest> [--rev <n>]` downloads what the build froze, also after it ends.
 - **Where phases find them.** `ab context` writes each pinned asset to
   `$AB_CONTEXT_DIR/assets/<kind>/<name>/` (a file asset is the single file inside that
@@ -2382,8 +2382,8 @@ These commands request normal kernel work; they do not wake a runner, operate
 the forge, or bypass the lease sweep. Resume is therefore an attempt, not a
 guarantee: if the condition still fails, a phase may raise a new escalation and
 block again. Every open escalation, including all policy and setup causes,
-survives `ab dispatch` and `ab dispatch --once` startup until a human answers
-it. Startup still recovers actionable builds and delivers pending operator
+survives `ab dispatch` and `ab dispatch --once` startup until your operator agent or you
+answer it. Startup still recovers actionable builds and delivers pending operator
 commands, but it never records an answer or re-arms a budget.
 
 Durable repository intake has launch-flag setters and a global-row toggle.

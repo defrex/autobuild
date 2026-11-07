@@ -742,8 +742,9 @@ slug and its `ab/<slug>` branch are recorded once and never renamed.
 explicit operator revision protocol (leaf escalation or the node exception below). Every downstream reviewer approves
 conformance *to it*; a drifting spec silently converts approvals into
 approvals-of-something-else. A phase discovering the spec itself is wrong
-raises an `escalation`; a human uses `ab answer --revise-spec` (or
-`--revise-spec-from-ticket`), the spec gets rev N+1, and the leaf restarts
+raises an `escalation`; the operator agent or a human answers with
+`ab answer --revise-spec` (or `--revise-spec-from-ticket`), the spec gets
+rev N+1, and the leaf restarts
 from `plan` (cheap — downstream was invalidated anyway).
 
 If a leaf spec revision arrives during an unfinished reconcile, the same reconcile attempt resumes under the revised spec on its retained frozen target. Its replay and committed contribution remain owned by reconcile. Confirmed publication must settle before the fresh plan loop opens; prior approvals and verification remain invalidated.
@@ -2245,7 +2246,7 @@ converge<A>(
   reviewer marks persistence — judgment; the kernel applies the threshold —
   determinism).
 - **Round ceiling:** `policy.maxReviewRounds` is the default absolute cap for
-  each loop. Once its `review-round-limit` escalation is open, a human may
+  each loop. Once its `review-round-limit` escalation is open, the operator agent or a human may
   answer it with an optional positive `reviewRoundCeiling`. That value replaces
   the configured cap for only the escalation's plan or code loop and current
   spec revision. It is absolute, durable, and cleared by `spec.revised`; the
@@ -3491,8 +3492,8 @@ setup under the claimed lease before announcing another attachment. Another
 failure appends only a new failure fact; success appends `runner.attached
 {resumedFromSeq}` and clears the current error projection. After
 `policy.maxSetupAttempts`, the kernel raises one policy escalation targeted at
-`setup`; lease sweeps and fresh dispatcher startup leave it parked until a human
-answer re-arms the setup budget. Its exhaustion guard considers only setup-targeted
+`setup`; lease sweeps and fresh dispatcher startup leave it parked until an answer
+from the operator agent or a human re-arms the setup budget. Its exhaustion guard considers only setup-targeted
 policy raises, independently of phase-policy exhaustion. After claiming the lease,
 however, a runner honors an engine-selected pause or abort acknowledgement before
 setup-failure gating, even while that escalation is open. This control-only path
