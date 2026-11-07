@@ -3527,7 +3527,10 @@ compatibility deferral. Interrupted pairs and historical logs remain readable
 with runtime null in JSON and `runtime unrecorded` in human detail.
 
 The runtime is captured once per executing process from its own distribution,
-never the consuming repository or dispatcher on behalf of a runner. It includes
+never the consuming repository or dispatcher on behalf of a runner. Capture
+happens on first need, no later than the process's first runtime-recorded
+companion (the runner's construction or the dispatcher's run start); importing
+modules performs no capture. It includes
 `version`, `commit` (a Git object id or explicit `unknown`), and
 `source: {kind: source | package, location}` with an absolute distribution root
 (realpath when available). A source distribution owns its Git top level,
