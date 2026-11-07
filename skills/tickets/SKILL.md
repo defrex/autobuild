@@ -87,13 +87,13 @@ move work into: the dispatcher moves a ticket there when it claims it.
 anywhere. Do not try to change a ticket's state by editing the file.
 
 Each ticket is `<id>.md`: TOML frontmatter between `+++` fences carrying `id`
-and `title` (and optional `labels`, `blockedBy` and `issueLinks`), then the body — which is
+and `title` (and optional `labels`, `blockedBy`, `issueLinks` and `priority`), then the body — which is
 the spec.
 
 ## Create a ticket
 
 ```
-ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api] [--blocked-by file-1,file-2] [--issues 824,820:refs]
+ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api] [--blocked-by file-1,file-2] [--issues 824,820:refs] [--priority urgent]
 ```
 
 It lands in `triage/` and prints the new id. `--body` is a file, and its
@@ -104,7 +104,8 @@ spec gets bounced back to `triage/` by the dispatcher rather than built.
 Blocker ids are source-local; every blocker must exist before creation
 succeeds. When the ticket originates from a forge issue, attach it with
 `--issues`: `N` (intent `closes`, the default) when the ticket fully resolves
-the issue, `N:refs` when it only partly addresses it.
+the issue, `N:refs` when it only partly addresses it. `--priority urgent` makes
+the dispatcher claim it before normal ready work; omit it for normal.
 
 For dependencies on any source, follow the
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
@@ -123,13 +124,17 @@ ab ticket update file-3 --body spec.md
 ab ticket update file-3 --title "New title" --labels bug,api
 ab ticket update file-3 --labels ''
 ab ticket update file-3 --issues 824:refs
+ab ticket update file-3 --priority urgent
 ab ticket block file-3 file-1
 ab ticket unblock file-3 file-1
 ```
 
 Update is partial: omitted fields stay untouched, while an explicitly empty
 `--labels` clears labels. `--issues` replaces the whole set of issue links and
-`--issues ''` clears it. It cannot change state. For block/unblock the first
+`--issues ''` clears it. `--priority urgent|normal` sets the dispatch class;
+the file tracker writes `priority = "urgent"` and removes the key for normal. A
+source that cannot store priority refuses `urgent`, names itself, and writes
+nothing; `normal` succeeds there. It cannot change state. For block/unblock the first
 id is the ticket being edited; the second is its blocker. Both are safe to
 retry, and adding validates the blocker exists and is not the ticket itself.
 
@@ -175,6 +180,11 @@ re-evaluates the dependent on a later tick; it can then become eligible without
 another move to `ready/`, subject to the remaining dispatch gates and available
 capacity. Blocker edits must use the source-agnostic `ab ticket block` and
 `ab ticket unblock` commands shown above.
+
+With a free slot the dispatcher claims eligible urgent tickets first, then
+normal ones, each in source order; a blocked urgent ticket waits while normal
+work proceeds, and urgency never stops a running build. To expedite a ticket,
+mark it urgent rather than moving other tickets out of `ready/`.
 
 When the dispatcher claims an eligible file ticket, it moves it to `doing/`,
 then to `done/` on merge or back to `triage/` if the build aborts or the spec
@@ -331,15 +341,15 @@ revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
-kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
+kind, target, id, blockers, issue links, priority, creation key and reference comments are read-only. It saves only
 changed fields with the opening revision. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links. Reverting identical
-content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links and urgent priority.
+Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File comments
 change the body and revision; separate hosted comments do not. Hosted revisions

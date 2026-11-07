@@ -102,7 +102,7 @@ describe('ticket grooming skill guidance', () => {
       expect(guide).toContain('are file-tracker-only')
       expect(guide).toContain('[tickets] source = "linear"')
       expect(guide).toContain('do not apply that lifecycle')
-      expect(guide).toContain('optional `labels`, `blockedBy` and `issueLinks`')
+      expect(guide).toContain('optional `labels`, `blockedBy`, `issueLinks` and `priority`')
       expect(guide).not.toContain('there is no API')
     }
   })

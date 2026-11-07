@@ -401,10 +401,13 @@ describe('HarvestRunner', () => {
     expect(state.latest?.status).toBe('completed')
     expect(state.latest?.trigger).toBe('count')
     expect(state.ledger).toHaveLength(2)
-    expect(await tickets.get('fake-1')).toMatchObject({
+    const proposal = await tickets.get('fake-1')
+    expect(proposal).toMatchObject({
       state: 'Triage',
       labels: [HARVEST_PROPOSAL_LABEL],
     })
+    // Harvest files proposals normal; only grooming marks one urgent.
+    expect(proposal && 'priority' in proposal).toBe(false)
     expect(tickets.claims).toEqual([])
     expect(await tickets.listReady({ state: 'Ready', labels: [HARVEST_PROPOSAL_LABEL] })).toEqual({
       tickets: [],

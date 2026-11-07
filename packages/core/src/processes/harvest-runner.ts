@@ -1269,6 +1269,7 @@ export class HarvestRunner {
             reservations.set(proposalKey, reservedId)
           }
           const body = renderHarvestProposal(proposal, observations)
+          // Harvest proposals are always normal priority; grooming may mark one urgent.
           const ticket = (
             await tickets.create(
               {

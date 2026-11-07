@@ -113,6 +113,10 @@ rejectedState = "rejected"
 
 The `file` and `hosted` sources store [forge issue links](tickets.md#groom-a-buildable-spec): as `issueLinks` frontmatter (`file`) or transactional project data (`hosted`). `linear` doesn't, because Linear links GitHub issues natively through its own integration; a create or update that names issue links is refused with an error naming the source, and nothing is written.
 
+### Optional priority
+
+A ticket is `urgent` or `normal` (the default); the dispatcher claims urgent ready work first. The `file` source stores `priority = "urgent"` in frontmatter and writes no key for normal. `hosted` and `linear` don't store priority: they read every ticket as normal, refuse a create or update naming `urgent` with an error naming the source, and write nothing. `--priority normal` succeeds on them as a no-op.
+
 ### Optional ticket tree
 
 All three sources declare `integrationTree: true`, storing kind and target as frontmatter (`file`), transactional project data (`hosted`), or the exact `node` label plus the parent relationship (`linear`).
