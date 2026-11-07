@@ -18,6 +18,10 @@ export interface ForgeContractControls {
   commentExists(number: number, body: string): Promise<boolean>
   mergeSha(number: number): Promise<string>
   trackPr(number: number): Promise<void> | void
+  /** Edit the PR title or body, changing the forge's fresh default message. */
+  editPr?(number: number, edit: { title?: string; body?: string }): Promise<void> | void
+  /** Arm native auto-merge with the merge-commit method, as a human might. */
+  armMergeCommitAutoMerge?(number: number): Promise<void> | void
 }
 
 export interface ForgeContractHarness {
@@ -342,6 +346,34 @@ export function describeForgeContract(name: string, factory: ForgeContractFactor
           kind: 'applied',
         })
         expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(false)
+      })
+    })
+
+    test('identity-aware setAutoMerge replaces a mismatched native request and only reads a matching one', async () => {
+      await withForge(factory, { gated: true }, async (harness) => {
+        const { editPr, armMergeCommitAutoMerge } = harness.controls
+        if (harness.nativeAutoMerge === false || !editPr || !armMergeCommitAutoMerge) return
+        const { pr } = await pushAndOpen(harness)
+        await harness.controls.prepareMergeable(pr.number)
+        await armMergeCommitAutoMerge(pr.number)
+        expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(true)
+        const options = { buildSlug: 'contract-build', baseBranch: harness.base }
+
+        expect(
+          await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true, options),
+        ).toEqual({ kind: 'applied' })
+        expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(true)
+
+        expect(
+          await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true, options),
+        ).toEqual({ kind: 'applied' })
+        expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(true)
+
+        await editPr(pr.number, { title: `${harness.title} (edited)` })
+        expect(
+          await harness.forge.setAutoMerge(harness.workspacePath, pr.number, true, options),
+        ).toEqual({ kind: 'applied' })
+        expect(await harness.controls.nativeAutoMergeEnabled(pr.number)).toBe(true)
       })
     })
 

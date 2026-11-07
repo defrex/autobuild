@@ -3716,17 +3716,19 @@ export class Dispatcher {
       sameLandingCandidate(native.candidate, state.landing?.decision?.candidate)
         ? native.retry
         : undefined)
+    const acknowledged = nativeLandingApplied(state.landing) && !state.landing?.nativeEnablePending
+    // SPEC §15.7: an armed, acknowledged request gets the forge's identity
+    // readback on every eligible poll. No consent read or event while it matches.
+    const maintain = acknowledged && prState.nativeAutoMerge === true && !nativeCancelled && isReady
     if (
       !integration &&
       !nodeTarget &&
       prState.state === 'open' &&
       landingAuthorized(state.landing) &&
-      (prState.nativeAutoMerge === false ||
-        !nativeLandingApplied(state.landing) ||
-        !!state.landing?.nativeEnablePending) &&
+      (prState.nativeAutoMerge === false || !acknowledged || maintain) &&
       (!retry || Date.parse(retry.after) <= this.deps.clock().getTime()) &&
       commandSeq !== undefined &&
-      (await canApply())
+      (maintain || (await canApply()))
     ) {
       const decision = state.landing!.decision!
       // The provider checks eligibility immediately before mutating. Inspection
@@ -3757,105 +3759,116 @@ export class Dispatcher {
           },
         })
       }
-      const result =
-        prState.nativeAutoMerge === true && !nativeCancelled
-          ? { kind: 'applied' as const }
-          : await forge
-              .setAutoMerge(workspacePath, pr.number, true, {
-                buildSlug: record.slug,
-                baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
-                ...issueLinksForForge(state, forge),
-                canApply: async () => {
-                  if (!(await canApply())) return false
-                  if (enableSeq === undefined)
-                    enableSeq = (
-                      await store.append(record.slug, {
-                        actor: DISPATCHER,
-                        type: 'landing.native-enable-started',
-                        payload: {},
-                      })
-                    ).seq
-                  return true
-                },
-              })
-              .catch(async (error: unknown) => {
-                if (isForgeFailure(error)) {
-                  const attempt = (retry?.attempt ?? 0) + 1
-                  await store.append(record.slug, {
-                    actor: DISPATCHER,
-                    type: 'landing.application-failed',
-                    payload: {
-                      candidate: decision.candidate,
-                      decisionSeq: decision.seq,
-                      ...(state.landing?.command ? { commandSeq: state.landing.command.seq } : {}),
-                      message: error.message,
-                      attempt,
-                      after: new Date(
-                        Math.max(
-                          this.deps.clock().getTime() +
-                            Math.min(300_000, 30_000 * 2 ** Math.min(attempt - 1, 4)),
-                          error.details.kind === 'rate-limited'
-                            ? Date.parse(error.details.resetAt)
-                            : 0,
-                        ),
-                      ).toISOString(),
-                    },
-                  })
-                  // An uncertain enable stays pending. Never spend another request during a limit.
-                  throw error
-                }
-                await settleFailedEnable()
-                throw error
-              })
-      // Only an attempt that reached the mutation guard needs cancellation.
-      // Persist retry timing with its receipt so restart cannot reset backoff.
-      if (result.kind !== 'applied') await settleFailedEnable()
-      if (result.kind === 'applied') {
-        const latest = (await store.buildFacts(record.slug)).state
-        if (await canApply()) {
-          if (
-            latest.landing?.nativeEnablePending ||
-            latest.landing?.native?.enabled !== true ||
-            latest.landing.native.decisionSeq !== decision.seq ||
-            latest.landing.native.commandSeq !== latest.landing.command?.seq
-          )
-            await store.append(record.slug, {
-              actor: DISPATCHER,
-              type: 'landing.native-applied',
-              payload: {
-                enabled: true,
-                ...(enableSeq !== undefined ? { enableSeq } : {}),
-                candidate: decision.candidate,
-                decisionSeq: decision.seq,
-                ...(latest.landing?.command ? { commandSeq: latest.landing.command.seq } : {}),
-              },
-            })
-        } else {
-          // Enable may have won after cancellation. Repair immediately, and
-          // again on the next poll if this process dies at this boundary.
-          const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
-          if (cancelled.kind === 'applied')
-            await store.append(record.slug, {
-              actor: DISPATCHER,
-              type: 'landing.native-applied',
-              payload: { enabled: false, ...(enableSeq !== undefined ? { enableSeq } : {}) },
-            })
-        }
-      } else if (result.kind === 'deferred' && result.reason) {
-        await recordAutoMergeDeferralObservation(
-          store,
-          record.slug,
-          result.reason,
-          pr.number,
-          commandSeq,
-          this.deps.ids('obs'),
-        )
-      } else if (result.kind === 'ungated' && prState.mergeable === true && (await canApply())) {
-        await forge.squashMerge(workspacePath, pr.number, result.headSha, {
+      // An enabled request counts as applied only after the forge confirms
+      // its method and identity message; a mismatch is repaired under consent.
+      const result = await forge
+        .setAutoMerge(workspacePath, pr.number, true, {
           buildSlug: record.slug,
           baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
           ...issueLinksForForge(state, forge),
+          canApply: async () => {
+            if (!(await canApply())) return false
+            if (enableSeq === undefined)
+              enableSeq = (
+                await store.append(record.slug, {
+                  actor: DISPATCHER,
+                  type: 'landing.native-enable-started',
+                  payload: {},
+                })
+              ).seq
+            return true
+          },
         })
+        .catch(async (error: unknown) => {
+          if (isForgeFailure(error)) {
+            const attempt = (retry?.attempt ?? 0) + 1
+            await store.append(record.slug, {
+              actor: DISPATCHER,
+              type: 'landing.application-failed',
+              payload: {
+                candidate: decision.candidate,
+                decisionSeq: decision.seq,
+                ...(state.landing?.command ? { commandSeq: state.landing.command.seq } : {}),
+                message: error.message,
+                attempt,
+                after: new Date(
+                  Math.max(
+                    this.deps.clock().getTime() +
+                      Math.min(300_000, 30_000 * 2 ** Math.min(attempt - 1, 4)),
+                    error.details.kind === 'rate-limited' ? Date.parse(error.details.resetAt) : 0,
+                  ),
+                ).toISOString(),
+              },
+            })
+            // An uncertain enable stays pending. Never spend another request during a limit.
+            throw error
+          }
+          await settleFailedEnable()
+          throw error
+        })
+      if (maintain && enableSeq === undefined) {
+        // Quiet maintenance: no consent check passed, so nothing was mutated.
+        // A vanished request is reconciled by the next poll's PR read.
+        if (result.kind === 'deferred' && result.reason)
+          await recordAutoMergeDeferralObservation(
+            store,
+            record.slug,
+            result.reason,
+            pr.number,
+            commandSeq,
+            this.deps.ids('obs'),
+          )
+      } else {
+        // Only an attempt that reached the mutation guard needs cancellation.
+        // Persist retry timing with its receipt so restart cannot reset backoff.
+        if (result.kind !== 'applied') await settleFailedEnable()
+        if (result.kind === 'applied') {
+          const latest = (await store.buildFacts(record.slug)).state
+          if (await canApply()) {
+            if (
+              latest.landing?.nativeEnablePending ||
+              latest.landing?.native?.enabled !== true ||
+              latest.landing.native.decisionSeq !== decision.seq ||
+              latest.landing.native.commandSeq !== latest.landing.command?.seq
+            )
+              await store.append(record.slug, {
+                actor: DISPATCHER,
+                type: 'landing.native-applied',
+                payload: {
+                  enabled: true,
+                  ...(enableSeq !== undefined ? { enableSeq } : {}),
+                  candidate: decision.candidate,
+                  decisionSeq: decision.seq,
+                  ...(latest.landing?.command ? { commandSeq: latest.landing.command.seq } : {}),
+                },
+              })
+          } else {
+            // Enable may have won after cancellation. Repair immediately, and
+            // again on the next poll if this process dies at this boundary.
+            const cancelled = await forge.setAutoMerge(workspacePath, pr.number, false)
+            if (cancelled.kind === 'applied')
+              await store.append(record.slug, {
+                actor: DISPATCHER,
+                type: 'landing.native-applied',
+                payload: { enabled: false, ...(enableSeq !== undefined ? { enableSeq } : {}) },
+              })
+          }
+        } else if (result.kind === 'deferred' && result.reason) {
+          await recordAutoMergeDeferralObservation(
+            store,
+            record.slug,
+            result.reason,
+            pr.number,
+            commandSeq,
+            this.deps.ids('obs'),
+          )
+        } else if (result.kind === 'ungated' && prState.mergeable === true && (await canApply())) {
+          await forge.squashMerge(workspacePath, pr.number, result.headSha, {
+            buildSlug: record.slug,
+            baseBranch: state.baseBranch ?? this.deps.config.baseBranch,
+            ...issueLinksForForge(state, forge),
+          })
+        }
       }
     }
 
