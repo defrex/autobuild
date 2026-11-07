@@ -1272,6 +1272,61 @@ describe('own-build read evidence', () => {
       (await store.getEvents(BUILD)).filter((event) => event.type === 'session.build-read-failed'),
     ).toHaveLength(1)
   })
+  test('a later successful read in the pending session records recovery once per failure', async () => {
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_test', role: 'plan', runner: 'fake', phase: 'plan', round: 1 },
+    })
+    const env = makeEnv({ phase: 'plan' })
+    const original = store.getReducerValue.bind(store)
+    const failRead = async () => {
+      store.getReducerValue = async () => {
+        throw new Error('transient')
+      }
+      await expect(buildContext({ store, env, workspacePath: workspace })).rejects.toThrow()
+      store.getReducerValue = original
+    }
+    const ofType = async <T extends string>(type: T) =>
+      (await store.getEvents(BUILD)).filter((event) => event.type === type)
+
+    // Without a pending deferral a successful read writes nothing.
+    await buildContext({ store, env, workspacePath: workspace })
+    expect(await ofType('session.build-read-recovered')).toHaveLength(0)
+
+    await failRead()
+    const [first] = await ofType('session.build-read-failed')
+    await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', session: 's_other' }),
+      workspacePath: workspace,
+    })
+    expect(await ofType('session.build-read-recovered')).toHaveLength(0)
+    await buildContext({ store, env, workspacePath: workspace })
+    await buildContext({ store, env, workspacePath: workspace })
+    expect((await ofType('session.build-read-recovered')).map((event) => event.payload)).toEqual([
+      {
+        session: 's_test',
+        phase: 'plan',
+        round: 1,
+        operation: 'context',
+        reason: 'own-build-read',
+        evidenceSeq: first!.seq,
+        failureSeq: first!.seq,
+      },
+    ])
+
+    await failRead()
+    const second = (await ofType('session.build-read-failed'))[1]!
+    await buildContext({ store, env, workspacePath: workspace })
+    await buildContext({ store, env, workspacePath: workspace })
+    const recovered = await ofType('session.build-read-recovered')
+    expect(recovered).toHaveLength(2)
+    expect(recovered[1]!.payload).toMatchObject({
+      evidenceSeq: first!.seq,
+      failureSeq: second.seq,
+    })
+  })
   test('an evidence write outage preserves the original read error', async () => {
     const read = store.getReducerValue.bind(store)
     const append = store.append.bind(store)

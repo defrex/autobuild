@@ -2953,7 +2953,12 @@ export class BuildRunner {
           // The failure-tolerant post-step still records its outcome below.
         }
       }
-      if (await this.settleReadDeferral(session)) {
+      if (
+        await this.settleReadDeferral(session, {
+          completed:
+            turn.abortCause === undefined && turnError === undefined && result?.kind !== 'failed',
+        })
+      ) {
         this.closeBracketStream(streamBracket, 'aborted')
         return { actor: agentActor(step, session), failureNote: undefined, cancelled: true }
       }
@@ -3110,7 +3115,9 @@ export class BuildRunner {
       failureNote === undefined && turn.abortCause !== 'operator' ? 'completed' : 'aborted',
     )
 
-    const deferred = await this.settleReadDeferral(session)
+    const deferred = await this.settleReadDeferral(session, {
+      completed: failureNote === undefined && turn.abortCause === undefined,
+    })
     return {
       actor: agentActor(step, session),
       failureNote,
@@ -4442,12 +4449,24 @@ export class BuildRunner {
    * new evidence instead of deadlocking before its recovery session starts.
    */
 
-  private async settleReadDeferral(session: string): Promise<boolean> {
+  /**
+   * Settle the session's pending own-build read deferral. Returns true when it
+   * parked the build. A finalize post-step never calls a terminal, so only
+   * durable recovery evidence (`session.build-read-recovered`, newer than the
+   * chain's latest failure) plus a `completed` turn retires its deferral; the
+   * caller's `finalize.step-completed` then clears it.
+   */
+  private async settleReadDeferral(
+    session: string,
+    opts?: { completed?: boolean },
+  ): Promise<boolean> {
     const { store, slug } = this.deps
     const item = (await readBuildFacts(store, slug)).value.log.readDeferrals.find(
       (item) => item.session === session,
     )
     if (!item) return false
+    const recovered =
+      opts?.completed === true && item.phase === 'finalize' && item.recovered && !item.settled
     if (!item.ended) {
       await store.append(slug, {
         actor: KERNEL,
@@ -4462,6 +4481,7 @@ export class BuildRunner {
         },
       })
     }
+    if (recovered) return false
     await this.raiseReadDeferral(item)
     return true
   }
