@@ -2244,7 +2244,7 @@ setters, not toggles, so the values the command names are the values the
 repository holds afterwards — and each per-build request is a compare-and-set
 against a freshly reduced log, so a rerun adds no second pending pause and
 never cancels one already in flight. Pause first is what makes every surviving
-prefix of a failed walk at least as quiesced as asked: once it merges, no queued
+prefix of a failed walk at least as quiesced as asked: once it is recorded, no queued
 build is launchable, whatever else fails after it. Output names every build that
 received a request, the hold, and the intake value written; `--json` emits that
 same summary for a script. A walk that fails partway exits nonzero and reports
