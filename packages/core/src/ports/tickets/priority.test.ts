@@ -163,3 +163,14 @@ describe('priority normalization', () => {
     expect(normal.revision).toBe(before)
   })
 })
+
+test('the compat wrapper still forwards an empty patch for the source to reject', async () => {
+  const fake = new FakeTicketSource([ticket({ ref: { source: 'fake', id: 'a', title: 'T' } })])
+  const stub = Object.assign(Object.create(fake) as FakeTicketSource, { priority: false })
+  const source = compatibleTicketSource(stub)
+  await expect(source.update('a', {})).rejects.toThrow('at least one')
+  const revision = (await fake.get('a'))!.revision
+  await expect(
+    source.mutateIfRevision!('a', revision, { kind: 'update', patch: {} }),
+  ).rejects.toThrow('at least one')
+})

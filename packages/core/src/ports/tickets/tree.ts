@@ -127,7 +127,7 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
           refuseUnsupportedMetadata(target, patch)
           const write = writablePatch(target, patch)
           // A normal-only patch on a source without priority changes nothing.
-          if (Object.keys(write).length === 0) return
+          if (write !== patch && Object.keys(write).length === 0) return
           return target.update(id, write)
         }
       if (property === 'mutateIfRevision')
@@ -139,7 +139,7 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
           if (mutation.kind !== 'update') return value.call(target, id, revision, mutation)
           refuseUnsupportedMetadata(target, mutation.patch)
           const patch = writablePatch(target, mutation.patch)
-          if (Object.keys(patch).length === 0) {
+          if (patch !== mutation.patch && Object.keys(patch).length === 0) {
             // Nothing to write, but a stale revision is still refused.
             if (!revision.trim()) throw new Error('expected revision must be nonblank')
             const current = await target.get(id)

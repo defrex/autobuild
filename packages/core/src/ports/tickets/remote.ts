@@ -265,7 +265,7 @@ export class HostedTicketSource implements TicketSource {
   ): Promise<void> {
     if (mutation.kind === 'update') {
       const patch = withoutUnsupportedPriority(this, mutation.patch)
-      if (Object.keys(patch).length === 0) {
+      if (mutation.patch.priority !== undefined && Object.keys(patch).length === 0) {
         // Nothing to send, but a stale revision is still refused.
         if (!expectedRevision.trim()) throw new Error('expected revision must be nonblank')
         const current = await this.get(id)
@@ -285,7 +285,7 @@ export class HostedTicketSource implements TicketSource {
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
     const write = withoutUnsupportedPriority(this, patch)
-    if (Object.keys(write).length === 0) return
+    if (patch.priority !== undefined && Object.keys(write).length === 0) return
     await this.request(
       'update',
       { id, patch: write },
