@@ -388,13 +388,22 @@ non-node, unopened and terminal builds and enforces repository ownership.
 
 Repository status includes `upgrades.runs`, keyed by originating dispatcher run,
 with latest successful `resolved` target, detected target, failure, handoff and
-completion evidence. `dispatcher.upgrade-target-resolved` carries strict
+completion evidence. It retains at most 16 runs: the authoritative run, the run
+holding the newest accepted handoff, the newest settled outcomes, then the most
+recently active, keeping incomplete handoffs longest. Full upgrade history stays
+in the repository journal for explicit history reads. `dispatcher.upgrade-target-resolved` carries strict
 `{run, lineage, target}` data; the target has mode (`pinned`, `installed`, or
 `source`), content key, source provenance and optional version/base/SHA. Source
 mode names the authoritative base commit, which can advance without changing
 packaged inputs or the running runtime. Status text renders the resolved mode,
 base and SHA separately, so an older handoff cannot hide a newer target. Identical
-observations append nothing; a successful resolution does not clear failures. Facts carry launcher
+observations append nothing. A failure fact stays on its run until a later
+successful preparation or handoff clears it; status marks it superseded once a
+later resolved target with a different key, or a later generation, exists.
+Human status shows at most the live handoff, the current generation's resolved
+target and latest outcome, and the latest settled outcome from an earlier
+generation; JSON `upgradeStatus` (`handoff`, `current`, `previous`, with
+`superseded` on a replaced failure) carries the same projection. Facts carry launcher
 lineage, from/to runtimes, resolution mode and authoritative base SHA/ref or original
 installation provenance, plus prepared cache identity. Completion names the successor
 and records completed retirement separately from takeover. During a handoff the
@@ -406,9 +415,11 @@ relaunch; their separate handoff capture never holds retirement open. `dispatche
 attention; the current generation remains active and identical failed inputs are
 suppressed across native handoff until target or selected-store compatibility evidence changes or a fresh operator launch.
 
-Repository status additionally exposes `upgrades.lastRollback` (historical, retained
-when cleared), `upgrades.holds` keyed by launcher lineage, `upgrades.lineages` keyed
-by generation run, optional `upgrades.authoritativeRun` from rollback, accepted takeover or committed operational tick (never startup/yield alone), `upgrades.rollbackIds` for idempotent rollback correlations, and `rollbackHold` for the effective dispatcher lineage.
+Repository status additionally exposes `upgrades.lastRollback` (the single latest
+rollback, retained when cleared), `upgrades.holds` keyed by launcher lineage (up to
+16 lineages, always including the authoritative lineage's hold), `upgrades.lineages`
+keyed by generation run (the 16 most recent generation starts, always including the
+authoritative run), optional `upgrades.authoritativeRun` from rollback, accepted takeover or committed operational tick (never startup/yield alone), `upgrades.rollbackIds` for idempotent rollback correlations (the 16 most recent), and `rollbackHold` for the effective dispatcher lineage.
 `dispatcher.runtime-rolled-back` names failed/restored runtime identities and cache
 roots, target, original handoff/takeover, three failed exits and reason. It is default
 repository attention. `dispatcher.rollback-hold-cleared` records a different
