@@ -790,26 +790,14 @@ should treat a `design` asset as part of the contract, a contract on observable
 visual and reference outcomes, not on implementation, and judge the result
 against it.
 
-Node `verify:*` context additionally exposes `nodeVerification`: the frozen
-range, a JSON index path, contribution build slugs, preparation-time stored ticket
-identities, event-authorized spec revisions and spec paths, and their commits.
-The index maps every commit in the range using build identity trailers,
-including earlier-cycle contributions and merge side history. Commits without
-an identity are listed as unattributed (a mechanical classification). The manifest
-and index also expose `handPushedCommits: [{sha, originalSha, message}]` for owned
-hand-pushed commits in the frozen range, preserving original identity across restacks.
-Their full messages express maintainer-authorized intent: judge quality and
-consistency, and never fail them solely for lacking a covering spec. Other node
-changes are authorized when covered by the node spec or the spec
-of the contribution introducing it; use the commit mapping to find that spec.
-The dispatcher collects these inputs with repository authority before launching
-verification and atomically deposits a node-owned `node-verification-context`
-artifact cited by exact revision in `integration.prepared`. Contributor specs
-freeze at preparation; resumed and concurrent verifiers read the same cycle input.
-Hydration reads only that node-owned artifact and grants no general contributor
-read authority. Missing or ambiguous provenance prevents preparation; missing,
-corrupt or mismatched prepared inputs fail hydration. Historical agent cycles
-without a citation require a new integration cycle. Leaf context is unchanged.
+Node `verify:*` context additionally exposes `nodeVerification`: frozen
+contribution specs, a commit provenance index and owned `handPushedCommits`,
+prepared by the dispatcher for the exact cycle. Judge hand-pushed commits on
+their messages and other changes against the node spec or the introducing
+contribution's spec. See
+[node verification context](references/integration-tree.md#node-verification-context)
+for the fields, the authorization rule, and preparation and failure behavior.
+Leaf context is unchanged.
 
 An agent verify step selects `[roles.<step>]` by its **logical step name** —
 the name in `[verify].steps`, not the skill it runs. An agent finalize

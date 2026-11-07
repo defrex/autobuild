@@ -1262,42 +1262,16 @@ Reads use explicit manifest/chunk revisions without a ticket connection. Old
 pins retain ticket-row reads; existing service attachments need no migration,
 and attachments in old local stores are not moved.
 
-In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
-`range`, `indexPath`, `contributions`, `handPushedCommits` and `unattributedCommits`. Each contribution
-has `build`, its preparation-time stored `ticket` identity, `spec: {kind: 'spec', rev}`,
-`specPath` and `commits`. The JSON index repeats this metadata and adds the
-exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
-and reflect scratch allocation, including legacy tracked-file collisions.
-Contribution specs normally live at `$AB_CONTEXT_DIR/contributions/<build>/spec.md`; the index
-normally lives at `$AB_CONTEXT_DIR/node-verification.json`. These files are marked `derived`
-in `materialized`, with their source build and revision recorded in the metadata.
-
-Membership comes from build identity trailers on every commit reachable in the
-frozen parent-to-head range, including earlier cycles and merge side history.
-The dispatcher gathers contributor material with repository authority while
-preparing the exact cycle head, before launching verification. Specs use the
-event-authorized revision at preparation, never an unsanctioned latest deposit
-or mutable ticket body. Unknown identities, ambiguous or invalid trailers, and
-missing source data prevent preparation. A versioned node-owned
-`node-verification-context` artifact is deposited atomically with
-`integration.prepared`, which cites its exact revision. Context hydration reads
-only that citation, validates its cycle and range, and allocates public paths;
-it needs no contributor reads or Git provenance discovery. Concurrent members
-and resumed sessions retain the same frozen specs; a new cycle collects fresh
-inputs. Missing, corrupt or mismatched inputs fail without publishing a manifest.
-Historical agent cycles without a citation require a new prepared cycle;
-check-only cycles do not require contributor inputs. Session and build scope
-permissions remain unchanged. Commits without a build trailer are
-listed as unattributed, a mechanical absence of a trailer rather than an authorization verdict.
-`handPushedCommits: [{sha, originalSha, message}]` identifies node-owned hand-pushed
-commits in the frozen range. Ownership uses the durable first-parent contribution
-boundary; inherited and merge-side history are not automatically owned. Confirmed
-rewrite aliases preserve original identity, and `message` is the full commit message.
-These messages express maintainer-authorized intent: judge quality and consistency;
-never fail these commits solely for lacking a covering spec.
-Other node changes are authorized when the node spec or the spec of the contribution
-that introduced it covers it; use the commit mapping to find that spec.
-Leaf verification omits node provenance.
+Node verification context is prepared, not discovered at hydration.
+`packages/core/src/kernel/node-verification-context.ts` collects trailer-based
+provenance (`collectNodeVerificationProvenance`) and builds the versioned
+`node-verification-context` artifact (`prepareNodeVerificationContext`), which
+`packages/core/src/processes/dispatcher.ts` deposits atomically with
+`integration.prepared`. `packages/core/src/cli/context.ts` parses only that
+cited artifact (`parseNodeVerificationContext`) and materializes
+`nodeVerification`, the index and the contribution specs. The design contract
+is SPEC §8.3; the agent-facing explanation is
+[node verification context](integration-tree.md#node-verification-context).
 
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance
