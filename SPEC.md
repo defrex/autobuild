@@ -749,7 +749,8 @@ and, when the forge can answer, against `ab/` or `ab-node/` build branches
 already on the remote — so a build never takes a branch another store owns —
 and falls back to a deterministic title-derived name on any absence, invalid
 output, error, or timeout. Naming failure never prevents build creation. The
-slug and its `ab/<slug>` branch are recorded once and never renamed.
+slug and its `ab/<slug>` (or `ab-node/<slug>` for a node) branch are recorded once and
+never renamed.
 
 **Immutability:** the spec cannot change during a build except through the
 explicit operator revision protocol (leaf escalation or the node exception below). Every downstream reviewer approves
@@ -1496,8 +1497,8 @@ also be reused within that request, including compound operator reads, but
 events, reducer tails, and mutation locks remain fresh. It
 checks actual build/session/stream ownership and filters collections server-side.
 Explicit project mismatch is 403; missing and foreign indirect IDs share 404.
-Remote project build creation allocates a fresh slug and branch; the returned
-record is authoritative. Local adapters retain exact-slug behavior.
+Remote project build creation allocates a fresh slug and a branch in the build
+kind's namespace (`ab/` or `ab-node/`); the returned record is authoritative. Local adapters retain exact-slug behavior.
 
 Owners issue/list/revoke credentials with deployment-local `ab-hosted-store
 credentials` commands. Retired deployment-wide and repository-less operator
