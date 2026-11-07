@@ -1,5 +1,5 @@
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, afterEach, expect, test } from 'bun:test'
 import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,27 @@ import { openLocalStore } from '../store/local/store'
 import type { RepositoryEvent } from '../events/repository'
 
 const mkdtemp = ownTempDirectories(afterEach)
+const mkdtempForFile = ownTempDirectories(afterAll)
+
+let seed: Promise<{ root: string; layers: string }> | undefined
+/** Prepares the unmodified distribution once per file and copies it into
+ * `destination`, plus the dependency layer into `repo`'s runtime cache so the
+ * launcher's own preparation reuses it, as a per-test preparation would. */
+async function seedInstallation(repo: string, destination: string): Promise<void> {
+  seed ??= (async () => {
+    const checkout = join(await mkdtempForFile(join(tmpdir(), 'ab-hot-upgrade-seed-')), 'checkout')
+    await mkdir(checkout)
+    const prepared = await prepareRuntime(distributionRoot(), checkout)
+    releasePreparedRuntime(prepared.root)
+    return { root: prepared.root, layers: join(checkout, '.autobuild/runtime/layers') }
+  })()
+  const { root, layers } = await seed
+  await cp(root, destination, { recursive: true, verbatimSymlinks: true })
+  await cp(layers, join(repo, '.autobuild/runtime/layers'), {
+    recursive: true,
+    verbatimSymlinks: true,
+  })
+}
 
 /** Real 60 s leases make a crashed successor's authority outlive it, so the
  * restored generation waits for expiry before it can tick or re-attach. The
@@ -62,9 +83,7 @@ test('real launcher adopts two replacements of the original installation', async
     original = join(root, 'installation')
   await mkdir(repo)
   await mkdir(join(repo, 'tickets/ready'), { recursive: true })
-  const seed = await prepareRuntime(distributionRoot(), repo)
-  await cp(seed.root, original, { recursive: true, verbatimSymlinks: true })
-  releasePreparedRuntime(seed.root)
+  await seedInstallation(repo, original)
   const manifest = JSON.parse(await readFile(join(original, 'package.json'), 'utf8'))
   const replace = async (version: string) =>
     writeFile(join(original, 'package.json'), JSON.stringify({ ...manifest, version }))
@@ -225,9 +244,7 @@ test('real source launcher observes excluded commits and adopts same-version sou
   const repo = join(root, 'repo'),
     editor = join(root, 'editor')
   await mkdir(repo)
-  const seed = await prepareRuntime(distributionRoot(), repo)
-  await cp(seed.root, repo, { recursive: true, verbatimSymlinks: true })
-  releasePreparedRuntime(seed.root)
+  await seedInstallation(repo, repo)
   const sourceManifest = JSON.parse(
     await readFile(join(distributionRoot(), 'package.json'), 'utf8'),
   )
@@ -480,9 +497,7 @@ for (const crashed of process.platform === 'linux' ? [false, true, 'successor'] 
       original = join(root, 'installation')
     await mkdir(repo)
     await mkdir(join(repo, 'tickets/ready'), { recursive: true })
-    const seed = await prepareRuntime(distributionRoot(), repo)
-    await cp(seed.root, original, { recursive: true, verbatimSymlinks: true })
-    releasePreparedRuntime(seed.root)
+    await seedInstallation(repo, original)
     const manifest = JSON.parse(await readFile(join(original, 'package.json'), 'utf8'))
     await writeFile(
       join(original, 'package.json'),
@@ -667,9 +682,7 @@ for (const scenario of ['immediate', 'phases', 'legacy', 'expired-reader'])
     const repo = join(root, 'repo'),
       original = join(root, 'installation')
     await mkdir(join(repo, 'tickets/ready'), { recursive: true })
-    const seed = await prepareRuntime(distributionRoot(), repo)
-    await cp(seed.root, original, { recursive: true, verbatimSymlinks: true })
-    releasePreparedRuntime(seed.root)
+    await seedInstallation(repo, original)
     const manifest = JSON.parse(await readFile(join(original, 'package.json'), 'utf8'))
     const replace = (version: string) =>
       writeFile(join(original, 'package.json'), JSON.stringify({ ...manifest, version }))
