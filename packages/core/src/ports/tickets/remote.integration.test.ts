@@ -40,6 +40,7 @@ import {
   type HostedTicketPolicy,
 } from './remote-protocol'
 import { HostedTicketSource, hostedTicketPolicy, type HostedTicketFetch } from './remote'
+import type { TicketSource } from '../types'
 import { ticketsSchema } from '../../config/schema'
 
 // ── The fake fetch ───────────────────────────────────────────────────────────
@@ -582,7 +583,7 @@ test('a service predating the roles is named only when the policy maps one', asy
 
 test('hosted priority: urgent is refused before any request and normal sends nothing', async () => {
   const { source, calls } = makeSource([{ body: OK }, { body: TICKET }])
-  expect(source.priority).toBeUndefined()
+  expect((source as TicketSource).priority).toBeUndefined()
   const urgent = await rejectionOf(
     source.create({ title: 'Hotfix', body: 'spec', priority: 'urgent' }),
   )
