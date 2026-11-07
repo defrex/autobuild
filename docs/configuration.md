@@ -1761,41 +1761,13 @@ Cross-field validation rejects:
 selectors are validated even though the mandatory step will not use them for
 applicability.
 
-In node `verify:*` context, `nodeVerification` in the manifest identifies the frozen
-`range`, `indexPath`, `contributions`, `handPushedCommits` and `unattributedCommits`. Each contribution
-has `build`, its stored `ticket` identity at preparation, `spec: {kind: 'spec', rev}`,
-`specPath` and `commits`. The JSON index repeats this metadata and adds the
-exhaustive ordered `commits: [{sha, build?}]` mapping. Paths are workspace-relative
-and reflect scratch allocation, including legacy tracked-file collisions.
-Contribution specs normally live at `$AB_CONTEXT_DIR/contributions/<build>/spec.md`; the index
-normally lives at `$AB_CONTEXT_DIR/node-verification.json`. These files are marked `derived`
-in `materialized`, with their source build and revision recorded in the metadata.
-
-Membership comes from build identity trailers on every commit reachable in the
-frozen parent-to-head range, including earlier cycles and merge side history.
-The dispatcher gathers contributor material with repository authority before
-launching verification. Specs use the event-authorized revision at preparation,
-never an unsanctioned latest deposit or mutable ticket body. Unknown identities,
-ambiguous or invalid trailers, and missing source data prevent preparation.
-A versioned node-owned `node-verification-context` artifact is deposited atomically
-with `integration.prepared`, which cites its exact revision. Hydration reads that
-citation and validates the prepared input's cycle and range without contributor
-reads or Git provenance discovery; session and build scope permissions remain
-unchanged. Concurrent verifiers and resumed sessions share the frozen inputs;
-a new cycle collects fresh contributor identities and specs. Missing, corrupt or
-mismatched prepared inputs fail hydration without publishing a manifest.
-Historical agent cycles without a citation require a new prepared cycle;
-check-only cycles require no contributor input. Commits without a build trailer are
-listed as unattributed, a mechanical absence of a trailer rather than an authorization verdict.
-`handPushedCommits: [{sha, originalSha, message}]` identifies node-owned hand-pushed
-commits in the frozen range. Ownership uses the durable first-parent contribution
-boundary; inherited and merge-side history are not automatically owned. Confirmed
-rewrite aliases preserve original identity, and `message` is the full commit message.
-These messages express maintainer-authorized intent: judge quality and consistency;
-never fail these commits solely for lacking a covering spec.
-Other node changes are authorized when the node spec or the spec of the contribution
-that introduced it covers it; use the commit mapping to find that spec.
-Leaf verification omits node provenance.
+Agent verify steps on a node receive `nodeVerification` in their context
+manifest: the frozen range, contribution specs at their event-authorized
+revisions, an exhaustive commit provenance index, and owned hand-pushed commits.
+The dispatcher prepares these inputs once per integration cycle; leaf
+verification omits them. See
+[node verification context](integration-tree.md#node-verification-context)
+for the complete field list, authorization rule, and failure behavior.
 
 ### Role routing for an agent verify step
 
