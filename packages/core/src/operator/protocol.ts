@@ -1,11 +1,18 @@
 import { z } from 'zod'
 import { issueLinksInputSchema } from '../ports/tickets/issue-links'
 import { TICKET_MOVE_ROLES } from '../ports/tickets/lifecycle'
+import { ticketPrioritySchema } from '../ports/tickets/priority'
 
 const issueLinksField = issueLinksInputSchema
   .optional()
   .describe(
     'Forge issues this ticket addresses: {issue, intent?}; intent "closes" (default) or "refs" for partial work. On update, a complete replacement; [] clears.',
+  )
+
+const priorityField = ticketPrioritySchema
+  .optional()
+  .describe(
+    'Dispatch class: "urgent" is claimed before normal ready work (never preempting a running build); "normal" (the default) removes urgency. Sources that cannot store priority refuse urgent.',
   )
 
 export const buildListScopeSchema = z.enum(['active', 'queued', 'all'])
@@ -65,6 +72,7 @@ export const ticketCreateRequestSchema = z.strictObject({
   state: z.string().min(1).optional(),
   blockedBy: z.array(z.string().min(1)).optional(),
   issueLinks: issueLinksField,
+  priority: priorityField,
 })
 const expectedRevisionSchema = z
   .string()
@@ -79,6 +87,7 @@ export const ticketUpdateRequestSchema = z
     body: z.string().optional(),
     labels: z.array(z.string()).optional(),
     issueLinks: issueLinksField,
+    priority: priorityField,
   })
   .refine(
     (value) =>
@@ -86,6 +95,7 @@ export const ticketUpdateRequestSchema = z
       value.body !== undefined ||
       value.labels !== undefined ||
       value.issueLinks !== undefined ||
+      value.priority !== undefined ||
       value.kind !== undefined ||
       value.target !== undefined,
     'update must name at least one field',

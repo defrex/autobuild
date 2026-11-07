@@ -48,7 +48,7 @@ A ticket is claimed when it passes every gate:
 - **Blockers.** Every dependency is done.
 - **Destination.** Its target (`main` or an integration node) accepts new work.
 
-Others stay queued. See [Tickets and specs](tickets.md) for grooming and [Intake and harvest](intake.md) for proposed work.
+Others stay queued. Urgent tickets are claimed before normal ones, each in the source's order; priority never preempts a running build. See [Tickets and specs](tickets.md) for grooming and [Intake and harvest](intake.md) for proposed work.
 
 Each build gets its own workspace (local git worktree or remote sandbox) and a build-runner that owns its pipeline. Capacity caps concurrency: a work build holds a slot while it runs; an integration node holds one only while it verifies, not while collecting children. See [the integration tree](integration-overview.md).
 

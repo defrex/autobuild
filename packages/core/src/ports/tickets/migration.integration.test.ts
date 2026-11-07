@@ -572,3 +572,27 @@ test('issue links survive export and import, and a target without them refuses f
   )
   expect((await plain.listAll()).tickets).toHaveLength(0)
 })
+
+test('urgent priority survives export and import, and a target without it refuses first', async () => {
+  const source = new FileTicketSource({ dir: join(root, 'priority-source') })
+  await source.create(
+    { title: 'Urgent', body: 'Body', priority: 'urgent' },
+    { requestedId: 'urgent' },
+  )
+  await source.create({ title: 'Normal', body: 'Body' }, { requestedId: 'normal' })
+  const dir = join(root, 'priority-export')
+  await exportTickets({ source, dir, repo: 'repo' })
+  const target = new FileTicketSource({ dir: join(root, 'priority-target') })
+  await importTickets({ source: target, dir, repo: 'repo' })
+  expect((await target.get('urgent'))?.priority).toBe('urgent')
+  expect('priority' in (await target.get('normal'))!).toBe(false)
+
+  const plain = new FileTicketSource({ dir: join(root, 'priority-unsupported') })
+  const unsupported = Object.assign(Object.create(plain) as FileTicketSource, {
+    priority: false,
+  })
+  await expect(importTickets({ source: unsupported, dir, repo: 'repo' })).rejects.toThrow(
+    'cannot store ticket priority',
+  )
+  expect((await plain.listAll()).tickets).toHaveLength(0)
+})

@@ -2346,6 +2346,13 @@ signals (telemetry, observations)
    → build → PR → merge
 ```
 
+**Intake order.** When a slot is free, dispatch takes ready candidates urgent
+first, then normal, each class in the source's listing order (see Ticket
+priority in §13). Every admission gate is unchanged — blockers, labels,
+creation holds, capacity, intake off and repository pause — so a blocked urgent
+ticket never holds back normal work. Priority never preempts: an urgent ticket
+does not stop, pause or displace a running build.
+
 Additional scheduled ingesters such as `ingest:sentry` remain an open design
 thread and have no shipped config surface. Observation harvest is
 pressure-driven: on the existing one-pass scan of repository build streams, the
@@ -2543,6 +2550,19 @@ them, including an empty set, with a typed error naming the source, before
 anything is written; it never drops them. Writes that name no links are
 unaffected. `ab ticket create` and `update` take `--issues N[:refs],...`;
 operator and MCP ticket requests take `issueLinks`.
+
+**Ticket priority.** A ticket's priority is `urgent` or `normal`; absent means
+normal. Urgent ready work is claimed before normal ready work (§12) and nothing
+else changes. Sources declare support. The file source stores
+`priority = "urgent"` in its frontmatter, writes no key for normal, and covers
+urgent priority in its revisions; the in-memory fake behaves the same way.
+The hosted and Linear sources do not store priority, nor do plugins without
+the capability: they read every ticket as normal and refuse a create or
+update naming `urgent` with a typed error naming the source, before anything is
+written. Naming `normal` on such a source is a successful no-op. `ab ticket
+create` and `update` take `--priority urgent|normal`; operator and MCP ticket
+requests take `priority`; JSON ticket output always names it. Harvest files
+every proposal normal; grooming marks one urgent.
 
 A build freezes its ticket's links into `build.created` when it claims the
 ticket, from the same sample as the body. Later ticket edits and spec revisions
@@ -4445,15 +4465,15 @@ revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
-kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
+kind, target, id, blockers, issue links, priority, creation key and reference comments are read-only. It saves only
 changed fields with the opening revision. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links. Reverting identical
-content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links and urgent priority.
+Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
 cover structured comments and portable attachments. Legacy file comments change

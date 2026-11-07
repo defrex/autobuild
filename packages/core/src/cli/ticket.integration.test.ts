@@ -852,7 +852,7 @@ describe('abTicketShow', () => {
         json,
         stdout: (line) => out.push(line),
       })
-      if (json) expect(JSON.parse(out[0]!)).toEqual({ ...stored, assets: [] })
+      if (json) expect(JSON.parse(out[0]!)).toEqual({ ...stored, priority: 'normal', assets: [] })
       else {
         expect(out.at(-1)).toBe(stored?.body)
         expect(out.some((line) => line.startsWith('Comment '))).toBe(false)
@@ -885,6 +885,7 @@ describe('abTicketShow', () => {
         expect(JSON.parse(out[0]!)).toEqual({
           ...ticket,
           kind: 'work',
+          priority: 'normal',
           assets: [],
           blockers: [{ id: 'AUT-0', exists: false, resolved: false, rejected: false }],
         })
@@ -933,6 +934,7 @@ describe('abTicketShow', () => {
     expect(JSON.parse(out.join('\n'))).toEqual({
       ...ticket,
       kind: 'work',
+      priority: 'normal',
       revision: expect.any(String),
       assets: [],
       blockers: [{ id: 'AUT-0', exists: false, resolved: false, rejected: false }],
@@ -1344,6 +1346,148 @@ describe('runCli — ticket routing', () => {
     ).toBe(1)
     expect(err.join('\n')).toContain('journal ticket source cannot store issue links')
     expect(err.join('\n')).not.toContain('create reached the source')
+  })
+
+  test('--priority marks urgent on create and update, and JSON always names priority', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, out } = sessionlessDeps()
+    expect(
+      await runCli(
+        ['ticket', 'create', 'Hotfix', '--body', bodyFile, '--priority', 'urgent'],
+        deps,
+      ),
+    ).toBe(0)
+    expect(out.at(-1)).toBe('ticket created: file:file-1 (triage) — urgent')
+    expect(await runCli(['ticket', 'create', 'Routine', '--body', bodyFile], deps)).toBe(0)
+
+    expect(await runCli(['ticket', 'list', '--state', 'triage'], deps)).toBe(0)
+    expect(out.at(-2)).toBe('file:file-1 (triage) — urgent — Hotfix')
+    expect(out.at(-1)).toBe('file:file-2 (triage) — Routine')
+    expect(await runCli(['ticket', 'list', '--state', 'triage', '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket[]).map((ticket) => ticket.priority)).toEqual([
+      'urgent',
+      'normal',
+    ])
+
+    expect(await runCli(['ticket', 'show', 'file-2'], deps)).toBe(0)
+    expect(out).toContain('  priority: normal')
+    expect(await runCli(['ticket', 'show', 'file-2', '--json'], deps)).toBe(0)
+    const normal = JSON.parse(out.at(-1)!) as Ticket
+    expect(normal.priority).toBe('normal')
+
+    expect(
+      await runCli(
+        [
+          'ticket',
+          'update',
+          'file-2',
+          '--priority',
+          'urgent',
+          '--expected-revision',
+          normal.revision,
+          '--json',
+        ],
+        deps,
+      ),
+    ).toBe(0)
+    const urgent = JSON.parse(out.at(-1)!) as Ticket
+    expect(urgent.priority).toBe('urgent')
+    expect(urgent.revision).not.toBe(normal.revision)
+    expect(await readFile(join(tmp, 'tickets', 'triage', 'file-2.md'), 'utf8')).toContain(
+      'priority = "urgent"',
+    )
+
+    const { deps: stale, err } = sessionlessDeps()
+    expect(
+      await runCli(
+        [
+          'ticket',
+          'update',
+          'file-2',
+          '--priority',
+          'normal',
+          '--expected-revision',
+          normal.revision,
+        ],
+        stale,
+      ),
+    ).toBe(1)
+    expect(err.join('\n')).toContain('changed: expected revision')
+    expect(await runCli(['ticket', 'show', 'file-2', '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).priority).toBe('urgent')
+
+    expect(
+      await runCli(['ticket', 'update', 'file-2', '--priority', 'normal', '--json'], deps),
+    ).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).priority).toBe('normal')
+    expect(await readFile(join(tmp, 'tickets', 'triage', 'file-2.md'), 'utf8')).not.toContain(
+      'priority =',
+    )
+  })
+
+  test('an invalid --priority exits nonzero naming the flag', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, err } = sessionlessDeps()
+    expect(
+      await runCli(['ticket', 'create', 'Hotfix', '--body', bodyFile, '--priority', 'high'], deps),
+    ).toBe(1)
+    expect(err.join('\n')).toContain('--priority: expected urgent or normal')
+    expect(existsSync(join(tmp, 'tickets', 'triage', 'file-1.md'))).toBe(false)
+  })
+
+  test('a source without priority refuses urgent and treats normal as a no-op', async () => {
+    await writeFile(
+      join(tmp, 'tickets-plugin.ts'),
+      `
+        const ticket = {
+          ref: { source: 'journal', id: 'J-1', title: 'Existing' },
+          revision: 'r1', title: 'Existing', body: 'body', state: 'Ready', resolved: false, labels: [],
+        }
+        const source = {
+          name: 'journal',
+          listReady: async () => ({ tickets: [ticket], diagnostics: [] }),
+          get: async (id) => (id === 'J-1' ? { ...ticket } : null),
+          claim: async () => true,
+          comment: async () => {},
+          transition: async () => {},
+          create: async () => { throw new Error('create reached the source') },
+          update: async () => { throw new Error('update reached the source') },
+          addBlocker: async () => {},
+          removeBlocker: async () => {},
+          dependencyStates: async (ids) => ids.map((id) => ({ id, exists: false, resolved: false, blockedBy: [] })),
+        }
+        export default {
+          name: 'journal-plugin',
+          apiVersion: '^1.1.0',
+          ticketSources: { journal: { factory: async () => source } },
+        }
+      `,
+    )
+    await writeRepo(
+      'plugins = ["./tickets-plugin.ts"]\n\n[tickets]\nsource = "journal"\nreadyState = "Ready"\n',
+    )
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, out, err } = sessionlessDeps()
+    expect(
+      await runCli(
+        ['ticket', 'create', 'Hotfix', '--body', bodyFile, '--priority', 'urgent'],
+        deps,
+      ),
+    ).toBe(1)
+    expect(err.join('\n')).toContain('journal ticket source cannot store ticket priority')
+    expect(err.join('\n')).not.toContain('reached the source')
+    expect(await runCli(['ticket', 'update', 'J-1', '--priority', 'urgent'], deps)).toBe(1)
+    expect(err.join('\n')).toContain('journal ticket source cannot store ticket priority')
+    expect(err.join('\n')).not.toContain('reached the source')
+    expect(await runCli(['ticket', 'update', 'J-1', '--priority', 'normal', '--json'], deps)).toBe(
+      0,
+    )
+    expect((JSON.parse(out.at(-1)!) as Ticket).priority).toBe('normal')
   })
 
   test('an invalid --issues item exits nonzero naming the flag', async () => {
