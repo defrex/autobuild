@@ -1613,7 +1613,11 @@ and replays individual changes. `kernel/node-restack-state.ts` reduces writer
 reservations, ordered receipts, conflicts, publication intent, confirmed effects,
 and inventory. `kernel/node-restack-transaction.ts` retains replay objects and
 archives before expected-head publication. The dispatcher polls all open nodes,
-including empty nodes, and advances clean cascades without agent calls. Only the
+including empty nodes, to observe parent movement durably, but replays a node only
+when it has demand: before a complete nonempty node verifies, before merge if its
+parent moved, for queued dependency presence, on `ab restack <node>`, or after
+accepted re-parenting. A clean replay needs no agent call. A restacked node does
+not restack its descendants: each nested node needs its own demand. Only the
 active conflicted item attaches a reconcile runner, using source-build artifacts
 materialized by the dispatcher into the integration owner's store scope.
 
@@ -1627,7 +1631,7 @@ confirmed, revalidated request with `node.parent-accepted`. Provider edits use
 the same validation; refusals are deduplicated by revision, target and reason.
 Uncertain writes recover by source readback rather than replaying a caller patch.
 Tracker observation errors are contained within that observation, preserving
-ordinary cascade and PR handling against durable ancestry. Already accepted moves
+ordinary demand-driven restack and PR handling against durable ancestry. Already accepted moves
 complete their PR effects without another tracker read. Rejection comparisons use
 revision, target and reason fields so JSONB key ordering cannot defeat deduplication;
 `node.parent-rejection-cleared` removes a current refusal after correction while
@@ -1643,8 +1647,11 @@ PR through the optional `Forge.retargetPr` capability, inspects its acknowledged
 base/head, records a receipt and completes the parent operation. GitHub uses the
 [documented PR update endpoint](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request)
 with a branch-name `base`. Publication and PR acknowledgement retry separately;
-terminal human PR changes keep their ordinary handling. Children retain the moved
-node's identity and branch, so the usual target observations cascade the move.
+terminal human PR changes keep their ordinary handling. Children keep targeting
+the moved node's identity and branch and observe its new head, but re-parenting a
+node alone does not restack its descendants; each descendant catches up only
+through its own demand, such as verification, merge, queued dependency presence,
+or `ab restack <node>`.
 
 In origin mode, node plumbing uses the forge's trusted `kernelExec` transport.
 The GitHub adapter supplies its token through subprocess-only Git configuration,
