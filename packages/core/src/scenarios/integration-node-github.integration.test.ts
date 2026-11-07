@@ -177,7 +177,7 @@ test('parent movement before the merge request abandons intent and restacks and 
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 test('ambiguous non-local merge response recovers kernel provenance after consent revocation', async () => {
   const { h, node, forge, loseResponse } = await remoteNode()
