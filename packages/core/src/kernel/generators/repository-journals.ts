@@ -285,11 +285,14 @@ export function randomStatusJournal(seed: number, length: number): RepositoryEve
         type: 'dispatcher.operator-reported',
         payload: { run, level: pick(rand, ['info', 'warning']), message: 'm' },
       }),
-      () => ({ type: 'dispatcher.upgrade-available', payload: { run, version: '1.0.0' } }),
-      () => ({
-        type: 'dispatcher.summary-handoff',
-        payload: { run, slug: 'b', status: 'verifying' },
-      }),
+      // Shares a slot deterministically (no rand draw) so the sequence holds.
+      () =>
+        i % 5 !== 0
+          ? { type: 'dispatcher.upgrade-available', payload: { run, version: '1.0.0' } }
+          : {
+              type: 'dispatcher.summary-handoff',
+              payload: { run, slug: 'b', status: 'verifying' },
+            },
       () => ({
         type: 'dispatcher.run-stopped',
         payload: { run, outcome: pick(rand, ['normal', 'abnormal']) },
