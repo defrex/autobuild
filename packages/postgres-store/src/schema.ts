@@ -917,7 +917,7 @@ export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL)
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
  * remain valid while the hosted ticket tables are added. */
-export const TICKET_SCHEMA_VERSION = 7
+export const TICKET_SCHEMA_VERSION = 8
 export const TICKET_SCHEMA_V1_DDL = `
 CREATE TABLE IF NOT EXISTS ab_ticket_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -997,7 +997,18 @@ export const TICKET_SCHEMA_V6_CHECKSUM = new Bun.CryptoHasher('sha256')
 const TICKET_ISSUE_LINKS_DELTA = `
 ALTER TABLE ab_tickets ADD COLUMN issue_links jsonb NOT NULL DEFAULT '[]'::jsonb;
 `
-export const TICKET_SCHEMA_DDL = TICKET_SCHEMA_V6_DDL + TICKET_ISSUE_LINKS_DELTA
+export const TICKET_SCHEMA_V7_DDL = TICKET_SCHEMA_V6_DDL + TICKET_ISSUE_LINKS_DELTA
+export const TICKET_SCHEMA_V7_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(TICKET_SCHEMA_V7_DDL)
+  .digest('hex')
+
+/** Ticket priority: `urgent` or `normal`. Additive; existing rows read normal
+ * and keep their revisions. */
+const TICKET_PRIORITY_DELTA = `
+ALTER TABLE ab_tickets ADD COLUMN priority text NOT NULL DEFAULT 'normal';
+ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_priority_check CHECK (priority IN ('urgent', 'normal'));
+`
+export const TICKET_SCHEMA_DDL = TICKET_SCHEMA_V7_DDL + TICKET_PRIORITY_DELTA
 export const TICKET_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_DDL)
   .digest('hex')
@@ -1556,6 +1567,7 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       ['kind', 'text', true],
       ['target_id', 'text', false],
       ['issue_links', 'jsonb', true],
+      ['priority', 'text', true],
     ],
     ab_ticket_counters: [
       ['repo', 'text', true],
@@ -1630,6 +1642,7 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       "CHECK ((kind = ANY (ARRAY['work'::text, 'node'::text])))",
       'FOREIGN KEY (repo, target_id) REFERENCES ab_tickets(repo, id)',
       'CHECK ((target_id <> id))',
+      "CHECK ((priority = ANY (ARRAY['urgent'::text, 'normal'::text])))",
     ],
     ab_ticket_counters: ['PRIMARY KEY (repo)', 'CHECK ((last_number >= 0))'],
     ab_ticket_comments: [
@@ -1953,6 +1966,7 @@ export async function migratePostgres(
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
         await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION},
           checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
@@ -1964,6 +1978,7 @@ export async function migratePostgres(
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
         await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1973,6 +1988,7 @@ export async function migratePostgres(
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
         await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1982,6 +1998,7 @@ export async function migratePostgres(
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
         await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1990,6 +2007,7 @@ export async function migratePostgres(
       ) {
         await tx.unsafe(TICKET_TREE_DELTA)
         await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1997,6 +2015,14 @@ export async function migratePostgres(
         ticketMarker.checksum === TICKET_SCHEMA_V6_CHECKSUM
       ) {
         await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
+        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
+      } else if (
+        ticketMarker &&
+        Number(ticketMarker.version) === 7 &&
+        ticketMarker.checksum === TICKET_SCHEMA_V7_CHECKSUM
+      ) {
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (ticketMarker) {
         if (Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION) {
@@ -2015,6 +2041,7 @@ export async function migratePostgres(
         await migrateReadableTickets(tx as SQL, options.openBlobs)
         await tx.unsafe(TICKET_TREE_DELTA)
         await tx.unsafe(TICKET_ISSUE_LINKS_DELTA)
+        await tx.unsafe(TICKET_PRIORITY_DELTA)
         await tx`INSERT INTO ab_ticket_schema_migrations
           (singleton, version, checksum, applied_at)
           VALUES (true, ${TICKET_SCHEMA_VERSION}, ${TICKET_SCHEMA_CHECKSUM}, ${new Date().toISOString()})`

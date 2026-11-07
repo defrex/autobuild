@@ -7,7 +7,6 @@ import {
 } from '@defrex/autobuild/hosted-tickets'
 import { seedTicketStates, lockTicketStates, readTicketStateCounts } from './ticket-states'
 import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
-import { refuseUnsupportedPriority } from '@defrex/autobuild/hosted-tickets'
 import { SQL } from 'bun'
 import { normalizeIssueLinks } from '@defrex/autobuild/plugin-sdk'
 import type {
@@ -98,6 +97,7 @@ export class PostgresTicketSource implements TicketSource {
   readonly name = 'database'
   readonly integrationTree = true
   readonly issueLinks = true
+  readonly priority = true
   private readonly teamKey: string
   private readonly repo: string
   private readonly claimedState: string
@@ -229,6 +229,7 @@ export class PostgresTicketSource implements TicketSource {
       labels: strings(row.labels),
       ...(blockedBy.length > 0 ? { blockedBy } : {}),
       ...(issueLinks.length > 0 ? { issueLinks } : {}),
+      ...(row.priority === 'urgent' ? { priority: 'urgent' as const } : {}),
     }
   }
 
@@ -327,13 +328,14 @@ export class PostgresTicketSource implements TicketSource {
       if (criteria.state === undefined) await this.seed(q)
       const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
       // Project targets in the listing statement to avoid per-record lookups.
+      // Urgent first, each class in filing order, in the same statement.
       const rows: Row[] = await q`SELECT *, revision::text AS revision,
         (SELECT t.readable_id FROM ab_tickets t WHERE t.repo = ab_tickets.repo AND t.id = ab_tickets.target_id) AS target_readable_id,
         ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers FROM ab_tickets
         WHERE repo = ${this.repo}
           AND (${state}::text IS NULL OR state = ${state})
           AND labels @> ${q.array(labels, 'text')}
-        ORDER BY created_at, id`
+        ORDER BY (priority = 'urgent') DESC, created_at, id`
       // Sequential, not `Promise.all`: every statement of a body runs on one
       // pinned connection, and failure attribution (`Attempt.inFlight` in
       // `./retry`) requires the statements to be ordered.
@@ -398,7 +400,6 @@ export class PostgresTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
-    refuseUnsupportedPriority(this, draft)
     if (!draft.title.trim()) throw new Error('database ticket create: title must be nonblank')
     if (!draft.body.trim() && options.requestedId === undefined)
       throw new Error('database ticket create: body must be nonblank')
@@ -434,10 +435,10 @@ export class PostgresTicketSource implements TicketSource {
       const id = `ticket-${crypto.randomUUID()}`
       const now = new Date().toISOString()
       const inserted: Row[] = await q`INSERT INTO ab_tickets
-        (repo, id, readable_id, ticket_number, creation_key, title, body, state, labels, created_at, updated_at, kind, target_id, issue_links)
+        (repo, id, readable_id, ticket_number, creation_key, title, body, state, labels, created_at, updated_at, kind, target_id, issue_links, priority)
         VALUES (${this.repo}, ${id}, ${readable}, ${number}::bigint, ${options.idempotencyKey ?? null}, ${draft.title}, ${draft.body},
           ${state}, ${q.array(draft.labels ?? [], 'text')}, ${now}, ${now}, ${draft.kind ?? 'work'}, ${target},
-          ${JSON.stringify(normalizeIssueLinks(draft.issueLinks ?? []))}::jsonb)
+          ${JSON.stringify(normalizeIssueLinks(draft.issueLinks ?? []))}::jsonb, ${draft.priority ?? 'normal'})
         ON CONFLICT (repo, creation_key) DO NOTHING RETURNING *, revision::text AS revision`
       let row = inserted[0]
       if (!row && options.idempotencyKey !== undefined) {
@@ -477,8 +478,6 @@ export class PostgresTicketSource implements TicketSource {
 
   private async mutate(id: string, mutation: TicketMutation, expected?: string): Promise<void> {
     const patch = mutation.kind === 'update' ? validateTicketUpdate(mutation.patch) : undefined
-    // Priority is not stored here; urgent is refused and normal changes nothing.
-    if (patch) refuseUnsupportedPriority(this, patch)
     await this.retry.tx(this.sql, async (q) => {
       if (patch && (patch.kind !== undefined || patch.target !== undefined)) await this.graphLock(q)
       const state = mutation.kind === 'transition' ? await this.state(q, mutation.state) : undefined
@@ -496,6 +495,8 @@ export class PostgresTicketSource implements TicketSource {
         const labels = patch.labels ?? strings(row.labels)
         const stored = issueLinksOf(row)
         const links = patch.issueLinks ?? stored
+        const storedPriority = row.priority === 'urgent' ? 'urgent' : 'normal'
+        const priority = patch.priority ?? storedPriority
         changed =
           kind !== row.kind ||
           target !== row.target_id ||
@@ -503,9 +504,10 @@ export class PostgresTicketSource implements TicketSource {
           body !== row.body ||
           JSON.stringify([...new Set(labels)].sort()) !==
             JSON.stringify([...new Set(strings(row.labels))].sort()) ||
-          JSON.stringify(links) !== JSON.stringify(stored)
+          JSON.stringify(links) !== JSON.stringify(stored) ||
+          priority !== storedPriority
         if (changed)
-          await q`UPDATE ab_tickets SET kind = ${kind}, target_id = ${target}, title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')}, issue_links = ${JSON.stringify(links)}::jsonb WHERE repo = ${this.repo} AND id = ${storageId}`
+          await q`UPDATE ab_tickets SET kind = ${kind}, target_id = ${target}, title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')}, issue_links = ${JSON.stringify(links)}::jsonb, priority = ${priority} WHERE repo = ${this.repo} AND id = ${storageId}`
       } else if (mutation.kind === 'transition') {
         changed = row.state !== state
         if (changed)
