@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { buildFiles } from '../packages/website/src/build'
 import { SEAMS } from '../packages/website/src/seams'
 import {
@@ -20,7 +20,34 @@ import {
 } from './website-capture'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { stat } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
+
+// Capture output must live under .ab/; remove exactly what this process created.
+const ownedOutput = new Set<string>()
+const pendingCaptures = new Set<Promise<unknown>>()
+let outputClosed = false
+const scratchDir = (name: string) => join(import.meta.dir, '..', '.ab', `${name}-${process.pid}`)
+async function capture(options: Parameters<typeof captureWebsite>[0] & { outputDir: string }) {
+  if (outputClosed) throw new Error(`capture after cleanup: ${options.outputDir}`)
+  ownedOutput.add(options.outputDir)
+  const pending = captureWebsite(options)
+  pendingCaptures.add(pending)
+  try {
+    return await pending
+  } finally {
+    pendingCaptures.delete(pending)
+  }
+}
+afterAll(async () => {
+  outputClosed = true
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    Promise.allSettled([...pendingCaptures]),
+    new Promise((resolve) => (timer = setTimeout(resolve, 30_000))),
+  ])
+  clearTimeout(timer)
+  await Promise.all([...ownedOutput].map((dir) => rm(dir, { recursive: true, force: true })))
+}, 60_000)
 
 const probe = (over: Partial<Probe> = {}): Probe => ({
   reducedMotion: true,
@@ -207,9 +234,9 @@ describe('website capture', () => {
   test.skipIf(!chromium)(
     'captures four real PNGs with the stylesheet loaded and the remote state applied',
     async () => {
-      const dir = join(import.meta.dir, '..', '.ab', `website-capture-test-${process.pid}`)
+      const dir = scratchDir('website-capture-test')
       const frames = discoverFrames({ ...(await buildFiles()) }).filter((f) => f.kind === 'landing')
-      await captureWebsite({ chromium, outputDir: dir, frames, includeMotionSamples: false })
+      await capture({ chromium, outputDir: dir, frames, includeMotionSamples: false })
       const inventory: { frame: WebsiteFrame; probe: Probe }[] = await Bun.file(
         join(dir, 'inventory.json'),
       ).json()
@@ -312,8 +339,8 @@ window.__websiteCapture = { sequence: { duration: 100, async seek(timeMs, {still
 }}};</script>`
     const files = fixtureFiles(animation)
     const frames = discoverFrames(files).filter((f) => f.kind === 'docs')
-    const dir = join(import.meta.dir, '..', '.ab', `website-fixtures-${process.pid}`)
-    await captureWebsite({ files, frames, outputDir: dir })
+    const dir = scratchDir('website-fixtures')
+    await capture({ files, frames, outputDir: dir })
     const inventory = await Bun.file(join(dir, 'inventory.json')).json()
     expect(inventory).toHaveLength(10)
     for (const r of inventory)
@@ -350,7 +377,7 @@ window.__websiteCapture = { sequence: { duration: 100, async seek(timeMs, {still
     ]) {
       const broken = fixtureFiles(extra)
       await expect(
-        captureWebsite({
+        capture({
           files: broken,
           frames: discoverFrames(broken).filter((f) => f.kind === 'docs'),
           outputDir: `${dir}-${name}`,
@@ -544,7 +571,7 @@ test('new Markdown page flows through output, navigation, pager and both real ca
   const { mkdtemp, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const root = await mkdtemp(join(tmpdir(), 'capture-markdown-'))
-  const outputDir = join(import.meta.dir, '../.ab', `markdown-capture-${process.pid}`)
+  const outputDir = scratchDir('markdown-capture')
   try {
     const page = (title: string, order: number) =>
       `---\ntitle: ${title}\ngroup: guides\norder: ${order}\ndescription: A generated page\n---\n# ${title}\n\nFirst paragraph.\n\n## Section\n\nMore words.\n`
@@ -565,7 +592,7 @@ test('new Markdown page flows through output, navigation, pager and both real ca
     expect(added.map((frame) => frame.width)).toEqual([1440, 390])
     const chromium = chromiumBinary()
     if (chromium) {
-      await captureWebsite({
+      await capture({
         chromium,
         outputDir,
         files: { ...files },
@@ -747,9 +774,9 @@ describe('frame tiling under the artifact ceiling', () => {
       const files = fixtureFiles(blocks)
       const docs = discoverFrames(files).filter((f) => f.kind === 'docs' && f.width === 1440)
       const frames = [docs.find((f) => f.page === 'docs/index.html')!]
-      const dir = join(import.meta.dir, '..', '.ab', `website-tiles-${process.pid}`)
+      const dir = scratchDir('website-tiles')
       const max = 40_000
-      await captureWebsite({
+      await capture({
         files,
         frames,
         outputDir: dir,
@@ -776,7 +803,7 @@ describe('frame tiling under the artifact ceiling', () => {
       for (const name of (await readdir(dir)).filter((n) => n.endsWith('.png')))
         expect((await stat(join(dir, name))).size).toBeLessThanOrEqual(max)
 
-      await captureWebsite({
+      await capture({
         files,
         frames,
         outputDir: `${dir}-whole`,
