@@ -129,8 +129,10 @@ Before replacement the kernel publishes retained tips, displaced heads and the
 temporary change under immutable exact archive refs. Remote archives also publish
 commits present only on the remote: GitHub uses create-only Git-reference REST creation
 when the workspace lacks the commit, retaining guarded Git pushes for local objects.
-Exact remote readback confirms publication, then a depth-one fetch by the archive ref
-(without tags or configured refmap expansion) restores missing commits and verifies them
+Exact remote readback confirms publication, then a non-shallow fetch of only that exact
+archive ref (without tags, configured refmap expansion or a depth limit) restores
+missing commits and their missing ancestry, writes no shallow boundary, leaves an
+already-shallow repository's existing boundaries unchanged, and verifies the commits
 locally before returning. `restack.*` facts record
 preparation, replay, intent, archived replacement, contention and completion.
 Unpublished request/loss records alone cannot preserve objects from a released
