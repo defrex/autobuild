@@ -937,6 +937,7 @@ describe('release orchestration', () => {
     expect(skill).toContain('create `.changelog/<number>.md` exclusively')
     expect(skill).toContain('idempotent no-op')
     expect(skill).toContain('Do not modify CHANGELOG.md')
+    expect(skill).toContain('bun tools/changelog-add.ts')
   })
 })
 
