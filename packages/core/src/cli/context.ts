@@ -201,6 +201,36 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
     throw error
   }
+  // Durable, session-scoped proof that this session read its own build after
+  // the chain's latest classified failure. Written before any filesystem work.
+  const pending = events.log.readDeferrals.find(
+    (item) =>
+      item.session === env.session &&
+      item.phase === phase &&
+      item.round === round &&
+      !item.ended &&
+      !item.settled &&
+      !item.recovered,
+  )
+  if (pending) {
+    try {
+      await store.append(build, {
+        actor: KERNEL,
+        type: 'session.build-read-recovered',
+        payload: {
+          session: env.session,
+          phase,
+          round,
+          operation: 'context',
+          reason: 'own-build-read',
+          evidenceSeq: pending.evidenceSeq,
+          failureSeq: pending.lastFailureSeq,
+        },
+      })
+    } catch {
+      /* Lost evidence leaves the deferral unrecovered, which parks safely. */
+    }
+  }
   const state = events.state
 
   // Preserve legacy tracked scratch exactly while replacing disposable files.

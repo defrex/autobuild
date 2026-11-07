@@ -145,7 +145,12 @@ test('pre-deferral reader decodes the complete protocol without new values in kn
     string,
     z.ZodType
   >
-  for (const type of ['session.build-read-failed', 'phase.deferred', 'phase.deferral-escalated'])
+  for (const type of [
+    'session.build-read-failed',
+    'session.build-read-recovered',
+    'phase.deferred',
+    'phase.deferral-escalated',
+  ])
     delete oldSchemas[type]
   const payloads = [
     [
@@ -161,6 +166,18 @@ test('pre-deferral reader decodes the complete protocol without new values in kn
         operation: 'context',
         reason: 'own-build-read',
         diagnostic: 'unreadable',
+      },
+    ],
+    [
+      'session.build-read-recovered',
+      {
+        session: 's_read',
+        phase: 'plan',
+        round: 1,
+        operation: 'context',
+        reason: 'own-build-read',
+        evidenceSeq: 2,
+        failureSeq: 2,
       },
     ],
     [
@@ -209,7 +226,7 @@ test('pre-deferral reader decodes the complete protocol without new values in kn
     }
     if (i >= 1) expect(compatibilityDiagnostic(oldState)).toContain('Kernel decisions deferred')
   }
-  expect(oldState.decisiveFacts).toBe(3)
+  expect(oldState.decisiveFacts).toBe(4)
   expect(() =>
     projectPayload(oldRaise, {
       id: 'bad',

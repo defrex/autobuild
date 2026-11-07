@@ -1670,14 +1670,21 @@ facts retain the mixed-version wait gate and durable compatibility diagnostic.
 When the scoped `ab context` initial own-build read fails, the CLI best-effort
 writes `session.build-read-failed` with exact session, phase, round, operation
 `context`, reason `own-build-read`, and diagnostic. A valid terminal from that
-session wins if the agent recovers. Otherwise settlement records `phase.deferred`
+session, or from its native continuation, wins if the agent recovers; a
+continuation inherits its predecessor's pending deferral, so a chain parks at
+most once. A later successful own-build read in the same session records
+`session.build-read-recovered`, which a newer classified failure invalidates. A
+finalize post-step, which has no terminal, settles as recovered only with that
+evidence and a completed turn, and the kernel then records its
+`finalize.step-completed`. Otherwise settlement records `phase.deferred`
 and `phase.deferral-escalated`, immediately projecting ordinary blocked attention.
 The raise cites `own-build-read:<evidenceSeq>`; replay repairs either settlement
 crash gap before launching another agent. An `escalation.answered` retry or
 guidance authorizes one fresh session without resetting genuine phase failures;
 a new classified failure parks again. There are zero automatic paid retries
 after this deferral. If evidence cannot be written, ordinary recovery applies;
-agent output and `no-terminal` alone never classify a read failure.
+agent output and `no-terminal` alone never classify a read failure or settle
+one as recovered.
 
 A kernel store write rejected with HTTP 413 raises `StoreWriteTooLargeError`
 and records `phase.failed {willRetry:false}` on its first attempt, including
@@ -3151,7 +3158,7 @@ with illustrative members:
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
-| Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `phase.deferred`, `phase.deferral-escalated` |
+| Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
