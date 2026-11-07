@@ -500,6 +500,18 @@ validates, defaults intent to `closes` and sorts. Without the flag, the
 compatibility facade refuses any write naming links with
 `TicketIssueLinksUnsupported` before your methods run, and strips links from reads.
 
+## Optional priority capability
+
+An adapter opts in with `priority: true` and must persist
+`priority?: 'urgent' | 'normal'` on create, update and revision-checked update,
+return `priority: 'urgent'` on every read of an urgent ticket and omit the field
+otherwise, treat `normal` as clearing urgency, and include urgent priority in
+revisions. The dispatcher claims urgent ready tickets before normal ones, each in
+your listing order. Without the flag, every ticket reads as normal: the
+compatibility facade refuses a write naming `urgent` with
+`TicketPriorityUnsupported` before your methods run, drops a `normal` no-op
+(skipping the call when nothing else remains), and strips priority from reads.
+
 ## Optional ticket paging capability
 
 Native paging is an optional API 1.9 ticket-source capability:

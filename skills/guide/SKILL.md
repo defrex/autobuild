@@ -80,8 +80,10 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   verifiable acceptance criteria, explicit out-of-scope, and evidence — and
   dispatches. Generated work cannot leave Triage un-groomed. The dispatcher
   claims tickets that pass the `[tickets]` ready
-  gate, chooses a short immutable slug from the final conforming spec, and
-  starts builds up to the top-level `capacity` bound.
+  gate — urgent tickets first, then normal ones, each in the source's order —
+  chooses a short immutable slug from the final conforming spec, and
+  starts builds up to the top-level `capacity` bound. Priority never preempts
+  a running build.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
   after exact build-ownership readback. Unresolved attempts stay withheld and
@@ -1750,12 +1752,12 @@ The sessionless `ab ticket` namespace constructs whichever TicketSource the
 repository's `[tickets]` table selects. These forms therefore work unchanged
 with Linear and the file tracker, without provider-specific API/MCP calls:
 
-- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--json]`
+- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--json]`
   files a ticket. Without `--state`, the source uses `[tickets].createState` or
   its own default. A named state is passed through unchanged and the selected
   source validates it before creating anything. Blocker ids belong to the same
   source and are also checked before the single create call.
-- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--json]`
+- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--priority urgent|normal] [--json]`
   partially replaces editable fields. At least one editable flag is required;
   `--json` alone is not an update.
 - `ab ticket block <id> <blocker-id[,blocker-id...]> [--json]` adds one or more
@@ -1817,6 +1819,13 @@ when it claims the ticket and turns them into PR and commit keywords; see
 [issue links in builds](#issue-links-in-builds). On update `--issues` is a
 complete replacement and `--issues ''` clears it. A source that cannot store
 issue links refuses any write naming them, names itself, and writes nothing.
+`--priority urgent` makes the dispatcher claim the ticket before normal ready
+work, each class in source order; blockers and every other gate still apply,
+and it never preempts a running build. `--priority normal` (the default)
+removes urgency. The file source stores priority; hosted, Linear and plugin
+sources without the capability read every ticket as normal, refuse `urgent`
+naming themselves and writing nothing, and accept `normal` as a no-op. JSON
+ticket output always includes `priority`, and list output marks urgent tickets.
 Supplied title/body values must be
 nonblank. State is intentionally not an update field — `transition()` remains its sole owner —
 and every validation or unknown-ticket error occurs before
@@ -2932,15 +2941,15 @@ revisions rather than ignoring them.
 
 `ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
 frontmatter and a Markdown body. Only title, body and labels are editable;
-kind, target, id, blockers, issue links, creation key and reference comments are read-only. It saves only
+kind, target, id, blockers, issue links, priority, creation key and reference comments are read-only. It saves only
 changed fields with the opening revision. Unchanged or formatting-only edits
 write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links. Reverting identical
-content restores its fingerprint. File checks
+and state; file revisions also cover nonempty issue links and urgent priority.
+Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
 cover structured comments and portable attachments. Legacy file comments change

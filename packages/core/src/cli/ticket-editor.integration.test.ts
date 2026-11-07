@@ -187,7 +187,43 @@ test.each(['add', 'change'])(
             return 0
           },
         ),
-      ).rejects.toThrow('issueLinks are read-only')
+      ).rejects.toThrow('issueLinks and priority are read-only')
+      expect(source.updates).toHaveLength(0)
+    } finally {
+      if (kept) await rm(dirname(kept), { recursive: true })
+    }
+  },
+)
+
+test.each(['add', 'remove'])(
+  'editor shows priority read-only and refuses to %s urgency',
+  async (mode) => {
+    const source = new FakeTicketSource()
+    const ticket = await source.create({
+      title: 'Urgent',
+      body: 'spec',
+      ...(mode === 'remove' ? { priority: 'urgent' as const } : {}),
+    })
+    let kept = ''
+    try {
+      await expect(
+        editTicket(
+          source,
+          ticket.ref.id,
+          { EDITOR: 'editor' },
+          () => {},
+          async (_, path) => {
+            kept = path
+            let raw = await readFile(path, 'utf8')
+            if (mode === 'remove') {
+              expect(raw).toContain('priority = "urgent"')
+              raw = raw.replace('priority = "urgent"\n', '')
+            } else raw = raw.replace(/\n\+\+\+\n/, '\npriority = "urgent"\n+++\n')
+            await writeFile(path, raw)
+            return 0
+          },
+        ),
+      ).rejects.toThrow('issueLinks and priority are read-only')
       expect(source.updates).toHaveLength(0)
     } finally {
       if (kept) await rm(dirname(kept), { recursive: true })
