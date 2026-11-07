@@ -73,7 +73,7 @@ import {
 
 import type { TicketSource } from '../ports/types'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
-import { triageStateCount } from '../ports/tickets/states'
+import { boundedStateCount } from '../ports/tickets/states'
 import type { ControlTickets } from './ticket'
 
 const PAINT_MS = 250
@@ -396,8 +396,7 @@ export class DispatchFrontend {
           this.viewerTicketSource = undefined
           throw error
         }
-        if (source.countStates === undefined) return
-        const count = triageStateCount(await source.countStates([name]), name)
+        const count = await boundedStateCount(source, name)
         if (count !== undefined) this.viewerTriage = count
       } catch {
         // Display only: the header keeps its last good count, or `–`.

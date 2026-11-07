@@ -6185,39 +6185,44 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
-  /** Install a counting state-count read on the fixture's fake source, which
-   * otherwise cannot enumerate states. The file default triage name `Triage`
+  /** Install a counting bounded state-count read on the fixture's fake
+   * source, which otherwise has no state counts, plus a listing spy that a
+   * dispatcher must never call. The file default triage name `Triage`
    * resolves against the lowercase state case-insensitively. */
   function countingTriageStates(
     tickets: object,
-    fail: (call: number) => boolean = () => false,
-  ): { calls: number; counts: number } {
-    const probe = { calls: 0, counts: 0 }
+    answer: (call: number) => number = () => 3,
+  ): { counts: number; listings: number } {
+    const probe = { counts: 0, listings: 0 }
     Object.assign(tickets, {
-      // Only a viewer reads bounded counts; a dispatcher's tick never does.
-      countStates: async () => {
+      countStates: async (names: readonly string[]) => {
         probe.counts += 1
-        return [{ name: 'triage', tickets: 3 }]
+        expect(names).toEqual(['Triage'])
+        const tickets = answer(probe.counts)
+        if (tickets < 0) throw new Error('ticket states unavailable')
+        return [{ name: 'triage', tickets }]
       },
+      // A dispatcher's tick reads only bounded counts, never a listing.
       listStates: async () => {
-        probe.calls += 1
-        if (fail(probe.calls)) throw new Error('ticket states unavailable')
-        return [
-          { name: 'triage', tickets: 3 },
-          { name: 'ready', tickets: 0 },
-        ]
+        probe.listings += 1
+        return [{ name: 'triage', tickets: 9 }]
       },
     })
     return probe
   }
 
-  test('watch samples the triage count once per tick and retains it when a later read fails', async () => {
+  test('watch samples the triage count once per tick, retains it when a read fails, and recovers', async () => {
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
     const term = fakeTerminal()
     const stop = new AbortController()
-    const probe = countingTriageStates(fx.tickets, (call) => call === 2)
+    // Tick 1 counts 3, tick 2's read fails, tick 3 recovers with a changed count.
+    const probe = countingTriageStates(fx.tickets, (call) => [3, -1, 0][call - 1] ?? 0)
     let sleeps = 0
     let eventsAfterFirstTick = 0
+    const tickCompleted = async () =>
+      (await fx.store.getRepoEvents(fx.origin))
+        .slice(eventsAfterFirstTick)
+        .filter((event) => event.type === 'dispatcher.tick-completed')
     try {
       await abDispatch({
         targetRepo: fx.checkout,
@@ -6230,11 +6235,22 @@ describe('abDispatch --once with an interactive terminal', () => {
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
-            expect(probe.calls).toBe(1)
+            expect(probe.counts).toBe(1)
             await waitFor(() =>
               latestDashboardFrame(term).includes('triage 3 | queue 0 | active 0/1'),
             )
             eventsAfterFirstTick = (await fx.store.getRepoEvents(fx.origin)).length
+            return
+          }
+          if (sleeps === 2) {
+            // The second tick's read failed: the header keeps the last value,
+            // the tick does not fail, and the failure appends nothing.
+            expect(probe.counts).toBe(2)
+            const frame = latestDashboardFrame(term)
+            expect(frame).toContain('triage 3 | queue 0 | active 0/1')
+            expect(frame).not.toContain('triage 0')
+            expect(frame).not.toContain('ticket states unavailable')
+            expect(await tickCompleted()).toEqual([])
             return
           }
           stop.abort()
@@ -6243,17 +6259,16 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: term,
       })
 
-      // The second tick's read failed: the header keeps the last value, the
-      // tick does not fail, and the failure appends nothing.
-      expect(probe.calls).toBe(2)
-      const frame = latestDashboardFrame(term)
-      expect(frame).toContain('triage 3 | queue 0 | active 0/1')
-      expect(frame).not.toContain('triage 0')
-      expect(frame).not.toContain('ticket states unavailable')
+      // The third tick recovered with a changed count: a real zero is shown
+      // and published, distinct from unknown.
+      expect(probe.counts).toBe(3)
+      expect(probe.listings).toBe(0)
+      await waitFor(() => latestDashboardFrame(term).includes('triage 0 | queue 0 | active 0/1'))
       const events = await fx.store.getRepoEvents(fx.origin)
       expect(events.some((event) => event.type === 'dispatcher.tick-failed')).toBe(false)
-      const later = events.slice(eventsAfterFirstTick)
-      expect(later.some((event) => event.type === 'dispatcher.tick-completed')).toBe(false)
+      expect((await tickCompleted()).map((event) => event.payload)).toEqual([
+        expect.objectContaining({ triage: 0 }),
+      ])
       expect(fx.err).toEqual([])
     } finally {
       stop.abort()
@@ -6280,8 +6295,8 @@ describe('abDispatch --once with an interactive terminal', () => {
           (event) => event.type === 'dispatcher.tick-completed',
         )
         return {
-          calls: probe.calls,
           counts: probe.counts,
+          listings: probe.listings,
           payloads: completed.map((event) => event.payload),
         }
       } finally {
@@ -6289,19 +6304,72 @@ describe('abDispatch --once with an interactive terminal', () => {
       }
     }
 
-    // Plain and hosted-style kernels (kernelRunId alone) never read states.
+    // Plain and hosted-style kernels (kernelRunId alone) never read counts.
     const plain = await run({})
-    expect(plain.calls).toBe(0)
+    expect(plain.counts).toBe(0)
     const hosted = await run({ kernelRunId: 'triage-hosted-kernel' })
-    expect(hosted.calls).toBe(0)
+    expect(hosted.counts).toBe(0)
     expect(hosted.payloads.length).toBeGreaterThan(0)
     for (const payload of hosted.payloads) expect(payload).not.toHaveProperty('triage')
 
-    // The interactive frontend's kernel child publishes its sample.
+    // The interactive frontend's kernel child publishes its bounded sample.
     const frontend = await run({ kernelRunId: 'triage-frontend-kernel', frontendStatus: true })
-    expect(frontend.calls).toBe(1)
+    expect(frontend.counts).toBe(1)
     expect(frontend.payloads.at(-1)).toMatchObject({ triage: 3 })
-    for (const result of [plain, hosted, frontend]) expect(result.counts).toBe(0)
+    for (const result of [plain, hosted, frontend]) expect(result.listings).toBe(0)
+  }, 30_000)
+
+  test('a source without bounded counts is never listed and its triage stays unknown', async () => {
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, steppingClock())
+    let listings = 0
+    Object.assign(fx.tickets, {
+      listStates: async () => {
+        listings += 1
+        return [{ name: 'triage', tickets: 9 }]
+      },
+    })
+    const term = fakeTerminal()
+    const stop = new AbortController()
+    try {
+      // The interactive dashboard samples on every tick.
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 1,
+        signal: stop.signal,
+        sleep: async () => {
+          await waitFor(() => latestDashboardFrame(term).includes('triage – | queue 0'))
+          stop.abort()
+        },
+        wire: fx.wire,
+        terminal: term,
+      })
+      // The interactive frontend's kernel child publishes no triage.
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        kernelRunId: 'triage-unsupported-kernel',
+        frontendStatus: true,
+      })
+      expect(listings).toBe(0)
+      const completed = (await fx.store.getRepoEvents(fx.origin)).filter(
+        (event) => event.type === 'dispatcher.tick-completed',
+      )
+      expect(completed.length).toBeGreaterThan(0)
+      for (const event of completed) expect(event.payload).not.toHaveProperty('triage')
+      expect(fx.err).toEqual([])
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
   }, 30_000)
 
   test('--once ticks exactly ONCE — a ticket that turns Ready mid-drain is not claimed', async () => {
