@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { abPlugin, type PluginContractProcessInput } from './plugin'
+import { BUN_REPORTER_ENVS, bunTestSummary, expectBunContractPassed } from './testkit'
 
 const roots: string[] = []
 const notGit: Exec = async () => ({ stdout: '', stderr: '', exitCode: 1 })
@@ -149,7 +150,7 @@ describe('ab plugin', () => {
     expect(launches).toBe(1)
   })
 
-  test('real Bun bridge exposes per-test output and preserves green/red status', async () => {
+  test('real Bun bridge forwards child output and preserves green/red status in every reporter mode', async () => {
     const sdk = join(import.meta.dir, '..', 'plugin-sdk', 'index.ts')
     const source = `
 import { FakeTicketSource } from ${JSON.stringify(sdk)}
@@ -169,16 +170,21 @@ export default {
 }
 `
     const root = await repo(['./plugin.ts'], { 'plugin.ts': source })
-    const green = output(root)
-    expect(await abPlugin(['test', 'ticket-source', 'green'], green.opts)).toBe(0)
-    expect(green.stdout.concat(green.stderr).join('\n')).toContain(
-      'create/get round-trips common fields',
-    )
+    for (const mode of BUN_REPORTER_ENVS) {
+      const green = output(root, mode.env)
+      const greenStatus = await abPlugin(['test', 'ticket-source', 'green'], green.opts)
+      expectBunContractPassed(
+        greenStatus,
+        [`${mode.label} reporter`, ...green.stdout, ...green.stderr].join('\n'),
+      )
 
-    const red = output(root)
-    expect(await abPlugin(['test', 'ticket-source', 'red'], red.opts)).not.toBe(0)
-    expect(red.stdout.concat(red.stderr).join('\n')).toContain('deliberately broken fixture')
-  })
+      const red = output(root, mode.env)
+      expect(await abPlugin(['test', 'ticket-source', 'red'], red.opts), mode.label).not.toBe(0)
+      const redText = red.stdout.concat(red.stderr).join('\n')
+      expect(redText).toContain('deliberately broken fixture')
+      expect(bunTestSummary(redText)?.fail, redText).toBeGreaterThan(0)
+    }
+  }, 60_000)
 
   test('forwards the exact contract selection and output seams to the child', async () => {
     const root = await repo(['./plugin.ts'], { 'plugin.ts': contractPlugin(false) })
