@@ -2698,7 +2698,7 @@ region = "overseas"
           stdout: async () =>
             probe
               ? 'AB_INIT_READINESS_V1={"checks":[{"name":"ok","status":"pass","detail":"ready"}]}\n'
-              : '',
+              : bunVersionOutput(params),
           stderr: async () => '',
         }
       },
