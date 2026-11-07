@@ -1660,9 +1660,13 @@ receive-pack path.
 `kernel/node-landing.ts` shares the node writer lease and reservation with
 restacking. It cancels native auto-merge, refreshes actual PR refs, proves the
 exact destination ungated and fast-forwards the canonical child commit under
-CAS. The destination write proves merge; provider PR reconciliation is
-best-effort and never decides or retries that write. Root merge retains squash
-semantics. Store adapters expose node writer claim, renewal and holder-checked
+CAS. Only exact authoritative readback of the destination showing the
+candidate, or the durable receipt of an accepted write overtaken before
+readback, records `node.rewritten` and the source build's `pr.merged`; another
+observed head settles the writer `contended`, a failed readback records nothing
+and is retried, and recovery of an interrupted merge uses the same exact
+readback. Provider PR reconciliation is best-effort and never decides or
+retries that merge. Root merge retains squash semantics. Store adapters expose node writer claim, renewal and holder-checked
 release separately from execution leases; Postgres schema version 15 adds their
 columns. Reservations live in the event stream and survive lease expiry.
 
