@@ -205,6 +205,31 @@ describe('minimal config dispatch over the real file tracker', () => {
     expect(await ls('doing')).toEqual([`${created.ref.id}.md`])
   })
 
+  test('urgent ready work is claimed first, each class in file order', async () => {
+    const h = await harness('capacity = 2\n[tickets]\nsource = "file"\n')
+    expect(h.tickets.priority).toBe(true)
+    const ids: string[] = []
+    for (const [title, priority] of [
+      ['First normal work', undefined],
+      ['Second normal work', undefined],
+      ['Urgent work', 'urgent'],
+    ] as const) {
+      const created = await h.tickets.create({
+        title,
+        body: CONFORMING_BODY,
+        ...(priority ? { priority } : {}),
+      })
+      await h.tickets.transition(created.ref.id, 'Ready')
+      ids.push(created.ref.id)
+    }
+    const [n1, n2, u1] = ids
+    await h.dispatcher.tick()
+    expect((await ls('doing')).sort()).toEqual([`${n1}.md`, `${u1}.md`].sort())
+    expect(await ls('ready')).toEqual([`${n2}.md`])
+    // Builds are created in claim order: urgent first, then the first normal.
+    expect(h.launches).toEqual(['urgent-work', 'first-normal-work'])
+  })
+
   test('a ticket left in triage/ is not dispatched', async () => {
     const h = await harness()
     await h.tickets.create({

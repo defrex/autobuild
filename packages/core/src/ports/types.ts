@@ -93,7 +93,13 @@ export interface Ticket {
   /** Forge issues this ticket addresses, sorted by issue number. Absent ≡ none
    * or unsupported by the source. */
   issueLinks?: IssueLink[]
+  /** `urgent` dispatches before normal ready work. Absent means normal, or a
+   * source that cannot store priority. Normalized tickets never carry `normal`. */
+  priority?: TicketPriority
 }
+
+/** Dispatch class: urgent ready work is claimed before normal ready work. */
+export type TicketPriority = 'urgent' | 'normal'
 
 export type IssueLinkIntent = 'closes' | 'refs'
 
@@ -145,6 +151,9 @@ export interface TicketDraft {
   /** Forge issues this ticket addresses. An adapter without the `issueLinks`
    * capability must refuse, never discard. */
   issueLinks?: IssueLink[]
+  /** Dispatch class. A source without the `priority` capability refuses
+   * `urgent`; `normal` is a no-op. */
+  priority?: TicketPriority
 }
 
 /** One node of the dependency graph, as this source sees it. */
@@ -195,6 +204,9 @@ export interface TicketUpdate {
   labels?: string[]
   /** A complete issue-link replacement. An explicit empty array clears links. */
   issueLinks?: IssueLink[]
+  /** `normal` removes urgency. A source without the `priority` capability
+   * refuses `urgent`; `normal` is a no-op. */
+  priority?: TicketPriority
 }
 
 /** One workflow state of a source that can enumerate them. */
@@ -256,6 +268,10 @@ export interface TicketSource {
    * boundary, including create and guarded writes. Sources without it refuse
    * any write naming issue links. */
   readonly issueLinks?: boolean
+  /** Opt in only when urgent priority is persisted and returned at every write
+   * boundary, including create and guarded writes. Sources without it read
+   * every ticket as normal and refuse any write naming `urgent`. */
+  readonly priority?: boolean
   /** Every lifecycle state, including archived/completed tickets; no ready gate. */
   listAll?(): Promise<TicketListing>
   /** Import support: the same pure id policy used by create, for mutation-free preflight. */

@@ -4,6 +4,7 @@ import {
   refuseUnsupportedIssueLinks,
   TicketIssueLinksUnsupported,
 } from './issue-links'
+import { refuseUnsupportedPriority, TicketPriorityUnsupported } from './priority'
 import {
   mutateTicketIfRevision,
   TicketRevisionConflict,
@@ -67,7 +68,8 @@ function passthrough(error: unknown): boolean {
   return (
     error instanceof TicketRevisionConflict ||
     error instanceof TicketRevisionUnsupported ||
-    error instanceof TicketIssueLinksUnsupported
+    error instanceof TicketIssueLinksUnsupported ||
+    error instanceof TicketPriorityUnsupported
   )
 }
 
@@ -96,6 +98,7 @@ export async function createTicket(
   options: { blockerErrorPrefix?: string; blockerErrorSuffix?: string } = {},
 ): Promise<Ticket> {
   refuseUnsupportedIssueLinks(source, input)
+  refuseUnsupportedPriority(source, input)
   source = compatibleTicketSource(source)
   const blockedBy = await knownBlockers(
     source,
@@ -113,6 +116,7 @@ export async function createTicket(
     ...(input.issueLinks !== undefined
       ? { issueLinks: normalizeIssueLinks(input.issueLinks) }
       : {}),
+    ...(input.priority !== undefined ? { priority: input.priority } : {}),
   }
   try {
     return input.state === undefined
@@ -135,6 +139,7 @@ export async function updateTicket(
   expectedRevision?: string,
 ): Promise<Ticket | null> {
   refuseUnsupportedIssueLinks(source, patch)
+  refuseUnsupportedPriority(source, patch)
   source = compatibleTicketSource(source)
   try {
     if (expectedRevision !== undefined)
