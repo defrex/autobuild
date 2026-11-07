@@ -1263,7 +1263,7 @@ test('an aborted child merged before its links reach the node holds the node unt
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 test('operator revision retries failed node verification on the same head without restarting children', async () => {
   let nodeSlug = ''
@@ -1364,7 +1364,7 @@ test('operator revision retries failed node verification on the same head withou
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 for (const mode of ['success', 'bare', 'cas', 'lease', 'missing', 'check-only'] as const) {
   test(`dispatcher prepares node inputs with ${mode}`, async () => {

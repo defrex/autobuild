@@ -5,7 +5,19 @@ import {
   type RepositoryEventWrite,
   type RepositoryEvent,
 } from '../events/repository'
-import { dispatchUpgradeReducer, type Handoff } from './dispatch-upgrade'
+import {
+  dispatchUpgradeReducer,
+  UPGRADE_HISTORY_LIMIT,
+  type Handoff,
+  type UpgradeRun,
+} from './dispatch-upgrade'
+import {
+  resolutionOnlyWrites,
+  upgradeGenerationRun,
+  upgradeGenerationWrites,
+  upgradeRuntime,
+  upgradeTarget,
+} from '../testing/upgrade-generations'
 import { checkIncremental } from './incremental-contract'
 const runtime = {
   version: '1.0.0',
@@ -234,4 +246,147 @@ test('rollback history and lineage holds replay across a changed target and a ne
   checkIncremental(dispatchUpgradeReducer, cleared)
   expect(dispatchUpgradeReducer.reduce(cleared).holds).toEqual({})
   expect(dispatchUpgradeReducer.reduce(cleared).lastRollback?.payload.failed.version).toBe('2.0.0')
+})
+
+const generations = (from: number, to: number) => {
+  const writes: RepositoryEventWrite[] = []
+  for (let i = from; i < to; i++) writes.push(...upgradeGenerationWrites(i))
+  return writes
+}
+const churn = (count: number, prefix = 'churn') => {
+  const writes: RepositoryEventWrite[] = []
+  for (let i = 0; i < count; i++)
+    writes.push(...resolutionOnlyWrites(`${prefix}-${String(i).padStart(3, '0')}`, 'running'))
+  return writes
+}
+
+test('runs, lineages and handoffs stay within the retention window across many generations', () => {
+  const events = log([
+    ...generations(0, 20),
+    ...resolutionOnlyWrites(upgradeGenerationRun(20), 'k'),
+  ])
+  checkIncremental(dispatchUpgradeReducer, events)
+  const state = dispatchUpgradeReducer.reduce(events)
+  expect(Object.keys(state.runs).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
+  expect(Object.keys(state.lineages).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
+  expect(state.authoritativeRun).toBe(upgradeGenerationRun(20))
+  expect(state.runs[upgradeGenerationRun(20)]?.resolved).toBeDefined()
+  expect(state.lineages[upgradeGenerationRun(20)]).toBe('launcher')
+  const predecessor = state.runs[upgradeGenerationRun(19)]!
+  for (const fact of ['resolved', 'prepared', 'request', 'handoff', 'released', 'takeover'])
+    expect(predecessor[fact as keyof UpgradeRun]).toBeDefined()
+  expect(predecessor.completed).toBeDefined()
+  expect(state.runs[upgradeGenerationRun(0)]).toBeUndefined()
+})
+
+test('an unfinished handoff outlives newer completed runs, and the authoritative run is never evicted', () => {
+  const unfinished = upgradeGenerationWrites(0).slice(0, -1)
+  const events = log([...unfinished, ...generations(1, 18)])
+  checkIncremental(dispatchUpgradeReducer, events)
+  const state = dispatchUpgradeReducer.reduce(events)
+  expect(Object.keys(state.runs).length).toBe(UPGRADE_HISTORY_LIMIT)
+  expect(state.runs[upgradeGenerationRun(0)]?.takeover).toBeDefined()
+  expect(state.runs[upgradeGenerationRun(0)]?.completed).toBeUndefined()
+  expect(state.runs[upgradeGenerationRun(1)]).toBeUndefined()
+
+  // Only the first run ticks; later runs merely resolve, so it stays oldest.
+  const resolutions = Array.from({ length: 20 }, (_, i) =>
+    write('dispatcher.upgrade-target-resolved', {
+      run: `other-${String(i).padStart(3, '0')}`,
+      lineage: 'launcher',
+      target: upgradeTarget('k'),
+    }),
+  )
+  const authority = dispatchUpgradeReducer.reduce(
+    log([...resolutionOnlyWrites('authority', 'k'), ...resolutions]),
+  )
+  expect(Object.keys(authority.runs).length).toBe(UPGRADE_HISTORY_LIMIT)
+  expect(authority.runs.authority?.resolved).toBeDefined()
+})
+
+test('resolution-only churn evicts its own runs before accepted handoffs', () => {
+  const captured = upgradeGenerationWrites(0).map((write) =>
+    write.type === 'dispatcher.handoff-started'
+      ? {
+          ...write,
+          payload: { ...write.payload, remoteBuilds: [{ slug: 'remote', instance: 'open' }] },
+        }
+      : write,
+  ) as RepositoryEventWrite[]
+  const events = log([...captured, ...churn(24)])
+  checkIncremental(dispatchUpgradeReducer, events)
+  const state = dispatchUpgradeReducer.reduce(events)
+  expect(Object.keys(state.runs).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
+  expect(state.runs[upgradeGenerationRun(0)]?.handoff?.payload.remoteBuilds).toEqual([
+    { slug: 'remote', instance: 'open' },
+  ])
+
+  const several = dispatchUpgradeReducer.reduce(log([...generations(0, 5), ...churn(24)]))
+  expect(Object.keys(several.runs).length).toBe(UPGRADE_HISTORY_LIMIT)
+  for (let i = 0; i < 5; i++) expect(several.runs[upgradeGenerationRun(i)]?.completed).toBeDefined()
+})
+
+test('the newest settled outcomes survive resolution-only churn', () => {
+  const failure = (run: string) =>
+    write('dispatcher.upgrade-failed', {
+      correlation: `fail-${run}`,
+      run,
+      lineage: 'launcher',
+      from: upgradeRuntime('1.0.0'),
+      target: upgradeTarget('broken'),
+      reason: 'preflight process exited',
+    })
+  const failed = upgradeGenerationRun(1)
+  for (const prefix of [upgradeGenerationWrites(0), []]) {
+    const events = log([
+      ...prefix,
+      ...resolutionOnlyWrites(failed, 'broken'),
+      failure(failed),
+      ...churn(20),
+    ])
+    checkIncremental(dispatchUpgradeReducer, events)
+    const state = dispatchUpgradeReducer.reduce(events)
+    expect(Object.keys(state.runs).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
+    expect(state.runs[failed]?.failure?.payload.reason).toBe('preflight process exited')
+    if (prefix.length) expect(state.runs[upgradeGenerationRun(0)]?.completed).toBeDefined()
+  }
+})
+
+test('rollback correlations and lineage holds keep a recent window and the authoritative hold', () => {
+  const rollback = (correlation: string, lineage: string) =>
+    write('dispatcher.runtime-rolled-back', {
+      correlation,
+      run: 'restored',
+      lineage,
+      predecessor: 'old',
+      successor: 'new',
+      handoff: 'upgrade',
+      takeoverAt: '2026-01-01T00:00:00.000Z',
+      failures: 3,
+      failed: handoff.to,
+      restored: runtime,
+      failedRoot: '/cache/new',
+      restoredRoot: '/cache/old',
+      target: handoff.target,
+      reason: 'three failed exits',
+    })
+  const latest = rollback('rollback-019', 'lineage-019')
+  const writes = [
+    ...resolutionOnlyWrites('restored', 'k', 'launcher'),
+    rollback('rollback-main', 'launcher'),
+    ...Array.from({ length: 19 }, (_, i) =>
+      rollback(`rollback-${String(i).padStart(3, '0')}`, `lineage-${String(i).padStart(3, '0')}`),
+    ),
+    latest,
+  ]
+  const events = log([...writes, latest])
+  checkIncremental(dispatchUpgradeReducer, events)
+  const state = dispatchUpgradeReducer.reduce(events)
+  expect(state.rollbackIds.length).toBe(UPGRADE_HISTORY_LIMIT)
+  expect(state.rollbackIds.at(-1)).toBe('rollback-019')
+  expect(Object.keys(state.holds).length).toBe(UPGRADE_HISTORY_LIMIT)
+  expect(state.holds.launcher?.payload.correlation).toBe('rollback-main')
+  expect(state.holds['lineage-019']).toBeDefined()
+  // The repeated latest correlation is still recognized and ignored.
+  expect(state.lastRollback?.seq).toBe(events.length - 1)
 })
