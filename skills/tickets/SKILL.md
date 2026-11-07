@@ -347,8 +347,8 @@ write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
-File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links and urgent priority.
+File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets,
+state and urgent priority; file revisions also cover nonempty issue links.
 Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File comments

@@ -1835,9 +1835,11 @@ issue links refuses any write naming them, names itself, and writes nothing.
 `--priority urgent` makes the dispatcher claim the ticket before normal ready
 work, each class in source order; blockers and every other gate still apply,
 and it never preempts a running build. `--priority normal` (the default)
-removes urgency. The file source stores priority; hosted, Linear and plugin
-sources without the capability read every ticket as normal, refuse `urgent`
-naming themselves and writing nothing, and accept `normal` as a no-op. JSON
+removes urgency. The file and Linear sources store priority (Linear as its
+native Urgent; `normal` clears only Urgent and leaves other Linear priorities
+alone); hosted and plugin sources without the capability read every ticket as
+normal, refuse `urgent` naming themselves and writing nothing, and accept
+`normal` as a no-op. JSON
 ticket output always includes `priority`, and list output marks urgent tickets.
 Supplied title/body values must be
 nonblank. State is intentionally not an update field — `transition()` remains its sole owner —
@@ -2948,8 +2950,8 @@ write nothing. On conflict, invalid input or editor failure, the error names an
 absolute file path containing the edited text. Read the current ticket and
 reapply the intended changes before retrying; conflicts are never merged.
 
-File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets
-and state; file revisions also cover nonempty issue links and urgent priority.
+File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets,
+state and urgent priority; file revisions also cover nonempty issue links.
 Reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also

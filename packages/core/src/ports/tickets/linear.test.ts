@@ -3,6 +3,7 @@ import { projectTicketTree } from './tree'
 import { TicketSourceRateLimitError } from '../types'
 import { LINEAR_API_URL, LinearTicketSource, type LinearFetch } from './linear'
 import { TicketIssueLinksUnsupported } from './issue-links'
+import { TicketRevisionUnsupported, mutateTicketIfRevision, ticketRevision } from './revision'
 
 interface RecordedCall {
   url: string
@@ -77,6 +78,7 @@ function gqlIssue(over: Record<string, unknown> = {}) {
     title: 'Rate-limit auth',
     description: '# Spec\n\nToken bucket on /auth/*.',
     url: 'https://linear.app/acme/issue/ENG-42',
+    priority: 0,
     state: { name: 'Ready', type: 'unstarted' },
     labels: connection([{ name: 'autobuild' }]),
     comments: connection([]),
@@ -2796,4 +2798,163 @@ test('cancellation rejects a held transport response even when transport ignores
   controller.abort(new Error('cancelled'))
   release()
   await expect(pending).rejects.toThrow('cancelled')
+})
+
+describe('Linear priority', () => {
+  const UPDATED = { body: { data: { issueUpdate: { success: true } } } }
+  const priorityOf = (priority: number) => ({
+    body: { data: { issue: { id: 'uuid-42', priority } } },
+  })
+
+  test('only Urgent (1) reads as urgent; every other value reads as normal', async () => {
+    const issues = [1, 0, 2, 3, 4, undefined].map((priority, index) =>
+      gqlIssue({ id: `uuid-${index}`, identifier: `ENG-${index}`, priority }),
+    )
+    const { fetchFn, calls } = fakeLinear([{ body: { data: { issues: connection(issues) } } }])
+
+    const { tickets } = await makeSource(fetchFn).listReady({ state: 'Ready' })
+
+    expect(calls[0]?.query).toContain(' priority ')
+    expect(tickets.map((ticket) => ticket.priority)).toEqual([
+      'urgent',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+    expect(tickets.slice(1).every((ticket) => !('priority' in ticket))).toBe(true)
+  })
+
+  test('get selects and maps priority', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: gqlIssue({ priority: 1 }) } } },
+    ])
+
+    const ticket = await makeSource(fetchFn).get('ENG-42')
+
+    expect(calls[0]?.query).toContain(' priority ')
+    expect(ticket?.priority).toBe('urgent')
+  })
+
+  test('the revision covers urgent priority and nothing finer', async () => {
+    const read = async (priority: number) => {
+      const { fetchFn } = fakeLinear([{ body: { data: { issue: gqlIssue({ priority }) } } }])
+      const ticket = await makeSource(fetchFn).get('ENG-42')
+      if (!ticket) throw new Error('missing ticket')
+      return ticket
+    }
+    const none = await read(0)
+    const medium = await read(3)
+    const urgent = await read(1)
+
+    expect(medium.revision).toBe(none.revision)
+    expect(urgent.revision).not.toBe(medium.revision)
+    const {
+      revision: _revision,
+      priority: _priority,
+      comments: _comments,
+      ...unprioritized
+    } = urgent
+    expect(none.revision).toBe(ticketRevision(unprioritized))
+    expect(urgent.revision).toBe(ticketRevision({ ...unprioritized, priority: 'urgent' }))
+  })
+
+  test('create writes Urgent for urgent and nothing for normal', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      TEAM_INFO_RESPONSE,
+      { body: { data: { issueCreate: { success: true, issue: gqlIssue({ priority: 1 }) } } } },
+      { body: { data: { issueCreate: { success: true, issue: gqlIssue() } } } },
+      { body: { data: { issueCreate: { success: true, issue: gqlIssue() } } } },
+    ])
+    const source = makeSource(fetchFn)
+
+    const urgent = await source.create({ title: 'X', body: 'y', priority: 'urgent' })
+    await source.create({ title: 'X', body: 'y', priority: 'normal' })
+    await source.create({ title: 'X', body: 'y' })
+
+    expect(calls[1]?.variables.input).toHaveProperty('priority', 1)
+    expect(urgent.priority).toBe('urgent')
+    expect(calls[2]?.variables.input).not.toHaveProperty('priority')
+    expect(calls[3]?.variables.input).not.toHaveProperty('priority')
+  })
+
+  test('update urgent writes Urgent without reading the current priority', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issue: { id: 'uuid-42' } } } },
+      UPDATED,
+    ])
+
+    await makeSource(fetchFn).update('ENG-42', { priority: 'urgent' })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.query).toContain('ResolveIssue')
+    expect(calls[1]?.variables).toEqual({ id: 'uuid-42', input: { priority: 1 } })
+  })
+
+  test('update normal clears a current Urgent to No priority', async () => {
+    const { fetchFn, calls } = fakeLinear([priorityOf(1), UPDATED])
+
+    await makeSource(fetchFn).update('ENG-42', { priority: 'normal' })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.query).toContain('IssuePriority')
+    expect(calls[1]?.query).toContain('issueUpdate')
+    expect(calls[1]?.variables).toEqual({ id: 'uuid-42', input: { priority: 0 } })
+  })
+
+  for (const current of [0, 2]) {
+    test(`update normal leaves Linear priority ${current} untouched and writes nothing`, async () => {
+      const { fetchFn, calls } = fakeLinear([priorityOf(current)])
+
+      await makeSource(fetchFn).update('ENG-42', { priority: 'normal' })
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]?.query).toContain('IssuePriority')
+    })
+  }
+
+  test('update normal with other fields omits priority when it is not Urgent', async () => {
+    const { fetchFn, calls } = fakeLinear([priorityOf(3), UPDATED])
+
+    await makeSource(fetchFn).update('ENG-42', { title: 'x', priority: 'normal' })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.variables).toEqual({ id: 'uuid-42', input: { title: 'x' } })
+  })
+
+  test('update normal on an unknown ticket names it and writes nothing', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      {
+        body: {
+          data: null,
+          errors: [
+            {
+              message: 'Entity not found: Issue',
+              extensions: { code: 'INPUT_ERROR' },
+            },
+          ],
+        },
+      },
+    ])
+
+    await expect(makeSource(fetchFn).update('ENG-404', { priority: 'normal' })).rejects.toThrow(
+      'linear update: unknown ticket "ENG-404"',
+    )
+    expect(calls).toHaveLength(1)
+  })
+
+  test('declares the priority capability and still refuses guarded writes', async () => {
+    const { fetchFn, calls } = fakeLinear([])
+    const source = makeSource(fetchFn)
+
+    expect(source.priority).toBe(true)
+    await expect(
+      mutateTicketIfRevision(source, 'ENG-42', 'rev', {
+        kind: 'update',
+        patch: { priority: 'urgent' },
+      }),
+    ).rejects.toBeInstanceOf(TicketRevisionUnsupported)
+    expect(calls).toHaveLength(0)
+  })
 })

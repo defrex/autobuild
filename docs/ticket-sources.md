@@ -73,6 +73,7 @@ Replace `ENG` and the case-sensitive workflow names with your team's.
 - **Admission.** `teamKey` selects the team; `readyState`, every `readyLabels` entry and optional `readyAssignee` filter it.
 - **Labels.** `readyLabels` defaults to `["autobuild"]`; `[]` removes the gate.
 - **No `project` key.** Scope the queue through team access, states and labels.
+- **Priority.** Linear's Urgent priority reads as `urgent`; every other priority, including none, reads as `normal`. `--priority urgent` sets Urgent. `--priority normal` clears Urgent to No priority and leaves High, Medium or Low untouched.
 - **Rate limits** are shared with your other API callers.
 - **Backlog and rejected.** Neither role has a default, and neither may share a state with triage. Here `Backlog` is the triage state, so a deferred-work state needs its own name, such as `backlogState = "Icebox"`. Linear counts `Canceled` as complete; mapped to `rejectedState`, it no longer resolves blockers.
 
@@ -115,7 +116,7 @@ The `file` and `hosted` sources store [forge issue links](tickets.md#groom-a-bui
 
 ### Optional priority
 
-A ticket is `urgent` or `normal` (the default); the dispatcher claims urgent ready work first. The `file` source stores `priority = "urgent"` in frontmatter and writes no key for normal. `hosted` and `linear` don't store priority: they read every ticket as normal, refuse a create or update naming `urgent` with an error naming the source, and write nothing. `--priority normal` succeeds on them as a no-op.
+A ticket is `urgent` or `normal` (the default); the dispatcher claims urgent ready work first. The `file` source stores `priority = "urgent"` in frontmatter and writes no key for normal. `linear` uses its native Urgent priority, described in its section above. `hosted` doesn't store priority: it reads every ticket as normal, refuses a create or update naming `urgent` with an error naming the source, and writes nothing. `--priority normal` succeeds on it as a no-op.
 
 ### Optional ticket tree
 
