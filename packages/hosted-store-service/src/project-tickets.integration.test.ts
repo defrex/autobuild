@@ -92,6 +92,33 @@ async function setup(extra: Record<string, string | undefined> = {}, publishConf
   return { store, sources, diagnostics, contexts, service, fetchFn, client }
 }
 
+/** The world's fetch, keeping each response's status and JSON body, so the
+ * wire refusal a real client received can be asserted as sent. */
+function recording(world: Awaited<ReturnType<typeof setup>>) {
+  const responses: { url: string; status: number; body: unknown }[] = []
+  const fetchFn = async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await world.fetchFn(input, init)
+    const url = input instanceof Request ? input.url : String(input)
+    responses.push({ url, status: response.status, body: await response.clone().json() })
+    return response
+  }
+  const machine = (token: string) =>
+    new HostedTicketSource({
+      url: 'http://test',
+      token,
+      teamKey: 'FORGED',
+      claimedState: 'FORGED',
+      createState: 'FORGED',
+      fetchFn,
+    })
+  const operator = new OperatorApiClient({
+    url: 'http://test',
+    token: 'abp_one',
+    fetchFn: fetchFn as typeof fetch,
+  })
+  return { responses, machine, operator }
+}
+
 test('machine ticket authority is credential-derived; admin selection is explicit', async () => {
   const world = await setup()
   const one = world.client('abp_one'),
@@ -128,6 +155,21 @@ test('external source and missing effective configuration refuse machine and ope
       fetchFn: world.fetchFn as typeof fetch,
     })
     await expect(client.listTickets(repos[0]!)).rejects.toThrow(`own "${source}" ticket source`)
+    const wire = recording(world)
+    await expect(wire.machine('abp_one').listReady({})).rejects.toThrow(
+      `own "${source}" ticket source`,
+    )
+    expect(wire.responses).toEqual([
+      {
+        url: 'http://test/tickets/list-ready',
+        status: 409,
+        body: {
+          kind: 'conflict',
+          error: expect.stringContaining(`own "${source}" ticket source`),
+          code: 'external-ticket-source',
+        },
+      },
+    ])
   }
 })
 
@@ -158,6 +200,25 @@ test('missing project configuration refuses before source construction with no t
   await expect(world.client('abp_one').listReady({})).rejects.toThrow(
     'effective config unavailable',
   )
+  const wire = recording(world)
+  await expect(wire.machine('abp_one').listReady({})).rejects.toThrow(
+    'effective config unavailable',
+  )
+  await expect(wire.operator.listTickets(repos[0]!)).rejects.toThrow(
+    'no dispatcher run is recorded',
+  )
+  const refusal = {
+    status: 409,
+    body: {
+      kind: 'conflict',
+      error: expect.stringContaining('no dispatcher run is recorded'),
+      code: 'no-dispatcher-run',
+    },
+  }
+  expect(wire.responses).toEqual([
+    { url: 'http://test/tickets/list-ready', ...refusal },
+    { url: `http://test/operator/v1/repos/${encodeURIComponent(repos[0]!)}/tickets`, ...refusal },
+  ])
   expect(world.contexts).toEqual([])
   const admin = mintToken(env.AB_STORE_SECRET, {
     version: 1,

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import * as api from '../dashboard/api'
 import { DispatcherControls } from '../dashboard/BuildsView'
 import { reconcileDashboard } from '../dashboard/view-model'
-import type { DashboardModel } from '@defrex/autobuild/operator-presentation'
+import { activeCounterText, type DashboardModel } from '@defrex/autobuild/operator-presentation'
 import { OperatorShell } from '../dashboard/Shell'
 import { ViewTabs, useTicketMeta } from '../dashboard/tickets'
 import { tabLink } from '../dashboard/project-selection'
@@ -111,7 +111,7 @@ export function SettingsClient(props: {
           page
           counts={{
             triage: ticketMeta.names && ticketMeta.counts?.[ticketMeta.names.triage],
-            active: model ? `${model.active.current}/${model.active.limit}` : undefined,
+            active: model ? activeCounterText(model) : undefined,
             queue: ticketMeta.names && ticketMeta.counts?.[ticketMeta.names.ready],
           }}
         />

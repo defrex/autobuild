@@ -37,6 +37,7 @@ import { systemClock } from '../store/types'
 import { BuildControlError, buildControlUser, controlBuild } from './build-control'
 import { bulkControlReport, bulkControlRepository } from './bulk-control'
 import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
+import { NO_DISPATCHER_RUN_LINE } from './dashboard/configuration'
 import { dashboardBuildControl } from './dashboard/actions'
 import {
   buildDashboardFromProjected,
@@ -442,7 +443,9 @@ export class DispatchFrontend {
             this.outputFrame(
               renderViewerNotice(
                 this.opts.viewer,
-                status.warningNotice ?? 'Waiting for dispatcher configuration',
+                repositoryFacts.config.run === undefined
+                  ? NO_DISPATCHER_RUN_LINE
+                  : (status.warningNotice ?? 'Waiting for dispatcher configuration'),
                 this.opts.terminal.columns,
                 paintableRows(this.opts.terminal.rows),
               ),
