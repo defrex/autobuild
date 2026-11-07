@@ -1422,6 +1422,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     revision?: string
     generation?: number
     restoration?: import('../types').WorkspacePreservationHead[]
+    restorationReplaced?: string[]
   }): Promise<WorkspaceProvisionResult> {
     const scopedToken = await (this.options.delegateCredential ?? delegateCredential)(
       this.options.storeRef,
@@ -1616,14 +1617,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }
     }
     let provisionHead = base
+    let restorationSkipped: import('../types').RestorationSkip[] = []
     if (opts.restoration?.length) {
       provisionHead = await this.withTrustedGit(sandbox, name, async (exec) => {
-        await restoreGitCommits({
-          exec,
-          workspacePath: VERCEL_WORKSPACE_PATH,
-          branch: opts.branch,
-          heads: opts.restoration!,
-        })
+        restorationSkipped = (
+          await restoreGitCommits({
+            exec,
+            workspacePath: VERCEL_WORKSPACE_PATH,
+            branch: opts.branch,
+            heads: opts.restoration!,
+            replaced: opts.restorationReplaced,
+          })
+        ).skipped
         const result = await exec(
           ['git', 'rev-parse', '--verify', `refs/heads/${opts.branch}^{commit}`],
           { cwd: VERCEL_WORKSPACE_PATH },
@@ -1643,6 +1648,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         source: opts.restoration?.length || existing !== null ? 'existing' : 'remote',
         sha: provisionHead,
       },
+      ...(restorationSkipped.length ? { restorationSkipped } : {}),
     }
   }
 
