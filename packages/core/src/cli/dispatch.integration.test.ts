@@ -13562,6 +13562,25 @@ for (const plain of [true, false])
     }
   })
 
+test('malformed local store configuration reports repository resolution, not placement', async () => {
+  const targetRepo = await mkdtemp(join(tmpdir(), 'ab-unresolved-direct-'))
+  await writeFile(join(targetRepo, 'autobuild.toml'), '[store\nurl = ')
+  const error = await realAbDispatch({
+    targetRepo,
+    env: {},
+    exec: spawnExec,
+    stdout: () => {},
+    stderr: () => {},
+    once: true,
+    wire: () => {
+      throw new Error('entered execution wiring')
+    },
+  }).catch((error: unknown) => error)
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toContain('Cannot resolve the repository')
+  expect((error as Error).message).not.toContain('Cannot read dispatch placement')
+})
+
 test('unreadable placement never reaches execution wiring; explicit takeover warns and reaches config', async () => {
   const targetRepo = await mkdtemp(join(tmpdir(), 'ab-unreadable-direct-'))
   const server = Bun.serve({ port: 0, fetch: () => new Response('unavailable', { status: 503 }) })
