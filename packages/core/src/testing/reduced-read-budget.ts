@@ -44,6 +44,12 @@ import {
 } from '../store/reduced-reads'
 import { RepoViewStore } from '../processes/repo-view'
 import { settlePendingPublication } from '../cli/publication-settlement'
+import {
+  readLaunchFence,
+  refreshSummaryBoundary,
+  settleSummaryRequests,
+  summaryHandoffPending,
+} from '../cli/pr-summary-publication'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
 import { abWatch, decodeCursor } from '../cli/watch'
 import { abWait } from '../cli/wait'
@@ -844,6 +850,129 @@ export async function finalizePrRejectionReadBudget(opts: {
   }
   expect(forge.openPrAttempts).toBe(1)
   expect(await raised()).toBe(1)
+}
+
+/** Remote summary handoff: the dispatcher's launch fence and exit
+ * classification plus the guest's coalescing boundary read reduced values
+ * only, at constant cost in build length. */
+export async function summaryHandoffReadBudget(opts: {
+  store: BuildStore
+  costs: ReducedReadCosts
+  fresh: () => Promise<BuildStore>
+}) {
+  const { store, costs } = opts
+  const build = 'summary-handoff-budget'
+  const branch = `ab/${build}`
+  await store.createBuild({ slug: build, repo, branch })
+  await store.append(build, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket: { source: 'file', id: 'BUDGET-SUMMARY' }, repo, baseBranch: 'main' },
+  })
+  await store.append(build, {
+    actor: KERNEL,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'vercel-sandbox',
+      remote: true,
+      ref: 'sandbox-summary',
+      branch,
+      base: { source: 'remote', sha: 'e'.repeat(40) },
+    },
+  })
+  const forge = new FakeForge()
+  const pr = await forge.openPr({
+    workspacePath: '/budget',
+    head: branch,
+    base: 'main',
+    title: 'Budget',
+    body: '',
+  })
+  await store.append(build, { actor: KERNEL, type: 'finalize.completed', payload: { pr } })
+  await store.append(build, {
+    actor: KERNEL,
+    type: 'verify.started',
+    payload: { step: 'unit', attempt: 1 },
+  })
+  await store.append(build, {
+    actor: KERNEL,
+    type: 'verify.completed',
+    payload: { step: 'unit', attempt: 1, outcome: 'pass' },
+  })
+  const deps = (reader: BuildStore) => ({
+    store: reader,
+    forge,
+    slug: build,
+    workspacePath: '/budget',
+    storeRef: 'budget',
+    clock: () => new Date(),
+  })
+  // Launch fence, then the guest writes its request and exits.
+  const fence = await readLaunchFence(store, build)
+  expect(await refreshSummaryBoundary(deps(store))).toBe(true)
+  expect(summaryHandoffPending((await readBuildFacts(store, build)).value, fence)).toBe(true)
+  await settleSummaryRequests({ ...deps(store), holder: 'budget-host' })
+  expect(forge.comments).toHaveLength(1)
+  // One launch and exit: fence, completion classification, guest boundary.
+  const sequence = async (reader: BuildStore, launchFence: number) => {
+    const next = await readLaunchFence(reader, build)
+    const pending = summaryHandoffPending((await readBuildFacts(reader, build)).value, launchFence)
+    const yielded = await refreshSummaryBoundary(deps(reader), {
+      continuesVerifyCycle: true,
+      reassert: true,
+    })
+    return { next, pending, yielded }
+  }
+  const bytes = new Map<string, number>()
+  let metadata: number | undefined
+  let seeded = (await store.getEvents(build)).length
+  for (const length of [100, 10_000]) {
+    for (; seeded < length; seeded++)
+      await store.append(build, {
+        actor: humanActor('budget'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+    for (const [name, reader] of [
+      ['live', store],
+      ['fresh', await opts.fresh()],
+    ] as const) {
+      // Catching up to the padded tail is allowed once per reader.
+      const launchFence = (await sequence(reader, fence)).next
+      costs.events = costs.metadata = costs.bytes = 0
+      for (let exit = 0; exit < 3; exit++)
+        expect(await sequence(reader, launchFence)).toEqual({
+          next: launchFence,
+          pending: false,
+          yielded: false,
+        })
+      expect(costs.events).toBe(0)
+      if (length === 100) {
+        metadata ??= costs.metadata
+        expect(costs.metadata).toBeLessThan(20)
+        bytes.set(name, costs.bytes)
+      } else {
+        // Seq digits grow in the saved value; allow 100 bytes per measured call.
+        expect(costs.bytes).toBeLessThanOrEqual(bytes.get(name)! + 300)
+      }
+      expect(costs.metadata).toBe(metadata!)
+    }
+  }
+  // A guest-written request is the only new tail the next exit reads.
+  const launchFence = await readLaunchFence(store, build)
+  const fresh = await opts.fresh()
+  await sequence(fresh, launchFence)
+  await store.append(build, {
+    actor: KERNEL,
+    type: 'pr-summary.requested',
+    payload: (await readBuildFacts(store, build)).value.summaryBoundary!,
+  })
+  for (const reader of [store, fresh]) {
+    costs.events = 0
+    expect((await sequence(reader, launchFence)).pending).toBe(true)
+    expect(costs.events).toBeLessThanOrEqual(3)
+  }
+  expect(forge.comments).toHaveLength(1)
 }
 
 async function coldDispatchOnceBudget(
