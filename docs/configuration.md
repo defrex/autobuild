@@ -1388,8 +1388,9 @@ cause. A marked sandbox does not repeat provisioning; every replacement/new
 generation does. A named sandbox left without the completion marker, for example
 after a provision timeout, is flagged `cleanup-required` and never launched into.
 The dispatcher releases it automatically, recording an empty
-`workspace.commits-lost` when no checkout exists, and provisions the next
-generation.
+`workspace.commits-lost` when no checkout exists, or `workspace.commits-preserved`
+when a checkout that never started executing lacks its objects, and provisions
+the next generation.
 
 The representative actual-provider check is opt-in and must point at an
 independent consuming repository whose `autobuild.toml` selects the universal
