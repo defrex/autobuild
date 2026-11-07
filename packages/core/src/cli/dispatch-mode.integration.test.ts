@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   selectDispatchMode,
   DispatchPlacementStartupError,
+  DispatchRepositoryResolutionError,
   type DispatchModeOptions,
 } from './dispatch-mode'
 import { resolveRepoStatePaths } from './repo-state'
@@ -194,16 +195,38 @@ for (const status of [401, 403, 404, 426])
   })
 
 test('repository resolution failures fail closed without opening a store', async () => {
-  await expect(
-    selectDispatchMode(options, {
-      resolve: async () => {
-        throw new Error('invalid repository store configuration')
-      },
-      open: () => {
-        throw new Error('must not open')
-      },
-    }),
-  ).rejects.toThrow('invalid repository store configuration')
+  const cause = new Error('invalid repository store configuration')
+  const error = await selectDispatchMode(options, {
+    resolve: async () => {
+      throw cause
+    },
+    open: () => {
+      throw new Error('must not open')
+    },
+  }).catch((error: unknown) => error)
+  expect(error).toBeInstanceOf(DispatchRepositoryResolutionError)
+  expect(error).not.toBeInstanceOf(DispatchPlacementStartupError)
+  const resolution = error as DispatchRepositoryResolutionError
+  expect(resolution.code).toBe('DISPATCH_REPOSITORY_UNRESOLVED')
+  expect(resolution.cause).toBe(cause)
+  expect(resolution.message).toContain('invalid repository store configuration')
+  expect(resolution.message).toContain('autobuild.toml')
+  expect(resolution.message).not.toContain('dispatch placement')
+  expect(resolution.message).not.toContain('--viewer')
+  expect(resolution.message).not.toContain('--takeover')
+})
+
+test('repository resolution failures redact credentials from the cause', async () => {
+  const error = await selectDispatchMode(options, {
+    resolve: async () => {
+      throw new Error('bad store https://user:pw@store.test/x?token=secret-token')
+    },
+  }).catch((error: unknown) => error)
+  expect(error).toBeInstanceOf(DispatchRepositoryResolutionError)
+  const message = (error as Error).message
+  expect(message).not.toContain('secret-token')
+  expect(message).not.toContain('user:pw')
+  expect(message).toContain('https://store.test/x')
 })
 
 test('advertised malformed placement payload fails closed', async () => {

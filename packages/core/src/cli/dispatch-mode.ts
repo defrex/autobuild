@@ -1,30 +1,44 @@
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { DispatchPlacement } from '../kernel/dispatch-placement'
 import { RemoteBuildStore } from '../store/remote/client'
-import { resolveRepoState, isRemoteStoreRef } from './repo-state'
+import { resolveRepoState, isRemoteStoreRef, type RepoStatePaths } from './repo-state'
 import { projectToken } from './project-credentials'
 
 export const TAKEOVER_WARNING =
   'Warning: --takeover dispatches locally and can displace the hosted dispatcher.'
 
+function redactDetail(cause: unknown, secrets: string[]): string {
+  let detail = cause instanceof Error ? cause.message : String(cause)
+  for (const secret of secrets) if (secret) detail = detail.split(secret).join('[redacted]')
+  return detail.replace(/https?:\/\/[^\s]+/g, (url) => {
+    try {
+      const parsed = new URL(url)
+      return `${parsed.origin}${parsed.pathname}`
+    } catch {
+      return '[redacted URL]'
+    }
+  })
+}
+
 export class DispatchPlacementStartupError extends Error {
   readonly code = 'DISPATCH_PLACEMENT_UNREADABLE'
   constructor(cause: unknown, secrets: string[] = []) {
-    let detail = cause instanceof Error ? cause.message : String(cause)
-    for (const secret of secrets) if (secret) detail = detail.split(secret).join('[redacted]')
-    detail = detail.replace(/https?:\/\/[^\s]+/g, (url) => {
-      try {
-        const parsed = new URL(url)
-        return `${parsed.origin}${parsed.pathname}`
-      } catch {
-        return '[redacted URL]'
-      }
-    })
     super(
-      `Cannot read dispatch placement: ${detail}. Use --viewer to watch, or --takeover to dispatch locally and potentially displace hosted dispatch.`,
+      `Cannot read dispatch placement: ${redactDetail(cause, secrets)}. Use --viewer to watch, or --takeover to dispatch locally and potentially displace hosted dispatch.`,
       { cause },
     )
     this.name = 'DispatchPlacementStartupError'
+  }
+}
+
+export class DispatchRepositoryResolutionError extends Error {
+  readonly code = 'DISPATCH_REPOSITORY_UNRESOLVED'
+  constructor(cause: unknown, secrets: string[] = []) {
+    super(
+      `Cannot resolve the repository's store selection for dispatch: ${redactDetail(cause, secrets)}. Check --store, AB_STORE, and autobuild.toml [store].`,
+      { cause },
+    )
+    this.name = 'DispatchRepositoryResolutionError'
   }
 }
 
@@ -63,16 +77,21 @@ export async function selectDispatchMode(
     opts.stderr(TAKEOVER_WARNING)
     return { viewer: false }
   }
-  let token: string | undefined
-  let placement: DispatchPlacement
+  let state: RepoStatePaths
   try {
-    const state = await (deps.resolve ?? resolveRepoState)({
+    state = await (deps.resolve ?? resolveRepoState)({
       targetRepo: opts.targetRepo,
       exec: opts.exec,
       ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
       ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
     })
-    if (!isRemoteStoreRef(state.storeRef)) return { viewer: false }
+  } catch (cause) {
+    throw new DispatchRepositoryResolutionError(cause, [opts.env.AB_TOKEN ?? ''])
+  }
+  if (!isRemoteStoreRef(state.storeRef)) return { viewer: false }
+  let token: string | undefined
+  let placement: DispatchPlacement
+  try {
     const repo = opts.repo ?? state.repo
     token = projectToken(state.storeRef, repo, opts.env)
     const reader = (deps.open ?? ((url, token) => new RemoteBuildStore({ url, token })))(
