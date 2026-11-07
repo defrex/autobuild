@@ -64,7 +64,10 @@ export async function supersedingReplacedHead(input: {
 }
 
 /** Boundary-only Git inspection. Inventory traverses the unpublished change,
- * while immutable archive acknowledgement proves the tip and its ancestry. */
+ * while immutable archive acknowledgement proves the tip and its ancestry.
+ * With `neverExecuted`, a non-zero object probe means the checkout lacks that
+ * object: a missing base preserves nothing, and a missing `HEAD`, branch or
+ * candidate is skipped. Traversal and archive failures stay strict. */
 export async function preserveGitCommits(input: {
   exec: Exec
   workspacePath: string
@@ -77,6 +80,9 @@ export async function preserveGitCommits(input: {
    * archived as a producer so restoration never moves the branch to it. */
   replaced?: string[]
   local?: boolean
+  /** No execution ever started in this environment, so it holds no
+   * unpublished work and absent objects are not an error. */
+  neverExecuted?: boolean
 }): Promise<WorkspacePreservationHead[]> {
   const git = async (args: string[], optional = false) => {
     const result = await input.exec(['git', ...args], { cwd: input.workspacePath })
@@ -84,23 +90,33 @@ export async function preserveGitCommits(input: {
       throw new Error(`workspace preservation git ${args.join(' ')} failed: ${result.stderr}`)
     return result
   }
-  const branch = await git(
+  // An object probe: present, or (only for a never-executed checkout) absent.
+  const probe = (args: string[], optional = false) =>
+    input.neverExecuted
+      ? input.exec(['git', ...args], { cwd: input.workspacePath })
+      : git(args, optional)
+  const branch = await probe(
     ['rev-parse', '--verify', '--quiet', `refs/heads/${input.branch}^{commit}`],
     true,
   )
-  const head = await git(['rev-parse', '--verify', 'HEAD^{commit}'])
+  const head = await probe(['rev-parse', '--verify', 'HEAD^{commit}'])
   const heads: WorkspacePreservationHead[] = []
   const branchSha = branch.exitCode === 0 ? branch.stdout.trim() : undefined
+  const headSha = head.exitCode === 0 ? head.stdout.trim() : undefined
   const candidates = [
-    ...new Set([...(branchSha ? [branchSha] : []), head.stdout.trim(), ...input.candidates]),
+    ...new Set([
+      ...(branchSha ? [branchSha] : []),
+      ...(headSha ? [headSha] : []),
+      ...input.candidates,
+    ]),
   ]
   // The base is the authoritative branch (or recorded immutable initial base),
   // never an arbitrary local remote-tracking cache.
-  await git(['cat-file', '-e', `${input.base}^{commit}`])
+  if ((await probe(['cat-file', '-e', `${input.base}^{commit}`])).exitCode !== 0) return []
   for (const sha of candidates) {
     if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha))
       throw new Error('invalid preservation candidate')
-    await git(['cat-file', '-e', `${sha}^{commit}`])
+    if ((await probe(['cat-file', '-e', `${sha}^{commit}`])).exitCode !== 0) continue
     const commits = (await git(['rev-list', sha, `^${input.base}`])).stdout
       .trim()
       .split('\n')
