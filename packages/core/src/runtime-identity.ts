@@ -49,8 +49,16 @@ export function captureRuntimeIdentity(root = distributionRoot()) {
     source: Object.freeze({ kind, location }),
   }) satisfies RuntimeIdentity
 }
-export const RUNTIME_IDENTITY = captureRuntimeIdentity()
+let captured: RuntimeIdentity | undefined
+/** The executing process's own distribution identity, captured on first use and
+ * then fixed for the life of the process (module instance). Importing this module
+ * performs no capture, so in-memory consumers never run Git or read files. */
+export function runtimeIdentity(): RuntimeIdentity {
+  captured ??= captureRuntimeIdentity()
+  return captured
+}
 export function formatDispatcherError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
-  return `${message}; autobuild=${RUNTIME_IDENTITY.version}; commit=${RUNTIME_IDENTITY.commit}`
+  const identity = runtimeIdentity()
+  return `${message}; autobuild=${identity.version}; commit=${identity.commit}`
 }

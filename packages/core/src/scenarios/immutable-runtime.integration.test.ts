@@ -112,12 +112,12 @@ for (const mode of ['package', 'source'])
         ).toBe(entry.digest)
       }
       const probe = `
-      import { RUNTIME_IDENTITY } from ${JSON.stringify(join(runtime.root, 'packages/core/src/runtime-identity.ts'))};
+      import { runtimeIdentity } from ${JSON.stringify(join(runtime.root, 'packages/core/src/runtime-identity.ts'))};
       await import(${JSON.stringify(join(runtime.root, 'packages/core/src/cli/binary-direct.ts'))});
       await import(${JSON.stringify(join(runtime.root, 'packages/core/src/cli/dispatch.ts'))});
       await import(${JSON.stringify(join(runtime.root, 'packages/core/src/processes/build-child.ts'))});
       await import(${JSON.stringify(join(runtime.root, 'packages/core/src/processes/harvest-child.ts'))});
-      if(RUNTIME_IDENTITY.source.location !== ${JSON.stringify(runtime.root)}) throw new Error('wrong runtime');
+      if(runtimeIdentity().source.location !== ${JSON.stringify(runtime.root)}) throw new Error('wrong runtime');
       const {resolveDistributionArchive}=await import(${JSON.stringify(join(runtime.root, 'packages/core/src/ports/workspace/distribution-archive.ts'))});
       if((await resolveDistributionArchive()).digest !== ${JSON.stringify(runtime.archiveDigest)}) throw new Error('wrong frozen archive');
       console.log('graphs loaded');`

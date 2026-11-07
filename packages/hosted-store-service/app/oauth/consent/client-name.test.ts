@@ -98,7 +98,7 @@ describe('registeredClientName — lookup contract', () => {
 // Drives the helper through a real better-auth instance — the actual adapter
 // factory and the memory adapter's findOne query path (field resolution
 // included) — rather than a hand-written fake. Same pattern as
-// src/web/auth.integration.test.ts; the instance is passed via the `auth` parameter the
+// src/web/auth.test.ts; the instance is passed via the `auth` parameter the
 // helper already exposes, so the module-level webAuth() singleton is untouched.
 const ORIGIN = 'https://operator.example'
 const realAuthEnv: Record<string, string> = {
