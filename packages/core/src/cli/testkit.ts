@@ -6,6 +6,7 @@
  * behavior IS the contract, store/contract.ts) and the git fixtures are real
  * throwaway repos, matching the patterns in git-worktree.integration.test.ts.
  */
+import { expect } from 'bun:test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
@@ -205,4 +206,40 @@ export async function commitFile(
   await runGit(['add', file], dir)
   await runGit([...GIT_ID, 'commit', '-q', '-m', message], dir)
   return runGit(['rev-parse', 'HEAD'], dir)
+}
+
+/**
+ * Bun omits the `(pass) <name>` lines from `bun test` output when an agent
+ * variable (`CLAUDECODE`, `AI_AGENT`) is set, but prints the `N pass` / `N fail`
+ * summary in both modes. Tests that judge a nested contract run must therefore
+ * read the summary, never a passing test's name, and should exercise both
+ * reporter modes rather than inherit whichever the parent happens to carry.
+ */
+export const BUN_AGENT_ENV_KEYS = ['CLAUDECODE', 'AI_AGENT'] as const
+
+export const BUN_REPORTER_ENVS: readonly { label: string; env: Record<string, string> }[] = [
+  { label: 'ordinary', env: {} },
+  { label: 'agent', env: { CLAUDECODE: '1', AI_AGENT: '1' } },
+]
+
+function lastCount(output: string, pattern: RegExp): number | undefined {
+  let count: number | undefined
+  for (const match of output.matchAll(pattern)) count = Number(match[1])
+  return count
+}
+
+/** The last ` N pass` / ` N fail` summary lines of `bun test` output, if both are present. */
+export function bunTestSummary(output: string): { pass: number; fail: number } | undefined {
+  const pass = lastCount(output, /^\s*(\d+) pass$/gm)
+  const fail = lastCount(output, /^\s*(\d+) fail$/gm)
+  return pass === undefined || fail === undefined ? undefined : { pass, fail }
+}
+
+/** A nested `bun test` passed: zero exit, a nonzero pass count, and zero failures. */
+export function expectBunContractPassed(status: number, output: string): void {
+  expect(status, output).toBe(0)
+  const summary = bunTestSummary(output)
+  expect(summary, output).toBeDefined()
+  expect(summary?.pass, output).toBeGreaterThan(0)
+  expect(summary?.fail, output).toBe(0)
 }

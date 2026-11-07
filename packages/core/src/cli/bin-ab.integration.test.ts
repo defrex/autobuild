@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
+import { BUN_REPORTER_ENVS, expectBunContractPassed } from './testkit'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
@@ -285,10 +286,14 @@ export default {
   expect(doctor.stdout).toContain('OK ./plugin.ts')
   expect(doctor.stderr).not.toContain('AB_BUILD')
 
-  const contract = await runBinWithoutAb(['plugin', 'test', 'ticket-source', 'sample'])
-  expect(contract.code).toBe(0)
-  expect(contract.stdout + contract.stderr).toContain('create/get round-trips common fields')
-})
+  for (const mode of BUN_REPORTER_ENVS) {
+    const contract = await runBinWithoutAb(['plugin', 'test', 'ticket-source', 'sample'], mode.env)
+    expectBunContractPassed(
+      contract.code,
+      `${mode.label} reporter\n${contract.stdout}${contract.stderr}`,
+    )
+  }
+}, 60_000)
 
 test('ab build status runs sessionless and exits 1 on an unknown slug', async () => {
   const result = await runBin(['build', 'status', 'no-such-build'])
