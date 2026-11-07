@@ -239,6 +239,29 @@ describe('ab-guide — dispatch dashboard summary', () => {
   })
 })
 
+describe('ab-guide — hosted dispatch viewer guidance', () => {
+  const SETUP_PATH = join(DIST_ROOT, 'skills', 'guide', 'references', 'setup.md')
+  const distinctive = [
+    'Startup intake flags require `--takeover` when placement selects viewer',
+    'Placement is a startup snapshot, not a liveness probe or a polling input',
+  ]
+
+  test('the guide links to the one authoritative setup passage', () => {
+    const section = headingSection('## Dispatch dashboard')
+    expect(section).toBeDefined()
+    expect(section).toContain('](references/setup.md#hosted-dispatch-and-local-viewing)')
+    const compact = guide.replace(/\s+/g, ' ')
+    for (const sentence of distinctive) expect(compact).not.toContain(sentence)
+  })
+
+  test('setup.md keeps the anchored heading and the full guidance', async () => {
+    const setup = await readFile(SETUP_PATH, 'utf8')
+    expect(setup).toContain('\n## Hosted dispatch and local viewing\n')
+    const compact = setup.replace(/\s+/g, ' ')
+    for (const sentence of distinctive) expect(compact).toContain(sentence)
+  })
+})
+
 describe('ab-guide — persistence marking', () => {
   /**
    * The guide and the three review skills must give one answer about what
