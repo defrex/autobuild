@@ -1,11 +1,17 @@
 import { expect, test } from 'bun:test'
-import { RUNTIME_IDENTITY } from '../runtime-identity'
+import type { RuntimeIdentity } from '../events/runtime'
 import { reduceBuild } from '../kernel/reducer'
 import type { AbEvent } from '../events/catalog'
 import { relaunchTarget, sameRuntime } from './execution-relaunch'
 
+const RUNTIME: RuntimeIdentity = Object.freeze({
+  version: '1.0.0',
+  commit: 'a'.repeat(40),
+  source: Object.freeze({ kind: 'source' as const, location: '/runtime' }),
+})
+
 test('full immutable identity comparison needs no Store access', () => {
-  const runtime = RUNTIME_IDENTITY
+  const runtime = RUNTIME
   const state = reduceBuild([])
   expect(relaunchTarget(state, 'runner', runtime)).toBeUndefined()
   for (const to of [
@@ -34,7 +40,7 @@ test('full immutable identity comparison needs no Store access', () => {
 })
 
 test('legacy, settled and ended authorizations preserve replay behavior', () => {
-  const runtime = RUNTIME_IDENTITY
+  const runtime = RUNTIME
   const authorization = {
     type: 'execution.drain-authorized',
     payload: { instance: 'runner', correlation: 'h', run: 'old', runtime },
@@ -56,7 +62,7 @@ test('legacy, settled and ended authorizations preserve replay behavior', () => 
 })
 
 test('replayed older authorizations cannot replace the newest target or resurrect settlement', () => {
-  const runtime = RUNTIME_IDENTITY
+  const runtime = RUNTIME
   const authorization = (correlation: string, commit: string) =>
     ({
       type: 'execution.drain-authorized',

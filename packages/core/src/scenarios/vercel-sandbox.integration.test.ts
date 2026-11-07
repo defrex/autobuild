@@ -5,7 +5,7 @@ import { temporaryDirectories as ownTempDirectories } from '../testing/temp-dire
 import { authorizeRemoteHandoffs } from '../kernel/dispatch-drain-recovery'
 import { readBuildFacts } from '../store/reduced-reads'
 import { relaunchTarget } from '../processes/execution-relaunch'
-import { RUNTIME_IDENTITY } from '../runtime-identity'
+import { runtimeIdentity } from '../runtime-identity'
 import { distributionStampFor } from '../ports/workspace/distribution-archive'
 import { afterEach, expect, test } from 'bun:test'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
@@ -639,11 +639,11 @@ for (const upgrading of [false, true])
     let archiveByte = 1
     const installed: Uint8Array[] = []
     const guestRuntime = {
-      ...RUNTIME_IDENTITY,
+      ...runtimeIdentity(),
       source: { kind: 'package' as const, location: VERCEL_AUTOBUILD_PATH },
     }
     const target = {
-      ...RUNTIME_IDENTITY,
+      ...runtimeIdentity(),
       commit: 'f'.repeat(40),
       source: { kind: 'package' as const, location: '/host/cache/new' },
     }
@@ -1004,7 +1004,7 @@ for (const upgrading of [false, true])
           correlation: 'remote-upgrade',
           run: 'predecessor',
           lineage: 'launcher',
-          from: RUNTIME_IDENTITY,
+          from: runtimeIdentity(),
           to: target,
           root: target.source.location,
           cacheId: 'target',

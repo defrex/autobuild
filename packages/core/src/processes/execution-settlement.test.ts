@@ -1,12 +1,18 @@
 import { executionNoProgressReducer } from './execution-no-progress'
 import { describe, expect, test } from 'bun:test'
-import { RUNTIME_IDENTITY } from '../runtime-identity'
+import type { RuntimeIdentity } from '../events/runtime'
 import { KERNEL, DISPATCHER } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock } from '../testing/fixed'
 import type { BuildExecution, ExecutionObservation } from '../ports/workspace/build-execution'
 import { openExecution, settleExecution, settleOpenExecution } from './execution-settlement'
+
+const RUNTIME: RuntimeIdentity = Object.freeze({
+  version: '1.0.0',
+  commit: 'a'.repeat(40),
+  source: Object.freeze({ kind: 'source' as const, location: '/runtime' }),
+})
 
 function started(over: { instance?: string; commandId?: string } = {}): AbEvent {
   return {
@@ -140,7 +146,7 @@ describe('settleExecution', () => {
         type: 'execution.started',
         payload: start.payload as never,
       })
-      const runtime = RUNTIME_IDENTITY
+      const runtime = RUNTIME
       await h.store.append('build', {
         actor: DISPATCHER,
         type: 'execution.drain-authorized',
