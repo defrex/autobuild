@@ -254,8 +254,11 @@ An unreadable placement fails closed with a typed error naming the cause:
 use `--viewer` to watch or `--takeover` to dispatch locally. Both explicit modes
 skip placement discovery. Older services without the capability and projects
 with unknown or nonhosted placement retain local dispatch behavior. Local stores
-need no placement request. Origin mode (`--repository` or `AB_REPOSITORY`) and
-hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
+need no placement request. Failing to resolve the checkout's store selection
+(for example, a malformed `autobuild.toml`) is not a placement failure: default
+startup reports it as a repository resolution error naming its cause, and
+neither explicit mode bypasses it. Origin mode (`--repository` or
+`AB_REPOSITORY`) and hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
 liveness probe or a polling input. Operator agents' prohibition on running dispatch includes viewer.
 
 Resident checkout-backed `ab dispatch` starts a launcher and one dispatcher
