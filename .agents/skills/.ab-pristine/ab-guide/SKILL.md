@@ -1966,26 +1966,10 @@ in-session `put|get` still require ambient phase auth.
 
 ## Dispatch dashboard
 
-A plain `ab dispatch` reads dispatch placement once before starting local execution.
-For a hosted project it opens the viewer automatically, displaying
-`viewer · dispatched by <host>` from the placement origin (including a nondefault
-port). `--once`, `--plain`, and `--interval` retain their viewer meanings.
-The viewer reads its dashboard from the Store; its one ticket-source read is
-the header's triage count, through the source's optional `countStates`.
-`--takeover` explicitly dispatches locally, with a warning that it can displace
-the hosted dispatcher; it cannot be combined with `--viewer`. Startup intake
-flags require `--takeover` when placement selects viewer.
-
-An unreadable placement fails closed with a typed error naming the cause:
-use `--viewer` to watch or `--takeover` to dispatch locally. Both explicit modes
-skip placement discovery. Older services without the capability and projects
-with unknown or nonhosted placement retain local dispatch behavior. Local stores
-need no placement request. Failing to resolve the checkout's store selection
-(for example, a malformed `autobuild.toml`) is not a placement failure: default
-startup reports it as a repository resolution error naming its cause, and
-neither explicit mode bypasses it. Origin mode (`--repository` or
-`AB_REPOSITORY`) and hosted cron dispatch bypass this check. Placement is a startup snapshot, not a
-liveness probe or a polling input.
+How a plain `ab dispatch` chooses between the viewer and local execution for a
+hosted project — placement discovery, `--takeover`, explicit `--viewer`, and
+the fail-closed behavior when placement is unreadable — is described once in
+[hosted dispatch and local viewing](references/setup.md#hosted-dispatch-and-local-viewing).
 
 Humans may run `ab dispatch --viewer` from a local checkout to watch dispatch
 elsewhere without taking a lease or starting any dispatch work. The optional
