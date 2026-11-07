@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
+import type { TicketSource, TicketStateCount } from '../types'
 import {
+  boundedStateCount,
   matchStateNames,
   orderStates,
   resolveState,
@@ -58,6 +60,56 @@ test('triage count matches like resolveState and reports unknown without a uniqu
       'triage',
     ),
   ).toBe(2)
+})
+
+test('a bounded state count is one countStates request and never a listing', async () => {
+  class Counts {
+    requests: (readonly string[])[] = []
+    listings = 0
+    constructor(private readonly answer: () => Promise<TicketStateCount[]>) {}
+    async countStates(names: readonly string[]): Promise<TicketStateCount[]> {
+      this.requests.push(names)
+      return this.answer()
+    }
+    async listStates(): Promise<never> {
+      this.listings++
+      throw new Error('a bounded count never lists states')
+    }
+  }
+  const counted = new Counts(async () => [{ name: 'Triage', tickets: 3 }])
+  expect(await boundedStateCount(counted, 'triage')).toBe(3)
+  expect(counted.requests).toEqual([['triage']])
+  // A resolved zero is a real zero, distinct from unknown.
+  expect(
+    await boundedStateCount(new Counts(async () => [{ name: 'triage', tickets: 0 }]), 'triage'),
+  ).toBe(0)
+  // Omitted and ambiguous names are unknown.
+  expect(await boundedStateCount(new Counts(async () => []), 'triage')).toBeUndefined()
+  expect(
+    await boundedStateCount(
+      new Counts(async () => [
+        { name: 'Triage', tickets: 1 },
+        { name: 'TRIAGE', tickets: 2 },
+      ]),
+      'triage',
+    ),
+  ).toBeUndefined()
+  const failing = new Counts(async () => {
+    throw new Error('state-counts unavailable')
+  })
+  await expect(boundedStateCount(failing, 'triage')).rejects.toThrow('state-counts unavailable')
+  for (const source of [counted, failing]) expect(source.listings).toBe(0)
+
+  // A source without bounded counts makes no request at all, even when it can list.
+  let listings = 0
+  const listOnly: Pick<TicketSource, 'countStates' | 'listStates'> = {
+    listStates: async () => {
+      listings++
+      return [{ name: 'triage', tickets: 9 }]
+    },
+  }
+  expect(await boundedStateCount(listOnly, 'triage')).toBeUndefined()
+  expect(listings).toBe(0)
 })
 
 test('matchStateNames resolves canonical names in request order and drops misses', () => {

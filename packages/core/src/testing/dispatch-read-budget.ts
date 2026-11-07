@@ -18,6 +18,7 @@ import type { TicketSource } from '../ports/types'
 import { FileTicketSource } from '../ports/tickets/file'
 import { HostedTicketSource } from '../ports/tickets/remote'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { boundedStateCount } from '../ports/tickets/states'
 
 const tickCounters = {
   merged: 0,
@@ -906,7 +907,11 @@ async function upgradeGenerationReadBudget(): Promise<void> {
 /** Measure real ticket-source operations through an injected statement boundary.
  * Each fixture is fresh, so a source-local cache cannot conceal target reads.
  * Listed rows carry one `closes #1` issue link on even-titled tickets and none
- * on odd ones; statement counts must not change with links. */
+ * on odd ones; statement counts must not change with links.
+ *
+ * With `triageState`, also measure the interactive dispatcher's triage sample
+ * (one bounded `countStates` read, never a listing): it answers the fixture's
+ * `size` with the same statement count at every ticket population. */
 export async function ticketListReadBudget(
   fixture: (
     size: number,
@@ -916,8 +921,25 @@ export async function ticketListReadBudget(
     reset(): void
     statements(): number
   },
+  opts: { triageState?: string } = {},
 ): Promise<void> {
+  const sampleCosts: number[] = []
   for (const size of [0, 1, 100]) {
+    if (opts.triageState !== undefined) {
+      const { source, reset, statements } = fixture(size, 'none')
+      expect(source.countStates).toBeDefined()
+      Object.defineProperty(source, 'listStates', {
+        configurable: true,
+        value: async () => {
+          throw new Error('the triage sample never lists ticket states')
+        },
+      })
+      reset()
+      expect(await boundedStateCount(source, opts.triageState)).toBe(size)
+      // Seed probe, state names, one primary-key probe: no ticket rows.
+      expect(statements()).toBeLessThanOrEqual(3)
+      sampleCosts.push(statements())
+    }
     for (const targets of ['none', 'shared', 'distinct'] as const) {
       for (const state of [undefined, 'Ready']) {
         const { source, reset, statements } = fixture(size, targets)
@@ -951,6 +973,8 @@ export async function ticketListReadBudget(
       }
     }
   }
+  // The bounded count costs the same at every ticket population.
+  for (const cost of sampleCosts) expect(cost).toBe(sampleCosts[0]!)
 }
 
 /** Persisted caches isolate startup transfer from unrelated discarded history.

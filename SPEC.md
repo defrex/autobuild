@@ -3036,7 +3036,8 @@ facts.
 Successful dispatcher ticks with no effects, counters, diagnostics, queue change,
 sampled triage-count change, or attention transition append no tick boundary
 events. Only a dispatcher feeding an interactive dashboard samples the triage
-count, once per tick from the ticket source's state counts. A viewer
+count, once per tick through the ticket source's bounded state-count answer
+(`countStates`), never a listing; a source without it shows `–`. A viewer
 (`ab dispatch --viewer`, or the default viewer placement for hosted dispatch)
 reads the configured triage state's count itself, at most once per 10 s while
 its dashboard runs, through the ticket source's bounded state-count answer

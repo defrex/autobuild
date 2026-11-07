@@ -1,4 +1,4 @@
-import type { TicketStateInfo } from '../types'
+import type { TicketSource, TicketStateCount } from '../types'
 
 /** Shared state rules; configured names are deliberately not create-validated. */
 export const STATE_NAME_RULE =
@@ -48,13 +48,25 @@ export function resolveState(
 /** Ticket count of the named state using `resolveState`'s matching (exact,
  * else one case-insensitive match); zero or ambiguous matches are unknown. */
 export function triageStateCount(
-  states: readonly TicketStateInfo[],
+  states: readonly TicketStateCount[],
   name: string,
 ): number | undefined {
   const exact = states.find((state) => state.name === name)
   if (exact !== undefined) return exact.tickets
   const matches = states.filter((state) => state.name.toLowerCase() === name.toLowerCase())
   return matches.length === 1 ? matches[0]?.tickets : undefined
+}
+
+/** One bounded display count for the named state: a single
+ * `countStates([name])` request, never a listing. Undefined when the source
+ * has no bounded counts or the name does not resolve uniquely; rejects when
+ * the read fails, so callers can keep their last good value. */
+export async function boundedStateCount(
+  source: Pick<TicketSource, 'countStates'>,
+  name: string,
+): Promise<number | undefined> {
+  if (source.countStates === undefined) return undefined
+  return triageStateCount(await source.countStates([name]), name)
 }
 
 /** Canonical names for requested states using `resolveState`'s matching

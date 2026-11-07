@@ -16,7 +16,8 @@ import { abDispatch } from '../cli/dispatch'
 import { createTerminalModeController } from '../cli/terminal-restore'
 import { randomUuids } from '../ids'
 import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
-import { Dispatcher } from '../processes/dispatcher'
+import { Dispatcher, defaultTriageState } from '../processes/dispatcher'
+import { boundedStateCount } from '../ports/tickets/states'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import { FakeForge } from '../ports/forge/fake'
@@ -1070,9 +1071,12 @@ steps = []
     // only for a dispatcher that feeds an interactive frontend.
     let stateReads = 0
     const tickets = Object.assign(new FakeTicketSource([]), {
-      listStates: async () => {
+      countStates: async (names: readonly string[]) => {
         stateReads++
-        return [{ name: 'triage', tickets: 2 }]
+        return names.map((name) => ({ name, tickets: 2 }))
+      },
+      listStates: async () => {
+        throw new Error('the triage sample never lists ticket states')
       },
     })
     const checked = new Proxy(cold, {
@@ -2546,11 +2550,17 @@ export async function hostedSeedReadBudget() {
  * a role-aware tick issues exactly as many ticket-source requests as a
  * role-free one, at 100 and at 100,000 repository events, and an unchanged
  * read after it costs zero event rows. `open` returns the source a project
- * with `config` dispatches over and a running count of its source requests. */
+ * with `config` dispatches over and a running count of its source requests.
+ *
+ * Each tick is followed by the interactive dispatcher's triage sample: exactly
+ * `sampleRequests` source requests (one bounded count, or none for a source
+ * without counts), never a listing, zero event rows, and the same cost at
+ * every log length. */
 export async function ticketRoleTickBudget(
   open: (
     config: import('../config/schema').Config,
   ) => Promise<{ tickets: import('../ports/types').TicketSource; requests: () => number }>,
+  sampleRequests: 0 | 1,
 ) {
   const { MemoryBuildStore } = await import('../store/memory')
   const sha = 'a'.repeat(40)
@@ -2624,6 +2634,27 @@ export async function ticketRoleTickBudget(
           report.dependencyDiagnostics.some((line) => line.endsWith('which was rejected')),
         ).toBe(roles)
         expect(counter.rows).toBeLessThanOrEqual(32)
+        // The interactive dispatcher's per-tick triage sample, exactly as it
+        // calls it: one bounded count at most, never a listing or an event read.
+        const listStates = Object.getOwnPropertyDescriptor(tickets, 'listStates')
+        Object.defineProperty(tickets, 'listStates', {
+          configurable: true,
+          writable: true,
+          value: async () => {
+            throw new Error('the triage sample never lists ticket states')
+          },
+        })
+        try {
+          const sampleBefore = requests()
+          counter.reset()
+          const triage = await boundedStateCount(tickets, defaultTriageState(config))
+          expect(requests() - sampleBefore).toBe(sampleRequests)
+          expect(triage === undefined).toBe(sampleRequests === 0)
+          expect(counter.rows).toBe(0)
+        } finally {
+          if (listStates === undefined) Reflect.deleteProperty(tickets, 'listStates')
+          else Object.defineProperty(tickets, 'listStates', listStates)
+        }
         // Prepare the tick's own tail, then prove an unchanged read costs zero rows.
         await readRepositoryFacts(store, repo)
         await readBuildDigests(store, repo)
