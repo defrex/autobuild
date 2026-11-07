@@ -4,7 +4,7 @@
  * the wire schemas in remote-protocol.ts — the same vocabulary the hosted
  * ticket server composes (the linear.test.ts fake-fetch pattern). The other
  * half of the seam — client → real HTTP → ticket server over a real socket —
- * runs in packages/hosted-store-service/src/ticket-server.seam.integration.test.ts; no
+ * runs in packages/hosted-store-service/src/ticket-server.seam.test.ts; no
  * server fixture is created here.
  *
  * Pinned as core surface: every operation POSTs `{context, input}` to
