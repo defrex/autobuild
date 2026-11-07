@@ -391,14 +391,10 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
 1. Run `ab context` and read `"$AB_CONTEXT_DIR/context.json"`. The verifier receives
    `$AB_CONTEXT_DIR/spec.md`, the configured step,
    the commit range, and, after escalation is answered, `$AB_CONTEXT_DIR/guidance.json`.
-   Node verify sessions also receive `nodeVerification` in the context manifest:
-   contribution specs and a provenance index mapping commits to the builds that
-   introduced them. Read those specs through the manifest's allocated paths.
-   Also read `handPushedCommits: [{sha, originalSha, message}]` from the manifest
-   and index. These hand-pushed node commit messages express maintainer-authorized
-   intent; judge quality and consistency, and never fail them solely for lacking
-   a covering spec. Other node changes are authorized when the node spec or the introducing
-   contribution's spec covers it; use the commit index to find that spec.
+   Node verify sessions also receive `nodeVerification`: contribution specs,
+   a commit provenance index and owned `handPushedCommits`, read through the
+   manifest's allocated paths. Judge them as described in
+   [node verification context](integration-tree.md#node-verification-context).
 2. Exercise each applicable acceptance criterion through the repository's real
    application lifecycle. Prefer the narrowest honest flow that catches a
    regression.
