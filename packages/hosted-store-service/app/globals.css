@@ -308,7 +308,9 @@ textarea {
 .menu-label {
   overflow-wrap: anywhere;
 }
+/* The sans face has no U+25BE; the mono face carries the select's same glyph. */
 .menu-glyph {
+  font-family: var(--mono);
   color: var(--slack);
 }
 .menu-list {
