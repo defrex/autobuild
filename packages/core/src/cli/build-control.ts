@@ -1,5 +1,5 @@
 import { integrationFailed } from '../kernel/integration-state'
-import { landPreconditions } from '../kernel/landing-readiness'
+import { landRefusalReason } from '../kernel/landing-readiness'
 import { observeIntegration } from '../kernel/integration-completeness'
 import type { TicketSource } from '../ports/types'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -122,6 +122,8 @@ export type BuildControlErrorCode =
   | 'discard-pending'
   | 'review-round-ceiling-unavailable'
   | 'incompatible-answer-options'
+  | 'merge-not-ready'
+  | 'node-incomplete'
 
 /** Typed codes let the dashboard turn stale selections/prompts into warnings
  * while the CLI can surface the same underlying conflict as a command error. */
@@ -542,29 +544,42 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         if (opts.action.kind === 'land' && discardInFlight(current)) throw discardPending(opts.slug)
         const decision = current.landing?.decision
         if (opts.action.kind === 'land') {
-          if (!landPreconditions(current, facts.log.restack))
-            throw new Error(
-              'Merge is not ready; wait for current-base verification and finalize before running ab merge',
+          const reason = landRefusalReason(current, facts.log.restack)
+          if (reason !== undefined)
+            throw new BuildControlError(
+              'merge-not-ready',
+              `Merge is not ready: ${reason}; refresh the build's status and run ab merge once it is ready`,
             )
           if (current.kind === 'node') {
             if (!opts.ticketSource)
               throw new Error('Cannot establish node completeness: ticket source unavailable')
             const source = await opts.ticketSource()
             const rejectedState = await opts.rejectedState?.()
-            const observed = await observeIntegration(
-              opts.store,
-              source,
-              opts.slug,
-              undefined,
-              rejectedState === undefined ? {} : { rejectedState },
-            )
+            let failure: { error: unknown } | undefined
+            const observed = await observeIntegration(opts.store, source, opts.slug, undefined, {
+              ...(rejectedState === undefined ? {} : { rejectedState }),
+              onFailure: (error) => {
+                failure ??= { error }
+              },
+            })
+            // An observation that could not run is a server fault, not a
+            // build-state refusal, so it never becomes node-incomplete.
+            if (failure !== undefined)
+              throw failure.error instanceof Error
+                ? failure.error
+                : new Error(String(failure.error))
             if (
               observed.openChildren.length ||
               observed.diagnostics.length ||
               !observed.contributions.length
             )
-              throw new Error(
-                'Node is incomplete; wait for its children and verification before running ab merge',
+              throw new BuildControlError(
+                'node-incomplete',
+                `Node is incomplete${
+                  observed.openChildren.length
+                    ? ` (open children: ${observed.openChildren.join(', ')})`
+                    : ''
+                }; wait for its children and verification before running ab merge`,
               )
           }
         }

@@ -217,6 +217,11 @@ skew and unavailable projections are `409 conflict`. A build outside the URL's
 repository is deliberately hidden as `404 not-found` with `unknown build`,
 consistently for detail, control, answer, and artifact routes. Control refusals are `409
 refusal` and preserve the shared `BuildControlError` code and exact reason text.
+A `land` control whose merge candidate is not ready is refused with code
+`merge-not-ready`, and its reason names the unmet condition; a node that fails
+the live completeness check is refused with code `node-incomplete`, naming any
+open children. Neither records consent or starts a merge, so refresh the
+build's status and retry once the reason is resolved.
 A partial bulk failure uses code `bulk-partial` and includes the durable write
 progress and unattempted builds. Unexpected failures are `500 internal`.
 

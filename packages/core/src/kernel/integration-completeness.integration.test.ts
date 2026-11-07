@@ -96,3 +96,19 @@ test('digest-filtered observation equals observing every build, reading facts on
   expect(observed.contributions).toEqual(['merged'])
   expect(read.sort()).toEqual(['merged', 'restacked', 'running'])
 })
+
+test('an observation failure is reported through onFailure and still recorded as a diagnostic', async () => {
+  const source = new FakeTicketSource([{ ...readyTicket('NODE'), kind: 'node' }])
+  const failing = async () => {
+    throw new Error('ticket service offline')
+  }
+  const reported: unknown[] = []
+  const observed = await observeIntegration(await seed(), source, 'node', failing, {
+    onFailure: (error) => reported.push(error),
+  })
+  expect(reported).toHaveLength(1)
+  expect((reported[0] as Error).message).toBe('ticket service offline')
+  expect(observed.diagnostics).toContain('ticket service offline')
+  const silent = await observeIntegration(await seed(), source, 'node', failing)
+  expect(silent.diagnostics).toContain('ticket service offline')
+})
