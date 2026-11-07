@@ -352,13 +352,13 @@ test('frontend input and captured controls remain responsive while the kernel is
   await waitFor(() => repositoryReads.some((read) => read.sinceSeq > 0), 'incremental repo cursor')
   // The frontend journal cursor still advances incrementally.
   expect(repositoryReads.filter((read) => read.sinceSeq > 0).length).toBeGreaterThan(0)
-  // AUT-534: the initial fold is the bounded seed read (issued pre-launch by
-  // the warm-up). With an empty-at-seed journal the seed leaves the cursor at
-  // 0, so the delta path may read from zero until the child's first facts
-  // advance it — the same reads today's full read performed. The invariant
-  // that rules out a whole-journal rescan is monotonicity: once the cursor
-  // has advanced, no read ever returns to zero.
-  expect(boundedReads).toBeGreaterThan(0)
+  // AUT-534: the initial fold is the canonical seed (issued pre-launch by
+  // the warm-up), never the journal's state events. With an empty-at-seed
+  // journal the seed leaves the cursor at 0, so the delta path may read from
+  // zero until the child's first facts advance it. The invariant that rules
+  // out a whole-journal rescan is monotonicity: once the cursor has advanced,
+  // no read ever returns to zero.
+  expect(boundedReads).toBe(0)
   let cursorAdvanced = false
   for (const read of repositoryReads) {
     if (read.sinceSeq > 0) cursorAdvanced = true
@@ -2032,24 +2032,23 @@ test('frontend repository traffic stays flat as finished builds accumulate (AUT-
 // --- AUT-534: the interactive surfaces' initial replays become bounded reads ---
 
 interface ProbeCall {
-  method: 'getRepoEvents' | 'getRepoStateEvents' | 'getRepositoryTail'
+  method: 'getRepoEvents' | 'getRepoStateEvents' | 'getRepositoryTail' | 'repositoryReadFacts'
   sinceSeq?: number
   order: number
   failed: boolean
 }
 
 /** A counting proxy over a real `MemoryBuildStore`: records every repository
- * journal read (bounded or delta) in issue order, can fail the bounded read,
- * and can defeat the bound by answering `getRepoStateEvents` with the full
- * journal. `markLaunch` stamps the shared order counter when `launchChild` is
- * invoked, so every recorded call is attributable to the pre- or post-launch
- * window. */
+ * journal read (canonical seed or delta) in issue order and can fail the
+ * pre-launch canonical seed read. `getRepoStateEvents` is recorded so tests can
+ * pin that startup never falls back to it. `markLaunch` stamps the shared order
+ * counter when `launchChild` is invoked, so every recorded call is attributable
+ * to the pre- or post-launch window. */
 function frontendProbe(
   backing: MemoryBuildStore,
   opts: {
     failBounded?: boolean
     failPreLaunchFullRead?: boolean
-    boundedReturnsFull?: boolean
   } = {},
 ) {
   let counter = 0
@@ -2060,20 +2059,24 @@ function frontendProbe(
     get(target, property) {
       if (property === 'getRepoStateEvents') {
         return async (requestedRepo: string) => {
+          calls.push({ method: 'getRepoStateEvents', order: counter++, failed: false })
+          return target.getRepoStateEvents(requestedRepo)
+        }
+      }
+      if (property === 'getReducerValue') {
+        return async (...args: Parameters<BuildStore['getReducerValue']>) => {
+          if (args[1].reducer !== 'repositoryReadFacts') return target.getReducerValue(...args)
           const order = counter++
           try {
             // The failure is confined to the pre-launch window: the warm-up
-            // seed attempt is what must fail; later bounded reads
+            // seed attempt is what must fail; later canonical reads
             // (post-launch) stay served.
             if (opts.failBounded === true && !launched) throw new Error('bounded read unavailable')
-            const result =
-              opts.boundedReturnsFull === true
-                ? await target.getRepoEvents(requestedRepo, 0)
-                : await target.getRepoStateEvents(requestedRepo)
-            calls.push({ method: 'getRepoStateEvents', order, failed: false })
+            const result = await target.getReducerValue(...args)
+            calls.push({ method: 'repositoryReadFacts', order, failed: false })
             return result
           } catch (error) {
-            calls.push({ method: 'getRepoStateEvents', order, failed: true })
+            calls.push({ method: 'repositoryReadFacts', order, failed: true })
             throw error
           }
         }
@@ -2283,20 +2286,21 @@ async function runBoundedSeed(input: {
   return frames
 }
 
-test('the interactive frontend seeds its initial fold with the bounded read before launch (AUT-534)', async () => {
+test('the interactive frontend seeds its initial fold from canonical facts before launch (AUT-534)', async () => {
   const repo = '/bounded-seed-repo'
   const backing = new MemoryBuildStore({ clock: steppingClock() })
   const journalEnd = await seedAgedJournal(backing, repo)
   const probe = frontendProbe(backing)
   const frames = await runBoundedSeed({ repo, backing, probe })
 
-  // The bounded seed completes before launch; other initialization reads
-  // capture the high-water boundary and fetch its contiguous tail.
+  // The canonical seed completes before launch; other initialization reads
+  // capture the high-water boundary and fetch its contiguous tail. Startup
+  // never downloads the current run's tail through getRepoStateEvents.
   expect(probe.launchOrder).toBeDefined()
   const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
-  expect(preLaunch.filter((call) => call.method === 'getRepoStateEvents')).toHaveLength(1)
+  expect(probe.calls.filter((call) => call.method === 'getRepoStateEvents')).toEqual([])
   expect(preLaunch[0]).toEqual({
-    method: 'getRepoStateEvents',
+    method: 'repositoryReadFacts',
     order: preLaunch[0]!.order,
     failed: false,
   })
@@ -2323,18 +2327,18 @@ test('the interactive frontend seeds its initial fold with the bounded read befo
   expect(model).not.toHaveProperty('observations')
 })
 
-test('a failed bounded seed launches immediately and recovers from the prelaunch boundary', async () => {
+test('a failed canonical seed launches immediately and recovers from the prelaunch boundary', async () => {
   const repo = '/bounded-fallback-repo'
   const backing = new MemoryBuildStore({ clock: steppingClock() })
   await seedAgedJournal(backing, repo)
   const probe = frontendProbe(backing, { failBounded: true })
   const frames = await runBoundedSeed({ repo, backing, probe })
 
-  // A failed bounded seed does not trigger a prelaunch retry or full replay.
+  // A failed canonical seed does not trigger a prelaunch retry or full replay.
   expect(probe.launchOrder).toBeDefined()
   const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
   expect(preLaunch.map((call) => [call.method, call.sinceSeq ?? null, call.failed])).toEqual([
-    ['getRepoStateEvents', null, true],
+    ['repositoryReadFacts', null, true],
   ])
 
   // The frame is complete and identical in shape to the bounded run's.
@@ -2375,15 +2379,15 @@ test('post-launch recovery survives a competitor anchor', async () => {
     },
   })
 
-  // Prelaunch attempts the bounded seed only.
+  // Prelaunch attempts the canonical seed only.
   expect(probe.launchOrder).toBeDefined()
   const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
   expect(preLaunch.map((call) => [call.method, call.sinceSeq ?? null, call.failed])).toEqual([
-    ['getRepoStateEvents', null, true],
+    ['repositoryReadFacts', null, true],
   ])
 
   // Recovery folds every event newer than the prelaunch boundary, even
-  // though the bounded seed now excludes this child's start.
+  // though the canonical latest run is now the competitor's.
   const post = probe.calls.filter((call) => call.order > probe.launchOrder!)
   expect(post.some((call) => call.method === 'getRepositoryTail' && call.sinceSeq === 10)).toBe(
     true,
@@ -2474,30 +2478,50 @@ test('once mode warms before launch and folds only the final delta', async () =>
   // Once mode also seeds before launch, then renders the child's delta
   // during final presentation.
   expect(probe.calls[0]).toEqual({
-    method: 'getRepoStateEvents',
+    method: 'repositoryReadFacts',
     order: probe.calls[0]!.order,
     failed: false,
   })
+  expect(probe.calls.some((call) => call.method === 'getRepoStateEvents')).toBe(false)
   expect(frames).toHaveLength(1)
   const model = JSON.parse(frames[0]!) as DashboardModel
   expect(model.queued).toBe(3)
   expect(model.warningLines).toEqual(['durable role warning'])
 })
 
-test('the bounded seed renders the same first frame as the full-journal seed (AUT-534 equivalence)', async () => {
-  const run = async (opts: { boundedReturnsFull?: boolean }): Promise<string> => {
+test('the canonical seed renders the same first frame as a full-journal checkpoint (AUT-534 equivalence)', async () => {
+  const { dispatchFrontendReducer } = await import('./dispatch-repository-feed')
+  const { persistReducerSnapshot } = await import('../store/snapshots')
+  const run = async (opts: { checkpoint: boolean }): Promise<string> => {
     const repo = '/equivalence-repo'
     const backing = new MemoryBuildStore({ clock: steppingClock() })
     await seedAgedJournal(backing, repo)
-    const probe = frontendProbe(backing, opts)
+    // A migration written before startup: the capacity identity reads it from
+    // canonical facts whether or not the frontend's checkpoint retained it.
+    await backing.appendRepo(repo, {
+      actor: humanActor('operator'),
+      type: 'tickets.migration-recorded',
+      payload: { identity: 'move', from: 'linear', to: 'file', mapping: { 'AUT-1': 'AUT-1' } },
+    })
+    if (opts.checkpoint) {
+      const full = await backing.getRepoEvents(repo)
+      await persistReducerSnapshot(backing, { kind: 'repo', repo }, 'dispatchFrontend', {
+        version: dispatchFrontendReducer.version,
+        cursor: full.at(-1)!.seq,
+        state: { retained: dispatchFrontendReducer.reduce(full), incompleteIdentities: true },
+      })
+    }
+    const probe = frontendProbe(backing)
     const frames = await runBoundedSeed({ repo, backing, probe })
-    return frames[0]!
+    expect(probe.calls.some((call) => call.method === 'getRepoStateEvents')).toBe(false)
+    return frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!
   }
   // Same journal, same child facts, same clock: the only difference is
-  // whether the seed read is bounded or the whole journal.
-  const bounded = await run({})
-  const full = await run({ boundedReturnsFull: true })
-  expect(bounded).toEqual(full)
+  // whether startup restores a checkpoint folded from the whole journal or
+  // seeds from the canonical repository value with no checkpoint at all.
+  const canonical = await run({ checkpoint: false })
+  const full = await run({ checkpoint: true })
+  expect(canonical).toEqual(full)
 })
 
 test('frontend standby refreshes ownership independently of yield notices and reuses seed/delta identities', async () => {
