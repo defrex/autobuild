@@ -746,13 +746,19 @@ the standard — moving failure to the cheapest point instead of launching a
 build that will thrash and escalate.
 
 **Build identity at dispatch:** once the final conforming spec is in hand,
-the selected runtime proposes a short kebab-case slug from its substance —
-judgment proposes; the dispatcher validates, deduplicates against the store
-and, when the forge can answer, against `ab/` or `ab-node/` build branches
-already on the remote — so a build never takes a branch another store owns —
-and falls back to a deterministic title-derived name on any absence, invalid
-output, error, or timeout. Naming failure never prevents build creation. The
-slug and its `ab/<slug>` branch are recorded once and never renamed.
+the selected runtime may propose a short kebab-case slug from its substance.
+Judgment proposes; the dispatcher validates the proposal under a hard
+deadline. A missing capability, invalid output, error, or timeout falls back
+to a deterministic title-derived name, so a failed proposal never prevents
+build creation. The dispatcher then deduplicates the base with `-2`, `-3`, …
+suffixes against the store and, when the forge can answer, against `ab/` or
+`ab-node/` build branches already on the remote, so a build never takes a
+branch another store owns. That check is not best effort: if a remote branch
+lookup fails, or the base and its `-2` … `-100` candidates are all taken, the
+claim fails at the naming stage, no build is created, and the ticket returns
+to configured Ready under the dispatcher's preparation recovery contract
+(§3.3). The slug and its `ab/<slug>` branch are recorded once and never
+renamed.
 
 **Immutability:** the spec cannot change during a build except through the
 explicit operator revision protocol (leaf escalation or the node exception below). Every downstream reviewer approves
