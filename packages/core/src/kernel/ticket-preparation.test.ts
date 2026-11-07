@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ticketPreparationReducer } from './ticket-preparation'
+import { abandonedPreparationDiagnostic, ticketPreparationReducer } from './ticket-preparation'
 import type { RepositoryEvent, RepositoryEventWrite } from '../events/repository'
 import { DISPATCHER } from '../events/envelope'
 
@@ -66,4 +66,25 @@ test('intent is not evidence of a claim; incremental recovery retains both failu
   ])
   expect(acc).toEqual({})
   expect(ticketPreparationReducer.advance(acc, [events[4]!])).toEqual({})
+})
+
+test('abandoned preparation diagnostic names the attempt, reason and claim certainty', () => {
+  const confirmed = abandonedPreparationDiagnostic(
+    { attempt: 'prep', ticket, claimed: true },
+    'Ticket no longer exists; ticket unchanged.',
+  )
+  expect(confirmed).toContain('ticket T-1 (fake)')
+  expect(confirmed).toContain('preparation prep abandoned')
+  expect(confirmed).toContain('claim confirmed')
+  expect(confirmed).toContain('Ticket no longer exists; ticket unchanged.')
+  const unconfirmed = abandonedPreparationDiagnostic(
+    { attempt: 'prep', ticket, claimed: false },
+    'Claim outcome uncertain: ticket observed in state Doing',
+  )
+  expect(unconfirmed).toContain('ticket T-1 (fake)')
+  expect(unconfirmed).toContain('preparation prep abandoned')
+  expect(unconfirmed).toContain('claim unconfirmed (provider outcome unknown')
+  expect(unconfirmed).toContain('ticket observed in state Doing')
+  expect(unconfirmed).not.toContain('claim confirmed')
+  expect(unconfirmed).not.toContain('claim applied')
 })

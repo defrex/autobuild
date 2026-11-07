@@ -11,7 +11,10 @@ import { preserveWorkspaceBeforeRelease, supersedeRestorationHeads } from './wor
 import { WorkspaceCleanupRequired } from '../ports/types'
 import type { OpenHarvestExecution } from './harvest-execution-state'
 import { ArtifactMetaUnsupportedError } from '../store/artifact-meta'
-import type { TicketPreparation } from '../kernel/ticket-preparation'
+import {
+  abandonedPreparationDiagnostic,
+  type TicketPreparation,
+} from '../kernel/ticket-preparation'
 import { sampleTargetDistance } from '../kernel/target-distance'
 import { capturedBuildConfig } from './verify-cycle-config'
 import { publicationRetryGate } from '../kernel/publication-retry'
@@ -431,7 +434,8 @@ export interface TickReport {
   discarded: number
   /** Contained build janitor and ticket-preparation recovery failures this pass. */
   janitorFailed: number
-  /** One actionable line per contained failure, attributed by build or attempt. */
+  /** One actionable line per contained failure or abandoned ticket preparation,
+   * attributed by build, ticket or attempt. */
   janitorDiagnostics: string[]
   /** Ordinary-tick recovery completed an interrupted post-creation dispatch. */
   recovered: number
@@ -1068,6 +1072,7 @@ export class Dispatcher {
   lastForgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
   async tick(opts: TickOpts = {}): Promise<TickReport> {
     this.kernelGitUnavailable = undefined
+    this.tickAbandonments = []
     this.availabilityEntries = undefined
     this.availabilityLandings = undefined
     this.availabilityLandingKey = undefined
@@ -1102,11 +1107,36 @@ export class Dispatcher {
         ? this.deps.forge.withReadScope(() => this.runTick(opts))
         : this.runTick(opts))
       if (stop || this.deps.config.forge === 'local-git') report.forgeRequests = counts()
+      report.janitorDiagnostics.push(...this.tickAbandonments)
       return report
+    } catch (error) {
+      throw this.withTickAbandonments(error)
     } finally {
+      this.tickAbandonments = []
       if (stop || this.deps.config.forge === 'local-git') this.lastForgeRequests = counts()
       stop?.()
     }
+  }
+
+  /** Ticket preparations durably abandoned during the current tick. Drained
+   * once by `tick()` into its report or its rejection, so later ticks never
+   * repeat them. At most 8 recoveries plus one inline abandonment per tick. */
+  private tickAbandonments: string[] = []
+
+  /** A failed tick still reports the attempts it abandoned. The rejection
+   * keeps its type: the lines are appended to a writable message in place. */
+  private withTickAbandonments(error: unknown): unknown {
+    if (this.tickAbandonments.length === 0) return error
+    const lines = `abandoned ticket preparations this tick: ${this.tickAbandonments.join('; ')}`
+    if (error instanceof Error) {
+      try {
+        error.message = `${error.message}; ${lines}`
+        return error
+      } catch {
+        // A frozen or non-writable message falls through to a wrapper.
+      }
+    }
+    return new AggregateError([error], `${String(error)}; ${lines}`, { cause: error })
   }
 
   private async runTick(opts: TickOpts): Promise<TickReport> {
@@ -5191,6 +5221,14 @@ export class Dispatcher {
     })
   }
 
+  /** Durably abandon an attempt, then queue its one operator diagnostic for
+   * this tick. No line exists unless the resolution was appended. */
+  private async abandonPreparation(attempt: TicketPreparation, reason: string): Promise<void> {
+    const recorded = reason.slice(0, 4000)
+    await this.preparationResolved(attempt, 'abandoned', recorded)
+    this.tickAbandonments.push(abandonedPreparationDiagnostic(attempt, recorded))
+  }
+
   private async recoverTicketPreparation(attempt: TicketPreparation): Promise<void> {
     try {
       // A rejected create can have committed. Unavailable or conflicting readback
@@ -5207,9 +5245,8 @@ export class Dispatcher {
             created.payload.ticket?.source !== attempt.ticket.source ||
             created.payload.ticket?.id !== attempt.ticket.id
           )
-            return await this.preparationResolved(
+            return await this.abandonPreparation(
               attempt,
-              'abandoned',
               `Conflicting build ownership at ${attempt.slug}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
             )
           await this.preparationResolved(attempt, 'owned')
@@ -5224,15 +5261,10 @@ export class Dispatcher {
       )
       const ticket = await this.deps.tickets.get(ref.id)
       if (!ticket)
-        return await this.preparationResolved(
-          attempt,
-          'abandoned',
-          'Ticket no longer exists; ticket unchanged.',
-        )
+        return await this.abandonPreparation(attempt, 'Ticket no longer exists; ticket unchanged.')
       if (ticket.state === undefined)
-        return await this.preparationResolved(
+        return await this.abandonPreparation(
           attempt,
-          'abandoned',
           'Ticket state is unavailable; ticket unchanged. Inspect the provider record before manually retrying.',
         )
       const state = (value: string) => value.toLowerCase()
@@ -5244,11 +5276,15 @@ export class Dispatcher {
         )
         return
       }
-      if (!attempt.claimed || state(ticket.state) !== state(attempt.claimedState))
-        return await this.preparationResolved(
+      if (!attempt.claimed)
+        return await this.abandonPreparation(
           attempt,
-          'abandoned',
-          `Uncertain claim or externally changed ticket state ${ticket.state}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
+          `Claim outcome uncertain: the claim request did not confirm and the provider may have applied it; ticket observed in state ${ticket.state}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
+        )
+      if (state(ticket.state) !== state(attempt.claimedState))
+        return await this.abandonPreparation(
+          attempt,
+          `Confirmed claim but ticket externally changed to state ${ticket.state}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
         )
       await this.deps.tickets.transition(ref.id, handback)
       await this.preparationResolved(

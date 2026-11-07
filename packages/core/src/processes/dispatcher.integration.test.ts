@@ -13257,8 +13257,10 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
   const { readRepositoryFacts } = await import('../store/reduced-reads')
   const { RemoteBuildStore } = await import('../store/remote/client')
   let previousBytes: number | undefined
+  let abandonRows: number | undefined
   for (const length of [100, 100_000]) {
-    const store = new RowCountingStore({ clock: manualClock() })
+    const clock = manualClock()
+    const store = new RowCountingStore({ clock })
     await seedPreparationHistory(store, REPO, length)
     const counter = memoryRepositoryReadCounter(store, REPO)
     const facts = await readRepositoryFacts(store, REPO)
@@ -13290,7 +13292,9 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
     expect(calls).toEqual(
       Array(2).fill('https://budget.test/repos/%2Frepos%2Forigin/reducer-values'),
     )
-    const h = harness({ store })
+    const h = harness({ store, clock })
+    const get = h.tickets.get.bind(h.tickets)
+    let ticketReads = 0
     h.tickets.get = async () => {
       throw new Error('parked recovery must not read tickets')
     }
@@ -13298,6 +13302,30 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drainRows()).toBe(0)
     expect(counter.rows).toBe(0)
+    // The parked attempt comes due and is abandoned: one diagnostic, at the
+    // same read cost for both history lengths, and never repeated.
+    h.tickets.add(readyTicket('pending', { state: 'Doing' }))
+    h.tickets.get = async (id) => {
+      ticketReads++
+      return get(id)
+    }
+    clock.set('2099-01-01T00:00:01.000Z')
+    const abandoning = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(abandoning.janitorDiagnostics.filter((line) => line.includes('ticket pending'))).toEqual(
+      [expect.stringContaining('preparation pending abandoned; claim unconfirmed')],
+    )
+    expect(ticketReads).toBe(1)
+    const rows = counter.rows + store.drainRows()
+    if (abandonRows !== undefined) expect(rows).toBe(abandonRows)
+    abandonRows = rows
+    counter.reset()
+    for (let i = 0; i < 2; i++) {
+      const idle = await h.dispatcher.tick({ acceptNewWork: false })
+      expect(idle.janitorDiagnostics).toEqual([])
+    }
+    expect(store.drainRows()).toBe(0)
+    expect(counter.rows).toBe(0)
+    expect(ticketReads).toBe(1)
   }
 }, 30_000)
 
@@ -13373,13 +13401,20 @@ test('an intended claim without confirmation cannot release a ticket in Doing', 
     recoveryReads++
     return get(id)
   }
-  await h.dispatcher.tick({ acceptNewWork: false })
+  const first = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(first.janitorDiagnostics).toEqual([
+    expect.stringContaining(
+      'ticket T-1 (fake): preparation uncertain abandoned; claim unconfirmed',
+    ),
+  ])
+  expect(first.janitorFailed).toBe(0)
   expect(
     (await (await import('../store/reduced-reads')).readRepositoryFacts(h.store, REPO)).value
       .preparation,
   ).toEqual({})
   h.clock.advance(86_400_000)
-  await h.dispatcher.tick({ acceptNewWork: false })
+  const second = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(second.janitorDiagnostics).toEqual([])
   expect(recoveryReads).toBe(1)
   const resolution = (await h.store.getRepoEvents(REPO)).find(
     (e) => e.type === 'ticket-preparation.resolved',
@@ -13387,6 +13422,216 @@ test('an intended claim without confirmation cannot release a ticket in Doing', 
   expect(resolution?.payload).toMatchObject({ outcome: 'abandoned' })
   expect(h.tickets.transitions).toEqual([])
   expect(h.tickets.claims).toEqual([])
+})
+
+describe('abandoned ticket preparation diagnostics', () => {
+  const causes = ['uncertain-claim', 'changed', 'missing', 'slug-conflict'] as const
+  const expected: Record<(typeof causes)[number], string[]> = {
+    'uncertain-claim': ['claim unconfirmed (provider outcome unknown', 'observed in state Doing'],
+    changed: ['claim confirmed', 'externally changed to state Review'],
+    missing: ['claim confirmed', 'Ticket no longer exists'],
+    'slug-conflict': ['claim confirmed', 'Conflicting build ownership at add-rate-limiting'],
+  }
+
+  function scenario(cause: (typeof causes)[number], deferred: boolean) {
+    let missing = false
+    let failRecoveryRead = false
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', {
+          body: cause === 'changed' || cause === 'missing' ? 'thin' : undefined,
+        }),
+      ],
+      authorSpec: async () => {
+        if (cause === 'changed') h.tickets.add(readyTicket('T-1', { state: 'Review' }))
+        if (cause === 'missing') missing = true
+        failRecoveryRead = deferred
+        throw new Error('author unavailable')
+      },
+    })
+    const claim = h.tickets.claim.bind(h.tickets)
+    h.tickets.claim = async (id) => {
+      await claim(id)
+      if (cause !== 'uncertain-claim') return true
+      failRecoveryRead = deferred
+      throw new Error('claim response lost')
+    }
+    h.tickets.transition = async () => {
+      throw new Error('handback must not run')
+    }
+    let ticketReads = 0
+    const get = h.tickets.get.bind(h.tickets)
+    h.tickets.get = async (id) => {
+      if (id === 'T-1') ticketReads++
+      if (failRecoveryRead) {
+        failRecoveryRead = false
+        throw new Error('provider read offline')
+      }
+      return missing ? null : get(id)
+    }
+    const create = h.store.createBuild.bind(h.store)
+    const getBuild = h.store.getBuild.bind(h.store)
+    if (cause === 'slug-conflict') {
+      const other = { source: 'fake', id: 'OTHER', title: 'other' }
+      h.store.createBuild = async (input) => {
+        const created = input.created
+        if (!created) throw new Error('dispatch creates with a build.created event')
+        await create({
+          ...input,
+          ticket: other,
+          created: { ...created, payload: { ...created.payload, ticket: other } },
+        } as typeof input)
+        failRecoveryRead = deferred
+        throw new Error('creation acknowledgement lost')
+      }
+      h.store.getBuild = async (slug) => {
+        if (failRecoveryRead) {
+          failRecoveryRead = false
+          throw new Error('build readback offline')
+        }
+        return getBuild(slug)
+      }
+    }
+    return { h, reads: () => ticketReads }
+  }
+
+  async function resolution(h: Harness) {
+    const events = (await h.store.getRepoEvents(REPO)).filter(
+      (e) => e.type === 'ticket-preparation.resolved',
+    )
+    expect(events).toHaveLength(1)
+    const payload = events[0]?.payload as { outcome: string; reason: string; attempt: string }
+    expect(payload.outcome).toBe('abandoned')
+    return payload
+  }
+
+  for (const cause of causes) {
+    test(`inline ${cause} abandonment reports its recorded reason in the tick failure`, async () => {
+      const { h } = scenario(cause, false)
+      const error = await h.dispatcher.tick().then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+      expect(error).toBeInstanceOf(AggregateError)
+      const message = (error as Error).message
+      expect(message).toContain(
+        cause === 'uncertain-claim'
+          ? 'claim response lost'
+          : cause === 'slug-conflict'
+            ? 'creation acknowledgement lost'
+            : 'author unavailable',
+      )
+      const { reason, attempt } = await resolution(h)
+      expect(message).toContain(`ticket T-1 (fake): preparation ${attempt} abandoned`)
+      expect(message).toContain(reason)
+      for (const part of expected[cause]) expect(message).toContain(part)
+      expect(message.split(`preparation ${attempt} abandoned`)).toHaveLength(2)
+      expect(h.tickets.transitions).toEqual([])
+      const later = await h.dispatcher.tick({ acceptNewWork: false })
+      expect(later.janitorDiagnostics.join('\n')).not.toContain(attempt)
+    })
+
+    test(`deferred ${cause} abandonment reports once on the abandoning tick`, async () => {
+      const { h, reads } = scenario(cause, true)
+      await expect(h.dispatcher.tick()).rejects.toThrow('recovery failed')
+      expect((await h.store.getRepoEvents(REPO)).map((e) => e.type)).toContain(
+        'ticket-preparation.recovery-failed',
+      )
+      const parked = await h.dispatcher.tick({ acceptNewWork: false })
+      expect(parked.janitorDiagnostics.join('\n')).not.toContain('abandoned')
+      h.clock.advance(30_000)
+      const report = await h.dispatcher.tick({ acceptNewWork: false })
+      const { reason, attempt } = await resolution(h)
+      const lines = report.janitorDiagnostics.filter((line) => line.includes(attempt))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain(reason)
+      for (const part of expected[cause]) expect(lines[0]).toContain(part)
+      expect(report.janitorFailed).toBe(0)
+      const settled = reads()
+      for (let i = 0; i < 2; i++) {
+        const idle = await h.dispatcher.tick({ acceptNewWork: false })
+        expect(idle.janitorDiagnostics.join('\n')).not.toContain(attempt)
+      }
+      expect(reads()).toBe(settled)
+      expect(h.tickets.transitions).toEqual([])
+    })
+  }
+
+  async function seedUncertain(h: Harness) {
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: {
+        attempt: 'uncertain',
+        ticket: { source: 'fake', id: 'T-1' },
+        readyState: 'Ready',
+        claimedState: 'Doing',
+      },
+    })
+  }
+
+  test('a later stage failure still carries the deferred abandonment, once', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1', { state: 'Doing' }), readyTicket('T-2', { body: 'thin' })],
+      authorSpec: async () => {
+        throw new Error('unrelated author failure')
+      },
+    })
+    await seedUncertain(h)
+    let t1Reads = 0
+    const get = h.tickets.get.bind(h.tickets)
+    h.tickets.get = async (id) => {
+      if (id === 'T-1') t1Reads++
+      return get(id)
+    }
+    const error = await h.dispatcher.tick().then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+    const message = (error as Error).message
+    expect(message).toContain('unrelated author failure')
+    const resolved = (await h.store.getRepoEvents(REPO)).find(
+      (e) => e.type === 'ticket-preparation.resolved' && e.payload.attempt === 'uncertain',
+    )
+    const reason = (resolved?.payload as { reason?: string } | undefined)?.reason ?? 'missing'
+    expect(message).toContain(reason)
+    expect(message).toContain('claim unconfirmed')
+    expect(message.split('preparation uncertain abandoned')).toHaveLength(2)
+    const next = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(next.janitorDiagnostics.join('\n')).not.toContain('preparation uncertain')
+    expect(t1Reads).toBe(1)
+  })
+
+  test('a typed later-stage rejection keeps its type and carries the abandonment', async () => {
+    const h = harness({ tickets: [readyTicket('T-1', { state: 'Doing' })] })
+    await seedUncertain(h)
+    h.tickets.listReady = async () => {
+      throw new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+    }
+    const error = await h.dispatcher.tick().then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+    expect(error).toBeInstanceOf(TicketSourceRateLimitError)
+    expect((error as Error).message).toContain('preparation uncertain abandoned; claim unconfirmed')
+  })
+
+  test('a non-Error rejection is wrapped with its cause and the abandonment', async () => {
+    const h = harness({ tickets: [readyTicket('T-1', { state: 'Doing' })] })
+    await seedUncertain(h)
+    h.tickets.listReady = async () => {
+      throw 'provider string failure'
+    }
+    const error = await h.dispatcher.tick().then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).cause).toBe('provider string failure')
+    expect((error as Error).message).toContain('provider string failure')
+    expect((error as Error).message).toContain('preparation uncertain abandoned')
+  })
 })
 
 test('recovery diagnostics retain a confirmed claim and original error when earlier appends fail', async () => {
