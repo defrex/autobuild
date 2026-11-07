@@ -206,6 +206,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'escalation.answered': ['human'],
   'phase.failed': ['kernel'],
   'session.build-read-failed': ['kernel'],
+  'session.build-read-recovered': ['kernel'],
   'phase.deferred': ['kernel'],
   'phase.deferral-escalated': ['kernel'],
 }

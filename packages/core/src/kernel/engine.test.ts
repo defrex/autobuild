@@ -3646,6 +3646,210 @@ test('read deferral projection is exact-session, terminal-first and incremental 
   })
 })
 
+describe('read deferral recovery', () => {
+  const handle = {
+    version: 1 as const,
+    runner: 'pi',
+    nativeId: 'native',
+    host: 'host',
+    workspacePath: '/repo',
+  }
+  const started = (session: string, phase: 'plan' | 'finalize', predecessor?: string) =>
+    ev('session.started', {
+      session,
+      phase,
+      round: 1,
+      role: phase === 'finalize' ? 'release-notes' : 'plan',
+      runner: 'pi',
+      ...(predecessor
+        ? {
+            continuation: {
+              predecessor,
+              root: predecessor,
+              handle,
+              cause: 'shutdown' as const,
+              activeMs: 100,
+              budgetMs: 1000,
+            },
+          }
+        : {}),
+    })
+  const failed = (session: string, phase: 'plan' | 'finalize', diagnostic = 'cannot decode') =>
+    ev('session.build-read-failed', {
+      session,
+      phase,
+      round: 1,
+      operation: 'context',
+      reason: 'own-build-read',
+      diagnostic,
+    })
+  const recovered = (
+    session: string,
+    phase: 'plan' | 'finalize',
+    evidenceSeq: number,
+    failureSeq: number,
+  ) =>
+    ev('session.build-read-recovered', {
+      session,
+      phase,
+      round: 1,
+      operation: 'context',
+      reason: 'own-build-read',
+      evidenceSeq,
+      failureSeq,
+    })
+  const ended = (session: string) =>
+    ev('session.ended', {
+      session,
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'old', resumedFromSeq: 0 },
+    })
+  const stepCompleted = (session: string) =>
+    ev(
+      'finalize.step-completed',
+      { step: 'release-notes', ok: true },
+      { kind: 'agent', role: 'release-notes', session },
+    )
+  /** 1-based seq the next write will receive. */
+  const seqOf = (writes: EventWrite[]) => writes.length + 1
+  const pendingOf = (log: AbEvent[]) => {
+    checkIncremental(logIndexReducer, log)
+    return logIndexReducer.reduce(log).readDeferrals
+  }
+
+  test('a native continuation inherits the pending item and its terminal clears it', () => {
+    const writes = [...prelude(), started('s_p', 'plan')]
+    const evidence = seqOf(writes)
+    writes.push(failed('s_p', 'plan'), started('s_c', 'plan', 's_p'))
+    expect(pendingOf(toLog(writes))).toMatchObject([
+      { session: 's_c', evidenceSeq: evidence, lastFailureSeq: evidence, recovered: false },
+    ])
+    writes.push(
+      ev(
+        'plan.completed',
+        { round: 1, artifact: { kind: 'plan', rev: 0 } },
+        { kind: 'agent', role: 'plan', session: 's_c' },
+      ),
+      ended('s_c'),
+      ended('s_p'),
+    )
+    const log = toLog(writes)
+    expect(pendingOf(log)).toEqual([])
+    expect(decideNext(log, config)).toMatchObject({ kind: 'run-phase', phase: 'plan-review' })
+  })
+
+  test('a continuation that ends without a terminal parks the chain once', () => {
+    const writes = [...prelude(), started('s_p', 'plan')]
+    const evidence = seqOf(writes)
+    writes.push(failed('s_p', 'plan'), started('s_c', 'plan', 's_p'))
+    const second = seqOf(writes)
+    writes.push(failed('s_c', 'plan', 'still failing'), ended('s_c'), ended('s_p'))
+    const log = toLog(writes)
+    expect(pendingOf(log)).toEqual([
+      {
+        session: 's_c',
+        phase: 'plan',
+        round: 1,
+        evidenceSeq: evidence,
+        lastFailureSeq: second,
+        recovered: false,
+        diagnostic: 'still failing',
+        ended: true,
+        settled: false,
+      },
+    ])
+    expect(decideNext(log, config)).toMatchObject({
+      kind: 'raise-read-deferral',
+      session: 's_c',
+      evidenceSeq: evidence,
+    })
+  })
+
+  test('a recovered finalize post-step clears on its step outcome; an unrecovered one parks', () => {
+    const writes = [...prelude(), started('s_f', 'finalize')]
+    const evidence = seqOf(writes)
+    writes.push(failed('s_f', 'finalize'))
+    const unrecovered = toLog([...writes, ended('s_f')])
+    expect(pendingOf(unrecovered)).toHaveLength(1)
+    expect(decideNext(unrecovered, config)).toMatchObject({
+      kind: 'raise-read-deferral',
+      session: 's_f',
+    })
+    // An agent step outcome without recovery evidence clears nothing.
+    expect(pendingOf(toLog([...writes, ended('s_f'), stepCompleted('s_f')]))).toHaveLength(1)
+
+    writes.push(recovered('s_f', 'finalize', evidence, evidence), ended('s_f'))
+    expect(pendingOf(toLog(writes))).toMatchObject([{ recovered: true, ended: true }])
+    writes.push(stepCompleted('s_f'))
+    expect(pendingOf(toLog(writes))).toEqual([])
+  })
+
+  test('mismatched or post-end recovery evidence is ignored', () => {
+    const writes = [...prelude(), started('s_f', 'finalize')]
+    const evidence = seqOf(writes)
+    writes.push(failed('s_f', 'finalize'))
+    for (const stale of [
+      recovered('s_f', 'finalize', evidence + 1, evidence),
+      recovered('s_f', 'finalize', evidence, evidence + 1),
+      recovered('s_other', 'finalize', evidence, evidence),
+    ]) {
+      const log = toLog([...writes, stale, ended('s_f'), stepCompleted('s_f')])
+      expect(pendingOf(log)).toMatchObject([{ recovered: false }])
+    }
+    const late = toLog([
+      ...writes,
+      ended('s_f'),
+      recovered('s_f', 'finalize', evidence, evidence),
+      stepCompleted('s_f'),
+    ])
+    expect(pendingOf(late)).toMatchObject([{ recovered: false }])
+    expect(decideNext(late, config)).toMatchObject({ kind: 'raise-read-deferral' })
+  })
+
+  test('a later failure invalidates recovery until newer evidence arrives', () => {
+    const writes = [...prelude(), started('s_f', 'finalize')]
+    const first = seqOf(writes)
+    writes.push(failed('s_f', 'finalize'), recovered('s_f', 'finalize', first, first))
+    const second = seqOf(writes)
+    writes.push(failed('s_f', 'finalize', 'again'))
+    const stale = [...writes, recovered('s_f', 'finalize', first, first), ended('s_f')]
+    expect(pendingOf(toLog(stale))).toMatchObject([
+      { evidenceSeq: first, lastFailureSeq: second, recovered: false, diagnostic: 'again' },
+    ])
+    expect(pendingOf(toLog([...stale, stepCompleted('s_f')]))).toHaveLength(1)
+    expect(decideNext(toLog(stale), config)).toMatchObject({ kind: 'raise-read-deferral' })
+
+    writes.push(recovered('s_f', 'finalize', first, second), ended('s_f'))
+    expect(pendingOf(toLog(writes))).toMatchObject([{ recovered: true }])
+    writes.push(stepCompleted('s_f'))
+    expect(pendingOf(toLog(writes))).toEqual([])
+  })
+
+  test('recovery before a continuation does not survive a later failure in the continuation', () => {
+    const writes = [...prelude(), started('s_p', 'finalize')]
+    const first = seqOf(writes)
+    writes.push(
+      failed('s_p', 'finalize'),
+      recovered('s_p', 'finalize', first, first),
+      started('s_c', 'finalize', 's_p'),
+    )
+    expect(pendingOf(toLog(writes))).toMatchObject([{ session: 's_c', recovered: true }])
+    const second = seqOf(writes)
+    writes.push(failed('s_c', 'finalize'))
+    const parked = toLog([...writes, ended('s_c')])
+    expect(pendingOf(parked)).toMatchObject([
+      { session: 's_c', evidenceSeq: first, lastFailureSeq: second, recovered: false },
+    ])
+    expect(decideNext(parked, config)).toMatchObject({
+      kind: 'raise-read-deferral',
+      session: 's_c',
+    })
+
+    writes.push(recovered('s_c', 'finalize', first, second), ended('s_c'), stepCompleted('s_c'))
+    expect(pendingOf(toLog(writes))).toEqual([])
+  })
+})
+
 test('interleaved target passes never erase failures and the third distinct failed cycle escalates once', () => {
   const writes = [...prelude(), ...planApproved()]
   let round = 0
