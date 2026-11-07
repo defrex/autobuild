@@ -2605,6 +2605,232 @@ credentialEnv = "OTHER_ACCESS"
   }
 })
 
+describe('hosted Claude and Kimi project-secret readiness', () => {
+  const sha = 'f'.repeat(40)
+  const config = `baseBranch = "main"
+forge = "github"
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+[workspace.config.runtimeProvisioning.fake]
+install = "true"
+preflight = "true"
+[workspace.config.runtimeProvisioning.claude]
+install = "true"
+preflight = "true"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+[accounts.claude]
+kind = "claude-subscription"
+credentialEnv = "CLAUDE_CODE_OAUTH_TOKEN"
+[accounts.kimi]
+kind = "kimi-code"
+credentialEnv = "KIMI_KEY"
+region = "overseas"
+`
+  const entry = (name: string, overrides: Record<string, unknown> = {}) => ({
+    name,
+    kind: 'static',
+    owner: 'maintainer',
+    setAt: '2026-10-27T00:00:00.000Z',
+    fingerprint: 'a'.repeat(16),
+    status: 'ready',
+    failureCode: null,
+    lastSuppliedAt: null,
+    ...overrides,
+  })
+
+  async function hostedFixture(secrets: unknown[], localEnv: Record<string, string> = {}) {
+    const { ProjectCredentials } = await import('./project-credentials')
+    const { FakeForge } = await import('../ports/forge/fake')
+    const repo = await mkdtemp(join(tmpdir(), 'ab-hosted-static-readiness-'))
+    roots.push(repo)
+    await writeFile(join(repo, 'autobuild.toml'), config)
+    const env: Record<string, string | undefined> = {
+      ...completeVercelPreflightEnv,
+      XDG_CONFIG_HOME: join(repo, 'user-config'),
+      ...localEnv,
+    }
+    new ProjectCredentials(env).save({
+      service: 'https://store.example',
+      repo: 'https://github.com/acme/repo',
+      id: 'a'.repeat(32),
+      token: `abp_1_${'a'.repeat(32)}_${'b'.repeat(64)}`,
+    })
+    // Only the write-only listing is ever requested; no endpoint returns a value.
+    let metadataReads = 0
+    const fetch = async (input: string) => {
+      expect(new URL(input).pathname).toBe('/secrets/v1/list')
+      metadataReads++
+      return Response.json({ version: 1, secrets })
+    }
+    const probes: Array<Record<string, string> | undefined> = []
+    const policies: unknown[] = []
+    let created = 0
+    const sandbox: VercelSandboxHandle = {
+      getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
+      name: 'hosted-static-sandbox',
+      runCommand: async (params) => {
+        const probe = params.args?.some((arg) => arg.includes('ab-init-probe'))
+        if (probe) probes.push(params.env)
+        return {
+          exitCode: 0,
+          wait: async () => ({ exitCode: 0 }),
+          kill: async () => {},
+          stdout: async () =>
+            probe
+              ? 'AB_INIT_READINESS_V1={"checks":[{"name":"ok","status":"pass","detail":"ready"}]}\n'
+              : '',
+          stderr: async () => '',
+        }
+      },
+      writeFiles: async () => {},
+      stop: async () => {},
+      delete: async () => {},
+      update: async (params: { networkPolicy: NetworkPolicy }) => {
+        policies.push(params.networkPolicy)
+      },
+    }
+    const facade: VercelSandboxFacade = {
+      get: async () => null,
+      create: async () => sandbox,
+      createFresh: async (input) => {
+        created++
+        policies.push(input)
+        return sandbox
+      },
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
+    }
+    const exec: Exec = async (command) => {
+      if (command.includes('--show-toplevel'))
+        return { stdout: `${repo}\n`, stderr: '', exitCode: 0 }
+      if (command.includes('get-url'))
+        return { stdout: 'https://github.com/acme/repo.git\n', stderr: '', exitCode: 0 }
+      if (command.includes('ls-remote'))
+        return { stdout: `${sha}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
+      if (command.includes('show')) return { stdout: config, stderr: '', exitCode: 0 }
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+    const lines: string[] = []
+    const report = await validateInitReadiness({
+      targetRepo: repo,
+      env,
+      exec,
+      fetch,
+      vercelFacade: facade,
+      packageArchive: async () => new Uint8Array(),
+      openStore: () => readOnlyStore([]),
+      createForge: async () => new FakeForge(),
+      stdout: (line) => lines.push(line),
+    })
+    return { report, metadataReads, probes, policies, created, lines }
+  }
+
+  test('reports ready project secrets from metadata and reaches the sandbox probe', async () => {
+    const { report, metadataReads, probes, policies, created, lines } = await hostedFixture([
+      entry('CLAUDE_CODE_OAUTH_TOKEN'),
+      entry('KIMI_KEY'),
+    ])
+    expect(metadataReads).toBe(1)
+    expect(created).toBe(1)
+    expect(probes).toHaveLength(1)
+    expect(JSON.parse(probes[0]!.AB_HOSTED_ACCOUNT_READINESS!)).toEqual(['claude', 'kimi'])
+    for (const name of ['claude', 'kimi']) {
+      const check = report.checks.find((c) => c.name === `account ${JSON.stringify(name)}`)
+      expect(check?.status).toBe('pass')
+      expect(check?.detail).toContain('owner maintainer; set 2026-10-27T00:00:00.000Z')
+      expect(check?.detail).toContain('checked by metadata')
+      expect(check?.detail).toContain('the first hosted build is the live check')
+      expect(
+        report.checks.find((c) => c.name === `host account ${JSON.stringify(name)}`)?.detail,
+      ).toContain('ready hosted project secret (metadata only)')
+    }
+    expect(report.checks.some((c) => c.detail.includes('is missing'))).toBe(false)
+    expect(report.exitCode).toBe(0)
+    // Egress carries only the placeholder; it is never printed as a credential.
+    expect(JSON.stringify(policies)).toContain('autobuild-hosted-metadata-only')
+    expect(lines.join('\n')).not.toContain('autobuild-hosted-metadata-only')
+  })
+
+  test('a missing or non-ready project secret fails before provisioning and names both remedies', async () => {
+    for (const secrets of [
+      [entry('KIMI_KEY')],
+      [
+        entry('CLAUDE_CODE_OAUTH_TOKEN', { status: 'failed', failureCode: 'refresh-failed' }),
+        entry('KIMI_KEY'),
+      ],
+      [entry('CLAUDE_CODE_OAUTH_TOKEN', { kind: 'chatgpt-subscription' }), entry('KIMI_KEY')],
+    ]) {
+      const { report, created, metadataReads } = await hostedFixture(secrets)
+      expect(report.exitCode).toBe(1)
+      expect(created).toBe(0)
+      expect(metadataReads).toBe(1)
+      const check = report.checks.find((c) => c.name === 'account "claude"')
+      expect(check?.status).toBe('fail')
+      expect(check?.detail).toContain('bun ab secrets set CLAUDE_CODE_OAUTH_TOKEN')
+      expect(check?.detail).toContain('run claude setup-token and provide the local variable')
+    }
+  })
+
+  test('local variables keep the existing path without reading secret metadata', async () => {
+    const { report, metadataReads, probes, created } = await hostedFixture([], {
+      CLAUDE_CODE_OAUTH_TOKEN: 'local-claude',
+      KIMI_KEY: 'local-kimi',
+    })
+    expect(metadataReads).toBe(0)
+    expect(created).toBe(1)
+    expect(probes[0]).not.toHaveProperty('AB_HOSTED_ACCOUNT_READINESS')
+    expect(report.checks.find((c) => c.name === 'host account "claude"')?.detail).toBe(
+      'CLAUDE_CODE_OAUTH_TOKEN is present',
+    )
+    expect(report.exitCode).toBe(0)
+  })
+
+  test('the guest skips the live probe only for listed hosted accounts', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-hosted-static-guest-'))
+    roots.push(repo)
+    await writeFile(join(repo, 'autobuild.toml'), config)
+    let completions = 0
+    const runtimes: RuntimeRegistry = {
+      ...usableRuntime,
+      claude: {
+        runner,
+        servesModels: ['claude-'],
+        oneShot: {
+          complete: async () => {
+            completions++
+            throw new Error('live probe attempted')
+          },
+        },
+      },
+    }
+    const probe = (env: Record<string, string | undefined>) =>
+      runGuestReadinessProbe({
+        repo,
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'placeholder', KIMI_KEY: 'placeholder', ...env },
+        runtimes,
+        openStore: () => readOnlyStore([]),
+      })
+    const hosted = await probe({ AB_HOSTED_ACCOUNT_READINESS: JSON.stringify(['claude', 'kimi']) })
+    expect(completions).toBe(0)
+    for (const name of ['claude', 'kimi'])
+      expect(hosted.checks.find((c) => c.name === `account ${JSON.stringify(name)}`)).toEqual({
+        name: `account ${JSON.stringify(name)}`,
+        status: 'pass',
+        detail: 'Hosted metadata readiness only; the first hosted build is the live check',
+      })
+    const live = await probe({})
+    expect(completions).toBe(2)
+    expect(live.checks.find((c) => c.name === 'account "claude"')?.status).toBe('fail')
+  })
+})
+
 test('missing local ChatGPT credential names the account and local login destination', async () => {
   const { repo, config } = await committedLocalRepo('ab-local-chatgpt-missing-')
   await writeFile(
