@@ -48,7 +48,9 @@ for (const signal of GENERATION_SIGNALS)
     const stdout = new Response(child.stdout).text(),
       stderr = new Response(child.stderr).text()
     try {
-      const deadline = Date.now() + 30000
+      // Each start prepares a full launch runtime (~14 s idle); verify runs
+      // this under parallel load, so the start budget leaves wide headroom.
+      const deadline = Date.now() + 90000
       for (;;) {
         const repo = await store.getRepo(checkout)
         if (
@@ -81,7 +83,7 @@ for (const signal of GENERATION_SIGNALS)
       await store.close()
       await rm(checkout, { recursive: true, force: true })
     }
-  }, 45000)
+  }, 120000)
 
 test('public inherited markers cannot bypass routing; hot renderer keeps the direct seam', async () => {
   const checkout = await mkdtemp(join(tmpdir(), 'ab-launch-routing-'))
@@ -253,7 +255,7 @@ finally:
   } finally {
     await rm(cwd, { recursive: true, force: true })
   }
-}, 90000)
+}, 180000)
 
 test('an isolated registry installation prepares local launch without a guest asset fetch', async () => {
   const { prepareLaunchRuntime } = await import('./dispatch-launcher')
