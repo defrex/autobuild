@@ -304,6 +304,7 @@ describe('operator query wiring', () => {
       operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
+      upgradeStatus: {},
       publications: [],
     })
     expect(await getHarvestStatus(counting.store, REPO)).toMatchObject({

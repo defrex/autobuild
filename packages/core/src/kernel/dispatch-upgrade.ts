@@ -25,6 +25,82 @@ export interface DispatchUpgradeState {
   lastRollback?: Fact<'dispatcher.runtime-rolled-back'>
   holds: Record<string, Fact<'dispatcher.runtime-rolled-back'>>
 }
+/**
+ * Retention window for every map in the dispatch-upgrade state. The state is
+ * read on every dispatch tick, dashboard poll and status read, so it must not
+ * grow with the number of dispatcher generations. Every decision reads the
+ * authoritative generation, its immediate predecessor, the run that just
+ * started, a recently observed lease owner, or the newest handoffs, so recent
+ * runs suffice. Eviction never drops the authoritative run, the run holding the
+ * newest accepted handoff (each handoff captures every then-open remote
+ * execution), or the three newest settled runs (status's latest earlier
+ * outcome). Full history stays in the repository journal.
+ */
+export const UPGRADE_HISTORY_LIMIT = 16
+
+/** The newest fact sequence recorded on a run, or -1 when it has none. */
+export function upgradeRunRecency(run: UpgradeRun): number {
+  return Math.max(
+    -1,
+    ...[
+      run.resolved,
+      run.detected,
+      run.failure,
+      run.prepared,
+      run.request,
+      run.handoff,
+      run.released,
+      run.takeover,
+      run.completed,
+    ].map((fact) => fact?.seq ?? -1),
+  )
+}
+
+const settledSeq = (run: UpgradeRun) => (run.completed ?? run.failure)?.seq ?? -1
+// Runs without an accepted handoff go first, then completed handoffs; runs
+// still draining an accepted handoff go last.
+const evictionTier = (run: UpgradeRun) => (!run.handoff ? 0 : run.completed ? 1 : 2)
+
+function retainRuns(acc: DispatchUpgradeState, touched: string) {
+  while (Object.keys(acc.runs).length > UPGRADE_HISTORY_LIMIT) {
+    const entries = Object.entries(acc.runs)
+    // The newest accepted handoff carries the remote captures authorization needs.
+    let newestHandoff: string | undefined
+    for (const [id, run] of entries)
+      if (
+        run.handoff &&
+        (!newestHandoff || run.handoff.seq > acc.runs[newestHandoff]!.handoff!.seq)
+      )
+        newestHandoff = id
+    // Status's latest earlier outcome excludes at most the current and
+    // live-handoff runs, so the three newest settled runs always contain it.
+    const settled = new Set(
+      entries
+        .filter(([, run]) => settledSeq(run) >= 0)
+        .sort(([, a], [, b]) => settledSeq(b) - settledSeq(a))
+        .slice(0, 3)
+        .map(([id]) => id),
+    )
+    let victim: string | undefined
+    let victimRank: [number, number] = [0, 0]
+    for (const [id, run] of entries) {
+      if (id === touched || id === acc.authoritativeRun || id === newestHandoff || settled.has(id))
+        continue
+      const rank: [number, number] = [evictionTier(run), upgradeRunRecency(run)]
+      if (
+        victim === undefined ||
+        rank[0] < victimRank[0] ||
+        (rank[0] === victimRank[0] &&
+          (rank[1] < victimRank[1] || (rank[1] === victimRank[1] && id < victim)))
+      ) {
+        victim = id
+        victimRank = rank
+      }
+    }
+    delete acc.runs[victim!]
+  }
+}
+
 function same(a: Handoff, b: Handoff): boolean {
   return (
     a.correlation === b.correlation &&
@@ -42,20 +118,41 @@ export const dispatchUpgradeReducer = defineReducer<
   RepositoryEvent,
   DispatchUpgradeState
 >({
-  version: 6,
+  version: 7,
   initial: () => ({ runs: {}, holds: {}, lineages: {}, rollbackIds: [] }),
   fold(acc, events) {
     for (const event of events) {
-      if (event.type === 'dispatcher.run-started' && event.payload.lineage)
-        acc.lineages[event.payload.run] = event.payload.lineage
+      if (event.type === 'dispatcher.run-started' && event.payload.lineage) {
+        const started = event.payload.run
+        // Reinsert so key order is start order. Dispatch run ids are
+        // non-integer strings (`<host>-dispatch-<id>`), so JavaScript keeps
+        // insertion order; integer-like ids would only change which entry
+        // goes first, not the bound.
+        delete acc.lineages[started]
+        acc.lineages[started] = event.payload.lineage
+        for (const run of Object.keys(acc.lineages)) {
+          if (Object.keys(acc.lineages).length <= UPGRADE_HISTORY_LIMIT) break
+          if (run !== acc.authoritativeRun && run !== started) delete acc.lineages[run]
+        }
+      }
       // Starts and yielded ticks are not proof of repository authority.
       if (event.type === 'dispatcher.tick-started') acc.authoritativeRun = event.payload.run
       if (event.type === 'dispatcher.runtime-rolled-back') {
         if (acc.rollbackIds.includes(event.payload.correlation)) continue
         acc.rollbackIds.push(event.payload.correlation)
+        // Duplicate appends happen only next to the original, so a recent
+        // window of correlations still deduplicates them.
+        while (acc.rollbackIds.length > UPGRADE_HISTORY_LIMIT) acc.rollbackIds.shift()
         acc.authoritativeRun = event.payload.run
         acc.lastRollback = event
         acc.holds[event.payload.lineage] = event
+        const current = acc.lineages[acc.authoritativeRun]
+        while (Object.keys(acc.holds).length > UPGRADE_HISTORY_LIMIT) {
+          const oldest = Object.entries(acc.holds)
+            .filter(([lineage]) => lineage !== current && lineage !== event.payload.lineage)
+            .reduce((a, b) => (b[1].seq < a[1].seq ? b : a))
+          delete acc.holds[oldest[0]]
+        }
         continue
       }
       if (event.type === 'dispatcher.rollback-hold-cleared') {
@@ -70,8 +167,9 @@ export const dispatchUpgradeReducer = defineReducer<
       if (event.type !== 'dispatcher.upgrade-target-resolved' && !('correlation' in event.payload))
         continue
       if (!('run' in event.payload) || typeof event.payload.run !== 'string') continue
-      acc.runs[event.payload.run] ??= { outstanding: {}, drained: 0, suspended: 0 }
-      const state = acc.runs[event.payload.run]!
+      const run = event.payload.run
+      acc.runs[run] ??= { outstanding: {}, drained: 0, suspended: 0 }
+      const state = acc.runs[run]!
       switch (event.type) {
         case 'dispatcher.upgrade-target-resolved':
           state.resolved = event
@@ -165,6 +263,7 @@ export const dispatchUpgradeReducer = defineReducer<
             state.completed ??= event
           break
       }
+      retainRuns(acc, run)
     }
   },
   finish: (acc) => structuredClone(acc),
