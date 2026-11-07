@@ -4,7 +4,11 @@ import type {
   OperatorTicketDetail,
   OperatorTicketQueue,
 } from '@defrex/autobuild-hosted-store-service/operator-api'
-import { NO_DISPATCHER_RUN_LINE } from '@defrex/autobuild/operator-presentation'
+import {
+  NO_DISPATCHER_RUN_LINE,
+  queuedTickets,
+  URGENT_MARK,
+} from '@defrex/autobuild/operator-presentation'
 import Link from 'next/link'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import * as api from './api'
@@ -289,11 +293,14 @@ export function TicketListView({
     )
   }
   const loadingMore = page.requested > tickets.length && tickets.length < total
+  // The Queue reads in dispatch order and marks urgent tickets; the projection owns both.
+  const rows =
+    tab === 'queue' ? queuedTickets(tickets) : tickets.map((ticket) => ({ ticket, urgent: false }))
   return (
     <DashboardSurface>
       {error && <p className="warn notice">{error}</p>}
       <ol className="rows ticket-rows" aria-label={`${TAB_LABEL[tab]} tickets`}>
-        {tickets.map((ticket) => {
+        {rows.map(({ ticket, urgent }) => {
           const href = ticketLink(repo, ticket.ref.id)
           const preview = excerpt(ticket.body)
           const blockers = dependencies(ticket)
@@ -313,6 +320,7 @@ export function TicketListView({
                   <span className="ticket">{ticket.ref.id}</span>
                   <span className="build-title">{ticket.title}</span>
                 </Link>
+                {urgent && <span className="status ticket-priority">{URGENT_MARK}</span>}
               </div>
               <TicketMeta repo={repo} ticket={ticket} blockers={blockers} />
               {preview && <p className="ticket-excerpt">{preview}</p>}
