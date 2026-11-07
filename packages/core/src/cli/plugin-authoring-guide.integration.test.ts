@@ -155,6 +155,23 @@ describe('plugin authoring guide', () => {
       )
     }
   }, 60_000)
+
+  test('the package example names a placeholder, never a concrete host release', async () => {
+    const reference = await readFile(REFERENCE, 'utf8')
+    const manifest = JSON.parse(fencedBlock(reference, 'plugin-authoring-package-manifest', 'json'))
+    expect(manifest.devDependencies['@defrex/autobuild']).toBe('<tested-version>')
+    expect(manifest.peerDependencies['@defrex/autobuild']).toBe('<tested-version>')
+    expect(manifest.peerDependenciesMeta['@defrex/autobuild']).toEqual({ optional: true })
+    const prose = normalizedProse(reference)
+    expect(prose).toContain(
+      'Replace `<tested-version>` with the exact Autobuild release your contracts passed against',
+    )
+    expect(prose).toContain('also the first line of `ab --version`')
+    // No literal host version anywhere in the guide, so a release can't leave one stale.
+    expect(reference).not.toMatch(/"@defrex\/autobuild"\s*:\s*"[~^<>=\s]*\d/)
+    expect(reference).not.toMatch(/@defrex\/autobuild@\d/)
+    expect(reference).not.toMatch(/tested host release \(`/)
+  })
 })
 
 test('API 1.8 documents optional failures and request telemetry in every installed reference', async () => {

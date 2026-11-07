@@ -429,8 +429,9 @@ acme-autobuild-plugin/
 └── bun.lock
 ```
 
-This manifest declares only the tested host release (`1.0.0-beta.2`); widen it only after the unchanged contracts pass on each added host.
+Replace `<tested-version>` with the exact Autobuild release your contracts passed against: the version `bun add -d --exact @defrex/autobuild` recorded, also the first line of `ab --version`. That output's plugin API line is the version your `apiVersion` range must contain. Keep the peer at that tested release; widen it to a range only after the unchanged contracts pass on each added host.
 
+<!-- plugin-authoring-package-manifest:start -->
 ```json
 {
   "name": "@acme/autobuild-plugin",
@@ -443,11 +444,12 @@ This manifest declares only the tested host release (`1.0.0-beta.2`); widen it o
     "test": "bun test",
     "prepublishOnly": "bun run typecheck && bun test"
   },
-  "devDependencies": { "@defrex/autobuild": "1.0.0-beta.2", "typescript": "5.9.3" },
-  "peerDependencies": { "@defrex/autobuild": "1.0.0-beta.2" },
+  "devDependencies": { "@defrex/autobuild": "<tested-version>", "typescript": "5.9.3" },
+  "peerDependencies": { "@defrex/autobuild": "<tested-version>" },
   "peerDependenciesMeta": { "@defrex/autobuild": { "optional": true } }
 }
 ```
+<!-- plugin-authoring-package-manifest:end -->
 
 - **Dependencies.** Type-only SDK imports erase, so Autobuild is a dev dependency, not a runtime `dependencies` entry. The optional peer names the tested host without loading a second Autobuild copy. Runtime imports, such as the reference fake, need a runtime dependency; never ship the fake as a production adapter.
 - **Versions.** Package semver is independent of the host range and `apiVersion`. On an incompatible host plugin API, update adapter and contracts, change the range once they pass, and version the package by the user-visible compatibility change.
