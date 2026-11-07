@@ -17,12 +17,14 @@ import type { NativeSessionHandle, AgentResumeResult } from '../types'
  */
 import type { StreamPart } from '../../store/streams/types'
 import { spawnCliStream } from './cli-stream'
+import { startPrompt } from './start-prompt'
 import {
   agentInvocation,
   type AgentContinueOpts,
   type AgentRunner,
   type AgentSessionHandle,
   type AgentStartOpts,
+  type StartPromptOpts,
   type AgentTurnFailure,
   type AgentTurnResult,
   type SessionStreamEmitter,
@@ -278,11 +280,14 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     return { text: turn.text }
   }
 
+  startPrompt(opts: StartPromptOpts): string {
+    return startPrompt('codex', opts)
+  }
+
   async start(
     opts: AgentStartOpts,
   ): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }> {
-    // Codex Agent Skills use `$name`, unlike Claude/Pi's slash invocation.
-    const prompt = `$${opts.skill} ${agentInvocation(opts)}`
+    const prompt = this.startPrompt(opts)
     const executed = await this.runTurn(prompt, opts)
     const turn: CodexTurn =
       executed.failure === undefined && executed.threadId === undefined

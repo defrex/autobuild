@@ -22,6 +22,16 @@ describe('runtime registration validation', () => {
     )
   })
 
+  test('accepts an absent start prompt and rejects a non-function one', () => {
+    expect(validateRuntimeRegistration(reg([])).runner.startPrompt).toBeUndefined()
+    const runner = Object.assign(new ScriptedAgentRunner({ script: () => defaultTurnResult() }), {
+      startPrompt: 'not a function',
+    })
+    expect(() => validateRuntimeRegistration({ runner, servesModels: [] })).toThrow(
+      'runner.startPrompt must be a function when provided',
+    )
+  })
+
   test('validates adapter-owned option metadata', () => {
     expect(
       validateRuntimeRegistration({ ...reg([]), ownedArgs: ['--model', '-m'] }).ownedArgs,
