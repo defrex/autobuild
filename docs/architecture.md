@@ -1026,12 +1026,14 @@ intervals. In local execution mode the header's triage count comes from the
 reduced `DispatchStatus` (`status.triage`), exactly like the queue depth, so a
 frontend refresh reads neither the ticket source nor any extra store value for
 it; viewer mode differs, as described below. The supervised
-kernel child (`frontendStatus`) samples `TicketSource.listStates()` once per
-tick, after the Dispatcher tick and before publication, and carries the last
+kernel child (`frontendStatus`) samples the source's optional
+`countStates([triage])` once per tick, after the Dispatcher tick and before
+publication — one bounded request, never a listing — and carries the last
 successful count on `dispatcher.tick-completed`; a changed count is a
 standing-state change for publication suppression. Hosted, plain and
-non-TTY dispatchers never sample it. An unsupported source, failed read or
-unmatched state keeps the previous value (initially unknown, shown as `–`).
+non-TTY dispatchers never sample it. A source without `countStates` makes no
+request and stays unknown (`–`); a failed read or unmatched state keeps the
+previous value (initially unknown, shown as `–`).
 A viewer (`opts.viewer`) whose repository is dispatched elsewhere ignores
 `status.triage` and shows only its own count: on a refreshed frame it asks
 the source's optional `countStates([triage])` at most once per 10 s, in the

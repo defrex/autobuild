@@ -2056,9 +2056,9 @@ basename followed by the compact counters
 main counts the web operator app shows. `triage` is the number of tickets in
 the configured triage state (`[tickets].triageState`, or the source's default).
 The dispatcher samples it once per tick, only for an interactive dashboard,
-through the ticket source's state counts; it reads no events. It shows `–`
-when the source cannot enumerate states (Linear) or no sample has succeeded
-yet; a failed read keeps the last value, appends nothing, and never fails the
+through one bounded state-count read (`countStates`), never a ticket
+listing; it reads no events. It shows `–` when the source has no bounded
+state counts (Linear) or no sample has succeeded yet; a failed read keeps the last value, appends nothing, and never fails the
 tick. The interactive frontend of a local dispatch takes it from the
 dispatcher's published status and never reads the ticket source. A viewer
 (`ab dispatch --viewer`, or the default placement for hosted dispatch) reads
