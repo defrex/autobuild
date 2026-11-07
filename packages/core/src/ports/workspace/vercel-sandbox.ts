@@ -5,6 +5,7 @@ import {
 import { WorkspaceCleanupRequired } from '../types'
 import { inspectGitCandidate, preserveGitCommits, restoreGitCommits } from './commit-preservation'
 import { accountPolicy, accountGuestEnvironment } from './account-policy'
+import { HOSTED_ACCOUNT_READINESS_ENV } from '../../accounts/hosted-readiness'
 import { gitRewrite, parseRemoteHead } from '../forge/git-rewrite'
 import { delegateCredential } from '../../store/remote/credentials'
 import type { ExecutionLaunchAuth } from './build-execution'
@@ -999,8 +1000,8 @@ export async function validateVercelSandbox(
           ),
           AB_STORE: options.storeRef,
           AB_TOKEN: options.storeToken,
-          ...(options.env.AB_CHATGPT_HOSTED_READINESS
-            ? { AB_CHATGPT_HOSTED_READINESS: options.env.AB_CHATGPT_HOSTED_READINESS }
+          ...(options.env[HOSTED_ACCOUNT_READINESS_ENV]
+            ? { [HOSTED_ACCOUNT_READINESS_ENV]: options.env[HOSTED_ACCOUNT_READINESS_ENV] }
             : {}),
         },
       }),

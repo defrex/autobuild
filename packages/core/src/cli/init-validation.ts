@@ -1,6 +1,13 @@
 import { LocalCredentials } from '../accounts/local-credentials'
 import { LocalAccountOwner } from '../accounts/local-owner'
 import { abSecrets } from './secrets'
+import {
+  HOSTED_ACCOUNT_READINESS_ENV,
+  HOSTED_METADATA_PLACEHOLDER,
+  hostedReadinessNames,
+  withHostedReadiness,
+} from '../accounts/hosted-readiness'
+import { staticSecretEligible, staticSecretReadiness } from './init-hosted-accounts'
 import type { ProjectSecretMetadata } from '../project-secrets'
 import { accountRemedy } from '../config/accounts'
 import { createForge } from '../ports/forge/create'
@@ -278,17 +285,17 @@ export async function runGuestReadinessProbe(opts: {
 
   try {
     for (const [name, descriptor] of Object.entries(config.accounts)) {
+      const hosted = hostedReadinessNames(opts.env).includes(name)
       checks.push({
         name: `credential ${JSON.stringify(name)}`,
         status: opts.env[descriptor.credentialEnv] ? 'pass' : 'warning',
-        detail: `${descriptor.credentialEnv} is ${opts.env[descriptor.credentialEnv] ? 'present' : 'absent'}${!opts.env[descriptor.credentialEnv] && descriptor.kind === 'claude-subscription' ? '; run claude setup-token for remote use' : ''}`,
+        detail: hosted
+          ? `${descriptor.credentialEnv} is a hosted project secret (metadata only)`
+          : `${descriptor.credentialEnv} is ${opts.env[descriptor.credentialEnv] ? 'present' : 'absent'}${!opts.env[descriptor.credentialEnv] && descriptor.kind === 'claude-subscription' ? '; run claude setup-token for remote use' : ''}`,
       })
       const account = { name, descriptor }
       const runtime = descriptor.kind === 'chatgpt-subscription' ? 'codex' : 'claude'
-      if (
-        descriptor.kind === 'chatgpt-subscription' &&
-        (JSON.parse(opts.env.AB_CHATGPT_HOSTED_READINESS ?? '[]') as string[]).includes(name)
-      ) {
+      if (hosted) {
         checks.push({
           name: `account ${JSON.stringify(name)}`,
           status: 'pass',
@@ -810,35 +817,58 @@ async function validateInitReadinessInner(opts: {
   }
 }
 
-/** Validation consumes the current owner's access value, never its refresh token. */
+/**
+ * Validation consumes the current owner's access value, never its refresh
+ * token. On a connected project, ChatGPT accounts without a local login and
+ * Claude or Kimi accounts eligible for a static project secret are reported
+ * from one write-only metadata listing; their values are never downloaded, a
+ * placeholder satisfies downstream presence checks, and the guest skips their
+ * live model probe.
+ */
 export async function validateInitReadiness(
-  opts: Parameters<typeof validateInitReadinessInner>[0],
+  opts: Parameters<typeof validateInitReadinessInner>[0] & {
+    fetch?: (input: string, init?: RequestInit) => Promise<Response>
+  },
 ): Promise<InitValidationReport> {
+  const { fetch: fetchImpl, ...innerOpts } = opts
   const exec = opts.exec ?? spawnExec
   const repo = await resolveMainRepo(opts.targetRepo, exec)
   const config = await loadConfig(join(repo, 'autobuild.toml'))
+  const service = opts.env.AB_STORE?.trim() || config.store?.url
+  const connected = Boolean(service && isRemoteStoreRef(service))
+  const remoteReadiness =
+    builtinWorkspaceProviderCapabilities(config.workspace.provider)?.validateReadiness !== undefined
   const accounts = Object.entries(config.accounts).filter(
     ([, a]) => a.kind === 'chatgpt-subscription',
   )
-  if (!accounts.length) return validateInitReadinessInner({ ...opts, resolvedRepo: repo })
+  const staticAccounts = Object.entries(config.accounts).filter(([, a]) =>
+    staticSecretEligible(a, opts.env, { connected, remoteReadiness }),
+  )
+  if (!accounts.length && !staticAccounts.length)
+    return validateInitReadinessInner({ ...innerOpts, resolvedRepo: repo })
   const credentials = new LocalCredentials(join(repo, '.autobuild'))
   const owner = new LocalAccountOwner(credentials)
   const claimed: string[] = []
   const env = { ...opts.env }
   const checks: InitValidationReport['checks'] = []
+  const failed = (): InitValidationReport => ({
+    provider: config.workspace.provider,
+    context: config.workspace.provider === 'git-worktree' ? 'local worktree' : 'Vercel Sandbox',
+    checks,
+    exitCode: 1,
+  })
   try {
-    const service = opts.env.AB_STORE?.trim() || config.store?.url
     let metadata: ProjectSecretMetadata[] | undefined
     if (
-      service &&
-      isRemoteStoreRef(service) &&
-      accounts.some(([name]) => !credentials.load(name))
+      connected &&
+      (staticAccounts.length > 0 || accounts.some(([name]) => !credentials.load(name)))
     ) {
       await abSecrets('list', undefined, {
         cwd: repo,
         env: opts.env,
         exec,
         json: true,
+        ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
         print: (text) => {
           metadata = JSON.parse(text).secrets
         },
@@ -868,22 +898,19 @@ export async function validateInitReadiness(
             ? `Hosted credential ${entry.status}; owner ${entry.owner}; set ${entry.setAt}; ${entry.warnings?.join(', ') || 'no refresh-window warning'}. The first hosted build is the live check.`
             : `Credential absent; run ab accounts login ${JSON.stringify(name)} ${service && isRemoteStoreRef(service) ? '--project' : '--local'}`,
         })
-        if (!ready)
-          return {
-            provider: config.workspace.provider,
-            context:
-              config.workspace.provider === 'git-worktree' ? 'local worktree' : 'Vercel Sandbox',
-            checks,
-            exitCode: 1,
-          }
-        env.AB_CHATGPT_HOSTED_READINESS = JSON.stringify([
-          ...(JSON.parse(env.AB_CHATGPT_HOSTED_READINESS ?? '[]') as string[]),
-          name,
-        ])
-        env[descriptor.credentialEnv] = 'autobuild-hosted-metadata-only'
+        if (!ready) return failed()
+        env[HOSTED_ACCOUNT_READINESS_ENV] = withHostedReadiness(env, name)
+        env[descriptor.credentialEnv] = HOSTED_METADATA_PLACEHOLDER
       }
     }
-    const report = await validateInitReadinessInner({ ...opts, env, resolvedRepo: repo })
+    for (const [name, descriptor] of staticAccounts) {
+      const { ready, ...check } = staticSecretReadiness(name, descriptor, metadata)
+      checks.push(check)
+      if (!ready) return failed()
+      env[HOSTED_ACCOUNT_READINESS_ENV] = withHostedReadiness(env, name)
+      env[descriptor.credentialEnv] = HOSTED_METADATA_PLACEHOLDER
+    }
+    const report = await validateInitReadinessInner({ ...innerOpts, env, resolvedRepo: repo })
     return { ...report, checks: [...checks, ...report.checks] }
   } finally {
     for (const name of claimed) owner.release(name)

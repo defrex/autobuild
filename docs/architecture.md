@@ -2055,8 +2055,9 @@ manually. ChatGPT credentials are authorized with `ab accounts login NAME
 is the sole refresh owner; no sandbox refreshes. Local Codex uses a protected
 loopback inference transport and isolated CODEX_HOME, preserving the shell HOME
 and leaving ambient login untouched.
-Hosted validation uses write-only metadata and states that the first hosted
-build is the live check; local validation makes a minimal runtime request.
+Hosted validation uses write-only metadata for ChatGPT refreshing secrets and
+Claude/Kimi static project secrets, and states that the first hosted build is
+the live check; local validation makes a minimal runtime request.
 
 Selected Claude/Kimi credentials stay out of process arguments: each invocation
 uses a private 0700 directory and a regular 0600 settings file, removed after
