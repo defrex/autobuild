@@ -85,12 +85,16 @@ import {
   presenceInputs,
   confirmedLandings,
   presenceWitness,
-  projectPresence,
-  presenceEvidence,
+  answers,
+  compactProbe,
+  projectProbe,
+  probeEvidence,
   destinationAliases,
   ownedContribution,
   type ChangeIdentity,
   type PresenceInputs,
+  type PresenceProbe,
+  type PresenceWitness,
 } from '../kernel/change-presence'
 import { landIntoNode, settleClosedNode, preflightNodeLanding } from '../kernel/node-landing'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -287,6 +291,14 @@ export function markRejected(node: DependencyState, rejectedState?: string): Dep
     : node
 }
 
+/** One destination's in-tick presence answers and the probe behind them. */
+interface PresenceObservation {
+  branch: string
+  destination: string
+  head: string
+  identities: ChangeIdentity[]
+  probe: PresenceProbe
+}
 export interface DependencyVerdict {
   /** Unresolved blocker ids — nonempty means DO NOT dispatch. */
   unresolved: string[]
@@ -810,6 +822,12 @@ export class Dispatcher {
     { fingerprint: string; branch: string | null; scan: number }
   >()
   private foreignScanGeneration = 0
+  /** Last full in-memory witness per sampled destination, replaced on head
+   * moves, so a long-running dispatcher walks Git at most once per head. */
+  private readonly presenceWitnesses = new Map<
+    string,
+    { branch: string; head: string; witness: PresenceWitness }
+  >()
 
   private async integrationClaimKey(slug: string, state: BuildState): Promise<string> {
     return nodeTicketObservationKey(state, await this.nodePollingChildren(slug))
@@ -5426,10 +5444,7 @@ export class Dispatcher {
           (build.digest.kind !== 'node' || build.digest.mergedSha !== undefined)
         )
       })
-    const destinationHeads = new Map<
-      string,
-      { branch: string; destination: string; head: string; identities: string[] }
-    >()
+    const destinationHeads = new Map<string, PresenceObservation>()
     const demands: { slug: string; request: EventPayload<'node.restack-requested'> }[] = []
     const verdicts = new Map<string, DependencyVerdict>()
     const failed = new Set<string>()
@@ -5527,6 +5542,7 @@ export class Dispatcher {
       }
       verdicts.set(ticket.ref.id, verdict)
     }
+    await this.recordDestinationPresence(destinationHeads)
     if (this.outOfBudget(opts)) return
     if (failed.size === 0) {
       await this.sourceCondition(undefined, 'dependency-check')
@@ -6644,95 +6660,121 @@ export class Dispatcher {
     }
   }
 
+  /** Answer `query` for one destination with bounded, query-scoped evidence.
+   * A durable probe at the sampled head that covers the questions is reused
+   * without Git; otherwise one fresh walk (or this process's in-memory witness
+   * at the same head) is compacted. Full witnesses are never persisted. */
   private async sampleDestinationPresence(
     branch: string,
     destination: string,
     target: { target: { build: string } } | undefined,
     inputs: PresenceInputs,
-    observations: Map<
-      string,
-      { branch: string; destination: string; head: string; identities: string[] }
-    >,
-  ) {
-    let observed = observations.get(destination)
-    if (!observed) {
-      const forge = this.kernelForge()
+    observations: Map<string, PresenceObservation>,
+    query: readonly ChangeIdentity[],
+  ): Promise<PresenceObservation> {
+    const aliases = destinationAliases(inputs, target?.target.build)
+    const entry = observations.get(destination)
+    if (entry && answers(entry.probe, query, inputs.landings, aliases)) return entry
+    const forge = this.kernelForge()
+    let head = entry?.head
+    if (head === undefined) {
       if (!forge.remoteBranchSha) throw new Error('forge cannot read destination head')
-      const head = await forge.remoteBranchSha(branch)
-      const aliases = destinationAliases(inputs, target?.target.build)
-      const cached = this.store.repositoryFacts().presence[destination]
-      if (cached?.head === head && cached.branch === branch && cached.witness?.version === 1) {
-        const identities = projectPresence(cached.witness, inputs.landings, aliases)
-        const evidence = presenceEvidence(cached.witness, identities)
-        observed = { ...cached, identities }
-        if (cached.evidence !== evidence) {
-          await this.store.ensureRepo(this.deps.repo)
-          await this.store.appendRepo(this.deps.repo, {
-            actor: DISPATCHER,
-            type: 'change-presence.observed',
-            payload: { ...cached, identities, evidence },
-          })
-        }
-      } else {
-        if (!forge.snapshotBase && !forge.kernelExec && !forge.rewrite)
-          throw new Error('forge cannot snapshot destination presence')
-        observed = await this.withKernelRepository(async (path) => {
-          const destinationRef = `refs/autobuild/reconcile/${target?.target.build ?? 'presence'}/presence`
-          let sampled: string
-          if (forge.snapshotBase)
-            sampled = await forge.snapshotBase({
-              workspacePath: path,
-              base: branch,
-              destinationRef,
-            })
-          else if (target && forge.rewrite)
-            sampled = await forge.rewrite.snapshot({
-              workspacePath: path,
-              branch,
-              destinationRef,
-            })
-          else {
-            const exec = forge.kernelExec ?? this.deps.exec
-            const fetch = await exec(
-              [
-                'git',
-                'fetch',
-                '--no-tags',
-                '--no-write-fetch-head',
-                '--refmap=',
-                'origin',
-                `+refs/heads/${branch}:${destinationRef}`,
-              ],
-              { cwd: path },
-            )
-            if (fetch.exitCode !== 0) throw new Error(fetch.stderr)
-            const resolved = await exec(
-              ['git', 'rev-parse', '--verify', `${destinationRef}^{commit}`],
-              { cwd: path },
-            )
-            if (resolved.exitCode !== 0) throw new Error(resolved.stderr)
-            sampled = resolved.stdout.trim()
-          }
-          if (sampled !== head) throw new Error('destination moved while sampling presence')
-          const witness = await presenceWitness(
-            { exec: forge.kernelExec ?? this.deps.exec, workspacePath: path },
-            head,
-          )
-          const identities = projectPresence(witness, inputs.landings, aliases)
-          const evidence = presenceEvidence(witness, identities)
-          const payload = { branch, destination, head, evidence, identities, witness }
-          await this.store.ensureRepo(this.deps.repo)
-          await this.store.appendRepo(this.deps.repo, {
-            actor: DISPATCHER,
-            type: 'change-presence.observed',
-            payload,
-          })
-          return payload
-        })
-      }
-      observations.set(destination, observed)
+      head = await forge.remoteBranchSha(branch)
     }
-    return observed!
+    const questions = normalizeIdentities([...(entry?.probe.questions ?? []), ...query])
+    const cached = this.store.repositoryFacts().presence[destination]
+    let probe: PresenceProbe
+    if (
+      cached?.head === head &&
+      cached.branch === branch &&
+      cached.probe &&
+      answers(cached.probe as PresenceProbe, questions, inputs.landings, aliases)
+    )
+      probe = cached.probe as PresenceProbe
+    else {
+      const memo = this.presenceWitnesses.get(destination)
+      const witness =
+        memo?.branch === branch && memo.head === head
+          ? memo.witness
+          : await this.sampleDestinationWitness(branch, head, target)
+      this.presenceWitnesses.set(destination, { branch, head, witness })
+      probe = compactProbe(witness, questions, inputs.landings, aliases)
+    }
+    const identities = projectProbe(probe, inputs.landings, aliases)
+    const observed = { branch, destination, head, identities, probe }
+    observations.set(destination, observed)
+    return observed
+  }
+
+  /** Persist each destination's final in-tick probe once, after every ticket
+   * has added its questions, and only when it differs from the durable one. */
+  private async recordDestinationPresence(observations: Map<string, PresenceObservation>) {
+    for (const { branch, destination, head, identities, probe } of observations.values()) {
+      const evidence = probeEvidence(probe, identities)
+      const cached = this.store.repositoryFacts().presence[destination]
+      if (cached?.head === head && cached.branch === branch && cached.evidence === evidence)
+        continue
+      await this.store.ensureRepo(this.deps.repo)
+      await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'change-presence.observed',
+        payload: { branch, destination, head, evidence, identities, probe },
+      })
+    }
+  }
+
+  /** One snapshot of the destination at `head` and its full in-memory witness. */
+  private async sampleDestinationWitness(
+    branch: string,
+    head: string,
+    target: { target: { build: string } } | undefined,
+  ): Promise<PresenceWitness> {
+    const forge = this.kernelForge()
+    if (!forge.snapshotBase && !forge.kernelExec && !forge.rewrite)
+      throw new Error('forge cannot snapshot destination presence')
+    return this.withKernelRepository(async (path) => {
+      const destinationRef = `refs/autobuild/reconcile/${target?.target.build ?? 'presence'}/presence`
+      let sampled: string
+      if (forge.snapshotBase)
+        sampled = await forge.snapshotBase({
+          workspacePath: path,
+          base: branch,
+          destinationRef,
+        })
+      else if (target && forge.rewrite)
+        sampled = await forge.rewrite.snapshot({
+          workspacePath: path,
+          branch,
+          destinationRef,
+        })
+      else {
+        const exec = forge.kernelExec ?? this.deps.exec
+        const fetch = await exec(
+          [
+            'git',
+            'fetch',
+            '--no-tags',
+            '--no-write-fetch-head',
+            '--refmap=',
+            'origin',
+            `+refs/heads/${branch}:${destinationRef}`,
+          ],
+          { cwd: path },
+        )
+        if (fetch.exitCode !== 0) throw new Error(fetch.stderr)
+        const resolved = await exec(
+          ['git', 'rev-parse', '--verify', `${destinationRef}^{commit}`],
+          { cwd: path },
+        )
+        if (resolved.exitCode !== 0) throw new Error(resolved.stderr)
+        sampled = resolved.stdout.trim()
+      }
+      if (sampled !== head) throw new Error('destination moved while sampling presence')
+      return presenceWitness(
+        { exec: forge.kernelExec ?? this.deps.exec, workspacePath: path },
+        head,
+      )
+    })
   }
 
   private async presenceVerdict(
@@ -6743,10 +6785,7 @@ export class Dispatcher {
     nodes: Map<string, DependencyNode>,
     inputs: PresenceInputs,
     demands: { slug: string; request: EventPayload<'node.restack-requested'> }[],
-    observations: Map<
-      string,
-      { branch: string; destination: string; head: string; identities: string[] }
-    >,
+    observations: Map<string, PresenceObservation>,
   ): Promise<DependencyVerdict> {
     const branch = target?.branch ?? this.deps.config.baseBranch
     const destination = target?.target.build ?? `root:${branch}`
@@ -6814,6 +6853,7 @@ export class Dispatcher {
         target,
         inputs,
         observations,
+        normalizeIdentities([...required.values()].flat()),
       )
       const missing = [
         ...new Set(
@@ -6841,6 +6881,7 @@ export class Dispatcher {
             slug ? { target: { build: slug } } : undefined,
             inputs,
             observations,
+            missing,
           )
           path.push({ ...(slug ? { slug } : {}), ...parent })
           if (missing.every((id) => path.some((entry) => entry.identities.includes(id)))) break
