@@ -84,13 +84,22 @@ parent history. An empty completed contribution is satisfied; missing evidence,
 an open or aborted node, or ambiguous newest build generations remain queued.
 Older successful generations are never substituted for the newest build.
 
-Destination observations retain versioned, head-bound Git witnesses (reachable
-commit SHAs and direct build trailers) and a fixed-length evidence digest. Current
+Destination observations record a head-bound, query-scoped probe rather than
+the destination's history: only the commit SHAs and direct build trailers in the
+proof closure of the identities being decided (blocker identities, plus the
+landings and confirmed foreign aliases that could transport them), which of those
+are reachable from the sampled head, presence answers for only those identities,
+and a fixed-length evidence digest. Observation size is bounded by that closure,
+independent of the destination's reachable commit count and of repository history.
+While the head is unchanged and the probe covers the current questions, current
 confirmed landings and aliases from only the destination's accepted ancestry are
-reapplied before reuse. Unrelated merged history and ready destinations do not
-invalidate this proof. Head changes require a fresh Git sample; legacy observations
-without witnesses refresh once rather than replaying repository history. Current
-readiness and newest-generation checks still apply before claim.
+reapplied without Git; unrelated merged history and ready-set changes neither
+invalidate it nor append events. A moved head, a newly relevant landing, or a new
+question requires a fresh Git sample. Observations without a probe, including
+older full-history witnesses, are never trusted for admission: they refresh once
+from Git, and an unavailable sample leaves the dependent queued; neither replays
+repository history. Current readiness and newest-generation checks still apply
+before claim.
 
 - Same node: the blocking change merges directly into the target.
 - Ancestor: the change merges into an ancestor, then presence demand restacks only the required path to the target.
