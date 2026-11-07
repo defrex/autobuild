@@ -79,6 +79,38 @@ Received: "left"
 Ran 7 tests across 2 files. [55.00ms]
 `
 
+// Verbatim bun 1.4.4 non-TTY stderr of a real `installPackedDistribution`
+// failure with an injected 404 install. The thrown message embeds the install's
+// own `error:` lines. Only the absolute path prefix was rewritten.
+const PACKED_INSTALL_STDERR = String.raw`
+install.test.ts:
+225 |       await sleep(transientDelay)
+226 |       continue
+227 |     }
+228 | 
+229 |     if (options.allowFailure) return result
+230 |     throw new PackedInstallError(
+                ^
+PackedInstallError: bun install --production failed in /consumer (exit 1, 1 attempt(s))
+--- stderr (last 3000 chars) ---
+error: GET https://registry.npmjs.org/left-pad - 404
+error: left-pad@1.3.0 failed to resolve
+
+--- stdout (last 500 chars) ---
+bun install v1.4.4 (38afee6c8)
+
+   result: {
+  exitCode: 1,
+  stdout: "bun install v1.4.4 (38afee6c8)\n",
+  stderr: "error: GET https://registry.npmjs.org/left-pad - 404\nerror: left-pad@1.3.0 failed to resolve\n",
+},
+ attempts: 1,
+
+      at installPackedDistribution (/repo/packages/core/src/testing/packed-install.ts:230:11)
+      at async <anonymous> (/repo/.ab/probe/install.test.ts:4:9)
+(fail) packed install fails [1.09ms]
+`
+
 function collect(chunks: readonly string[]) {
   const collector = createFailureCollector()
   for (const chunk of chunks) collector.push(chunk)
@@ -199,6 +231,52 @@ describe('formatFailureDigest', () => {
     expect(digest).toContain('at <anonymous> (/repo/tools/b.test.ts:2:43)')
     // Console noise that preceded the excerpt is trimmed from the section.
     expect(digest).not.toMatch(/^console noise before the failure$/m)
+    expect(digest).not.toContain('elided')
+  })
+
+  test('keeps a multi-line message whose later lines start with error:', () => {
+    const stderr = [
+      'tools/nested.test.ts:',
+      'console noise from a passing test',
+      'error: primary failure',
+      'required diagnostic context',
+      '',
+      'error: nested diagnostic',
+      '  at example (sample.test.ts:1:1)',
+      '(fail) nested [0.10ms]',
+      '',
+    ].join('\n')
+
+    const digest = formatFailureDigest(collect([stderr]))
+
+    expect(digest).toContain(
+      [
+        '--- (fail) tools/nested.test.ts > nested ---',
+        'error: primary failure',
+        'required diagnostic context',
+        '',
+        'error: nested diagnostic',
+        '  at example (sample.test.ts:1:1)',
+      ].join('\n'),
+    )
+    expect(digest).not.toContain('console noise from a passing test')
+  })
+
+  test('keeps a real PackedInstallError with its embedded install stderr', () => {
+    const digest = formatFailureDigest(collect([PACKED_INSTALL_STDERR]))
+
+    expect(digest).toContain('--- (fail) install.test.ts > packed install fails ---\n225 |')
+    expect(digest).toContain(
+      [
+        'PackedInstallError: bun install --production failed in /consumer (exit 1, 1 attempt(s))',
+        '--- stderr (last 3000 chars) ---',
+        'error: GET https://registry.npmjs.org/left-pad - 404',
+        'error: left-pad@1.3.0 failed to resolve',
+      ].join('\n'),
+    )
+    expect(digest).toContain(
+      'at installPackedDistribution (/repo/packages/core/src/testing/packed-install.ts:230:11)',
+    )
     expect(digest).not.toContain('elided')
   })
 

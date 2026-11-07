@@ -31,7 +31,7 @@ const FAIL_LINE = /^\(fail\) (.*?)(?: \[[\d.]+m?s\])?$/
 const RESET_LINE = /^\((?:pass|skip|todo)\) /
 const TIMEOUT_LINE = /^\s+\^ this test timed out/
 const EXCERPT_LINE = /^\s*\d+ \| /
-const CARET_LINE = /^\s*\^\s*$/
+const ERROR_LINE = /^(?:error|\w*Error):/
 
 export type CollectedFailure = { file?: string; name: string; detail: string }
 
@@ -118,23 +118,16 @@ export function createFailureCollector(): FailureCollector {
 }
 
 /**
- * Drop console noise that precedes a failure's error: start at the first line
- * of the last contiguous run of source-excerpt, caret and `error:` lines.
+ * Drop console noise that precedes a failure's error: start at the block's
+ * first source-excerpt or error line (`error:`, `TypeError:`,
+ * `PackedInstallError:` …). bun prints a failure's excerpt and error line
+ * first, so everything after that point belongs to the failure, including
+ * `error:` lines embedded in a multi-line message. Only budget elision cuts it.
  */
 function errorSection(detail: string): string {
   const lines = detail.split('\n')
-  const marks = (text: string) =>
-    EXCERPT_LINE.test(text) || CARET_LINE.test(text) || text.startsWith('error:')
-  let end = -1
-  for (let index = lines.length - 1; index >= 0; index -= 1)
-    if (EXCERPT_LINE.test(lines[index] ?? '') || (lines[index] ?? '').startsWith('error:')) {
-      end = index
-      break
-    }
-  if (end < 0) return detail.trim()
-  let start = end
-  while (start > 0 && marks(lines[start - 1] ?? '')) start -= 1
-  return lines.slice(start).join('\n').trim()
+  const start = lines.findIndex((text) => EXCERPT_LINE.test(text) || ERROR_LINE.test(text))
+  return (start < 0 ? lines : lines.slice(start)).join('\n').trim()
 }
 
 /** The largest cap `C` with `Σ min(length, C) ≤ budget` (water-filling). */
