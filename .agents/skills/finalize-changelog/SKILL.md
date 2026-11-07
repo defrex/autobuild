@@ -42,16 +42,36 @@ The only accepted entry format is:
 ```
 
 Require a clean worktree before starting. Let the stable marker be `[#<number>](`.
-Count it across CHANGELOG.md (including historical releases) and the canonical
-`.changelog/<number>.md` fragment. Validate an existing fragment with
-`parseFragment` from `tools/changelog-fragments.ts`. Exactly one existing
-representation is an idempotent no-op, even after release consumption. Never
-rewrite an existing fragment when its title changes. Duplicates or malformed
-fragments are clean observed semantic failures.
+Exactly one existing representation across CHANGELOG.md (including historical
+releases) and the canonical `.changelog/<number>.md` fragment is an idempotent
+no-op, even after release consumption. Never rewrite an existing fragment when
+its title changes. Duplicates or malformed fragments are clean observed
+semantic failures.
 
-With zero representations, create `.changelog/<number>.md` exclusively (never
-overwrite), containing exactly the entry above plus a trailing newline. Use
-`renderFragment` from `tools/changelog-fragments.ts` to validate inputs.
+Count, validate and create through the repository helper, run from the
+worktree root with the title quoted as one argument:
+
+```sh
+bun tools/changelog-add.ts <number> <url> '<title>'
+```
+
+It counts the marker across CHANGELOG.md and the canonical fragment, validates
+an existing fragment with `parseFragment` and the inputs with `renderFragment`
+from `tools/changelog-fragments.ts`, and creates `.changelog/` when a release
+has removed it. With zero representations it will then
+create `.changelog/<number>.md` exclusively (never overwrite), containing
+exactly the entry above plus a trailing newline. Do not hand-write the fragment with
+another tool, and never pre-create content in `.changelog/` yourself. If
+`tools/changelog-add.ts` is absent from the worktree (a base that predates it),
+that is a clean semantic failure: observe it and end.
+
+- `{"outcome":"present",...}` on stdout: exactly one representation exists.
+  This is the idempotent no-op; make no commit and end.
+- A nonzero exit (duplicate markers, malformed fragment, invalid inputs) is a
+  clean semantic failure. The helper wrote nothing; record its stderr message
+  in the observation.
+- `{"outcome":"created",...}`: continue below.
+
 Do not modify CHANGELOG.md. Inspect the new file and the staged diff: only this
 path and exactly this one entry may be added. Reject unrelated changes. Run
 `git diff --check` and `git diff --cached --check`. On semantic failure remove
