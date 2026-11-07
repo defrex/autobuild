@@ -66,8 +66,10 @@ Reconcile requires the optional grouped `Forge.rewrite` capability:
    archives also publish commits present only on the remote: GitHub uses create-only
    Git-reference REST creation when the workspace lacks the commit, retaining guarded
    Git pushes for local objects. Exact remote readback confirms publication, then a
-   depth-one fetch by the archive ref (without tags or configured refmap expansion)
-   restores missing commits and verifies them locally before returning.
+   non-shallow fetch of only that exact archive ref (without tags, configured refmap
+   expansion or a depth limit) restores missing commits and their missing ancestry,
+   writes no shallow boundary, leaves an already-shallow repository's existing
+   boundaries unchanged, and verifies the commits locally before returning.
 3. Replace the explicit branch, leased on an explicit expected remote head.
 
 - Return `lease-mismatch` separately from transport, auth and policy failures.

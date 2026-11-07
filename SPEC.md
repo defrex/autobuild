@@ -3718,9 +3718,11 @@ history and rewrite facts, plus both heads and the temporary change, under immut
 namespace or permission failures stop publication without a branch/tag fallback. Remote
 archives also publish commits present only on the remote: GitHub uses create-only
 Git-reference REST creation when the workspace lacks the commit, retaining guarded Git
-pushes for local objects. Exact remote readback confirms publication, then a depth-one
-fetch by the archive ref (without tags or configured refmap expansion) restores missing
-commits and verifies them locally before returning.
+pushes for local objects. Exact remote readback confirms publication, then a non-shallow
+fetch of only that exact archive ref (without tags, configured refmap expansion or a
+depth limit) restores missing commits and their missing ancestry, writes no shallow
+boundary, leaves an already-shallow repository's existing boundaries unchanged, and
+verifies the commits locally before returning.
 Publication requests and loss records alone are not retained Git history: their
 unpublished objects may have died with a released sandbox. A separately published
 or reviewed tip remains an archive requirement even when an earlier request named
