@@ -159,7 +159,9 @@ match the exhaustive listing. The shared `describeTicketSourceContract` suite
 automatically compares declared native paging with full-read windows.
 
 Only paged operator listings select this capability. Sources without it retain
-the full-read/reverse/slice fallback; native errors propagate. Unpaged operator
+the full-read fallback, which orders the listing before offset and limit: by
+default a stable urgent-first partition (urgent, then normal, each in source
+order), or for newest the reversed source order. Native errors propagate. Unpaged operator
 listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
 `listReady`/`listAll`. The hosted PostgreSQL source counts matches without
 bodies and reads only the SQL-bounded window. File, Linear and the remote
