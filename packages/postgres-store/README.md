@@ -71,7 +71,7 @@ checksum, and editing the DDL in place leaves them all incompatible. Every
 schema change is therefore a new version — the four-step rule: freeze the
 previous DDL verbatim with its checksum, add an upgrade branch for it in
 `migratePostgres`, bump the schema version, and update the committed pin in
-`schema-guard.integration.test.ts`. An edit to any current DDL or version without the
+`schema-guard.test.ts`. An edit to any current DDL or version without the
 matching pin update fails the integration suite with a message that names those four
 steps.
 

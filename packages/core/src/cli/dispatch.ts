@@ -27,7 +27,7 @@ import { resolveUpgradeTarget } from './dispatch-upgrade-target'
 import { prepareUpgrade } from './dispatch-upgrade-install'
 import { readDispatchUpgrade } from '../store/reduced-reads'
 import type { Handoff, UpgradeRun } from '../kernel/dispatch-upgrade'
-import { RUNTIME_IDENTITY, formatDispatcherError } from '../runtime-identity'
+import { formatDispatcherError, runtimeIdentity } from '../runtime-identity'
 
 import { isDeepStrictEqual } from 'node:util'
 import { guardForge } from '../kernel/guarded-forge'
@@ -4714,7 +4714,7 @@ class DispatchLoop {
     this.upgradeController = new DispatchUpgradeController({
       run: this.runId,
       lineage: launch.lineage!,
-      from: RUNTIME_IDENTITY,
+      from: runtimeIdentity(),
       runningBunTag: (await readDistributionIdentity(distributionRoot())).bunTag,
       reservationOwner: launch.launcherPid,
       resolved: upgrades.runs[this.runId]?.resolved,
@@ -5444,7 +5444,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     await view.appendRepo(state.repo, {
       actor: DISPATCHER,
       type: 'dispatcher.runtime-recorded',
-      payload: { run: runId, startedSeq: started.event.seq, runtime: RUNTIME_IDENTITY },
+      payload: { run: runId, startedSeq: started.event.seq, runtime: runtimeIdentity() },
     })
 
     const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
