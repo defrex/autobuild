@@ -34,6 +34,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { normalizeVerifyCompletion, type EventType } from '../events/payloads'
 import { sequentialIds } from '../ids'
 import { leafTransaction } from '../kernel/generators/leaf-restack-log'
+import { indexLog } from '../kernel/log-index'
 import { reduceBuild } from '../kernel/reducer'
 import type { Finding } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
@@ -7979,6 +7980,137 @@ test('finalize post-step expiry still parks classified read evidence before reco
   expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
   expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
   expect(ofType(events, 'phase.failed')).toHaveLength(0)
+})
+
+describe('finalize post-step read recovery', () => {
+  const multiConfig = `${CONFIG_TOML}
+[roles.release-notes]
+runtime = "scripted"
+alternates = [{ runtime = "pi" }]
+`
+  /** Each script entry is a classified failure, optionally followed by the
+   * session's later successful own-build read after it. */
+  function recoveringNotes(store: BuildStore, script: readonly ('fail' | 'recover')[]) {
+    return async (ctx: ScriptContext) => {
+      let evidenceSeq: number | undefined
+      let failureSeq: number | undefined
+      for (const step of script) {
+        if (step === 'fail') {
+          const failed = await store.append(SLUG, {
+            actor: KERNEL,
+            type: 'session.build-read-failed',
+            payload: {
+              session: sessionOf(ctx),
+              phase: 'finalize',
+              round: 1,
+              operation: 'context',
+              reason: 'own-build-read',
+              diagnostic: 'transient',
+            },
+          })
+          evidenceSeq ??= failed.seq
+          failureSeq = failed.seq
+        } else
+          await store.append(SLUG, {
+            actor: KERNEL,
+            type: 'session.build-read-recovered',
+            payload: {
+              session: sessionOf(ctx),
+              phase: 'finalize',
+              round: 1,
+              operation: 'context',
+              reason: 'own-build-read',
+              evidenceSeq: evidenceSeq!,
+              failureSeq: failureSeq!,
+            },
+          })
+      }
+      return defaultTurnResult('release notes completed')
+    }
+  }
+
+  for (const path of ['single', 'alternates'] as const) {
+    const configToml = path === 'single' ? CONFIG_TOML : multiConfig
+    test(`${path}: a recovered read and completed turn record the step outcome`, async () => {
+      const h = await makeHarness({
+        configToml,
+        handlers: (store) => ({
+          ...happyHandlers(store),
+          'release-notes': recoveringNotes(store, ['fail', 'recover']),
+        }),
+      })
+      await h.br.run()
+      const events = await h.store.getEvents(SLUG)
+      const session = ofType(events, 'session.build-read-failed')[0]!.payload.session
+      expect(ofType(events, 'finalize.step-completed')).toEqual([
+        expect.objectContaining({
+          actor: expect.objectContaining({ kind: 'agent', session }),
+          payload: expect.objectContaining({ step: 'release-notes', ok: true }),
+        }),
+      ])
+      expect(ofType(events, 'phase.deferred')).toHaveLength(0)
+      expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(0)
+      expect(indexLog(events).readDeferrals).toEqual([])
+    })
+
+    for (const script of [['fail'], ['fail', 'recover', 'fail']] as const)
+      test(`${path}: ${script.join(', ')} parks once without a step outcome`, async () => {
+        const h = await makeHarness({
+          configToml,
+          handlers: (store) => ({
+            ...happyHandlers(store),
+            'release-notes': recoveringNotes(store, script),
+          }),
+        })
+        expect((await h.br.run()).status).toBe('blocked')
+        const events = await h.store.getEvents(SLUG)
+        expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+        expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+        expect(ofType(events, 'phase.failed')).toHaveLength(0)
+      })
+  }
+
+  test('single: re-recovery after a later failure completes the step', async () => {
+    const h = await makeHarness({
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'release-notes': recoveringNotes(store, ['fail', 'recover', 'fail', 'recover']),
+      }),
+    })
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'finalize.step-completed')).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ ok: true }) }),
+    ])
+    expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(0)
+  })
+
+  test('a recovered read still parks when the post-step budget expires', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    let signalRead!: () => void
+    const readRecorded = new Promise<void>((resolve) => {
+      signalRead = resolve
+    })
+    const h = await makeHarness({
+      runnerOpts: { scheduleSessionBudget: timers.schedule },
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        'release-notes': async (ctx) => {
+          await recoveringNotes(store, ['fail', 'recover'])(ctx)
+          signalRead()
+          return new Promise<AgentTurnResult>(() => {})
+        },
+      }),
+    })
+    const running = h.br.run()
+    await readRecorded
+    await timers.expireNext()
+    expect((await running).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'session.build-read-recovered')).toHaveLength(1)
+    expect(ofType(events, 'phase.deferral-escalated')).toHaveLength(1)
+    expect(ofType(events, 'finalize.step-completed')).toHaveLength(0)
+  })
 })
 
 test('runtime companion append failure prevents phase work after attach', async () => {

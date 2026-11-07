@@ -159,6 +159,7 @@ export const executionProgress = {
   'escalation.raised': 'progress',
   'escalation.answered': 'progress',
   'session.build-read-failed': 'bookkeeping',
+  'session.build-read-recovered': 'bookkeeping',
   'phase.deferred': 'bookkeeping',
   'phase.deferral-escalated': 'bookkeeping',
   'phase.failed': 'failure',

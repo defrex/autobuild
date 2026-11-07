@@ -1325,6 +1325,17 @@ export const eventPayloadSchemas = {
     reason: z.literal('own-build-read'),
     diagnostic: z.string().trim().min(1),
   }),
+  /** A later own-build read in the same session succeeded after `failureSeq`,
+   * the chain's latest classified failure. */
+  'session.build-read-recovered': z.strictObject({
+    session: z.string().min(1),
+    phase: phaseSchema,
+    round,
+    operation: z.literal('context'),
+    reason: z.literal('own-build-read'),
+    evidenceSeq: z.number().int().positive(),
+    failureSeq: z.number().int().positive(),
+  }),
   'phase.deferred': z.strictObject({
     session: z.string().min(1),
     phase: phaseSchema,
