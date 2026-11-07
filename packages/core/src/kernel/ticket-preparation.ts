@@ -64,3 +64,15 @@ export const ticketPreparationReducer = defineReducer<
   },
   finish: (acc) => structuredClone(acc),
 })
+
+/** The one operator line for a durably abandoned attempt. An unconfirmed
+ * claim is never reported as applied: its provider outcome is unknown. */
+export function abandonedPreparationDiagnostic(
+  attempt: Pick<TicketPreparation, 'attempt' | 'ticket' | 'claimed'>,
+  reason: string,
+): string {
+  const claim = attempt.claimed
+    ? 'claim confirmed'
+    : 'claim unconfirmed (provider outcome unknown; it may have applied the claim)'
+  return `ticket ${attempt.ticket.id} (${attempt.ticket.source}): preparation ${attempt.attempt} abandoned; ${claim}; ticket unchanged — ${reason}`
+}
