@@ -12,6 +12,50 @@ import type { RepositoryEvent } from '../events/repository'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
+/** Real 60 s leases make a crashed successor's authority outlive it, so the
+ * restored generation waits for expiry before it can tick or re-attach. The
+ * rollback fixtures shorten that clock in their copied installation (each
+ * heartbeat at most a fifth of its TTL); rollback still waits for and recovers
+ * from real expiry. A renamed constant fails here instead of silently testing
+ * the 60 s clock again. */
+const FIXTURE_LEASES: [file: string, from: string, to: string][] = [
+  [
+    'packages/core/src/cli/dispatch.ts',
+    'const REPO_LEASE_TTL_MS = 60_000',
+    'const REPO_LEASE_TTL_MS = 15_000',
+  ],
+  [
+    'packages/core/src/cli/dispatch.ts',
+    'const REPO_LEASE_HEARTBEAT_MS = 20_000',
+    'const REPO_LEASE_HEARTBEAT_MS = 3_000',
+  ],
+  ['packages/core/src/cli/dispatch-preflight.ts', 'launch.run, 60_000))', 'launch.run, 15_000))'],
+  [
+    'packages/core/src/ports/workspace/build-execution.ts',
+    'BUILD_EXECUTION_LEASE_TTL_MS = 60_000',
+    'BUILD_EXECUTION_LEASE_TTL_MS = 15_000',
+  ],
+  [
+    'packages/core/src/processes/build-runner.ts',
+    'opts?.heartbeatMs ?? 15_000',
+    'opts?.heartbeatMs ?? 3_000',
+  ],
+  [
+    'packages/core/src/processes/dispatcher.ts',
+    'PROVISION_HEARTBEAT_MS = 15_000',
+    'PROVISION_HEARTBEAT_MS = 3_000',
+  ],
+]
+
+async function shortenFixtureLeases(installation: string): Promise<void> {
+  for (const [file, from, to] of FIXTURE_LEASES) {
+    const path = join(installation, file)
+    const text = await readFile(path, 'utf8')
+    if (!text.includes(from)) throw new Error(`missing fixture lease constant: ${from}`)
+    await writeFile(path, text.replace(from, to))
+  }
+}
+
 test('real launcher adopts two replacements of the original installation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-hot-upgrade-'))
   const repo = join(root, 'repo'),
@@ -632,6 +676,7 @@ for (const scenario of ['immediate', 'phases', 'legacy', 'expired-reader'])
     await replace('1.0.0')
     const target = join(original, 'packages/core/src/cli/dispatch-upgrade-target.ts')
     await writeFile(target, (await readFile(target, 'utf8')).replace('60_000', '100'))
+    await shortenFixtureLeases(original)
     const entry = join(original, 'bin/ab-dispatch-generation.ts')
     const bytes = await readFile(entry, 'utf8')
     const broken = `JSON.parse(await Bun.file(new URL('../package.json', import.meta.url)).text()).version === '2.0.0'`
