@@ -3831,13 +3831,15 @@ restored runtime at the next boundary; unreadable decisive facts defer a build w
 attention before any action. Peers without negotiated rollback capability retain
 existing failure behavior and report that capable runtimes are required.
 
-Repository status exposes per-run resolved target, handoff and failure details.
+Repository status shows the current generation's resolved target and latest
+outcome, the live handoff, and the latest settled outcome from an earlier
+generation; a failure that later evidence replaced is marked superseded.
 `dispatcher.upgrade-target-resolved` records the first successful resolution and
 later changed observations, including equal-content advances. Its source mode,
 base and target SHA remain visible separately from the running commit and earlier
 handoff/failure facts. Repeated identical polls append no resolution facts.
 
-Repository status exposes both generations, mode, takeover, outstanding draining executions and deadline, plus per-run target and failure details. Upgrade
+Repository status exposes both generations, mode, takeover, outstanding draining executions and deadline, plus the current target and the latest failure, marked superseded once a later different target or generation replaces it. Upgrade
 failure is repository attention, naming the target and reason. Resolution/install
 failure leaves the running generation active and suppresses the same failed input
 until target or selected-store compatibility evidence changes or a fresh operator launch. Unrelated base advances do not

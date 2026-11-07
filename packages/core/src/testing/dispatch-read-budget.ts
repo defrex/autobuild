@@ -736,6 +736,148 @@ export async function upgradeReadBudget(store: BuildStore): Promise<void> {
     await check()
     expect(metrics.reducer).toBeGreaterThan(0)
   }
+  await upgradeGenerationReadBudget()
+}
+
+/** Completed dispatcher generations must not grow the saved upgrade values or
+ * the idle cost of any recurring reader: a dispatch tick, a dashboard poll, an
+ * `ab watch` liveness check and `ab repository status`. */
+async function upgradeGenerationReadBudget(): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { manualClock } = await import('./fixed')
+  const { readDispatchUpgrade } = await import('../store/reduced-reads')
+  const { memoryRepositoryReadCounter } = await import('./reduced-read-budget')
+  const { upgradeGenerationRun, upgradeGenerationWrites, resolutionOnlyWrites } = await import(
+    './upgrade-generations'
+  )
+  const { Dispatcher } = await import('../processes/dispatcher')
+  const { authorizeRemoteHandoffs } = await import('../kernel/dispatch-drain-recovery')
+  const { getOperatorDashboard, getRepositoryStatus } = await import('../operator/query')
+  const { abWatch } = await import('../cli/watch')
+  const { abRepositoryStatus } = await import('../cli/repository-status')
+  const { parseConfig } = await import('../config/load')
+  const { FakeWorkspaceProvider } = await import('../ports/workspace/fake')
+  const { FakeForge } = await import('../ports/forge/fake')
+  const { sequentialIds } = await import('../ids')
+  const config = parseConfig(
+    '[tickets]\nsource="file"\nreadyState="ready"\n[verify]\nsteps=[]\n[finalize]\nsteps=[]',
+  )
+  const baseline = new Map<string, number>()
+  for (const generations of [20, 2_000]) {
+    const repo = '/upgrade-generation-budget'
+    const exec = async (args: string[]) =>
+      args[1] === 'remote'
+        ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+        : { stdout: `${repo}/.git\n${repo}/.git\n${repo}\n`, stderr: '', exitCode: 0 }
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(repo)
+    for (let i = 0; i < generations; i++)
+      for (const write of upgradeGenerationWrites(i)) await store.appendRepo(repo, write)
+    const current = upgradeGenerationRun(generations)
+    const { verify: _verify, finalize: _finalize, ...root } = config
+    const artifact = await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({ ...root, verify: { steps: [] }, finalize: { steps: [] } }),
+    })
+    for (const write of resolutionOnlyWrites(current, 'current', 'launcher', {
+      kind: artifact.kind,
+      rev: artifact.revision,
+    }))
+      await store.appendRepo(repo, write)
+    await store.claimRepoLease(repo, current, 3_600_000)
+    const tick = async () => {
+      await new Dispatcher({
+        store,
+        repo,
+        config,
+        tickets: new FakeTicketSource([]),
+        workspaces: new FakeWorkspaceProvider({ root: '/upgrade-budget', mode: 'logical' }),
+        forge: new FakeForge(),
+        ids: sequentialIds(),
+        clock,
+        exec,
+        launchRunner: async () => 'scheduled',
+      }).tick({ acceptNewWork: false })
+      await authorizeRemoteHandoffs(
+        store,
+        repo,
+        (await readRepositoryFacts(store, repo)).value.upgrades,
+        new Set(),
+      )
+    }
+    const watch = () =>
+      abWatch({
+        targetRepo: repo,
+        env: {},
+        exec,
+        storeRef: '/budget',
+        openStore: () => store,
+        repository: true,
+        json: true,
+        timeout: '3',
+        now: clock,
+        stdout: () => {},
+        stderr: (line) => {
+          throw new Error(line)
+        },
+        delay: async () => clock.advance(1000),
+      })
+    const status = async () => {
+      await getRepositoryStatus(store, repo, clock())
+      const lines: string[] = []
+      await abRepositoryStatus({
+        targetRepo: repo,
+        env: {},
+        exec,
+        storeRef: '/budget',
+        openStore: () => store,
+        now: clock,
+        stdout: (line) => lines.push(line),
+      })
+      const upgrades = lines.filter((line) => /^(resolved target|upgrade|handoff) /.test(line))
+      expect(upgrades.length).toBeLessThanOrEqual(4)
+      expect(upgrades.join('\n')).toContain(`resolved target ${current}:`)
+    }
+    const readers = {
+      tick,
+      dashboard: () => getOperatorDashboard({ store, repo, clock }),
+      watch,
+      status,
+    }
+    // The one serialized reduction per key, and each reader's own first
+    // appends, happen before measurement.
+    for (const read of Object.values(readers)) await read()
+    for (const read of Object.values(readers)) await read()
+    const upgrades = (await readDispatchUpgrade(store, repo)).value
+    const {
+      scan: _scan,
+      scanSeq: _scanSeq,
+      ...facts
+    } = (await readRepositoryFacts(store, repo)).value
+    const bytes = {
+      upgrades: Buffer.byteLength(JSON.stringify(upgrades)),
+      facts: Buffer.byteLength(JSON.stringify(facts)),
+    }
+    for (const [name, size] of Object.entries(bytes)) {
+      // Only seq digit growth is allowed between journal lengths.
+      if (generations === 20) baseline.set(`bytes:${name}`, size)
+      else expect(size).toBeLessThanOrEqual(baseline.get(`bytes:${name}`)! + 1024)
+    }
+    const counter = memoryRepositoryReadCounter(store, repo)
+    for (const [name, read] of Object.entries(readers)) {
+      counter.reset()
+      await read()
+      expect({ name, rows: counter.rows }).toEqual({ name, rows: 0 })
+      if (generations === 20) baseline.set(name, counter.reducedCalls)
+      else
+        expect({ name, reduced: counter.reducedCalls }).toEqual({
+          name,
+          reduced: baseline.get(name)!,
+        })
+    }
+    await store.close()
+  }
 }
 
 /** Measure real ticket-source operations through an injected statement boundary.

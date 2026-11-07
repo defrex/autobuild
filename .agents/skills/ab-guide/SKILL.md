@@ -1425,8 +1425,13 @@ the authoritative base commit using packaged-content and production-lock equalit
 without modifying operator or build worktrees. Equal-content advances still record
 the latest resolved target SHA. Compatible generations overlap through the durable draining handoff described above. `--once`, origin-mode and direct hot
 presentation modes bypass automatic adoption. Operator stop wins over cutover.
-Repository status exposes per-run resolved target, upgrade target, failure and handoff facts, both
-generations, takeover, outstanding draining builds and deadline;
+Repository status shows the current upgrade condition: the live handoff (both
+generations, takeover, outstanding draining builds and deadline), the current
+generation's resolved target and latest outcome, and the latest settled outcome
+from an earlier generation. A failure that a later different resolved target or a
+later generation replaced is marked `(superseded)` and needs no action. The
+`upgrades` value keeps a bounded window of 16 recent runs; full upgrade history
+stays in the repository journal;
 `dispatcher.upgrade-failed` and `dispatcher.runtime-rolled-back` are actionable attention. Status also exposes the last rollback and current-lineage hold. Unrelated base commits do not
 retry an unchanged failed target. No registry credentials belong in these facts.
 
