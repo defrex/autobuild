@@ -383,7 +383,25 @@ not establish continuity for in-flight builds; see the migration procedure.
 
 ## Priority
 
-The hosted ticket protocol does not carry ticket priority: no request or response
-has a `priority` field. The hosted client refuses a create or update naming
-`urgent` with `TicketPriorityUnsupported` before any request, and drops `normal`,
-sending nothing when no other field remains. Hosted tickets read as normal.
+Hosted tickets store `priority`, either `"urgent"` or `"normal"`. Create,
+update and guarded update accept it as an optional field. A create that omits it
+files a normal ticket, and an update that omits it never changes it. Tickets that
+existed before the field read as normal. A priority change increments the
+revision, and rewriting the same value is a no-op.
+
+Ticket responses include `priority` on every ticket, `normal` included, only with
+`x-autobuild-ticket-priority: 1`, independently of the other capabilities and of
+the client version. Without it, priority is projected away for historical strict
+decoders, whose writes never name it and so never clear it. Every `/tickets/*`
+response, including errors, carries `x-autobuild-ticket-priority: 1`.
+
+`list-ready` returns urgent tickets first, then normal ones, each class in filing
+order, for every client. Ordering happens within the existing listing; it adds no
+per-ticket reads.
+
+A service whose backing source cannot store priority refuses a write naming
+`urgent` with `409 { "kind": "conflict", "code": "priority-unsupported" }` before
+anything is written. A service predating priority refuses the unknown field with a
+`400` validation error and no capability header. Clients report both as
+`TicketPriorityUnsupported`. Current clients omit `normal` on create, so a plain
+create still works against such a service.
