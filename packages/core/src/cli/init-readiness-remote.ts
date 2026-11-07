@@ -12,17 +12,30 @@ import type {
 } from '../ports/workspace/provider-capabilities'
 import { validateVercelSandbox, type VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
 import { gitText, parseGuestOutput } from './init-readiness-shared'
+import { hostedReadinessNames } from '../accounts/hosted-readiness'
+import { staticSecretRemedy } from './init-hosted-accounts'
+import { isRemoteStoreRef } from './repo-state'
 
 export async function validateRemoteReadiness(
   ctx: WorkspaceReadinessContext,
 ): Promise<InitValidationReport> {
   const vercel = ctx.providerConfig as VercelSandboxConfig
+  const hosted = hostedReadinessNames(ctx.env)
+  const connected = isRemoteStoreRef(ctx.storeRef)
   const hostChecks = Object.entries(ctx.accounts ?? {}).map(([name, descriptor]) => ({
     name: `host account ${JSON.stringify(name)}`,
     status: ctx.env[descriptor.credentialEnv] ? ('pass' as const) : ('fail' as const),
-    detail: ctx.env[descriptor.credentialEnv]
-      ? `${descriptor.credentialEnv} is present`
-      : `${descriptor.credentialEnv} is missing; ${descriptor.kind === 'claude-subscription' ? 'run claude setup-token and set the dispatcher variable' : 'provision the Kimi membership key'}`,
+    detail: hosted.includes(name)
+      ? `${descriptor.credentialEnv} is a ready hosted project secret (metadata only)`
+      : ctx.env[descriptor.credentialEnv]
+        ? `${descriptor.credentialEnv} is present`
+        : `${descriptor.credentialEnv} is missing; ${
+            connected && descriptor.kind !== 'chatgpt-subscription'
+              ? staticSecretRemedy(descriptor)
+              : descriptor.kind === 'claude-subscription'
+                ? 'run claude setup-token and set the dispatcher variable'
+                : 'provision the Kimi membership key'
+          }`,
   }))
   if (hostChecks.some((check) => check.status === 'fail'))
     return {

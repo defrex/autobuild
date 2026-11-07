@@ -89,9 +89,10 @@ below.
 
 Validation reports credential readiness and makes one minimal model request per
 declared account, including unused accounts, through its runtime (Claude Code
-for Claude/Kimi, Codex for ChatGPT) in the disposable sandbox. Hosted ChatGPT
-project secrets report readiness from write-only status metadata instead; the
-first hosted build is the live check. See
+for Claude/Kimi, Codex for ChatGPT) in the disposable sandbox. Hosted ChatGPT,
+Claude and Kimi project secrets report readiness from write-only status metadata
+instead; the first hosted build is the live check. See
+[Accounts](accounts.md) and
 [ChatGPT subscriptions](accounts.md#chatgpt-subscriptions).
 
 <!-- configuration-reference:accounts -->
