@@ -297,6 +297,46 @@ test('pre-stage readers validate the entire failure log and defer on the new dec
   }
 })
 
+test('a routine summary handoff is advisory and silent for a reader without the type', async () => {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { DISPATCHER } = await import('./envelope')
+  const { reduceDispatchStatus } = await import('../kernel/dispatch-status')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('/handoff-compat')
+  const started = await store.appendRepo('/handoff-compat', {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'run-a',
+      pid: 1,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: [],
+    },
+  })
+  const event = await store.appendRepo('/handoff-compat', {
+    actor: DISPATCHER,
+    type: 'dispatcher.summary-handoff',
+    payload: { run: 'run-a', slug: 'alpha', status: 'verifying' },
+  })
+  expect(repositoryEventPolicy['dispatcher.summary-handoff']).toBe('advisory')
+  expect(event.compatibility?.classification).toBe('advisory')
+  // A published client whose catalog predates the type, same seam as above.
+  const opaque = { ...event, type: 'old-reader-unknown.dispatcher.summary-handoff' }
+  expect(decodeStoredEvent(opaque)).toBeNull()
+  const state = initialCompatibility()
+  advanceCompatibility(state, [opaque])
+  expect(state.decisiveFacts).toBe(0)
+  expect(compatibilityDiagnostic(state)).toBeUndefined()
+  const oldView = [started, opaque].flatMap((stored) => {
+    const decoded = decodeStoredEvent(stored)
+    return decoded === null ? [] : [decoded as typeof started]
+  })
+  const status = reduceDispatchStatus(oldView, 'run-a')
+  expect(status.warningNotice).toBeUndefined()
+  expect(status.notice).toBeUndefined()
+  expect(reduceDispatchStatus([started, event], 'run-a').warningNotice).toBeUndefined()
+})
+
 test('persisted polling checkpoints remain advisory for a reader without the type', async () => {
   const { MemoryBuildStore } = await import('../store/memory')
   const { DISPATCHER } = await import('./envelope')
