@@ -96,6 +96,15 @@ and makes one minimal request using each account's actual runtime, including
 unused accounts, in the disposable sandbox. Hosted ChatGPT credentials use the
 metadata readiness boundary described below.
 
+Hosted Claude and Kimi accounts use the same boundary. When a connected project
+is validated in Vercel Sandbox and the account's variable is absent locally,
+validation reports the project secret set by `bun ab secrets set VARIABLE` from
+its write-only metadata: owner, set time and status. It never downloads, prints
+or forwards the value and makes no model request for that account. **The first
+hosted build is the live check.** A missing or non-ready secret fails before
+the sandbox is created and names both remedies: set the project secret, or
+provide the local variable. A local variable keeps the minimal model request.
+
 
 ## ChatGPT subscriptions
 
