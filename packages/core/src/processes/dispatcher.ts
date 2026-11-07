@@ -3719,7 +3719,12 @@ export class Dispatcher {
     const acknowledged = nativeLandingApplied(state.landing) && !state.landing?.nativeEnablePending
     // SPEC §15.7: an armed, acknowledged request gets the forge's identity
     // readback on every eligible poll. No consent read or event while it matches.
-    const maintain = acknowledged && prState.nativeAutoMerge === true && !nativeCancelled && isReady
+    const maintain =
+      acknowledged &&
+      prState.state === 'open' &&
+      prState.nativeAutoMerge === true &&
+      !nativeCancelled &&
+      isReady
     if (
       !integration &&
       !nodeTarget &&
