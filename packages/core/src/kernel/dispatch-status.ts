@@ -140,6 +140,9 @@ export function reduceDispatchStatus(
         }
         state.warningNotice = state.notice
         break
+      case 'dispatcher.summary-handoff':
+        // Routine guest yield for PR-summary publication: no notice at all.
+        break
       case 'dispatcher.harvest-runner-failed':
         state.notice = errorNotice('harvest runner failed', event.payload.error)
         state.warningNotice = state.notice

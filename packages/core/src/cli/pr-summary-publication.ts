@@ -102,15 +102,39 @@ export async function publishSummary(
   }
 }
 
+function remoteWorkspace(facts: CurrentBuildFacts): boolean {
+  const workspace = facts.latestWorkspace
+  return workspace?.type === 'workspace.provisioned' && isRemoteWorkspace(workspace.payload)
+}
+
+/** The launch fence: no guest request of the next execution can be at or
+ * below it. Read after pre-launch settlement and before execution.start. */
+export async function readLaunchFence(store: BuildStore, slug: string): Promise<number> {
+  return (await readBuildFacts(store, slug)).value.state.lastSeq
+}
+
+/** True iff this execution wrote a still-unsettled summary request, which a
+ * remote guest does only immediately before yielding for it. */
+export function summaryHandoffPending(facts: CurrentBuildFacts, launchFenceSeq: number): boolean {
+  return (
+    remoteWorkspace(facts) && facts.summaryRequests.some((request) => request.seq > launchFenceSeq)
+  )
+}
+
 /** Local boundary or durable guest handoff. Optional refresh failures never
- * prevent pipeline progress, including a failed request deposit. */
-export async function refreshSummaryBoundary(deps: SummaryDeps): Promise<boolean> {
+ * prevent pipeline progress, including a failed request deposit. A remote
+ * guest coalesces a verify cycle (`continuesVerifyCycle`) into one request at
+ * its end, and re-asserts (`reassert`) an eligible outstanding request so the
+ * dispatcher can tell its exit is a summary handoff. */
+export async function refreshSummaryBoundary(
+  deps: SummaryDeps,
+  options: { continuesVerifyCycle?: boolean; reassert?: boolean } = {},
+): Promise<boolean> {
   try {
     const events = (await readBuildFacts(deps.store, deps.slug)).value
     const boundary = events.summaryBoundary
     if (boundary === undefined) return false
-    const workspace = events.latestWorkspace
-    if (workspace?.type === 'workspace.provisioned' && isRemoteWorkspace(workspace.payload)) {
+    if (remoteWorkspace(events)) {
       const request = events.summaryRequested[String(boundary.occurrence)]
       if (request !== undefined) {
         // A lost result/disposition append must not repeatedly park a guest.
@@ -120,9 +144,17 @@ export async function refreshSummaryBoundary(deps: SummaryDeps): Promise<boolean
           Date.parse(events.summaryEligibleAfter) > deps.clock().getTime()
         )
           return false
-        return events.summaryRequests.some((event) => event.seq === request.seq)
+        if (!events.summaryRequests.some((event) => event.seq === request.seq)) return false
+        if (!options.reassert) return true
+        const reasserted = await deps.store.appendIfCurrent(deps.slug, events.state.lastSeq, {
+          actor: KERNEL,
+          type: 'pr-summary.requested',
+          payload: request.payload,
+        })
+        return reasserted !== null
       }
       if (events.state.pr === undefined && !events.finalizePublicationRequested) return false
+      if (options.continuesVerifyCycle) return false
       const written = await deps.store.appendIfCurrent(deps.slug, events.state.lastSeq, {
         actor: KERNEL,
         type: 'pr-summary.requested',
@@ -148,8 +180,7 @@ export async function settleSummaryRequests(
     let events = (await readBuildFacts(deps.store, deps.slug)).value
     if (events.open !== null) return
     // Repair a crash after terminal/session completion but before guest handoff.
-    const workspace = events.latestWorkspace
-    if (workspace?.type !== 'workspace.provisioned' || !isRemoteWorkspace(workspace.payload)) return
+    if (!remoteWorkspace(events)) return
     const holder = deps.reservation ?? deps.holder
     acquired = await deps.store.claimLease(deps.slug, holder, 60_000)
     if (!acquired) return

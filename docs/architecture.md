@@ -962,9 +962,13 @@ coalesces these at completed phase boundaries with durable attempt, result,
 cooldown, request, and disposition facts. Built-in forges upsert one hidden
 per-build marker; legacy plugins keep the existing bounded `commentOnPr` API.
 Oversized bodies become a compact pinned download of a full `pr-summary`
-store artifact. Local runners publish under their lease; remote guests request
-and yield, and dispatcher settlement fences ended execution and owns the
-publication lease before launching replacement work. Summary failure never
+store artifact. Local runners publish under their lease at every boundary;
+remote guests request and yield, coalescing a verify cycle into one request at
+its end (`continuesVerifyCycle` in `kernel/pr-summary.ts`). The dispatcher
+records a guest exit caused only by a request that execution wrote as a
+routine `dispatcher.summary-handoff`, not a parked runner, and dispatcher
+settlement fences ended execution and owns the publication lease before
+launching replacement work. Summary failure never
 changes phase outcomes. The GitHub release transport
 lives in `packages/core/src/ports/forge/github-pr-attachments.ts`; terminal-build reclamation
 and retry facts remain dispatcher janitor duty.

@@ -5,7 +5,12 @@ import { RUNTIME_IDENTITY } from '../runtime-identity'
 import { newerFact, seedNewerMemoryFact } from '../testing/newer-writer'
 import { readBuildFacts } from '../store/reduced-reads'
 import { done } from '../cli/terminals'
-import { summaryBoundary, settleSummaryRequests } from '../cli/pr-summary-publication'
+import {
+  readLaunchFence,
+  summaryBoundary,
+  summaryHandoffPending,
+  settleSummaryRequests,
+} from '../cli/pr-summary-publication'
 /**
  * Build-runner process tests (SPEC §3.3, §8, §9, §10, §15.6, D5): memory
  * store + ScriptedAgentRunner + FakeWorkspaceProvider + fake exec. The scripts
@@ -5858,6 +5863,354 @@ describe('coalesced summary boundaries', () => {
         }
       })
     }
+})
+
+describe('coalesced summary boundaries: one handoff per remote verify cycle', () => {
+  // A deterministic, an agent, a path-skipped and another deterministic step.
+  const CYCLE_TOML = `
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+typecheck = "bun tsc --noEmit"
+test = "bun test"
+dashboard = "bun test dashboard"
+
+[verify]
+steps = ["types", "e2e", "dashboard", "unit"]
+
+[verify.types]
+kind = "check"
+command = "typecheck"
+
+[verify.e2e]
+kind = "agent"
+skill = "ab-verify-e2e"
+
+[verify.dashboard]
+kind = "check"
+command = "dashboard"
+paths = ["src/cli/dashboard/**"]
+
+[verify.unit]
+kind = "check"
+command = "test"
+
+[finalize]
+steps = ["release-notes"]
+
+[finalize.release-notes]
+kind = "agent"
+skill = "ab-release-notes"
+`
+  const STEPS = ['types', 'e2e', 'dashboard', 'unit']
+
+  /** The host forge, journaling every publication (the fake upserts the
+   * marked comment, so its comment list cannot count publications). */
+  function publishingForge(): FakeForge & { published: string[] } {
+    const forge = Object.assign(new FakeForge(), { published: [] as string[] })
+    forge.setPrState(7, { state: 'open', mergeable: true })
+    const comment = forge.commentOnPr.bind(forge)
+    forge.commentOnPr = async (workspacePath, number, body) => {
+      forge.published.push(body)
+      await comment(workspacePath, number, body)
+    }
+    return forge
+  }
+
+  /** The seeded first cycle predates the dashboard step: settle it (a skip),
+   * then reconcile and capture the post-reconcile policy. */
+  async function reconcileAndCapture(h: Harness): Promise<void> {
+    await h.br.attach()
+    for (let i = 0; i < 4; i++) {
+      const decision = await h.br.step()
+      if (decision.kind === 'run-phase' && decision.phase === 'reconcile') break
+    }
+    await completeFixtureRestack(h.store)
+    expect((await h.br.step()).kind).toBe('capture-reconcile-policy')
+  }
+
+  /** Open PR, completed reconcile, captured policy: the next decision starts a
+   * fresh verify cycle. The reconcile occurrence is already settled. */
+  async function enterCycle(h: Harness): Promise<void> {
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'detected-base' },
+    })
+    await reconcileAndCapture(h)
+    const previous = summaryBoundary(await h.store.getEvents(SLUG))!
+    const request = await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'pr-summary.requested',
+      payload: previous,
+    })
+    await h.store.append(SLUG, {
+      actor: KERNEL,
+      type: 'pr-summary.settled',
+      payload: { request: request.seq, disposition: 'skipped' },
+    })
+    await h.store.releaseLease(SLUG, 'runner-1')
+  }
+
+  /** One guest launch as the dispatcher sees it: fence before the guest runs,
+   * classify the exit, release the guest lease, then settle as the host. */
+  async function launch(
+    h: Harness,
+    br: BuildRunner,
+    hostForge: FakeForge & { published: string[] },
+  ): Promise<{ summaryExit: boolean }> {
+    const fence = await readLaunchFence(h.store, SLUG)
+    await br.run()
+    const summaryExit = summaryHandoffPending((await readBuildFacts(h.store, SLUG)).value, fence)
+    await h.store.releaseLease(SLUG, 'runner-1')
+    await settleSummaryRequests({
+      store: h.store,
+      forge: hostForge,
+      slug: SLUG,
+      workspacePath: h.workspacePath,
+      storeRef: 'https://store.test',
+      clock: steppingClock(),
+      holder: 'authenticated-host',
+    })
+    return { summaryExit }
+  }
+
+  function cycleCompleted(events: AbEvent[]): number {
+    return ofType(events, 'verify.completed').filter((e) => e.payload.attempt === 2).length
+  }
+
+  /** Launch guests until the cycle has ended and a launch no longer yields
+   * for a summary. Counts only launches from the cycle's first step on. */
+  async function driveCycle(
+    h: Harness,
+    hostForge: FakeForge & { published: string[] },
+    done: (events: AbEvent[]) => boolean,
+  ): Promise<{ launches: number; summaryExits: number }> {
+    let launches = 0
+    let summaryExits = 0
+    for (let i = 0; i < 12; i++) {
+      const { summaryExit } = await launch(h, h.br, hostForge)
+      launches++
+      if (summaryExit) summaryExits++
+      if (done(await h.store.getEvents(SLUG))) break
+    }
+    return { launches, summaryExits }
+  }
+
+  async function fullBody(h: Harness, body: string): Promise<string> {
+    return body.includes('pr-summary@')
+      ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
+      : body
+  }
+
+  async function passingCycle(coalesce: boolean) {
+    const forge = new FakeForge()
+    forge.setPrState(7, { state: 'open', mergeable: true })
+    const hostForge = publishingForge()
+    const h = await makeHarness({
+      forge,
+      configToml: CYCLE_TOML,
+      workspaceRemote: true,
+      verifyDiffs: [{ paths: ['README.md'] }],
+    })
+    if (!coalesce)
+      // biome-ignore lint/complexity/useLiteralKeys: record today's per-step baseline without a production flag.
+      h.br['summaryContinuesVerifyCycle'] = () => false
+    await enterCycle(h)
+    const result = await driveCycle(h, hostForge, (events) => {
+      const settled =
+        events.findLast((e) => e.type === 'pr-summary.requested') === undefined ||
+        ofType(events, 'pr-summary.settled').at(-1)!.payload.request >=
+          events.findLast((e) => e.type === 'pr-summary.requested')!.seq
+      return cycleCompleted(events) === STEPS.length && settled
+    })
+    return { h, hostForge, forge, ...result }
+  }
+
+  test('a passing four-step cycle yields once instead of once per step', async () => {
+    const baseline = await passingCycle(false)
+    const after = await passingCycle(true)
+
+    // Baseline: every verify step, the skipped one included, cost a guest exit.
+    const baselineEvents = await baseline.h.store.getEvents(SLUG)
+    expect(cycleCompleted(baselineEvents)).toBe(STEPS.length)
+    expect(baseline.summaryExits).toBeGreaterThanOrEqual(4)
+    expect(baseline.launches).toBeGreaterThanOrEqual(4)
+    expect(baseline.hostForge.published.length).toBeGreaterThanOrEqual(4)
+
+    const events = await after.h.store.getEvents(SLUG)
+    expect(
+      ofType(events, 'verify.completed')
+        .filter((e) => e.payload.attempt === 2)
+        .map((e) => [e.payload.step, normalizeVerifyCompletion(e.payload).outcome]),
+    ).toEqual([
+      ['types', 'pass'],
+      ['e2e', 'pass'],
+      ['dashboard', 'skipped'],
+      ['unit', 'pass'],
+    ])
+    expect(after.summaryExits).toBeLessThanOrEqual(1)
+    expect(after.summaryExits).toBeLessThan(baseline.summaryExits)
+    expect(after.launches).toBeLessThan(baseline.launches)
+    // The guest never published; the host published the cycle once.
+    expect(after.forge.comments).toHaveLength(0)
+    expect(after.hostForge.published).toHaveLength(1)
+    const body = await fullBody(after.h, after.hostForge.published[0]!)
+    for (const step of STEPS) expect(body).toContain(`<code>${step}</code> (attempt 2)`)
+    expect(body).toContain('<code>unit</code> (attempt 2): pass')
+  })
+
+  test('a failing cycle publishes the failure before the next phase starts', async () => {
+    const hostForge = publishingForge()
+    const forge = new FakeForge()
+    forge.setPrState(7, { state: 'open', mergeable: true })
+    const h = await makeHarness({
+      forge,
+      configToml: CYCLE_TOML,
+      workspaceRemote: true,
+      verifyDiffs: [{ paths: ['README.md'] }],
+      failCommands: ['bun test'],
+    })
+    await enterCycle(h)
+    const { summaryExit } = await launch(h, h.br, hostForge)
+
+    expect(summaryExit).toBe(true)
+    const events = await h.store.getEvents(SLUG)
+    const failed = ofType(events, 'verify.completed').findLast(
+      (e) => e.payload.attempt === 2 && normalizeVerifyCompletion(e.payload).outcome === 'fail',
+    )!
+    expect(failed.payload.step).toBe('unit')
+    const requests = ofType(events, 'pr-summary.requested').filter((e) => e.seq > failed.seq)
+    expect(requests).toHaveLength(1)
+    const settled = ofType(events, 'pr-summary.settled').find(
+      (e) => e.payload.request === requests[0]!.seq,
+    )!
+    expect(settled.payload.disposition).toBe('attempted')
+    // Nothing of the next phase or escalation precedes the settled summary.
+    expect(
+      events.some(
+        (e) =>
+          e.seq > failed.seq &&
+          e.seq < settled.seq &&
+          (e.type === 'implement.started' || e.type === 'escalation.raised'),
+      ),
+    ).toBe(false)
+    expect(hostForge.published).toHaveLength(1)
+    const body = await fullBody(h, hostForge.published[0]!)
+    expect(body).toContain('<code>unit</code> (attempt 2): fail')
+  })
+
+  test('a local runner still publishes at every verify boundary', async () => {
+    const forge = new FakeForge()
+    forge.setPrState(7, { state: 'open', mergeable: true })
+    const h = await makeHarness({
+      forge,
+      configToml: CYCLE_TOML,
+      workspaceRemote: false,
+      verifyDiffs: [{ paths: ['README.md'] }],
+    })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'detected-base' },
+    })
+    await reconcileAndCapture(h)
+    await h.br.run()
+
+    const events = await h.store.getEvents(SLUG)
+    expect(cycleCompleted(events)).toBe(STEPS.length)
+    const verifyStarts = new Set(
+      ofType(events, 'verify.started')
+        .filter((e) => e.payload.attempt === 2)
+        .map((e) => e.seq),
+    )
+    expect(verifyStarts.size).toBe(STEPS.length)
+    const attempted = ofType(events, 'pr-summary.attempted').filter((e) =>
+      verifyStarts.has(e.payload.occurrence),
+    )
+    expect(attempted).toHaveLength(STEPS.length)
+    expect(
+      events.some((e) => e.type === 'pr-summary.requested' && e.seq > [...verifyStarts][0]!),
+    ).toBe(false)
+  })
+
+  test('a guest stopped mid-cycle recovers the latest summary once and continues', async () => {
+    const parent = new AbortController()
+    let armed = false
+    const forge = new FakeForge()
+    forge.setPrState(7, { state: 'open', mergeable: true })
+    const hostForge = publishingForge()
+    const h = await makeHarness({
+      forge,
+      configToml: CYCLE_TOML,
+      workspaceRemote: true,
+      verifyDiffs: [{ paths: ['README.md'] }],
+      shutdownSignal: parent.signal,
+      // Stop the guest during the third (path-gated) step's diff.
+      beforeExec: async (cmd) => {
+        if (armed && cmd[0] === 'git' && cmd[1] === 'diff') parent.abort()
+      },
+    })
+    await enterCycle(h)
+    armed = true
+    const first = await launch(h, h.br, hostForge)
+
+    expect(first.summaryExit).toBe(false)
+    let events = await h.store.getEvents(SLUG)
+    expect(
+      ofType(events, 'verify.completed')
+        .filter((e) => e.payload.attempt === 2)
+        .map((e) => e.payload.step),
+    ).toEqual(['types', 'e2e', 'dashboard'])
+    // The host recovered the latest completed occurrence from durable state.
+    const latestStart = ofType(events, 'verify.started').at(-1)!
+    expect(latestStart.payload.step).toBe('dashboard')
+    const requested = ofType(events, 'pr-summary.requested').filter(
+      (e) => e.seq > ofType(events, 'verify.started').find((s) => s.payload.attempt === 2)!.seq,
+    )
+    expect(requested.map((e) => e.payload.occurrence)).toEqual([latestStart.seq])
+    expect(
+      ofType(events, 'pr-summary.attempted').filter(
+        (e) => e.payload.occurrence === latestStart.seq,
+      ),
+    ).toHaveLength(1)
+    expect(hostForge.published).toHaveLength(1)
+
+    // A second settlement publishes nothing new for the same occurrence.
+    const before = events.length
+    await settleSummaryRequests({
+      store: h.store,
+      forge: hostForge,
+      slug: SLUG,
+      workspacePath: h.workspacePath,
+      storeRef: 'https://store.test',
+      clock: steppingClock(),
+      holder: 'authenticated-host',
+    })
+    events = await h.store.getEvents(SLUG)
+    expect(events.length).toBe(before)
+    expect(hostForge.published).toHaveLength(1)
+
+    // A replacement guest continues the same cycle and hands off its end once.
+    const next = await makeHarness({
+      store: h.store,
+      seedPrelude: false,
+      forge,
+      configToml: CYCLE_TOML,
+      workspaceRemote: true,
+      verifyDiffs: [{ paths: ['README.md'] }],
+    })
+    const second = await launch(h, next.br, hostForge)
+    expect(second.summaryExit).toBe(true)
+    events = await h.store.getEvents(SLUG)
+    expect(cycleCompleted(events)).toBe(STEPS.length)
+    expect(hostForge.published).toHaveLength(2)
+    expect(forge.comments).toHaveLength(0)
+  })
 })
 
 describe('frozen post-reconcile verification policy', () => {
