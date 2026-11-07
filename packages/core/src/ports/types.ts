@@ -417,6 +417,11 @@ export interface WorkspacePublication {
     /** Shas a recorded rewrite replaced (bounded, newest last). A local
      * branch they cover is archived only as a producer, never as `branch`. */
     replaced?: string[]
+    /** True only when the dispatcher's log shows no execution ever started in
+     * this environment. Such a checkout holds no unpublished work, so objects
+     * it lacks mean nothing to preserve rather than an error. Absent keeps
+     * every object probe strict. */
+    neverExecuted?: boolean
   }): Promise<{ outcome: 'preserved'; heads: WorkspacePreservationHead[] } | { outcome: 'absent' }>
 
   /** Trusted after-teardown path; never route a restack through plain publish. */

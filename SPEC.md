@@ -3560,7 +3560,10 @@ and unpublished divergent branch work, are still refused. Preservation
 never advances the public build branch. A confirmed absent environment, or one
 that exists without a provisioned checkout, records `workspace.commits-lost`,
 naming known candidates and explicitly noting that any additional unpublished
-SHAs could not be inspected. Unknown fencing, inspection, transport, or
+SHAs could not be inspected. An environment that never started executing holds
+no unpublished work: objects its checkout lacks mean nothing to preserve, so
+cleanup records `workspace.commits-preserved` carrying forward earlier preserved
+heads, then releases and replaces it. Unknown fencing, inspection, transport, or
 receipt-write outcomes leave the workspace and snapshots intact. A workspace
 flagged by `workspace.cleanup-required` is never launched into: the dispatcher
 releases it and provisions the next generation. A preservation or release
