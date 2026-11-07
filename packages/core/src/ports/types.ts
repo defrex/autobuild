@@ -915,12 +915,15 @@ export interface AgentStartOpts {
   stream?: SessionStreamEmitter
 }
 
+/** The inputs a runtime's start prompt depends on; no env, workspace or signal. */
+export type StartPromptOpts = Pick<AgentStartOpts, 'skill' | 'invocation' | 'buildSlug'>
+
 /** Per-turn refresh for a continued session (§10): each continue turn is a
  * NEW session bracket (next round, fresh session id), so the runner
  * re-issues ambient auth for the turn (D8) — merged over the start env. A
  * turn left on round 1's env would have the CLI resolve the stale round and
  * reject the continued round's terminal as a D5 second call (§8.4). */
-export function agentInvocation(opts: AgentStartOpts): string {
+export function agentInvocation(opts: StartPromptOpts): string {
   const invocation = opts.invocation ?? opts.buildSlug
   if (invocation === undefined || invocation === '') {
     throw new Error('AgentStartOpts requires a non-empty invocation')
@@ -948,6 +951,10 @@ export interface AgentRunner {
     opts: AgentResumeOpts,
   ): Promise<AgentResumeResult>
   start(opts: AgentStartOpts): Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>
+  /** The exact first message `start(opts)` sends for these inputs. The kernel
+   * records it on `session.started` before launch. Omit it when unknown;
+   * the fact then records no prompt. */
+  startPrompt?(opts: StartPromptOpts): string
   /** Review-loop rounds (§10), continuing the live native conversation. */
   continue(
     session: AgentSessionHandle,

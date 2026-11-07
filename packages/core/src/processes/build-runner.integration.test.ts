@@ -6281,6 +6281,8 @@ describe('native suspension and continuation', () => {
     const journal = h.runner.sessions.get(acceptance.payload.handle.nativeId)!
     expect(journal.messages[0]).toContain('interrupted (shutdown)')
     expect(journal.messages[0]).toContain('Re-check the worktree')
+    // The continued bracket records the interruption notice it actually sent.
+    expect(continuation.payload.prompt).toBe(journal.messages[0])
   })
 
   for (const countermanded of [false, true]) {
