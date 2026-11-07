@@ -1849,13 +1849,13 @@ async function capturePaint(
       check.detail = `${check.check} merging is disabled.`
     }
   }
-  // The fake source cannot enumerate states; give this capture's instance a
-  // fixed state count so the header shows the dispatcher's real triage sample.
+  // The fake source has no bounded state counts; give this capture's instance
+  // a fixed count so the header shows the dispatcher's real triage sample.
   Object.assign(harness.wiring.tickets, {
-    listStates: async () => [
-      { name: defaultTriageState(harness.config), tickets: CAPTURE_TRIAGE_COUNT },
-      { name: harness.config.tickets.readyState, tickets: 0 },
-    ],
+    countStates: async (names: readonly string[]) =>
+      names.includes(defaultTriageState(harness.config))
+        ? [{ name: defaultTriageState(harness.config), tickets: CAPTURE_TRIAGE_COUNT }]
+        : [],
   })
   await abDispatch({
     targetRepo: harness.origin,
