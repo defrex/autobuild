@@ -1552,7 +1552,7 @@ sessions need no separate global installation.
 | `ab observe --kind <followup\|refactor\|latent-bug> …` | structured observation, any phase, any time | no |
 | `ab done` | complete a producer phase (validates, then runs phase plumbing) | **yes** |
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> …` | complete a review/verify phase | **yes** |
-| `ab escalate <question>` | park the build for human input | **yes** |
+| `ab escalate <question>` | park the build for external judgment | **yes** |
 | `ab mcp [--store <ref>] [--repo <id>]` | serve the agent tool registry as an MCP server over stdio; fails closed inside a phase | no |
 
 The read-only `ab builds`, `ab build status`, and `ab artifact download` forms
@@ -3897,7 +3897,7 @@ committer are Git's ordinary resolved repository identity, exactly as for a plai
 local commit; commit signing remains disabled. Before offering the candidate,
 the adapter resolves both identities through Git. If either is unavailable,
 consent remains pending and one reason-bearing follow-up names the missing
-`user.name` / `user.email` configuration; later polls retry after the operator
+`user.name` / `user.email` configuration; later polls retry after the user
 configures it. When the base branch is checked out, Git's two-tree
 `read-tree -m -u` transition preflights and merges the old-to-squash tree:
 tracked/index changes on untouched paths and
@@ -3905,8 +3905,8 @@ untracked non-colliding files survive, while a tracked or untracked overwrite
 leaves consent pending and records one path-bearing follow-up instead of failing
 the dispatcher. Its durable pending-merge record is written before moving the
 base ref. A poll after a crash retries that same old-to-merged transition without
-rolling back the ref or overwriting operator work; the PR remains open and
-retryable until checkout repair succeeds. No merge is ever assumed: a build
+rolling back the ref or overwriting local work in the checkout; the PR remains
+open and retryable until checkout repair succeeds. No merge is ever assumed: a build
 reaches `merged` only when a later poll observes the merge and any required
 checkout synchronization. Without authorization, the local branch and PR record
 remain open for inspection with ordinary Git.
