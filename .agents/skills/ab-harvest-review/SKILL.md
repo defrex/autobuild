@@ -41,11 +41,12 @@ not author proposals or touch tickets.
    ```sh
    ab harvest verdict approve --notes .ab/harvest-review.md
    ab harvest verdict revise --notes .ab/harvest-review.md --findings .ab/findings.json
-   ab harvest verdict escalate --notes .ab/harvest-review.md --reason "the human question"
+   ab harvest verdict escalate --notes .ab/harvest-review.md --reason "the question"
    ```
 
-Use `escalate` only when evidence or product intent requires human judgment,
-not as a substitute for a precise revision finding.
+Use `escalate` only when evidence or product intent requires external judgment
+from the operator agent or a human, not as a substitute for a precise revision
+finding.
 
 ## Writing findings
 
