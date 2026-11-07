@@ -1071,9 +1071,12 @@ steps = []
     // only for a dispatcher that feeds an interactive frontend.
     let stateReads = 0
     const tickets = Object.assign(new FakeTicketSource([]), {
-      listStates: async () => {
+      countStates: async (names: readonly string[]) => {
         stateReads++
-        return [{ name: 'triage', tickets: 2 }]
+        return names.map((name) => ({ name, tickets: 2 }))
+      },
+      listStates: async () => {
+        throw new Error('the triage sample never lists ticket states')
       },
     })
     const checked = new Proxy(cold, {
