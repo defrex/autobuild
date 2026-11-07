@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -71,6 +71,7 @@ describe('live dispatcher config', () => {
     expect(await live.refresh(changed)).toEqual({
       kind: 'publication-failed',
       error: 'store unavailable',
+      deprecations: [],
     })
     expect(live.current().revision).toBe(0)
     expect(live.current().config.capacity).toBe(1)
@@ -317,6 +318,102 @@ describe('live merge policy', () => {
     const current = parseConfig(`${base}\n[[merge]]\nmode = "auto"\n`)
     expect(composeBuildConfig(pipeline, current).landing).toEqual([{ mode: 'auto' }])
     expect(BUILD_OWNED_CONFIG_PATHS).not.toContain('landing')
+  })
+})
+
+describe('live config deprecation notices', () => {
+  const landing = 'autobuild.toml: [[landing]] is deprecated; use [[merge]] instead'
+  const legacy = `landing = []\n${base}`
+
+  test('reports accepted deprecations from startup and adoption without writing', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const live = new LiveConfig(
+        'autobuild.toml',
+        parseConfig(legacy, 'autobuild.toml', () => {}),
+        legacy,
+        runtimes,
+        async () => {},
+        [landing],
+      )
+      expect(live.deprecations()).toEqual([landing])
+      expect((await live.refresh(base)).kind).toBe('adopted')
+      expect(live.deprecations()).toEqual([])
+      const changed = legacy.replace('capacity = 1', 'capacity = 2')
+      expect((await live.refresh(changed)).kind).toBe('adopted')
+      expect(live.deprecations()).toEqual([landing])
+      expect(await live.refresh(changed)).toEqual({ kind: 'unchanged' })
+      expect(live.deprecations()).toEqual([landing])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test('returns a rejected candidate deprecation once per distinct content', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const live = new LiveConfig(
+        'autobuild.toml',
+        parseConfig(base),
+        base,
+        runtimes,
+        async () => {},
+      )
+      // Schema-valid, but routed to a model the startup runtime catalog cannot serve.
+      const rejected = legacy.replace('model = "gpt-old"', 'model = "claude-new"')
+      const outcomes = [
+        await live.refresh(rejected),
+        await live.refresh(rejected),
+        await live.refresh(rejected),
+      ]
+      expect(outcomes.map((o) => o.kind === 'rejected' && o.deprecations)).toEqual([
+        [landing],
+        [],
+        [],
+      ])
+      expect(live.deprecations()).toEqual([])
+
+      // Returning to the accepted file and re-saving the same change notices once more.
+      expect(await live.refresh(base)).toEqual({ kind: 'unchanged' })
+      const again = await live.refresh(rejected)
+      expect(again.kind === 'rejected' && again.deprecations).toEqual([landing])
+
+      // Schema-invalid legacy text reports only its validation error.
+      const invalid = await live.refresh(legacy.replace('capacity = 1', 'capacity = 0'))
+      expect(invalid.kind).toBe('rejected')
+      expect(invalid.kind === 'rejected' && invalid.deprecations).toBeUndefined()
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test('returns a publication-failed candidate deprecation once, then adopts it', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let fail = true
+      const live = new LiveConfig('autobuild.toml', parseConfig(base), base, runtimes, async () => {
+        if (fail) throw new Error('store unavailable')
+      })
+      const outcomes = [
+        await live.refresh(legacy),
+        await live.refresh(legacy),
+        await live.refresh(legacy),
+      ]
+      expect(outcomes.map((o) => o.kind === 'publication-failed' && o.deprecations)).toEqual([
+        [landing],
+        [],
+        [],
+      ])
+      expect(live.deprecations()).toEqual([])
+      fail = false
+      expect((await live.refresh(legacy)).kind).toBe('adopted')
+      expect(live.deprecations()).toEqual([landing])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
   })
 })
 

@@ -179,7 +179,14 @@ with one deprecation notice on stderr. `node-landed` remains an alias for the
 `ab wait --for node-merged` condition. Ordinary help lists only the current names.
 
 The deprecated `[[landing]]` config array has the same semantics as `[[merge]]`
-and warns after validation. Declare only one spelling, including empty arrays.
+and warns after validation. Commands that read the file warn each time they run.
+`ab dispatch` reports it once at startup with its other configuration notices
+(stderr, or the dashboard's warning region), and once more for each changed
+`autobuild.toml` it evaluates — including a change it rejects or has not yet
+applied, which is labelled as pending. Repeated evaluation and phase launches
+stay quiet, and a build branch's own `landing` key is not reported because merge
+policy comes from the dispatcher's configuration. Declare only one spelling,
+including empty arrays.
 `ab upgrade` renames the old root key and table headers while preserving policy;
 unsupported spellings require the reported manual edit before retrying.
 

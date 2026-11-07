@@ -838,6 +838,8 @@ class DispatchLoop {
   private forgePublicationFailed = false
   private readonly startupRootBranch: string
   private configWarnings: readonly string[] = []
+  /** Deprecation notices of an autobuild.toml change that is not adopted. */
+  private candidateWarnings: readonly string[] = []
   /** Last intake-enabled tick's standing queue depth, for the dashboard header. */
   private queuedCount = 0
   /** Last successfully sampled triage-state ticket count. Undefined until a
@@ -1234,7 +1236,10 @@ class DispatchLoop {
             )
           })
         : await this.liveConfig.refreshFromDisk()
-    if (outcome.kind === 'unchanged') return
+    if (outcome.kind === 'unchanged') {
+      if (this.candidateWarnings.length > 0) this.reportCandidateDeprecations([])
+      return
+    }
     if (outcome.kind === 'rejected') {
       if (outcome.notify) {
         await this.appendStatus({
@@ -1244,6 +1249,9 @@ class DispatchLoop {
         })
         this.warn(`config reload rejected: ${outcome.error}`)
       }
+      // LiveConfig returns these once per distinct candidate content.
+      if (outcome.deprecations !== undefined && outcome.deprecations.length > 0)
+        this.reportCandidateDeprecations(outcome.deprecations)
       return
     }
     if (outcome.kind === 'publication-failed') {
@@ -1253,6 +1261,7 @@ class DispatchLoop {
         payload: { run: this.runId, error: outcome.error },
       })
       this.warn(`config reload not applied because its durable trace failed: ${outcome.error}`)
+      if (outcome.deprecations.length > 0) this.reportCandidateDeprecations(outcome.deprecations)
       return
     }
 
@@ -1264,6 +1273,8 @@ class DispatchLoop {
         `autobuild.toml reload requires dispatch restart for: ${outcome.restartRequired.join(', ')}`,
       )
     }
+    // The adopted file's deprecations now arrive as accepted-config notices.
+    if (this.candidateWarnings.length > 0) this.candidateWarnings = []
     this.reportRoleDiagnostics()
   }
 
@@ -1401,6 +1412,7 @@ class DispatchLoop {
     // no dependence on emission order relative to `startRendering()`.
     const warningLines = [
       ...this.configWarnings,
+      ...this.candidateWarnings,
       ...this.forgeWarnings,
       ...(this.warningLine !== undefined ? [this.warningLine] : []),
     ]
@@ -3806,13 +3818,36 @@ class DispatchLoop {
   }
 
   private reportRoleDiagnostics(): void {
-    const lines = startupWarnings(this.currentConfig().config, this.wiring.forge)
+    // The accepted file's deprecations were collected at parse time, never
+    // written there, so they reach this surface once per startup or adoption.
+    const lines = [
+      ...this.liveConfig.deprecations(),
+      ...startupWarnings(this.currentConfig().config, this.wiring.forge),
+    ]
     if (this.dashboard) {
       this.configWarnings = lines
       this.syncModelControls()
       this.paint()
     } else {
       for (const line of lines) this.opts.stderr(line)
+    }
+  }
+
+  /**
+   * Deprecation guidance for a changed autobuild.toml that was not adopted
+   * (rejected after parsing, or its publication failed). Labelled as pending
+   * so it cannot be read as the accepted config's state. An empty list clears
+   * the dashboard entry.
+   */
+  private reportCandidateDeprecations(lines: readonly string[]): void {
+    this.candidateWarnings = lines.map(
+      (line) => `${line} (pending autobuild.toml change, not yet adopted)`,
+    )
+    if (this.dashboard) {
+      this.syncModelControls()
+      this.paint()
+    } else if (!this.presentationReleased && this.opts.silent !== true) {
+      for (const line of this.candidateWarnings) this.opts.stderr(line)
     }
   }
 
@@ -4575,8 +4610,9 @@ class DispatchLoop {
         break
       // Read-only policy supervision: never another tick or config fan-out.
       try {
-        const { loadConfig } = await import('../config/load')
-        const config = await loadConfig(join(this.opts.targetRepo, 'autobuild.toml'))
+        // Deprecations were reported at startup/reload; this re-read stays quiet.
+        const path = join(this.opts.targetRepo, 'autobuild.toml')
+        const config = parseConfig(await Bun.file(path).text(), path, () => {})
         const { createRuntimeResolver } = await import('../ports/runner/routing')
         createRuntimeResolver(
           this.wiring.runtimes,
@@ -4897,6 +4933,8 @@ async function fetchOriginModeConfig(
 ): Promise<{
   content: string
   config: Config
+  /** Deprecation lines of the returned (startup) file, collected unwritten. */
+  deprecations: readonly string[]
 }> {
   const repository = normalizeGitRemoteUrl(opts.repository!)
   const label = `${repository}/autobuild.toml`
@@ -4919,9 +4957,10 @@ async function fetchOriginModeConfig(
     }
     throw error
   })
-  const parsed = parseConfig(content, label)
+  const deprecations: string[] = []
+  const parsed = parseConfig(content, label, (line) => deprecations.push(line))
   if (parsed.baseBranch === undefined || parsed.baseBranch === '') {
-    return { content, config: parsed }
+    return { content, config: parsed, deprecations }
   }
   const branchContent = await readFile
     .call(forge, 'autobuild.toml', parsed.baseBranch)
@@ -4935,7 +4974,9 @@ async function fetchOriginModeConfig(
       throw error
     })
   const branchLabel = `${label}@${parsed.baseBranch}`
-  return { content: branchContent, config: parseConfig(branchContent, branchLabel) }
+  const branchDeprecations: string[] = []
+  const config = parseConfig(branchContent, branchLabel, (line) => branchDeprecations.push(line))
+  return { content: branchContent, config, deprecations: branchDeprecations }
 }
 
 /** Loopback hosts where a plain-http store origin is accepted: it names the
@@ -5190,12 +5231,16 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const configPath = join(resolvedOpts.targetRepo, 'autobuild.toml')
   let configContent: string
   let config: Config
+  // Collected, never written at parse time: the dispatcher reports them once
+  // with its other configuration notices (`reportRoleDiagnostics`).
+  let startupDeprecations: readonly string[] = []
   if (opts.repository !== undefined) {
     // Origin mode startup config: the base branch's autobuild.toml, fetched
     // through the forge (default branch first — baseBranch itself is config).
     const fetched = originConfig!
     configContent = fetched.content
     config = fetched.config
+    startupDeprecations = fetched.deprecations
     if (config.forge !== 'github') {
       throw new Error(
         `origin-mode dispatch requires the builtin github forge, but the fetched autobuild.toml selects ${JSON.stringify(config.forge)}`,
@@ -5223,7 +5268,9 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   } else {
     try {
       configContent = await Bun.file(configPath).text()
-      config = parseConfig(configContent, configPath)
+      const deprecations: string[] = []
+      config = parseConfig(configContent, configPath, (line) => deprecations.push(line))
+      startupDeprecations = deprecations
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         throw new Error(
@@ -5339,6 +5386,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       )
       wiring.updateRuntimeReferences?.(effectiveConfig)
     },
+    startupDeprecations,
   )
 
   // Launch flags are durable repository setters. Omission writes nothing, so

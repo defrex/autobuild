@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import { spawnExec } from '../ports/workspace/git-worktree'
 import {
   isActionablePipelineFailure,
   isPipelineSourceRef,
+  readVerifyPipeline,
   recordedBaseSha,
   resolvePipelineSource,
   type PipelineSourceFailure,
@@ -425,6 +426,43 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
     const next = await resolvePipelineSource(input)
     expect(next?.meta).toEqual({ ref: 'branch-head', commit: 'head2' })
     expect(next?.config.verify.steps).toEqual(['b'])
+  })
+
+  test('repeated launches on a legacy landing branch resolve without writing a deprecation', async () => {
+    const legacy = `landing = []\n${PIPELINE_A}`
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pipeline-'))
+    try {
+      const forge = new FakeForge()
+      forge.seedBranch('ab/b1', 'head1')
+      forge.seedFile('head1', 'autobuild.toml', legacy)
+      forge.seedFile('base1', 'autobuild.toml', legacy)
+      const input = {
+        slug: 'b1',
+        record: { branch: 'ab/b1' },
+        events: [provisioned('base1')],
+        mode: 'origin' as const,
+        forge,
+      }
+      for (let launch = 0; launch < 3; launch++) {
+        const result = await resolvePipelineSource(input)
+        expect(result?.meta).toEqual({ ref: 'branch-head', commit: 'head1' })
+        expect(result?.config.verify.steps).toEqual(['a'])
+      }
+      const base = await resolvePipelineSource({ ...input, record: { branch: 'ab/unpublished' } })
+      expect(base?.meta).toEqual({ ref: 'base', commit: 'base1' })
+
+      await git(dir, ['init', '-q', '-b', 'main'])
+      await writeFile(join(dir, 'autobuild.toml'), legacy)
+      await git(dir, ['add', '-A'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'legacy'])
+      for (let read = 0; read < 2; read++)
+        expect((await readVerifyPipeline(dir, spawnExec)).config.verify.steps).toEqual(['a'])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   test('recordedBaseSha takes the newest provisioned workspace', () => {
