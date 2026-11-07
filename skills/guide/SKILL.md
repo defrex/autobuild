@@ -1211,11 +1211,11 @@ nonnegative integer so zero can disable that trigger.
 |---|---|---|---|
 | `upgradeDrainSeconds` | `900` | positive integer | Local generation drain deadline from handoff start; hot-reloaded while draining. |
 | `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it; native continuation retains accumulated time and excludes suspension. |
-| `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates to a human — the anti-loop guard. |
+| `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates for external judgment — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps distinct failed verify cycles since the latest spec revision; passed and skipped cycles cost zero. |
 | `maxDispatchAttempts` | `3` | positive integer | Caps consecutive dispatch failures before a setup-targeted `dispatch-failure-limit` escalation. |
-| `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted human escalation. |
-| `maxInfrastructureAttempts` | `3` | positive integer | Caps consecutive remote provider lifecycle failures before a setup-targeted human escalation; a `retry` answer re-arms the budget. |
+| `maxSetupAttempts` | `3` | positive integer | Caps consecutive `[commands].setup` failures before a setup-targeted policy escalation. |
+| `maxInfrastructureAttempts` | `3` | positive integer | Caps consecutive remote provider lifecycle failures before a setup-targeted policy escalation; a `retry` answer re-arms the budget. |
 | `maxReconcileAttempts` | `3` | positive integer | Caps completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the budget. |
 | `maxReviewRounds` | `6` | positive integer | Default `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. When that cap parks a build, `ab answer <slug> --review-round-ceiling <n>` may replace it for only the escalation's loop and current spec revision. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
@@ -2197,7 +2197,7 @@ and offers `p resume`. Exhaustion remains red, says `recovery exhausted — huma
 attention required`, shows stopped step/pending count, and offers `p
 acknowledge`; escalation also offers `p acknowledge`. A request awaiting
 acknowledgement has no duplicate action. Row `p` never pauses the gate. When the
-gate is off it writes nothing and directs the operator to global `h`; the
+gate is off it writes nothing and directs you to global `h`; the
 eventual shared human acknowledgement reopens every ordinary parked run and
 settles every exhaustion barrier. Exhaustion and escalation remain terminal.
 Escalation's row is dismissed only by a post-terminal human resume request
@@ -2290,7 +2290,7 @@ inserts a line break — as does `Shift+Enter` in terminals that report it
 distinctly — `Backspace` deletes at the caret, `Left`/`Right`/`Up`/`Down` and
 `Home`/`End` move the caret rather than the dashboard's row selection, and
 `Escape` cancels without writing. Line breaks survive submission, so the
-guidance the agent receives keeps the operator's line structure. Pasting
+guidance the agent receives keeps the line structure as typed. Pasting
 multi-line text inserts all of it in one step in terminals that support
 bracketed paste; where they do not, a paste still submits at its first line
 break.

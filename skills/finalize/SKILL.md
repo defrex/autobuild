@@ -14,7 +14,7 @@ Guidance is an external operator answer, from the operator agent or a human.
 ## Session shape
 
 1. Run `ab context`. You get `$AB_CONTEXT_DIR/spec.md`, `$AB_CONTEXT_DIR/plan.md`, every verify report (including earlier failed cycles),
-   the repo's PR template config if one exists, and — when a human answered an
+   the repo's PR template config if one exists, and — when an operator answered an
    escalation this phase raised on an earlier attempt — `$AB_CONTEXT_DIR/guidance.json`,
    their answer to it.
 2. Write `$AB_CONTEXT_DIR/pr-description.md`:

@@ -151,7 +151,7 @@ async function seedRealPlanConflict(repo: string): Promise<{
   const incoming = plan.content
   const heading = '# /ab-plan <build>'
   const conflict = '- **Approach** — the shape of the change and why this shape, in a few'
-  const incomingOnly = 'Park the build for a human:'
+  const incomingOnly = 'Park the build for external judgment from the operator agent or a human:'
   const baseConflict = '- **Approach** — the old default wording for this section'
   const localConflict = '- **Approach** — keep this repository-specific planning standard'
 
@@ -1172,7 +1172,9 @@ describe('runCli routing — ab upgrade outside a session', () => {
     expect(await readFile(pristineSkillPath(repo, 'ab-plan'), 'utf8')).toBe(fixture.incoming)
     expect(fixture.resolved).toContain('keep this repository-specific planning standard')
     expect(fixture.resolved).toContain('local house style')
-    expect(fixture.resolved).toContain('Park the build for a human:')
+    expect(fixture.resolved).toContain(
+      'Park the build for external judgment from the operator agent or a human:',
+    )
     expect(fixture.resolved).not.toContain('<<<<<<<')
   })
 
