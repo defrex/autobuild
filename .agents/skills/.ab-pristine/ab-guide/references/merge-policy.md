@@ -115,8 +115,11 @@ authoritatively ungated root permits an inspected-head guarded direct squash;
 unknown gate state defers. Node targets instead require authoritative proof of
 an ungated destination, cancel native auto-merge and serialize the guarded push.
 Gated or unproven node destinations stay open with actionable diagnostics.
-Successful push proves merge; forge acknowledgement is best-effort, including
-a merged-SHA comment and closing an unacknowledged open review.
+A push alone is not evidence of merge: a node-target merge is recorded only
+under the publication readback rule in Forge requirements. Forge
+acknowledgement, a merged-SHA comment and closing an unacknowledged open
+review, is best-effort after the merge is recorded and never decides, retries
+or fails the merge.
 
 Native application receipts bind to exact candidates; consent does not. Every
 replacement confirms cancellation first; the next poll reconciles native state
@@ -152,10 +155,16 @@ admitting nodes or requesting unsupported retargeting or merge operations.
 For the lifecycle see [integration trees](integration-tree.md); for old controls
 and upgrade conversion see [migration](migration-1.0.md).
 
-Publication acknowledgement requires exact authoritative head readback, including
-recovery. An unconfirmed candidate's descendants do not prove success. Durable
-confirmed receipts preserve historical writes. Local refs cache confirmed heads;
-remote expected-head leases and durable writer reservations still guard writes.
+Publication, including a node-target merge, is acknowledged only by exact
+authoritative head readback of the destination: `ls-remote` on an origin
+forge, the shared database for local-git. A node merge is recorded when that
+readback shows exactly the candidate head, or from the durable receipt of an
+accepted guarded write overtaken before readback. A different observed head is
+contention and records no merge; a failed readback records nothing and is
+retried. Interrupted publication recovers by the same exact readback; an
+unconfirmed candidate's descendants do not prove success. Durable confirmed
+receipts preserve historical writes. Local refs cache confirmed heads; remote
+expected-head leases and durable writer reservations still guard writes.
 Local-git's shared database retains authoritative CAS.
 
 Native cancellation receipts are candidate- and operation-specific. Publication
