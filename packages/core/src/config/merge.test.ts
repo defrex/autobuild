@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { parseConfig } from './load'
 const base = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 test('merge and deprecated landing normalize identically, warning only after successful legacy validation', () => {
@@ -24,4 +24,15 @@ test('dual declarations are refused even when empty; canonical failures name mer
   expect(() => parseConfig(`merge = []\nlanding = []\n${base}`)).toThrow('cannot both be declared')
   expect(() => parseConfig(`${base}\n[[merge]]\nmode = "invalid"`)).toThrow('merge[0].mode')
   expect(() => parseConfig(`${base}\n[[merge]]\nmode = "auto"\nunknown = true`)).toThrow('merge[0]')
+})
+test('explicit one-shot parses default to console.error for deprecated landing', () => {
+  const error = spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    parseConfig(`landing = []\n${base}`, 'explicit.toml')
+    expect(error.mock.calls).toEqual([
+      ['explicit.toml: [[landing]] is deprecated; use [[merge]] instead'],
+    ])
+  } finally {
+    error.mockRestore()
+  }
 })

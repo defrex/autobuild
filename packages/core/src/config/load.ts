@@ -70,6 +70,15 @@ function describeIssue(issue: z.core.$ZodIssue): string {
   return `  ${formatPath(path)}: ${message}`
 }
 
+/**
+ * Parse and validate autobuild.toml text. Deprecated spellings are reported
+ * through `warn` after validation succeeds; invalid text throws first. The
+ * `console.error` default suits explicit one-shot reads (scoped CLI commands,
+ * `ab init`, `ab upgrade`). Recurring or internal callers — the dispatcher and
+ * pipeline-source resolution — pass their own sink, a collector or a no-op, so
+ * a deprecation is reported once per startup or changed file instead of per
+ * phase launch.
+ */
 export function parseConfig(
   tomlText: string,
   source = 'autobuild.toml',

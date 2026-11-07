@@ -21,7 +21,7 @@ import { gitRewrite } from '../ports/forge/git-rewrite'
  * in one pass.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdir, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9958,6 +9958,133 @@ describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)
  * build: the diagnostic is emitted before the first tick and is what is under
  * test.
  */
+describe('abDispatch: deprecated [[landing]] notices are bounded', () => {
+  // The build branch is cut from this main, so every phase launch resolves an
+  // in-flight branch config that still declares `landing`.
+  const LEGACY = DISPATCH_CONFIG_TOML.replace('[[merge]]', '[[landing]]')
+  const landingLines = (lines: readonly string[]) =>
+    lines.filter((line) => line.includes('[[landing]] is deprecated'))
+
+  test('headless dispatch warns once at startup, not per phase launch', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    const fx = await makeFixture(readyTicket('T-landing'), happyHandlers(), LEGACY)
+    const stop = new AbortController()
+    let slug: string | undefined
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          await waitFor(async () => {
+            slug = (await fx.store.listBuilds())[0]?.slug
+            if (slug === undefined) return false
+            return (await fx.store.getEvents(slug)).some(
+              (event) => event.type === 'finalize.completed',
+            )
+          }, 10_000)
+          stop.abort()
+        },
+        wire: fx.wire,
+      })
+
+      const sessions = (await fx.store.getEvents(slug!)).filter(
+        (event) => event.type === 'session.started',
+      )
+      expect(sessions.length).toBeGreaterThanOrEqual(2)
+      expect(landingLines(fx.err)).toEqual([
+        `${join(fx.checkout, 'autobuild.toml')}: [[landing]] is deprecated; use [[merge]] instead`,
+      ])
+      // The scripted sessions run their own `ab done` in-process; that explicit
+      // command reads its worktree file and keeps the user-facing default. No
+      // dispatcher parse (checkout file or `autobuild.toml@<ref>` pipeline
+      // source) writes raw.
+      for (const [line] of error.mock.calls) {
+        expect(String(line)).toContain('/worktrees/')
+        expect(String(line)).not.toStartWith(join(fx.checkout, 'autobuild.toml'))
+        expect(String(line)).not.toStartWith('autobuild.toml@')
+      }
+    } finally {
+      stop.abort()
+      error.mockRestore()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('the interactive dashboard shows the notice in its warning region, never raw', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    const fx = await makeFixture([], happyHandlers(), LEGACY)
+    const term = fakeTerminal(true)
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+        terminal: term,
+      })
+      expect(latestDashboardFrame(term)).toContain('[[landing]] is deprecated')
+      // Only painted dashboard frames carry the line.
+      for (const frame of term.frames)
+        if (stripAnsi(frame).includes('[[landing]]'))
+          expect(stripAnsi(frame)).toContain('Autobuild')
+      expect(fx.err).toEqual([])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a changed candidate is noticed once, pending until adopted', async () => {
+    const error = spyOn(console, 'error').mockImplementation(() => {})
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    // Schema-valid, but routed to a runtime the dispatcher never registered.
+    const rejected = LEGACY.replace('runtime = "claude"', 'runtime = "ghost"')
+    const adopted = LEGACY.replace('capacity = 1', 'capacity = 2')
+    let sleeps = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) await writeFile(join(fx.checkout, 'autobuild.toml'), rejected)
+          else if (sleeps === 4) await writeFile(join(fx.checkout, 'autobuild.toml'), adopted)
+          else if (sleeps >= 7) stop.abort()
+        },
+        wire: fx.wire,
+      })
+
+      expect(fx.err.filter((line) => line.includes('config reload rejected'))).toHaveLength(1)
+      const landing = landingLines(fx.err)
+      expect(landing.filter((line) => line.includes('pending autobuild.toml change'))).toHaveLength(
+        1,
+      )
+      expect(landing.filter((line) => !line.includes('pending'))).toHaveLength(1)
+      expect(landing).toHaveLength(2)
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      stop.abort()
+      error.mockRestore()
+      await fx.cleanup()
+    }
+  }, 30_000)
+})
+
 describe('abDispatch: unconsumed and deprecated [roles] keys', () => {
   /** A stray key plus a deprecated skill-name alias for a real agent step. */
   const BROKEN_ROLES_TOML = DISPATCH_CONFIG_TOML.replace(

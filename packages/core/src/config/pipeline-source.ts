@@ -170,7 +170,10 @@ function parsePipeline(
   try {
     return {
       meta: commit === undefined ? { ref } : { ref, commit },
-      config: parseConfig(content, `autobuild.toml@${label}`),
+      // Merge policy is dispatcher-owned (composeBuildConfig), so a branch's
+      // deprecated spelling is not reported per launch; the dispatcher reports
+      // its own config's deprecations at startup and reload.
+      config: parseConfig(content, `autobuild.toml@${label}`, () => {}),
     }
   } catch (error) {
     onFailure({
@@ -412,6 +415,7 @@ export async function readVerifyPipeline(
       committed.split(/\s+/)[2] === working
         ? { ref: 'branch-head', commit: head }
         : { ref: 'worktree-dirty' },
-    config: parseConfig(content, `autobuild.toml@${head}`),
+    // Dispatcher-owned keys are not read from here; see parsePipeline.
+    config: parseConfig(content, `autobuild.toml@${head}`, () => {}),
   }
 }
