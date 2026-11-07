@@ -1,7 +1,11 @@
 import { missingAccountCredentials, reconcileMissingAccounts } from '../accounts/availability'
 import { readRepositoryFacts } from '../store/reduced-reads'
 import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
-import { loadReducerSnapshot, persistReducerSnapshot } from '../store/snapshots'
+import {
+  catalogSnapshotName,
+  loadReducerSnapshot,
+  persistReducerSnapshot,
+} from '../store/snapshots'
 import { expect } from 'bun:test'
 import { DispatchFrontend } from '../cli/dispatch-frontend'
 import type { DispatchChildResult } from '../cli/dispatch-process'
@@ -182,6 +186,8 @@ export async function dispatchReadBudget(
   // without a wall-clock timer determining the batch boundaries.
   const refresh = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
   await refresh()
+  // Startup without a checkpoint seeds from the canonical value, not the journal.
+  expect(metrics.state).toBe(0)
   const initialSize = JSON.stringify(
     (
       await loadReducerSnapshot(
@@ -402,15 +408,15 @@ export async function dispatchReadBudget(
 }
 
 /** Viewer cold/idle reads must reuse canonical values even without a frontend checkpoint. */
-async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
-  // Instrument the existing in-memory backing boundary, also when reached through HTTP.
+/** Count rows sliced from the in-memory journal, also when reached through HTTP.
+ * Server-side reductions are visible here even though no public read returns them. */
+function countJournalSlices(
+  backing: BuildStore,
+): { rows(): number; reset(): void; restore(): void } | undefined {
   const memory = backing as unknown as { repoState(repo: string): { events: RepositoryEvent[] } }
   const originalState = memory.repoState
-  if (originalState === undefined) return
-  const originalEvents = backing.getRepoEvents.bind(backing)
-  const originalSeed = backing.getRepoStateEvents.bind(backing)
+  if (originalState === undefined) return undefined
   let rows = 0
-  let rawCalls = 0
   memory.repoState = function (repo) {
     const state = originalState.call(this, repo)
     return new Proxy(state, {
@@ -430,6 +436,23 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
       },
     })
   }
+  return {
+    rows: () => rows,
+    reset: () => {
+      rows = 0
+    },
+    restore: () => {
+      memory.repoState = originalState
+    },
+  }
+}
+
+async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise<void> {
+  const slices = countJournalSlices(backing)
+  if (slices === undefined) return
+  const originalEvents = backing.getRepoEvents.bind(backing)
+  const originalSeed = backing.getRepoStateEvents.bind(backing)
+  let rawCalls = 0
   backing.getRepoEvents = async (...args) => {
     rawCalls++
     return originalEvents(...args)
@@ -471,7 +494,7 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
             },
           })
         await readRepositoryFacts(store, repo)
-        rows = 0
+        slices.reset()
         rawCalls = 0
         for (let fresh = 0; fresh < 3; fresh++) {
           let now = 0
@@ -551,7 +574,7 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
             }
             expect(counts.calls).toBe(expected)
           }
-          expect(rows).toBe(0)
+          expect(slices.rows()).toBe(0)
           expect(rawCalls).toBe(0)
           await backing.appendRepo(repo, {
             actor: humanActor('budget'),
@@ -559,13 +582,13 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
             payload: { enabled: true },
           })
           await refresh()
-          expect(rows).toBe(1)
+          expect(slices.rows()).toBe(1)
           expect(rawCalls).toBe(0)
-          rows = 0
+          slices.reset()
           now += 15_000
           await refresh()
           if (configured) expected++
-          expect(rows).toBe(0)
+          expect(slices.rows()).toBe(0)
           expect(counts.calls).toBe(expected)
           if (configured) {
             expect(new Set(counts.names)).toEqual(new Set(['Triage']))
@@ -575,7 +598,7 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
             await refresh()
             expect(counts.calls).toBe(++expected)
             expect(internals.model?.triage).toBe(7)
-            expect(rows).toBe(0)
+            expect(slices.rows()).toBe(0)
             expect(rawCalls).toBe(0)
             // A headless tick publishes no count; the viewer keeps its own.
             await backing.appendRepo(repo, {
@@ -594,7 +617,7 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
             await refresh()
             expect(internals.model?.triage).toBe(7)
             expect(rawCalls).toBe(0)
-            rows = 0
+            slices.reset()
           }
           controller.abort()
           await running
@@ -605,12 +628,12 @@ async function viewerReadBudget(store: BuildStore, backing: BuildStore): Promise
           payload: { enabled: true },
         })
         await readRepositoryFacts(store, repo)
-        expect(rows).toBe(1)
+        expect(slices.rows()).toBe(1)
         expect(rawCalls).toBe(0)
       }
     }
   } finally {
-    memory.repoState = originalState
+    slices.restore()
     backing.getRepoEvents = originalEvents
     backing.getRepoStateEvents = originalSeed
   }
@@ -930,7 +953,9 @@ export async function ticketListReadBudget(
   }
 }
 
-/** Persisted caches isolate startup transfer from unrelated discarded history. */
+/** Persisted caches isolate startup transfer from unrelated discarded history.
+ * Without a usable checkpoint, startup seeds from the canonical repository value:
+ * its transfer is the same at every journal and current-run length. */
 export async function warmRestoreReadBudget(
   store: BuildStore,
   backing: BuildStore,
@@ -938,31 +963,28 @@ export async function warmRestoreReadBudget(
   fillDiscarded?: (repo: string, count: number) => Promise<void>,
 ): Promise<unknown[]> {
   const { DispatchRepositoryFeed } = await import('../cli/dispatch-repository-feed')
-  const reports = []
-  for (const gap of verify ? [1, 10_000, 100_000, 2] : [1, 10_000, 100_000]) {
-    const repo = `/warm-restore-${gap}`
-    await backing.ensureRepo(repo)
-    const append = (enabled: boolean) =>
-      backing.appendRepo(repo, {
-        actor: humanActor('budget'),
-        type: 'dispatcher.pause-set',
-        payload: { enabled },
-      })
-    await append(false)
-    await new DispatchRepositoryFeed(store, repo, () => new Date(0)).refresh()
-    // Local tests can populate identical irrelevant rows in one SQL statement.
-    // Restoration still uses the public store boundary on every adapter.
-    if (fillDiscarded && gap > 1) await fillDiscarded(repo, gap - 1)
-    else
-      for (let i = 0; i < gap - 1; i++)
-        await backing.appendRepo(repo, {
-          actor: DISPATCHER,
-          type: 'dispatcher.run-stopped',
-          payload: { run: 'discarded', outcome: 'normal' },
+  const reports: {
+    gap: number
+    seeds: number
+    seedRows: number
+    canonical: number
+    missing: { rows: number; slices?: number; identities: number; events: number }
+  }[] = []
+  const slices = countJournalSlices(backing)
+  try {
+    for (const gap of verify ? [1, 10_000, 100_000, 2] : [1, 10_000, 100_000]) {
+      const repo = `/warm-restore-${gap}`
+      await backing.ensureRepo(repo)
+      const append = (enabled: boolean) =>
+        backing.appendRepo(repo, {
+          actor: humanActor('budget'),
+          type: 'dispatcher.pause-set',
+          payload: { enabled },
         })
-    // New anchor makes the recovery seed independent of the gap.
-    if (gap > 1)
-      await backing.appendRepo(repo, {
+      await append(false)
+      await new DispatchRepositoryFeed(store, repo, () => new Date(0)).refresh()
+      // The current run's tail spans the whole gap, as a long-running dispatcher's does.
+      const latest = await backing.appendRepo(repo, {
         actor: DISPATCHER,
         type: 'dispatcher.run-started',
         payload: {
@@ -972,79 +994,155 @@ export async function warmRestoreReadBudget(
           effectiveConfig: { kind: 'config', rev: 0 },
         },
       })
-    await append(true)
-    const metrics = { raw: 0, tails: 0, rows: 0, seeds: 0, seedRows: 0, cursors: [] as number[] }
-    const raw = backing.getRepoEvents.bind(backing)
-    const tail = backing.getRepositoryTail?.bind(backing)
-    const seed = backing.getRepoStateEvents.bind(backing)
-    backing.getRepoEvents = async (...args) => {
-      metrics.raw++
-      const events = await raw(...args)
-      metrics.rows += events.length
-      return events
-    }
-    if (tail)
-      backing.getRepositoryTail = async (...args) => {
-        metrics.tails++
-        metrics.cursors.push(args[1] ?? 0)
-        if (gap === 2 && metrics.tails === 1) {
-          for (let i = 0; i < 1001; i++)
-            await backing.appendRepo(repo, {
-              actor: DISPATCHER,
-              type: 'dispatcher.run-stopped',
-              payload: { run: 'racing', outcome: 'normal' },
-            })
+      // Local tests can populate identical irrelevant rows in one SQL statement.
+      // Restoration still uses the public store boundary on every adapter.
+      if (fillDiscarded && gap > 1) await fillDiscarded(repo, gap - 1)
+      else
+        for (let i = 0; i < gap - 1; i++)
           await backing.appendRepo(repo, {
             actor: DISPATCHER,
-            type: 'dispatcher.run-started',
-            payload: {
-              run: 'racing-anchor',
-              pid: 1,
-              roleWarnings: [],
-              effectiveConfig: { kind: 'config', rev: 0 },
-            },
+            type: 'dispatcher.run-stopped',
+            payload: { run: 'latest', outcome: 'normal' },
           })
-          await append(true)
-        }
-        const events = await tail(...args)
-        if (verify) expect(events.length).toBeLessThanOrEqual(1000)
+      await append(true)
+      // The canonical value's one serialized, durably saved reduction precedes startup.
+      await readRepositoryFacts(store, repo)
+      const metrics = {
+        raw: 0,
+        tails: 0,
+        rows: 0,
+        seeds: 0,
+        seedRows: 0,
+        canonical: 0,
+        cursors: [] as number[],
+      }
+      const raw = backing.getRepoEvents.bind(backing)
+      const tail = backing.getRepositoryTail?.bind(backing)
+      const seed = backing.getRepoStateEvents.bind(backing)
+      const value = backing.getReducerValue.bind(backing)
+      const checkpoint = backing.getReducerSnapshot.bind(backing)
+      backing.getRepoEvents = async (...args) => {
+        metrics.raw++
+        const events = await raw(...args)
         metrics.rows += events.length
         return events
       }
-    backing.getRepoStateEvents = async (...args) => {
-      metrics.seeds++
-      const events = await seed(...args)
-      metrics.seedRows += events.length
-      return events
-    }
-    try {
-      const feed = new DispatchRepositoryFeed(store, repo, () => new Date(60_000))
-      await feed.refresh()
-      expect(feed.events.findLast((e) => e.type === 'dispatcher.pause-set')?.payload).toEqual({
-        enabled: true,
-      })
-      if (verify) {
-        expect(metrics.raw).toBe(0)
-        expect(metrics.seeds).toBe(gap === 1 ? 0 : 1)
-        expect(metrics.rows).toBe(gap === 1 ? 1 : 0)
-        expect(metrics.tails).toBe(gap === 2 ? 2 : 1)
-        expect(metrics.cursors).toEqual(
-          gap === 2 ? [1, await backing.getRepoHighWater(repo)] : [gap === 1 ? 1 : gap + 2],
-        )
+      if (tail)
+        backing.getRepositoryTail = async (...args) => {
+          metrics.tails++
+          metrics.cursors.push(args[1] ?? 0)
+          if (gap === 2 && metrics.tails === 1) {
+            for (let i = 0; i < 1001; i++)
+              await backing.appendRepo(repo, {
+                actor: DISPATCHER,
+                type: 'dispatcher.run-stopped',
+                payload: { run: 'racing', outcome: 'normal' },
+              })
+            await backing.appendRepo(repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.run-started',
+              payload: {
+                run: 'racing-anchor',
+                pid: 1,
+                roleWarnings: [],
+                effectiveConfig: { kind: 'config', rev: 0 },
+              },
+            })
+            await append(true)
+          }
+          const events = await tail(...args)
+          if (verify) expect(events.length).toBeLessThanOrEqual(1000)
+          metrics.rows += events.length
+          return events
+        }
+      backing.getRepoStateEvents = async (...args) => {
+        metrics.seeds++
+        const events = await seed(...args)
+        metrics.seedRows += events.length
+        return events
       }
-      reports.push({ gap, ...metrics, cursors: [...metrics.cursors] })
-      const before = metrics.rows
-      await feed.refresh()
-      expect(metrics.rows).toBe(before)
-    } finally {
-      backing.getRepoEvents = raw
-      if (tail) backing.getRepositoryTail = tail
-      backing.getRepoStateEvents = seed
+      backing.getReducerValue = async (scope, request) => {
+        if (request.reducer === 'repositoryReadFacts') metrics.canonical++
+        return value(scope, request)
+      }
+      try {
+        // A checkpoint `gap` events stale: restore within the window, else canonical seed.
+        const feed = new DispatchRepositoryFeed(store, repo, () => new Date(60_000))
+        await feed.refresh()
+        const head = await backing.getRepoHighWater(repo)
+        // Within the window the delta carries the fact; presentation reads canonical facts.
+        if (gap === 1) expect(feed.events.at(-1)?.payload).toEqual({ enabled: true })
+        if (verify) {
+          expect(metrics.raw).toBe(0)
+          expect(metrics.seeds).toBe(0)
+          expect(metrics.seedRows).toBe(0)
+          expect(metrics.canonical).toBe(gap === 1 ? 0 : 1)
+          expect(metrics.rows).toBe(gap === 1 ? 2 : 0)
+          expect(metrics.tails).toBe(gap === 2 ? 2 : 1)
+          expect(metrics.cursors).toEqual(gap === 2 ? [1, head] : [gap === 1 ? 1 : head])
+        }
+        const before = metrics.rows
+        await feed.refresh()
+        expect(metrics.rows).toBe(before)
+        expect((await readRepositoryFacts(store, repo)).value.settings.paused).toBe(true)
+
+        // A missing checkpoint: a fresh process with no presentation state at all.
+        backing.getReducerSnapshot = async (...args) =>
+          args[0].kind === 'repo' &&
+          args[0].repo === repo &&
+          args[1] === catalogSnapshotName('dispatchFrontend')
+            ? null
+            : checkpoint(...args)
+        const counted = { ...metrics }
+        slices?.reset()
+        const fresh = new DispatchRepositoryFeed(store, repo, () => new Date(120_000))
+        await fresh.warm()
+        const missing = {
+          rows: metrics.rows - counted.rows,
+          ...(slices ? { slices: slices.rows() } : {}),
+          identities: fresh.identities.length,
+          events: fresh.events.length,
+        }
+        expect(metrics.seeds).toBe(counted.seeds)
+        expect(metrics.raw).toBe(counted.raw)
+        expect(metrics.canonical - counted.canonical).toBe(1)
+        expect(missing.rows).toBe(0)
+        if (slices) expect(slices.rows()).toBe(0)
+        expect(
+          fresh.identities.map((e) => e.type === 'dispatcher.run-started' && e.payload.run),
+        ).toEqual([gap === 2 ? 'racing-anchor' : 'latest'])
+        if (gap !== 2) expect(fresh.identities).toEqual([latest])
+        expect(fresh.events).toEqual([])
+        // Unchanged: zero event rows. One new fact: exactly one row.
+        slices?.reset()
+        expect(await fresh.refresh()).toEqual([])
+        expect(metrics.rows - counted.rows).toBe(0)
+        if (slices) expect(slices.rows()).toBe(0)
+        const next = await append(false)
+        expect((await fresh.refresh()).map((e) => e.seq)).toEqual([next.seq])
+        expect(metrics.rows - counted.rows).toBe(1)
+        expect(fresh.events.at(-1)).toEqual(next)
+        reports.push({
+          gap,
+          seeds: metrics.seeds,
+          seedRows: metrics.seedRows,
+          canonical: metrics.canonical,
+          missing,
+        })
+      } finally {
+        backing.getRepoEvents = raw
+        if (tail) backing.getRepositoryTail = tail
+        backing.getRepoStateEvents = seed
+        backing.getReducerValue = value
+        backing.getReducerSnapshot = checkpoint
+      }
     }
+  } finally {
+    slices?.restore()
   }
+  // History independence: a fresh process transfers the same rows and retains the
+  // same state at 3, 10,000 and 100,000 journal events.
   if (verify)
-    expect((reports[1] as { seedRows: number }).seedRows).toBe(
-      (reports[2] as { seedRows: number }).seedRows,
-    )
+    for (const report of reports.slice(1, 3)) expect(report.missing).toEqual(reports[0]!.missing)
   return reports
 }

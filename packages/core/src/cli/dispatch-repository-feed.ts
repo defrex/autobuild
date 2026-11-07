@@ -2,6 +2,7 @@ import { CursorTooOldError, REPOSITORY_TAIL_WINDOW } from '../store/event-reads'
 import { DISPATCH_HANDOFF_EVENT_TYPES } from '../store/repo-state-events'
 import { type RepositoryEvent, validateRepositoryEventWrite } from '../events/repository'
 import { defineReducer } from '../kernel/incremental'
+import { readRepositoryFacts } from '../store/reduced-reads'
 import { loadReducerSnapshot, persistReducerSnapshotOutcome } from '../store/snapshots'
 import type { BuildStore, Clock } from '../store/types'
 
@@ -44,7 +45,11 @@ export const dispatchFrontendReducer = defineReducer({
 })
 
 /** One serialized, frontend-only repository projection. The consumed cursor is
- * independent of retained facts: quiet ticks must never survive in the cache. */
+ * independent of retained facts: quiet ticks must never survive in the cache.
+ * Presentation reads canonical repository facts; the dashboard-event cache holds
+ * only facts after the feed's restoration point. Without a usable checkpoint,
+ * startup and cursor-expiry recovery seed identities from the canonical
+ * `repositoryReadFacts` value, never from the journal. */
 export class DispatchRepositoryFeed {
   private cursor = 0
   private ready = false
@@ -161,15 +166,14 @@ export class DispatchRepositoryFeed {
             cursor = snapshot.cursor
             restored = true
           } catch {
-            /* A malformed cache uses the bounded seed. */
+            /* A malformed cache uses the canonical seed. */
           }
         }
         if (!restored) {
-          const seed = await this.store.getRepoStateEvents(this.repo)
-          this.validate(seed, 0, false)
+          const seed = await this.canonicalSeed(holder)
           incompleteIdentities = true
-          retained = dispatchFrontendReducer.reduce(seed)
-          cursor = Math.max(high, seed.at(-1)?.seq ?? 0)
+          retained = seed.retained
+          cursor = seed.cursor
         }
         delta = await this.readStartupTail(cursor)
         this.validate(delta, cursor, true)
@@ -212,15 +216,13 @@ export class DispatchRepositoryFeed {
     })
     const recovered = next.catch(async (error) => {
       if (!(error instanceof CursorTooOldError)) throw error
-      const high = await this.store.getRepoHighWater(this.repo)
-      const seed = await this.store.getRepoStateEvents(this.repo)
-      this.validate(seed, 0, false)
-      const cursor = Math.max(high, seed.at(-1)?.seq ?? 0)
+      const seed = await this.canonicalSeed(this.holder)
+      const cursor = seed.cursor
       const delta = await this.readStartupTail(cursor)
       this.validate(delta, cursor, true)
       this.replaceRetained(
         dispatchFrontendReducer.advance(
-          { retained: dispatchFrontendReducer.reduce(seed), incompleteIdentities: true },
+          { retained: seed.retained, incompleteIdentities: true, holder: this.holder },
           delta,
         ).retained,
       )
@@ -234,6 +236,33 @@ export class DispatchRepositoryFeed {
     })
     this.tail = recovered.catch(() => {})
     return recovered.then(() => result)
+  }
+
+  /** Missing or unusable presentation state restarts from the canonical reduced
+   * repository value: cost is independent of journal and current-run length. */
+  private async canonicalSeed(
+    holder: string | undefined,
+  ): Promise<{ cursor: number; retained: RepositoryEvent[] }> {
+    const { cursor, value } = await readRepositoryFacts(this.store, this.repo, true)
+    const runs = new Map(value.recentRuns)
+    const starts = new Map<number, RepositoryEvent>()
+    for (const run of [value.latestRun, holder]) {
+      const start = run === undefined ? undefined : runs.get(run)?.latestStart
+      if (start) starts.set(start.seq, start)
+    }
+    const sorted = [...starts.values()].sort((a, b) => a.seq - b.seq)
+    this.validate(sorted, 0, false)
+    if (!Number.isInteger(cursor) || cursor < 0)
+      throw new Error('invalid canonical repository cursor')
+    if (sorted.some((e) => e.type !== 'dispatcher.run-started' || e.seq > cursor))
+      throw new Error('invalid canonical identity')
+    return {
+      cursor,
+      retained: dispatchFrontendReducer.advance(
+        { retained: [], incompleteIdentities: true, holder },
+        sorted,
+      ).retained,
+    }
   }
 
   private readStartupTail(cursor: number): Promise<RepositoryEvent[]> {
