@@ -78,6 +78,11 @@ class FakeSandbox implements VercelSandboxHandle {
   failureStdout = ''
   failureStderr = ''
   provisioned = false
+  /** The version the guest's provisioned Bun reports; `undefined` models a
+   * missing or unrunnable executable. */
+  bunVersion: string | undefined = VERCEL_BUN_VERSION
+  /** The version a pinned `npm install bun@X` actually yields; defaults to X. */
+  bunInstallVersion: string | undefined
   /** Whether the guest holds a git checkout; `undefined` follows the
    * provisioned marker, `false` models a half-provisioned VM. */
   checkout: boolean | undefined
@@ -175,6 +180,16 @@ class FakeSandbox implements VercelSandboxHandle {
         stdout: async () => this.failureStdout,
         stderr: async () => this.failureStderr,
       }
+    if (params.cmd === VERCEL_BUN_EXECUTABLE && (params.args as string[])?.[0] === '--version') {
+      const version = this.bunVersion
+      if (version === undefined) return { exitCode: 1 }
+      return { exitCode: 0, stdout: async () => `${version}\n` }
+    }
+    if (params.cmd === 'npm' && (params.args as string[])?.[0] === 'install') {
+      const requested = (params.args as string[]).find((arg) => arg.startsWith('bun@'))
+      if (requested !== undefined)
+        this.bunVersion = this.bunInstallVersion ?? requested.slice('bun@'.length)
+    }
     if (params.cmd === 'cat') {
       const content = this.markerReadback ?? this.distributionVersion
       if ((params.args as string[])?.[0] === VERCEL_DISTRIBUTION_VERSION_MARKER) {
@@ -708,6 +723,7 @@ describe('VercelSandboxProvider', () => {
     expect(refreshed.map((command) => command.cmd)).toEqual([
       'test',
       'cat',
+      VERCEL_BUN_EXECUTABLE,
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
@@ -745,6 +761,7 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
       'test',
       'cat',
+      VERCEL_BUN_EXECUTABLE,
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
@@ -859,17 +876,17 @@ describe('VercelSandboxProvider', () => {
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
     // The refresh sequence strictly precedes the detached runner launch, with
-    // Bun's preflight after the reinstall.
+    // Bun's pin check before the reinstall that runs with it.
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      VERCEL_BUN_EXECUTABLE,
       'cat',
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
       'sh',
       'cat',
-      VERCEL_BUN_EXECUTABLE,
     ])
-    expect((restart[runner - 1] as { args?: string[] }).args).toEqual(['--version'])
+    expect((restart[0] as { args?: string[] }).args).toEqual(['--version'])
     // The marker now carries the full identity stamp.
     expect(h.sandbox.distributionVersion).toBe('1.2.3+protocol3')
     // Exactly one new write — the archive into /tmp — never the workspace.
@@ -907,13 +924,13 @@ describe('VercelSandboxProvider', () => {
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      VERCEL_BUN_EXECUTABLE,
       'cat',
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
       'sh',
       'cat',
-      VERCEL_BUN_EXECUTABLE,
     ])
     expect(h.sandbox.distributionVersion).toBe('2.0.0+protocol3')
     expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
@@ -958,17 +975,17 @@ describe('VercelSandboxProvider', () => {
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
     // The refresh sequence strictly precedes the detached runner launch, with
-    // Bun's preflight after the reinstall.
+    // Bun's pin check before the reinstall that runs with it.
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      VERCEL_BUN_EXECUTABLE,
       'cat',
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
       'sh',
       'cat',
-      VERCEL_BUN_EXECUTABLE,
     ])
-    expect((restart[runner - 1] as { args?: string[] }).args).toEqual(['--version'])
+    expect((restart[0] as { args?: string[] }).args).toEqual(['--version'])
     // The marker now carries the bumped version on the current protocol.
     expect(h.sandbox.distributionVersion).toBe('2.0.0+protocol3')
     // Exactly one new write — the archive into /tmp — never the workspace.
@@ -1012,16 +1029,16 @@ describe('VercelSandboxProvider', () => {
     const restart = h.sandbox.commands.slice(commandsBefore)
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
-    // The refresh ran strictly before the detached runner (Bun's preflight
-    // trails the reinstall).
+    // The refresh ran strictly before the detached runner (Bun's pin check
+    // precedes the reinstall).
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      VERCEL_BUN_EXECUTABLE,
       'cat',
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
       'sh',
       'cat',
-      VERCEL_BUN_EXECUTABLE,
     ])
     // The marker was rewritten to the independently recomputed full stamp —
     // not the bare version a degraded wiring would produce.
@@ -1051,11 +1068,11 @@ describe('VercelSandboxProvider', () => {
     const restart = h.sandbox.commands.slice(commandsBefore)
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
-    // One marker read (the comparison itself) then Bun's preflight — no
+    // Bun's pin check, then one marker read (the comparison itself) — no
     // archive fetch, no writes, no reinstall.
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
-      'cat',
       VERCEL_BUN_EXECUTABLE,
+      'cat',
     ])
     expect(h.sandbox.writes).toHaveLength(writesBefore)
   })
@@ -1090,13 +1107,13 @@ describe('VercelSandboxProvider', () => {
     // The refresh sequence strictly precedes the detached runner launch: the
     // archive is installed and the marker rewritten before any guest code runs.
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      VERCEL_BUN_EXECUTABLE,
       'cat',
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
       'sh',
       'cat',
-      VERCEL_BUN_EXECUTABLE,
     ])
     expect(h.sandbox.distributionVersion).toBe(`1.2.3+protocol3+sha256-${'a'.repeat(64)}`)
     expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
@@ -1129,11 +1146,11 @@ describe('VercelSandboxProvider', () => {
     const restart = h.sandbox.commands.slice(commandsBefore)
     const runner = restart.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
-    // One marker read (the comparison itself) then Bun's preflight — no
+    // Bun's pin check, then one marker read (the comparison itself) — no
     // archive fetch, no writes, no tar, no reinstall.
     expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
-      'cat',
       VERCEL_BUN_EXECUTABLE,
+      'cat',
     ])
     expect(h.sandbox.writes).toHaveLength(writesBefore)
     expect(h.sandbox.distributionVersion).toBe(fullStamp)
@@ -1379,7 +1396,7 @@ describe('VercelSandboxProvider', () => {
 
     await expect(
       h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
-    ).rejects.toThrow(/could not provision Bun 1\.4\.0.*universal managed image/)
+    ).rejects.toThrow(/could not provision Bun 1\.4\.4.*universal managed image/)
     expect(h.sandbox.deletes).toBe(0)
     expect(h.sandbox.provisioned).toBe(false)
     expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
@@ -1673,9 +1690,14 @@ describe('VercelSandboxProvider', () => {
       cwd: VERCEL_WORKSPACE_PATH,
     })
     const launchIndex = h.sandbox.commands.indexOf(launch)
-    expect(h.sandbox.commands[launchIndex - 1]).toEqual({
+    expect(
+      h.sandbox.commands
+        .slice(0, launchIndex)
+        .findLast((command) => command.cmd === VERCEL_BUN_EXECUTABLE),
+    ).toEqual({
       cmd: VERCEL_BUN_EXECUTABLE,
       args: ['--version'],
+      signal: expect.any(AbortSignal),
     })
     await h.provider.release(workspace)
     expect(h.sandbox.deletes).toBe(1)
@@ -2137,15 +2159,149 @@ describe('VercelSandboxProvider', () => {
     h.sandbox.failCommand = (command) =>
       command.cmd === VERCEL_BUN_EXECUTABLE &&
       (command.args as string[] | undefined)?.[0] === '--version'
+    const commandsBefore = h.sandbox.commands.length
 
-    await expect(
-      h.provider.buildExecution.start({
+    const rejection = await h.provider.buildExecution
+      .start({
         slug: 'remote-build',
         storeRef: 'https://store.example.test',
         instance: 'i-missing-bun',
         workspaceRef: workspace.ref,
-      }),
-    ).rejects.toThrow(/Bun 1\.4\.0 preflight failed.*release and reprovision/)
+      })
+      .catch((error: unknown) => error)
+    expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
+    expect((rejection as Error).message).toMatch(
+      /found no version \(pin 1\.4\.4\).*release and reprovision/,
+    )
+    // The pin refresh was attempted before giving up.
+    const since = h.sandbox.commands.slice(commandsBefore)
+    expect(since.some((command) => command.cmd === 'npm')).toBe(true)
+    expect(h.sandbox.commands.filter((command) => command.detached === true)).toHaveLength(0)
+  })
+
+  test('a fresh sandbox installs and verifies Bun at the pin', async () => {
+    expect(VERCEL_BUN_VERSION).toBe('1.4.4')
+    const h = harness()
+    await h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' })
+    const install = h.sandbox.commands.findIndex((command) => command.cmd === 'npm')
+    expect(h.sandbox.commands[install]!.args).toEqual([
+      'install',
+      '--prefix',
+      VERCEL_BUN_PREFIX,
+      '--no-save',
+      'bun@1.4.4',
+    ])
+    expect(h.sandbox.commands[install + 1]).toMatchObject({
+      cmd: VERCEL_BUN_EXECUTABLE,
+      args: ['--version'],
+    })
+    expect(h.sandbox.bunVersion).toBe('1.4.4')
+  })
+
+  test('fresh provisioning whose Bun reports another version fails naming both versions', async () => {
+    const h = harness()
+    h.sandbox.bunInstallVersion = '1.4.0'
+
+    const rejection = await h.provider
+      .provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' })
+      .catch((error: unknown) => error)
+    expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
+    expect((rejection as Error).message).toContain('could not verify provisioned Bun 1.4.4')
+    const cause = ((rejection as Error).cause as Error).cause as Error
+    expect(cause.message).toContain('reports 1.4.0 but the pin is 1.4.4')
+    expect(h.sandbox.provisioned).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
+  })
+
+  test('a reused sandbox reporting Bun 1.4.0 is brought to the pin before the runner starts', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.bunVersion = '1.4.0'
+    // A distribution refresh is also due, so the order proves the pin comes
+    // first: the refresh's `bun install` must run on the pinned Bun.
+    h.distributionIdentity = '1.2.3+protocol3'
+    const commandsBefore = h.sandbox.commands.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-stale-bun',
+      workspaceRef: workspace.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      VERCEL_BUN_EXECUTABLE,
+      'npm',
+      VERCEL_BUN_EXECUTABLE,
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+    ])
+    expect(restart[1]!.args).toContain('bun@1.4.4')
+    expect(h.sandbox.bunVersion).toBe(VERCEL_BUN_VERSION)
+  })
+
+  test('reused build provisioning refreshes a stale Bun before reinstalling the distribution', async () => {
+    const h = harness()
+    await h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' })
+    h.sandbox.bunVersion = '1.4.0'
+    h.sandbox.distributionVersion = '0.0.1'
+    const commandsBefore = h.sandbox.commands.length
+
+    await h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' })
+
+    expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
+      'test',
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+      'npm',
+      VERCEL_BUN_EXECUTABLE,
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+    ])
+    expect(h.sandbox.bunVersion).toBe(VERCEL_BUN_VERSION)
+  })
+
+  test('a reused sandbox that cannot reach the Bun pin is never launched, now or later', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.bunVersion = '1.4.0'
+    h.sandbox.bunInstallVersion = '1.4.0'
+    const start = () =>
+      h.provider.buildExecution
+        .start({
+          slug: 'remote-build',
+          storeRef: 'https://store.example.test',
+          instance: 'i-stuck-bun',
+          workspaceRef: workspace.ref,
+        })
+        .catch((error: unknown) => error)
+
+    const rejection = await start()
+    expect(rejection).toBeInstanceOf(WorkspaceCleanupRequired)
+    expect((rejection as Error).message).toContain('found 1.4.0 (pin 1.4.4)')
+    expect((rejection as Error).message).toContain('reports 1.4.0 but the pin is 1.4.4')
+    expect((rejection as Error).message).toContain('release and reprovision')
+    // A later preflight compares exactly, so the failed upgrade is not accepted.
+    expect(await start()).toBeInstanceOf(WorkspaceCleanupRequired)
     expect(h.sandbox.commands.filter((command) => command.detached === true)).toHaveLength(0)
   })
 
@@ -2909,6 +3065,62 @@ describe('VercelSandboxProvider harvestExecution', () => {
     expect(envelope.supervision).toEqual({ kind: 'environment' })
   })
 
+  test('a reused harvest environment reporting Bun 1.4.0 is brought to the pin before launch', async () => {
+    const h = harness({ provisionRuntimes: true })
+    const first = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+    })
+    expect(await first.completion).toEqual({ exitCode: 0 })
+    h.sandbox.bunVersion = '1.4.0'
+    const commandsBefore = h.sandbox.commands.length
+
+    const second = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i2',
+      baseBranch: 'main',
+    })
+    expect(await second.completion).toEqual({ exitCode: 0 })
+    const since = h.sandbox.commands.slice(commandsBefore)
+    const install = since.findIndex((command) => command.cmd === 'npm')
+    const runner = since.findIndex((command) => command.detached === true)
+    expect(install).toBeGreaterThan(0)
+    expect(since[install]!.args).toContain('bun@1.4.4')
+    expect(install).toBeLessThan(runner)
+    expect(h.sandbox.bunVersion).toBe(VERCEL_BUN_VERSION)
+  })
+
+  test('a reused harvest environment that cannot reach the Bun pin is reaped and never launched', async () => {
+    const h = harness({ provisionRuntimes: true })
+    const first = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+    })
+    expect(await first.completion).toEqual({ exitCode: 0 })
+    h.sandbox.bunVersion = '1.4.0'
+    h.sandbox.bunInstallVersion = '1.4.0'
+    const detachedBefore = h.sandbox.commands.filter((command) => command.detached === true).length
+    const deletesBefore = h.sandbox.deletes
+
+    await expect(
+      h.provider.harvestExecution.start({
+        storeRef: 'https://store.example.test',
+        repo: ORIGIN,
+        instance: 'host-harvest-i2',
+        baseBranch: 'main',
+      }),
+    ).rejects.toThrow(/found 1\.4\.0 \(pin 1\.4\.4\)/)
+    expect(h.sandbox.deletes).toBe(deletesBefore + 1)
+    expect(h.sandbox.commands.filter((command) => command.detached === true)).toHaveLength(
+      detachedBefore,
+    )
+  })
+
   test('harvest reuse without the identity seam refreshes a stale marker to the default stamp', async () => {
     // obs_8266d6a3 pin (startHarvestExecution / harvest-reuse site): without
     // the injected seam the reuse path must resolve the identity via the
@@ -2944,11 +3156,12 @@ describe('VercelSandboxProvider harvestExecution', () => {
     const since = h.sandbox.commands.slice(commandsBefore)
     const runner = since.findIndex((command) => command.detached === true)
     expect(runner).toBeGreaterThan(0)
-    // The stale marker is read, then the full refresh sequence runs before
-    // the detached runner (Bun's preflight trails the reinstall).
+    // The stale marker is read, Bun's pin is checked, then the full refresh
+    // sequence runs before the detached runner (the launch rechecks the pin).
     expect(since.slice(0, runner).map((command) => command.cmd)).toEqual([
       'test',
       'cat',
+      VERCEL_BUN_EXECUTABLE,
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
@@ -3199,6 +3412,7 @@ describe('operator sandbox capability', () => {
     expect(h.creates).toBe(1)
     expect(h.sandbox.commands.slice(commandCount)).toEqual([
       { cmd: 'test', args: ['-f', VERCEL_PROVISIONED_MARKER] },
+      { cmd: VERCEL_BUN_EXECUTABLE, args: ['--version'], signal: expect.any(AbortSignal) },
       {
         cmd: 'cat',
         args: [VERCEL_DISTRIBUTION_VERSION_MARKER],
@@ -3218,6 +3432,51 @@ describe('operator sandbox capability', () => {
     expect(h.creates).toBe(1)
     expect(h.sandbox.distributionVersion).toBe('1.2.3')
     expect(h.sandbox.commands.length).toBeGreaterThan(refreshCommands)
+  })
+
+  test('a reused operator sandbox reporting Bun 1.4.0 is brought to the pin before it is returned', async () => {
+    const h = harness()
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    h.sandbox.bunVersion = '1.4.0'
+    const commandsBefore = h.sandbox.commands.length
+
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
+      'test',
+      VERCEL_BUN_EXECUTABLE,
+      'npm',
+      VERCEL_BUN_EXECUTABLE,
+      'cat',
+    ])
+    expect(h.sandbox.bunVersion).toBe(VERCEL_BUN_VERSION)
+  })
+
+  test('a reused operator sandbox that cannot reach the Bun pin is reaped', async () => {
+    const h = harness()
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    h.sandbox.bunVersion = '1.4.0'
+    h.sandbox.bunInstallVersion = '1.4.0'
+    const deletesBefore = h.sandbox.deletes
+
+    const rejection = await h.provider.orchestratorSandbox
+      .ensure({ repo: '/repo', operator: OPERATOR, baseBranch: 'main' })
+      .catch((error: unknown) => error)
+    expect(rejection).toBeInstanceOf(SandboxOperationError)
+    expect((rejection as Error).message).toContain('found 1.4.0 (pin 1.4.4)')
+    expect(h.sandbox.deletes).toBe(deletesBefore + 1)
   })
 
   test('operator sandbox reuse without the identity seam refreshes a stale marker to the default stamp', async () => {
@@ -3253,6 +3512,7 @@ describe('operator sandbox capability', () => {
     // marker and suppress the refresh entirely).
     expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
       'test',
+      VERCEL_BUN_EXECUTABLE,
       'cat',
       'mkdir',
       'tar',
