@@ -13835,114 +13835,121 @@ test('failed preparation readback does not block sibling janitor or lease recove
   ).toEqual(['stuck'])
 })
 
+/** A waiting node with one unavailable presence request and a paused leaf
+ * targeting it; `counts` tracks snapshots and node-writer claims. */
+async function unavailablePresenceFixture(padding: number) {
+  const forge = new FakeForge()
+  const parent = 'b'.repeat(40)
+  const head = 'c'.repeat(40)
+  forge.seedCommit(BASE_SHA)
+  forge.seedCommit(parent, [BASE_SHA])
+  forge.seedCommit(head, [parent])
+  forge.seedCommit('d'.repeat(40), [head])
+  forge.remoteBranches.set('main', parent)
+  forge.remoteBranches.set('ab-node/waiting', head)
+  forge.nodeComparisons.set('main...ab-node/waiting', 1)
+  const counts = { snapshots: 0, claims: 0 }
+  const snapshot = forge.rewrite.snapshot
+  forge.rewrite.snapshot = async (args) => {
+    counts.snapshots++
+    return snapshot(args)
+  }
+  const dispatchForge = new Proxy(forge, {
+    get(target, key) {
+      if (key === 'snapshotBase')
+        return async () => {
+          counts.snapshots++
+          return parent
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const exec: Exec = async (args) => ({
+    stdout: args.includes('rev-list') ? '1' : '',
+    stderr: '',
+    exitCode: 0,
+  })
+  const h = harness({ dispatchForge, exec, repoOrigin: 'https://github.com/acme/repo' })
+  await h.store.ensureRepo(REPO)
+  await h.store.createBuild({ slug: 'waiting', repo: REPO, branch: 'ab-node/waiting' })
+  await h.store.append('waiting', {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      repo: REPO,
+      baseBranch: 'main',
+      kind: 'node',
+      ticket: { source: 'fake', id: 'WAIT' },
+    },
+  })
+  await h.store.append('waiting', {
+    actor: DISPATCHER,
+    type: 'node.opened',
+    payload: { sha: BASE_SHA },
+  })
+  // Exact sampled source mapping avoids manufacturing Git history in this fixture.
+  await h.store.append('waiting', {
+    actor: KERNEL,
+    type: 'node.inventory',
+    payload: {
+      head,
+      base: BASE_SHA,
+      builds: [],
+      foreign: [],
+    },
+  })
+  await h.store.append('waiting', {
+    actor: DISPATCHER,
+    type: 'node.restack-requested',
+    payload: {
+      id: 'nested',
+      reason: 'presence',
+      branch: 'main',
+      parent,
+      dependent: { source: 'fake', id: 'D' },
+      identities: ['build:ancestor-change'],
+    },
+  })
+  for (let i = 0; i < padding; i++)
+    await h.store.append('waiting', {
+      actor: KERNEL,
+      type: 'node.parent-distance',
+      payload: { base: BASE_SHA, parent, branch: 'main', count: 1 },
+    })
+  forge.setPrState(77, { state: 'open', mergeable: true })
+  const child = await seedBuild(h, {
+    slug: 'targeting-leaf',
+    pr: { number: 77, url: 'https://example/77', headSha: head },
+  })
+  await h.store.append(child, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: {
+      ticket: { source: 'fake', id: 'CHILD' },
+      repo: REPO,
+      baseBranch: 'ab-node/waiting',
+      target: { build: 'waiting', ticket: { source: 'fake', id: 'WAIT' } },
+    },
+  })
+  await h.store.append(child, { actor: DISPATCHER, type: 'build.paused', payload: {} })
+  const claim = h.store.claimNodeWriter.bind(h.store)
+  h.store.claimNodeWriter = async (...args) => {
+    counts.claims++
+    return claim(...args)
+  }
+  return { forge, dispatchForge, exec, h, parent, head, counts }
+}
+
 test.each([10, 1000])(
   'unavailable presence assessments bound preparation across idle ticks and dispatcher restart (%i events)',
   async (padding) => {
-    const forge = new FakeForge()
-    const parent = 'b'.repeat(40)
-    const head = 'c'.repeat(40)
-    forge.seedCommit(BASE_SHA)
-    forge.seedCommit(parent, [BASE_SHA])
-    forge.seedCommit(head, [parent])
-    forge.seedCommit('d'.repeat(40), [head])
-    forge.remoteBranches.set('main', parent)
-    forge.remoteBranches.set('ab-node/waiting', head)
-    forge.nodeComparisons.set('main...ab-node/waiting', 1)
-    let snapshots = 0
-    const snapshot = forge.rewrite.snapshot
-    forge.rewrite.snapshot = async (args) => {
-      snapshots++
-      return snapshot(args)
-    }
-    const dispatchForge = new Proxy(forge, {
-      get(target, key) {
-        if (key === 'snapshotBase')
-          return async () => {
-            snapshots++
-            return parent
-          }
-        const value = Reflect.get(target, key, target)
-        return typeof value === 'function' ? value.bind(target) : value
-      },
-    })
-    const exec: Exec = async (args) => ({
-      stdout: args.includes('rev-list') ? '1' : '',
-      stderr: '',
-      exitCode: 0,
-    })
-    const h = harness({ dispatchForge, exec, repoOrigin: 'https://github.com/acme/repo' })
-    await h.store.ensureRepo(REPO)
-    await h.store.createBuild({ slug: 'waiting', repo: REPO, branch: 'ab-node/waiting' })
-    await h.store.append('waiting', {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        repo: REPO,
-        baseBranch: 'main',
-        kind: 'node',
-        ticket: { source: 'fake', id: 'WAIT' },
-      },
-    })
-    await h.store.append('waiting', {
-      actor: DISPATCHER,
-      type: 'node.opened',
-      payload: { sha: BASE_SHA },
-    })
-    // Exact sampled source mapping avoids manufacturing Git history in this fixture.
-    await h.store.append('waiting', {
-      actor: KERNEL,
-      type: 'node.inventory',
-      payload: {
-        head,
-        base: BASE_SHA,
-        builds: [],
-        foreign: [],
-      },
-    })
-    await h.store.append('waiting', {
-      actor: DISPATCHER,
-      type: 'node.restack-requested',
-      payload: {
-        id: 'nested',
-        reason: 'presence',
-        branch: 'main',
-        parent,
-        dependent: { source: 'fake', id: 'D' },
-        identities: ['build:ancestor-change'],
-      },
-    })
-    for (let i = 0; i < padding; i++)
-      await h.store.append('waiting', {
-        actor: KERNEL,
-        type: 'node.parent-distance',
-        payload: { base: BASE_SHA, parent, branch: 'main', count: 1 },
-      })
-    forge.setPrState(77, { state: 'open', mergeable: true })
-    const child = await seedBuild(h, {
-      slug: 'targeting-leaf',
-      pr: { number: 77, url: 'https://example/77', headSha: head },
-    })
-    await h.store.append(child, {
-      actor: DISPATCHER,
-      type: 'build.created',
-      payload: {
-        ticket: { source: 'fake', id: 'CHILD' },
-        repo: REPO,
-        baseBranch: 'ab-node/waiting',
-        target: { build: 'waiting', ticket: { source: 'fake', id: 'WAIT' } },
-      },
-    })
-    await h.store.append(child, { actor: DISPATCHER, type: 'build.paused', payload: {} })
-    let claims = 0
-    const claim = h.store.claimNodeWriter.bind(h.store)
-    h.store.claimNodeWriter = async (...args) => {
-      claims++
-      return claim(...args)
-    }
+    const { forge, dispatchForge, exec, h, parent, counts } =
+      await unavailablePresenceFixture(padding)
     const first = await h.dispatcher.tick({ acceptNewWork: false })
     expect(first.janitorDiagnostics).toEqual([])
-    expect(snapshots).toBe(2)
-    expect(claims).toBe(1)
+    expect(counts.snapshots).toBe(2)
+    expect(counts.claims).toBe(1)
     const preparations = h.execCalls.filter(
       (args) => args.includes('worktree') && args.includes('add'),
     ).length
@@ -13965,8 +13972,8 @@ test.each([10, 1000])(
     expect(counter.buildRowsBySlug.size).toBe(0)
     expect(h.execCalls.slice(commands).filter((args) => args.includes('log'))).toHaveLength(0)
     expect(forge.autoMergeCalls.filter((call) => !call.enabled)).toHaveLength(0)
-    expect(snapshots).toBe(2)
-    expect(claims).toBe(1)
+    expect(counts.snapshots).toBe(2)
+    expect(counts.claims).toBe(1)
     expect(
       h.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
     ).toHaveLength(1)
@@ -13981,14 +13988,14 @@ test.each([10, 1000])(
       payload: { sha: parent },
     })
     await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(snapshots).toBe(4)
+    expect(counts.snapshots).toBe(4)
     await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(snapshots).toBe(4)
+    expect(counts.snapshots).toBe(4)
     forge.remoteBranches.set('ab-node/waiting', 'd'.repeat(40))
     await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(snapshots).toBe(6)
+    expect(counts.snapshots).toBe(6)
     await restarted.dispatcher.tick({ acceptNewWork: false })
-    expect(snapshots).toBe(6)
+    expect(counts.snapshots).toBe(6)
     expect(restarted.execCalls.filter((args) => args.includes('clone'))).toHaveLength(2)
     const state = reduceBuild(await h.store.getEvents('waiting'))
     expect(state.nodeRestack?.requests?.nested).toBeDefined()
@@ -13997,6 +14004,154 @@ test.each([10, 1000])(
         (e) => e.type === 'node.restack-availability-observed',
       ),
     ).toHaveLength(3)
+  },
+)
+
+const idleTickCosts = new Map<number, { reduced: number; listings: number }>()
+test.each([10, 1000])(
+  'mixed-version deferred landing keeps unavailable presence assessments idle (%i events)',
+  async (padding) => {
+    const { forge, dispatchForge, exec, h, parent, head, counts } =
+      await unavailablePresenceFixture(padding)
+    // A repository build with a confirmed landing that this runtime defers.
+    await h.store.createBuild({ slug: 'deferred-landed', repo: REPO })
+    await h.store.append('deferred-landed', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo: REPO, baseBranch: 'main', ticket: { source: 'fake', id: 'DEFERRED' } },
+    })
+    await h.store.append('deferred-landed', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: 'e'.repeat(40) },
+    })
+    const { newerFact, seedNewerMemoryFact } = await import('../testing/newer-writer')
+    const seq = (await h.store.getEvents('deferred-landed')).length + 1
+    seedNewerMemoryFact(h.store as MemoryBuildStore, newerFact(seq, 'decisive', 'deferred-landed'))
+    const first = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(first.janitorDiagnostics).toEqual([])
+    expect(counts.snapshots).toBe(2)
+    expect(counts.claims).toBe(1)
+
+    // The trigger: the deferred build is decisive-deferred and carries a
+    // confirmed landing, so dropping it changes the fingerprint.
+    const { readBuildDigests } = await import('../store/reduced-reads')
+    const { confirmedLandings, presenceInputs } = await import('../kernel/change-presence')
+    const { restackAvailabilityFingerprint } = await import('../kernel/node-restack-demand')
+    const digests = await readBuildDigests(h.store, REPO)
+    const deferred = digests.get('deferred-landed')!
+    expect(deferred.mergedSha).toBe('e'.repeat(40))
+    expect(deferred.compatibility?.decisiveFacts ?? 0).toBeGreaterThan(0)
+    const all = (await h.store.listBuildsForRepo(REPO)).map((record) => ({
+      record,
+      digest: digests.get(record.slug)!,
+    }))
+    const live = all.filter(({ record }) => record.slug !== 'deferred-landed')
+    expect(confirmedLandings(all).map((l) => l.slug)).toContain('deferred-landed')
+    expect(confirmedLandings(live).map((l) => l.slug)).not.toContain('deferred-landed')
+    const state = reduceBuild(await h.store.getEvents('waiting'))
+    const facts = {
+      buildFacts: async (slug: string) => (await readBuildFacts(h.store, slug)).value,
+    }
+    const fingerprint = async (entries: typeof all, parentSha = parent) =>
+      restackAvailabilityFingerprint(
+        state,
+        'ab-node/waiting',
+        'main',
+        head,
+        parentSha,
+        await presenceInputs(facts, entries, ['waiting']),
+      )
+    const recorded = state.nodeRestack?.availability?.fingerprint
+    expect(recorded).toBeDefined()
+    expect(await fingerprint(all)).toBe(recorded!)
+    expect(await fingerprint(live)).not.toBe(recorded!)
+    // A moved parent is relevant evidence too.
+    expect(await fingerprint(all, 'f'.repeat(40))).not.toBe(recorded!)
+
+    // Let ordinary polling reduce the assessment checkpoint and the deferral.
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const deferredEvents = (await h.store.getEvents('deferred-landed')).length
+    const { memoryRepositoryReadCounter } = await import('../testing/reduced-read-budget')
+    const counter = memoryRepositoryReadCounter(h.store as MemoryBuildStore, REPO)
+    let listings = 0
+    let repoScans = 0
+    const listBuilds = h.store.listBuilds.bind(h.store)
+    h.store.listBuilds = async (...args) => {
+      listings++
+      return listBuilds(...args)
+    }
+    const listBuildsForRepo = h.store.listBuildsForRepo.bind(h.store)
+    h.store.listBuildsForRepo = async (...args) => {
+      repoScans++
+      return listBuildsForRepo(...args)
+    }
+    const perTick: { reduced: number; listings: number }[] = []
+    const idle = async (dispatcher: typeof h.dispatcher) => {
+      const reduced = counter.reducedCalls
+      const listed = listings
+      await dispatcher.tick({ acceptNewWork: false })
+      perTick.push({ reduced: counter.reducedCalls - reduced, listings: listings - listed })
+    }
+    for (let n = 0; n < 3; n++) await idle(h.dispatcher)
+    const restarted = harness({
+      store: h.store,
+      dispatchForge,
+      exec,
+      repoOrigin: 'https://github.com/acme/repo',
+    })
+    // A fresh process pays its own one-time warmup; measure from its second tick.
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    const warm = perTick.length
+    for (let n = 0; n < 3; n++) await idle(restarted.dispatcher)
+    expect(counter.rows).toBe(0)
+    expect(counter.buildRows).toBe(0)
+    expect(counter.buildRowsBySlug.size).toBe(0)
+    expect(repoScans).toBe(0)
+    expect(new Set(perTick.slice(0, warm).map((t) => JSON.stringify(t))).size).toBe(1)
+    expect(new Set(perTick.slice(warm).map((t) => JSON.stringify(t))).size).toBe(1)
+    // Per-tick costs are independent of the node's event history.
+    idleTickCosts.set(padding, perTick[0]!)
+    if (idleTickCosts.size === 2) expect(idleTickCosts.get(10)).toEqual(idleTickCosts.get(1000))
+    expect(counts.snapshots).toBe(2)
+    expect(counts.claims).toBe(1)
+    expect(
+      h.execCalls.filter((args) => args.includes('worktree') && args.includes('add')),
+    ).toHaveLength(1)
+    expect(forge.autoMergeCalls.filter((call) => !call.enabled)).toHaveLength(0)
+    const observed = async () =>
+      (await h.store.getEvents('waiting')).filter(
+        (e) => e.type === 'node.restack-availability-observed',
+      ).length
+    expect(await observed()).toBe(1)
+
+    // A relevant landing invalidates the skip once, then idles again.
+    await h.store.createBuild({ slug: 'new-proof', repo: REPO })
+    await h.store.append('new-proof', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: parent },
+    })
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(counts.snapshots).toBe(4)
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(counts.snapshots).toBe(4)
+    expect(await observed()).toBe(2)
+    // So does a moved node head.
+    forge.remoteBranches.set('ab-node/waiting', 'd'.repeat(40))
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(counts.snapshots).toBe(6)
+    await restarted.dispatcher.tick({ acceptNewWork: false })
+    expect(counts.snapshots).toBe(6)
+    expect(await observed()).toBe(3)
+
+    // Deferral still withholds every decision for the deferred build.
+    const after = await h.store.getEvents('deferred-landed')
+    expect(after).toHaveLength(deferredEvents)
+    expect(after.filter((e) => e.type === 'build.compatibility-deferred')).toHaveLength(1)
+    expect(after.some((e) => e.type === 'build.completed')).toBe(false)
+    expect([...h.launches, ...restarted.launches]).not.toContain('deferred-landed')
   },
 )
 
