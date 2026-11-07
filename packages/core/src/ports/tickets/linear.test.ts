@@ -2873,7 +2873,7 @@ describe('Linear priority', () => {
     await source.create({ title: 'X', body: 'y', priority: 'normal' })
     await source.create({ title: 'X', body: 'y' })
 
-    expect((calls[1]?.variables.input as Record<string, unknown>).priority).toBe(1)
+    expect(calls[1]?.variables.input).toHaveProperty('priority', 1)
     expect(urgent.priority).toBe('urgent')
     expect(calls[2]?.variables.input).not.toHaveProperty('priority')
     expect(calls[3]?.variables.input).not.toHaveProperty('priority')
