@@ -9120,9 +9120,12 @@ describe('durable ticket scan cadence', () => {
         h.clock.set(new Date(time + 60_000).toISOString())
         expect((await invoke()).queued).toBe(observation ? 1 : 0)
         expect(h.scans()).toBe(0)
+        // Only the first probe falls inside the journal measurement's interval.
+        expect(h.cadenceReads()).toBe(interval === 0 ? 0 : 1)
         h.clock.advance(60_000)
         expect((await invoke()).queued).toBe(observation ? 1 : 0)
         expect(h.scans()).toBe(1)
+        expect(h.cadenceReads()).toBe(interval === 0 ? 1 : 2)
         scans += h.scans()
       }
       expect(scans).toBe(31)
@@ -9252,8 +9255,24 @@ describe('durable ticket scan cadence', () => {
 
   function counted(options: Parameters<typeof harness>[0] = {}) {
     let scans = 0
+    let cadenceReads = 0
+    const clock = options.clock ?? manualClock()
+    const base = options.store ?? new MemoryBuildStore({ clock })
+    const store = new Proxy(base, {
+      get(target, key) {
+        if (key === 'getScanCadence')
+          return (repo: string) => {
+            cadenceReads++
+            return target.getScanCadence(repo)
+          }
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
     const h = harness({
       ...options,
+      clock,
+      store,
       wrapTickets(source) {
         const original = source.listReady.bind(source)
         source.listReady = async (...args) => {
@@ -9263,8 +9282,138 @@ describe('durable ticket scan cadence', () => {
         return source
       },
     })
-    return { ...h, scans: () => scans }
+    return {
+      ...h,
+      scans: () => scans,
+      cadenceReads: () => cadenceReads,
+      /** Reads the row without counting it as a dispatcher read. */
+      cadence: () => base.getScanCadence(REPO),
+    }
   }
+
+  const scanEvents = async (h: { store: BuildStore }) =>
+    (await h.store.getRepoEvents(REPO)).filter((e) => e.type === 'dispatcher.ticket-scan-completed')
+
+  for (const observation of [false, true]) {
+    test(`the journal measurement alone defers without a cadence read (${observation ? 'observation' : 'admission'})`, async () => {
+      const h = counted()
+      const invoke = () => (observation ? h.dispatcher.observeReady() : h.dispatcher.tick())
+      await invoke()
+      expect(h.scans()).toBe(1)
+      const reads = h.cadenceReads()
+      for (let i = 0; i < 5; i++) {
+        h.clock.advance(10_000)
+        await invoke()
+      }
+      expect(h.cadenceReads()).toBe(reads)
+      expect(h.scans()).toBe(1)
+      h.clock.advance(10_000)
+      await invoke()
+      expect(h.cadenceReads()).toBe(reads + 1)
+      expect(h.scans()).toBe(2)
+    })
+  }
+
+  test('fresh dispatchers defer from the journal, then consult the advanced cadence row', async () => {
+    const tickets = [readyTicket('one')]
+    const h = counted({ tickets })
+    expect((await h.dispatcher.observeReady()).queued).toBe(1)
+    const start = h.clock().getTime()
+    const initial = await scanEvents(h)
+    expect(initial).toHaveLength(1)
+    const cold = (at: number) => {
+      const next = counted({ store: h.store, tickets })
+      next.clock.set(new Date(start + at).toISOString())
+      return next
+    }
+    const inside = cold(30_000)
+    expect((await inside.dispatcher.observeReady()).queued).toBe(1)
+    expect(inside.cadenceReads()).toBe(0)
+    expect(inside.scans()).toBe(0)
+    // An unchanged scan advances only the cadence row.
+    const boundary = cold(60_000)
+    await boundary.dispatcher.observeReady()
+    expect(boundary.scans()).toBe(1)
+    expect(await scanEvents(h)).toEqual(initial)
+    const beyond = cold(90_000)
+    expect((await beyond.dispatcher.observeReady()).queued).toBe(1)
+    expect(beyond.cadenceReads()).toBe(1)
+    expect(beyond.scans()).toBe(0)
+    expect(await scanEvents(h)).toEqual(initial)
+  })
+
+  test('a missing cadence row defers inside the journal interval and scans at its end', async () => {
+    const h = counted()
+    h.store.putScanCadence = async () => {}
+    await h.dispatcher.tick()
+    h.clock.advance(30_000)
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(1)
+    expect(h.scans()).toBe(1)
+    h.clock.advance(30_000)
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(2)
+    expect(h.scans()).toBe(2)
+    expect(await h.cadence()).toBeNull()
+    expect(await scanEvents(h)).toHaveLength(1)
+  })
+
+  test('an invalid row never shortens deferral; forced changes still consult and scan', async () => {
+    let config = parseConfig(withReadyState(''))
+    const h = counted({ getConfig: () => config })
+    await seedBuild(h, { slug: 'signal' })
+    await h.dispatcher.tick()
+    const cadence = (await h.cadence())!
+    await h.store.putScanCadence(REPO, { ...cadence, scanSeq: cadence.scanSeq + 100 })
+    h.clock.advance(30_000)
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(1)
+    expect(h.scans()).toBe(1)
+    await h.store.append('signal', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(2)
+    expect(h.scans()).toBe(2)
+    config = { ...config, tickets: { ...config.tickets, readyState: 'Other' } }
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(3)
+    expect(h.scans()).toBe(3)
+    // An observation measurement never defers the admission that follows it.
+    config = parseConfig(withReadyState(''))
+    await h.dispatcher.observeReady()
+    expect(h.cadenceReads()).toBe(4)
+    expect(h.scans()).toBe(4)
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(5)
+    expect(h.scans()).toBe(5)
+  })
+
+  test('clock regression: a future-dated row is consulted one interval after the measurement', async () => {
+    const h = counted()
+    await h.dispatcher.tick()
+    const anchor = h.clock().getTime()
+    const cadence = (await h.cadence())!
+    await h.store.putScanCadence(REPO, {
+      ...cadence,
+      startedAt: new Date(anchor + 300_000).toISOString(),
+    })
+    h.clock.set(new Date(anchor + 10_000).toISOString())
+    await h.dispatcher.tick()
+    h.clock.set(new Date(anchor + 59_999).toISOString())
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(1)
+    expect(h.scans()).toBe(1)
+    h.clock.set(new Date(anchor + 60_000).toISOString())
+    await h.dispatcher.tick()
+    expect(h.cadenceReads()).toBe(2)
+    expect(h.scans()).toBe(2)
+    // The rollback write was accepted, so cadence resumes from the current clock.
+    expect((await h.cadence())?.startedAt).toBe(h.clock().toISOString())
+    expect(await scanEvents(h)).toHaveLength(1)
+  })
 
   test('first scan, exact boundary, full capacity, cached depth and per-tick actions', async () => {
     let harvests = 0
