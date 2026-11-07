@@ -1043,22 +1043,68 @@ command = "postgres"
     expect(counting.artifactSlugs).toEqual(['aborted'])
   })
 
-  test('a snapshot for a repository the store has never seen answers as today and writes nothing', async () => {
+  test('a snapshot for a repository the store has never seen answers the no-run state and writes nothing', async () => {
     const raw = new MemoryBuildStore({ clock })
     const counting = countingStore(raw)
-    await expect(
-      getOperatorDashboard({ store: counting.store, repo: REPO, clock }),
-    ).rejects.toMatchObject({ code: 'effective-config-unavailable' })
+    const snapshot = await getOperatorDashboard({ store: counting.store, repo: REPO, clock })
+    expect(snapshot.model.configuration).toBe('no-dispatcher-run')
+    expect(snapshot.model.builds).toEqual([])
+    expect(snapshot.model.queued).toBe(0)
+    expect(counting.counts.get('getRepoArtifact') ?? 0).toBe(0)
     for (const method of MUTATING_STORE_METHODS) {
       expect(counting.counts.get(method) ?? 0).toBe(0)
     }
     expect(await raw.getRepo(REPO)).toBeNull()
   })
 
+  test('a repository with no dispatcher run keeps its journal-reduced controls', async () => {
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.pause-set',
+      payload: { enabled: true },
+    })
+    await store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    })
+    const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    expect(snapshot.model.configuration).toBe('no-dispatcher-run')
+    expect(snapshot.settingsHeader).toEqual({
+      intake: false,
+      repositoryPaused: true,
+      defaultAutoMerge: false,
+      harvestPaused: snapshot.model.harvestPaused,
+    })
+  })
+
+  test('reads that need configuration refuse a repository with no run as no-dispatcher-run', async () => {
+    const store = new MemoryBuildStore({ clock })
+    await createBuild(store, 'early', 'queued')
+    const error = await getOperatorBuild({ store, repo: REPO, slug: 'early', now }).catch(
+      (caught) => caught,
+    )
+    expect(error).toBeInstanceOf(OperatorQueryError)
+    expect(error).toMatchObject({
+      code: 'no-dispatcher-run',
+      message: `effective config unavailable for repository "${REPO}": no dispatcher run is recorded`,
+    })
+    const { buildRegistry } = await import('./registry')
+    const failure = await buildRegistry({ store, clock })
+      .call('builds.get', { repo: REPO, slug: 'early' })
+      .catch((caught) => caught)
+    expect((failure as { body: unknown }).body).toMatchObject({
+      kind: 'conflict',
+      code: 'no-dispatcher-run',
+    })
+  })
+
   test('dashboard reports every durable effective-config failure as a typed query error', async () => {
     const noRun = new MemoryBuildStore({ clock })
-    await expect(getOperatorDashboard({ store: noRun, repo: REPO, clock })).rejects.toMatchObject({
-      code: 'effective-config-unavailable',
+    expect((await getOperatorDashboard({ store: noRun, repo: REPO, clock })).model).toMatchObject({
+      configuration: 'no-dispatcher-run',
     })
 
     for (const content of [undefined, '{not json', JSON.stringify({ capacity: 'wrong' })]) {
@@ -1082,6 +1128,7 @@ command = "postgres"
       )
       expect(error).toBeInstanceOf(OperatorQueryError)
       expect(error).toMatchObject({ code: 'effective-config-unavailable' })
+      if (content === undefined) expect(error.message).toContain('is not retrievable')
     }
   })
 })
@@ -1327,4 +1374,9 @@ test('MCP build event pages traverse several pages without gaps or duplication',
     if (!page.hasMore) break
   }
   expect(seen).toEqual(Array.from({ length: 600 }, (_, i) => i + 1))
+})
+
+test('the no-dispatcher-run dashboard poll reads no event rows once warm', async () => {
+  const { noDispatcherRunDashboardBudget } = await import('../testing/reduced-read-budget')
+  await noDispatcherRunDashboardBudget()
 })

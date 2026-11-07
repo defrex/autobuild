@@ -4,6 +4,7 @@ import type {
   OperatorTicketDetail,
   OperatorTicketQueue,
 } from '@defrex/autobuild-hosted-store-service/operator-api'
+import { NO_DISPATCHER_RUN_LINE } from '@defrex/autobuild/operator-presentation'
 import Link from 'next/link'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import * as api from './api'
@@ -52,6 +53,8 @@ const pageCache = new Map<string, { tickets: Ticket[]; total: number }>()
 const detailCache = new Map<string, OperatorTicketDetail>()
 
 function message(cause: unknown): string {
+  if (cause instanceof api.WebOperatorError && cause.code === 'no-dispatcher-run')
+    return NO_DISPATCHER_RUN_LINE
   return cause instanceof Error ? cause.message : String(cause)
 }
 

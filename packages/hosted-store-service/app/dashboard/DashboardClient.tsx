@@ -5,8 +5,10 @@ import type {
   OperatorDashboardSnapshot,
 } from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
+  activeCounterText,
   buildActionAvailability,
   capacityExplanation,
+  NO_DISPATCHER_RUN_LINE,
   repositoryActionAvailability,
 } from '@defrex/autobuild/operator-presentation'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
@@ -440,8 +442,14 @@ export function DashboardClient({
               triage: names ? ticketMeta.counts?.[names.triage] : ticketMeta.error && '–',
               queue: names ? ticketMeta.counts?.[names.ready] : ticketMeta.error && '–',
               active: model ? (
-                <span title={capacityExplanation(model.capacity).trim() || undefined}>
-                  {model.active.current}/{model.active.limit}
+                <span
+                  title={
+                    model.configuration === 'no-dispatcher-run'
+                      ? NO_DISPATCHER_RUN_LINE
+                      : capacityExplanation(model.capacity).trim() || undefined
+                  }
+                >
+                  {activeCounterText(model)}
                 </span>
               ) : undefined,
             }}

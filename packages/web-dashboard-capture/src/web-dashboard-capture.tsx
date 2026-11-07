@@ -35,7 +35,13 @@ import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { DashboardModel } from '@defrex/autobuild/operator-presentation'
-import { autoMergeConsentReason } from '../../core/src/cli/dashboard/model'
+import {
+  activeCounterText,
+  autoMergeConsentReason,
+  NO_DISPATCHER_RUN_LINE,
+} from '../../core/src/cli/dashboard/model'
+import { getOperatorDashboard } from '../../core/src/operator/query'
+import { MemoryBuildStore } from '../../core/src/store/memory'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -378,6 +384,36 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     forbids: ['repository RUNNING'],
   },
   {
+    id: 'builds-no-dispatcher-wide',
+    width: 1440,
+    height: 1000,
+    requires: [
+      NO_DISPATCHER_RUN_LINE,
+      'no active builds',
+      'Triage',
+      'Queue',
+      'Active',
+      'Done',
+      'intake',
+    ],
+    forbids: ['0/0', 'effective config', 'no dispatcher run is recorded'],
+  },
+  {
+    id: 'builds-no-dispatcher-narrow',
+    width: 390,
+    height: 1000,
+    requires: [
+      NO_DISPATCHER_RUN_LINE,
+      'no active builds',
+      'Triage',
+      'Queue',
+      'Active',
+      'Done',
+      'intake',
+    ],
+    forbids: ['0/0', 'effective config', 'no dispatcher run is recorded'],
+  },
+  {
     id: 'builds-harvest-suspended-wide',
     width: 1440,
     height: 1000,
@@ -663,9 +699,7 @@ function shell(
           counts={{
             triage: opts.model ? FIXTURE_TICKETS.length : undefined,
             queue: opts.model ? 0 : undefined,
-            active: opts.model
-              ? `${opts.model.active.current}/${opts.model.active.limit}`
-              : undefined,
+            active: opts.model ? activeCounterText(opts.model) : undefined,
           }}
         />
       }
@@ -966,6 +1000,17 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'builds-empty-wide':
     case 'builds-empty-narrow': {
       const model = emptyModel(models.happy)
+      return shell(builds(model), { model })
+    }
+    case 'builds-no-dispatcher-wide':
+    case 'builds-no-dispatcher-narrow': {
+      // The real query over a store with no dispatcher run, so the frame shows
+      // exactly what a newly connected project's dashboard answers.
+      const { model } = await getOperatorDashboard({
+        store: new MemoryBuildStore(),
+        repo: FIXTURE_REPO,
+        clock: () => new Date(RENDER_NOW),
+      })
       return shell(builds(model), { model })
     }
     case 'builds-harvest-suspended-wide':
@@ -1406,6 +1451,7 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     '- [ ] Merge consent is amber on ground with Merge/Hold. No optimistic success or unconfirmed abort.',
     '- [ ] The tab line leads with Triage, Queue, Active, Done and Settings and marks the current tab; confirmations are viewport captures promoted to native modals over the visible 72% ground backdrop; abort uses a square dialog with a red primary and ghost Cancel.',
     '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
+    '- [ ] The no-dispatcher state shows the one factual line, `–` for Active, and no error banner at both widths.',
     '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',
     '',
     '## Web dashboard visual verdict',

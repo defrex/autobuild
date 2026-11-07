@@ -3790,7 +3790,7 @@ test.each([false, true])(
       },
     }).run()
     expect(output[0]).toBe('viewer')
-    if (!aborted) expect(output.join('\n')).toContain('Waiting for dispatcher configuration')
+    if (!aborted) expect(output.join('\n')).toContain('No dispatcher has run for this project yet.')
     expect(await store.getRepo('/absent-viewer')).toBeNull()
   },
 )
