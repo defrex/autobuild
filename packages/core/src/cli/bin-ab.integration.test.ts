@@ -652,6 +652,7 @@ test('repository status reads paused and unpaused stores without changing either
     },
     operator: { presence: 'loaded', registrations: [] },
     sandboxes: [],
+    upgradeStatus: {},
     upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
     publications: [],
   })
@@ -670,6 +671,7 @@ test('repository status reads paused and unpaused stores without changing either
     },
     operator: { presence: 'loaded', registrations: [] },
     sandboxes: [],
+    upgradeStatus: {},
     upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
     publications: [],
   })
