@@ -1374,7 +1374,7 @@ describe('runCli — sessionless repository-wide controls', () => {
   type BulkSeed = 'queued' | 'running' | 'pausing' | 'paused' | 'blocked' | 'paused-and-blocked'
 
   /** Seeds are expressed only in events, so the reduced status is the store's
-   * answer rather than the test's — as in bulk-control.integration.test.ts. */
+   * answer rather than the test's — as in bulk-control.test.ts. */
   async function seedBulkBuilds(store: BuildStore, seeds: Record<string, BulkSeed>): Promise<void> {
     for (const [slug, seed] of Object.entries(seeds)) {
       await store.createBuild({ slug, repo: tmp })

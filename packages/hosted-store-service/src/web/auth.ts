@@ -101,7 +101,7 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       // violating the client-name policy with the RFC 7591 error shape the
       // endpoint itself uses for other metadata problems. The matcher pins
       // the exact endpoint path the same way the jwks_uri fix is keyed to
-      // its call site: if an upgrade moved the endpoint, the auth.integration.test.ts
+      // its call site: if an upgrade moved the endpoint, the auth.test.ts
       // rejection tests fail loudly instead of the guard going silently
       // inert. A name is not an identity — the consent page keeps the raw
       // client_id visible precisely for that reason.

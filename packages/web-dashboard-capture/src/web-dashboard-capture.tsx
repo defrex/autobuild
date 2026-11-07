@@ -1162,7 +1162,7 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'consent-named-wide':
     case 'consent-unnamed-narrow':
       // The view is an async component: the awaited element must be produced
-      // here, mirroring Consent.integration.test.tsx. The stubbed lookup selects the
+      // here, mirroring Consent.test.tsx. The stubbed lookup selects the
       // named-client path (wide) and the client_id fallback path (narrow).
       // These frames render the Consent component rather than the route
       // module's page because only the component carries the lookupClientName
@@ -1191,7 +1191,7 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       const element = await ConsentPage({ searchParams: Promise.resolve(query) })
       // Awaiting the wrapper yields the Consent element; renderToStaticMarkup
       // cannot take it (React 19 throws on suspended sync renders — the reason
-      // Consent.integration.test.tsx streams), so resolve the component to its static tree.
+      // Consent.test.tsx streams), so resolve the component to its static tree.
       return await Consent({ query: element.props.query })
     }
     default:

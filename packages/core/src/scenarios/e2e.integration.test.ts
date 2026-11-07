@@ -1,4 +1,4 @@
-import { RUNTIME_IDENTITY } from '../runtime-identity'
+import { runtimeIdentity } from '../runtime-identity'
 import { reconcileHead } from '../kernel/reconcile-head'
 /**
  * End-to-end seam tests (SPEC §15.6 walkthroughs as LIVE scenarios, §8.7,
@@ -165,7 +165,7 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
   expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
     instance: attached.payload.instance,
     attachedSeq: attached.seq,
-    runtime: RUNTIME_IDENTITY,
+    runtime: runtimeIdentity(),
   })
   expect(decideNext(events, h.config)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
 

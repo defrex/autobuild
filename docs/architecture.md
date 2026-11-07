@@ -95,7 +95,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
 | `bin/agent/ab` | Private launcher placed first on agent-session `PATH`; delegates to the canonical `bin/ab.ts` | §8.1 |
 | `packages/core/src/config/` | `autobuild.toml` parsing and strict validation, plus the pure role-key consumability diagnostics `ab dispatch` reports at startup (`roles.ts`); user reference in `docs/configuration.md` | §9, §16.1 |
-| `packages/core/src/scenarios/` | In-memory end-to-end harness and product scenarios | — |
+| `packages/core/src/scenarios/` | End-to-end harness over a temporary Git origin and worktrees (integration tests) and product scenarios | — |
 | `tools/` | This repository's local maintainer tooling, including verification, dashboard capture, and release cutting; not shipped product behavior | — |
 | `skills/` | Canonical defaults; `ab init` vendors them to `.agents/skills/ab-*` and links `.claude/skills/ab-*` | §16.3 |
 | `skills/guide/` | `ab-guide` — the model-invocable reference for the lifecycle and full config surface; `references/` is the shared installed-documentation seam for every vendored skill. Update it when config or shared guidance changes; `packages/core/src/cli/guide-skill.integration.test.ts` guards schema coverage and `packages/core/src/cli/skill-self-containment.integration.test.ts` guards installed references | §16.3 |
@@ -1313,7 +1313,7 @@ adding an adapter, start from its contract suite, not only the interface.
 
 The two remote clients get client-only integration coverage in core itself:
 `RemoteBuildStore` (`store/remote/client.integration.test.ts`, which also pins scoped-token
-minting/verification) and `HostedTicketSource` (`ports/tickets/remote.integration.test.ts`)
+minting/verification) and `HostedTicketSource` (`ports/tickets/remote.test.ts`)
 run against an injected `fetchFn` with responses built from the protocol's wire
 schemas. The full over-the-wire seam suites (client → HTTP → server) live in
 `packages/hosted-store-service` (`*.seam.integration.test.ts`) and run with the

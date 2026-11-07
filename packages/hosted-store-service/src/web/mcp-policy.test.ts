@@ -661,7 +661,7 @@ describe('operator() — oauthApplication lookup contract (AUT-549)', () => {
 // Drives operator() through a real better-auth instance — the actual adapter
 // factory and the memory adapter's findOne query path (field resolution
 // included) — rather than a hand-written fake. Same pattern as
-// app/oauth/consent/client-name.integration.test.ts; the instance goes through the
+// app/oauth/consent/client-name.test.ts; the instance goes through the
 // `auth` option createMcpEndpoint already injects, so no production seam is
 // refactored in.
 describe('operator() — through a real better-auth adapter', () => {
