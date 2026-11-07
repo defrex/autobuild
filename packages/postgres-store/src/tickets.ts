@@ -7,6 +7,7 @@ import {
 } from '@defrex/autobuild/hosted-tickets'
 import { seedTicketStates, lockTicketStates, readTicketStateCounts } from './ticket-states'
 import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
+import { refuseUnsupportedPriority } from '@defrex/autobuild/hosted-tickets'
 import { SQL } from 'bun'
 import { normalizeIssueLinks } from '@defrex/autobuild/plugin-sdk'
 import type {
@@ -397,6 +398,7 @@ export class PostgresTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
+    refuseUnsupportedPriority(this, draft)
     if (!draft.title.trim()) throw new Error('database ticket create: title must be nonblank')
     if (!draft.body.trim() && options.requestedId === undefined)
       throw new Error('database ticket create: body must be nonblank')
@@ -475,6 +477,8 @@ export class PostgresTicketSource implements TicketSource {
 
   private async mutate(id: string, mutation: TicketMutation, expected?: string): Promise<void> {
     const patch = mutation.kind === 'update' ? validateTicketUpdate(mutation.patch) : undefined
+    // Priority is not stored here; urgent is refused and normal changes nothing.
+    if (patch) refuseUnsupportedPriority(this, patch)
     await this.retry.tx(this.sql, async (q) => {
       if (patch && (patch.kind !== undefined || patch.target !== undefined)) await this.graphLock(q)
       const state = mutation.kind === 'transition' ? await this.state(q, mutation.state) : undefined

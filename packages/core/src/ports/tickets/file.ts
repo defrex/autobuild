@@ -99,6 +99,7 @@ export class FileTicketSource implements TicketSource {
   readonly name = 'file'
   readonly integrationTree = true
   readonly issueLinks = true
+  readonly priority = true
   readonly requestedIds = fileRequestedIds
   readonly assets: FileTicketAssets
 
@@ -296,6 +297,7 @@ export class FileTicketSource implements TicketSource {
         ? { blockedBy: [...draft.blockedBy] }
         : {}),
       ...(draft.issueLinks?.length ? { issueLinks: normalizeIssueLinks(draft.issueLinks) } : {}),
+      ...(draft.priority === 'urgent' ? { priority: 'urgent' as const } : {}),
       ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
     }
     if (taken.has(front.id)) throw new Error(`requested ticket id already occupied: ${front.id}`)
@@ -335,6 +337,7 @@ export class FileTicketSource implements TicketSource {
       if (patch.title !== undefined) front.title = patch.title
       if (patch.labels !== undefined) front.labels = patch.labels
       setIssueLinks(front, patch.issueLinks)
+      setPriority(front, patch.priority)
       if (patch.body !== undefined) body = patch.body
     } else if (mutation.kind === 'blockers') {
       const blockers = new Set(front.blockedBy ?? [])
@@ -361,6 +364,7 @@ export class FileTicketSource implements TicketSource {
     }
     if (canonicalTarget === null) delete front.target
     setIssueLinks(front, validated.issueLinks)
+    setPriority(front, validated.priority)
     await this.rewriteAt(loaded.found, front, validated.body ?? loaded.body)
   }
 
@@ -686,6 +690,7 @@ export class FileTicketSource implements TicketSource {
         state,
         blockedBy: front.blockedBy,
         issueLinks: front.issueLinks,
+        priority: front.priority,
         ...(front.comments !== undefined ? { comments: front.comments } : {}),
         ...(front.attachments !== undefined ? { attachments: front.attachments } : {}),
       }),
@@ -701,6 +706,7 @@ export class FileTicketSource implements TicketSource {
         ? { blockedBy: [...front.blockedBy] }
         : {}),
       ...(front.issueLinks?.length ? { issueLinks: normalizeIssueLinks(front.issueLinks) } : {}),
+      ...(front.priority === 'urgent' ? { priority: 'urgent' as const } : {}),
     }
   }
 }
@@ -710,6 +716,13 @@ function setIssueLinks(front: Frontmatter, links: TicketUpdate['issueLinks']): v
   if (links === undefined) return
   if (links.length > 0) front.issueLinks = normalizeIssueLinks(links)
   else delete front.issueLinks
+}
+
+/** Urgent sets the key; normal removes it. */
+function setPriority(front: Frontmatter, priority: TicketUpdate['priority']): void {
+  if (priority === undefined) return
+  if (priority === 'urgent') front.priority = priority
+  else delete front.priority
 }
 
 function duplicateError(id: string, paths: string[]): Error {

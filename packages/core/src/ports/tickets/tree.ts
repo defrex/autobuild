@@ -1,20 +1,30 @@
 import type { Ticket, TicketDraft, TicketSource, TicketUpdate } from '../types'
+import { checkTicketRevision } from './revision'
+import { validateTicketUpdate } from './update'
 import { refuseUnsupportedIssueLinks } from './issue-links'
+import { refuseUnsupportedPriority, withoutUnsupportedPriority } from './priority'
 
 /** Sources without a capability cannot present that capability's fields. */
-export function normalizeTicket(ticket: Ticket, supported = true, issueLinks = true): Ticket {
-  const { target, issueLinks: links, ...rest } = ticket
+export function normalizeTicket(
+  ticket: Ticket,
+  supported = true,
+  issueLinks = true,
+  priority = true,
+): Ticket {
+  const { target, issueLinks: links, priority: urgency, ...rest } = ticket
   return {
     ...rest,
     kind: supported ? (ticket.kind ?? 'work') : 'work',
     ...(supported && target !== undefined ? { target } : {}),
     ...(issueLinks && links !== undefined ? { issueLinks: links } : {}),
+    // Normal is the absence of the field, so strict wire schemas never see it.
+    ...(priority && urgency === 'urgent' ? { priority: urgency } : {}),
   }
 }
 
 /** Apply the source's own capabilities to a ticket it returned. */
 export function normalizeSourceTicket(source: TicketSource, ticket: Ticket): Ticket {
-  return normalizeTicket(ticket, !!source.integrationTree, !!source.issueLinks)
+  return normalizeTicket(ticket, !!source.integrationTree, !!source.issueLinks, !!source.priority)
 }
 
 export function refuseUnsupportedMetadata(
@@ -26,6 +36,7 @@ export function refuseUnsupportedMetadata(
       `${source.name} ticket source does not support kind/target writes; use a source with integrationTree support (file, Linear or hosted)`,
     )
   refuseUnsupportedIssueLinks(source, patch)
+  refuseUnsupportedPriority(source, patch)
 }
 
 /** Validate before any part of a mixed patch is written. Canonical refs close alias cycles. */
@@ -75,6 +86,13 @@ export async function validateTicketTree(
   return canonical
 }
 
+/** Strip a `normal` no-op for a source without priority, after validating the
+ * patch it named so a stripped value is never an unchecked one. */
+function writablePatch(source: TicketSource, patch: TicketUpdate): TicketUpdate {
+  if (source.priority || patch.priority === undefined) return patch
+  return withoutUnsupportedPriority(source, validateTicketUpdate(patch))
+}
+
 /** Forward through an empty facade so frozen source properties do not constrain
  * proxy results. Methods and accessors still receive the original source. */
 export function compatibleTicketSource(source: TicketSource): TicketSource {
@@ -99,12 +117,18 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
       if (property === 'create')
         return async (draft: TicketDraft, ...args: unknown[]) => {
           refuseUnsupportedMetadata(target, draft)
-          return normalizeSourceTicket(target, await value.call(target, draft, ...args))
+          return normalizeSourceTicket(
+            target,
+            await value.call(target, withoutUnsupportedPriority(target, draft), ...args),
+          )
         }
       if (property === 'update')
         return async (id: string, patch: TicketUpdate) => {
           refuseUnsupportedMetadata(target, patch)
-          return target.update(id, patch)
+          const write = writablePatch(target, patch)
+          // A normal-only patch on a source without priority changes nothing.
+          if (Object.keys(write).length === 0) return
+          return target.update(id, write)
         }
       if (property === 'mutateIfRevision')
         return async (
@@ -112,8 +136,18 @@ export function compatibleTicketSource(source: TicketSource): TicketSource {
           revision: string,
           mutation: Parameters<NonNullable<TicketSource['mutateIfRevision']>>[2],
         ) => {
-          if (mutation.kind === 'update') refuseUnsupportedMetadata(target, mutation.patch)
-          return value.call(target, id, revision, mutation)
+          if (mutation.kind !== 'update') return value.call(target, id, revision, mutation)
+          refuseUnsupportedMetadata(target, mutation.patch)
+          const patch = writablePatch(target, mutation.patch)
+          if (Object.keys(patch).length === 0) {
+            // Nothing to write, but a stale revision is still refused.
+            if (!revision.trim()) throw new Error('expected revision must be nonblank')
+            const current = await target.get(id)
+            if (!current) throw new Error(`${target.name} ticket source: unknown ticket "${id}"`)
+            checkTicketRevision(current, revision)
+            return
+          }
+          return value.call(target, id, revision, { kind: 'update', patch })
         }
       return value.bind(target)
     },
