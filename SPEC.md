@@ -3502,7 +3502,12 @@ non-destructive execution fence for the exact workspace and execution generation
 It preserves unpublished branch commits and distinct detached producer candidates
 under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
 readback, and records `workspace.commits-preserved` before cleanup. Replacement
-provisioning restores those exact refs before starting an agent. Preservation
+provisioning restores those exact refs before starting an agent. A preserved
+branch head that the build's latest 64 replaced heads cover, as the replaced
+head itself or one of its ancestors, is kept only as archived objects: it is
+never preserved or restored as the branch, and provisioning records the skip as
+`restorationSkipped` on `workspace.provisioned`. Rewrites older than that bound,
+and unpublished divergent branch work, are still refused. Preservation
 never advances the public build branch. A confirmed absent environment, or one
 that exists without a provisioned checkout, records `workspace.commits-lost`,
 naming known candidates and explicitly noting that any additional unpublished
