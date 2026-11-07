@@ -115,7 +115,7 @@ The `file` and `hosted` sources store [forge issue links](tickets.md#groom-a-bui
 
 ### Optional priority
 
-A ticket is `urgent` or `normal` (the default); the dispatcher claims urgent ready work first. The `file` source stores `priority = "urgent"` in frontmatter and writes no key for normal. `hosted` and `linear` don't store priority: they read every ticket as normal, refuse a create or update naming `urgent` with an error naming the source, and write nothing. `--priority normal` succeeds on them as a no-op.
+A ticket is `urgent` or `normal` (the default); the dispatcher claims urgent ready work first. The `file` and `hosted` sources store priority: as `priority = "urgent"` frontmatter with no key for normal (`file`), or transactional project data covered by the ticket revision (`hosted`, whose ready listing returns urgent tickets first). `linear` doesn't store priority: it reads every ticket as normal, refuses a create or update naming `urgent` with an error naming the source, and writes nothing. `--priority normal` succeeds on it as a no-op.
 
 ### Optional ticket tree
 

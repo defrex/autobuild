@@ -318,6 +318,8 @@ test('ticket listings and the triage count have a fixed statement budget regardl
   const { PostgresTicketSource } = await import('./tickets')
   const { PlanRetryRunner } = await import('./retry')
   const lifecycle = { triage: 'Inbox', ready: 'Ready', doing: 'Doing', done: 'Done' }
+  // The ready listing orders urgent first inside its one listing statement.
+  let urgentOrdered = 0
   await ticketListReadBudget(
     (size, targets) => {
       let statements = 0
@@ -331,7 +333,11 @@ test('ticket listings and the triage count have a fixed statement budget regardl
         // The bounded triage count reads only the maintained per-state totals.
         if (query.includes('FROM ab_ticket_state_counts'))
           return [{ state: 'Inbox', tickets: size }]
-        if (query.includes('AS blockers') && query.includes('ORDER BY created_at')) {
+        if (
+          query.includes('AS blockers') &&
+          /ORDER BY (?:\(priority = 'urgent'\) DESC, )?created_at/.test(query)
+        ) {
+          if (query.includes("ORDER BY (priority = 'urgent') DESC, created_at, id")) urgentOrdered++
           return Array.from({ length: size }, (_, i) => ({
             id: `storage-${i}`,
             readable_id: `AUT-${i + 1}`,
@@ -343,6 +349,7 @@ test('ticket listings and the triage count have a fixed statement budget regardl
             blockers: [],
             // Text form exercises the driver's unparsed jsonb path.
             issue_links: i % 2 === 0 ? '[{"issue":1,"intent":"closes"}]' : '[]',
+            priority: i % 3 === 0 ? 'urgent' : 'normal',
             target_id: targets === 'none' ? null : `target-${targets === 'shared' ? 0 : i}`,
             ...(query.includes('AS target_readable_id')
               ? {
@@ -378,6 +385,7 @@ test('ticket listings and the triage count have a fixed statement budget regardl
     },
     { triageState: 'Inbox' },
   )
+  expect(urgentOrdered).toBeGreaterThan(0)
 })
 
 test('placement synchronization has a fixed idle query budget across fresh adapters and long journals', async () => {

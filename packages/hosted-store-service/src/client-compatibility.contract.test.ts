@@ -31,7 +31,9 @@ import * as ticket120 from './compatibility-fixtures/tickets-v1.2'
 import {
   HostedTicketSource,
   TICKET_ISSUE_LINKS_HEADER,
+  TICKET_PRIORITY_HEADER,
   TicketIssueLinksUnsupported,
+  TicketPriorityUnsupported,
 } from '@defrex/autobuild/hosted-tickets'
 import * as operatorWire from './compatibility-fixtures/operator-v0.9'
 
@@ -731,6 +733,8 @@ test('a current client reports a published server refusing issue links with a ty
     const response = await current.fetch(req)
     const headers = new Headers(response.headers)
     headers.delete(TICKET_ISSUE_LINKS_HEADER)
+    // Capabilities are independent: this server advertises no priority either.
+    headers.delete(TICKET_PRIORITY_HEADER)
     return new Response(response.body, { status: response.status, headers })
   }
   const client = new HostedTicketSource({
@@ -762,6 +766,122 @@ test('a current client reports a published server refusing issue links with a ty
   // Ordinary validation failures stay generic rather than claiming missing support.
   const invalid = await client.update(plain.ref.id, {}).catch((error: unknown) => error)
   expect(invalid).not.toBeInstanceOf(TicketIssueLinksUnsupported)
+})
+
+// Priority needs an explicit capability, so published 1.2–1.4 clients keep their
+// strict historical ticket shape (frozen in tickets-v1.2.ts), and their writes,
+// which never name priority, leave an urgent ticket urgent.
+for (const publication of RELEASED_CLIENTS.filter((entry) => isSupported(entry.version))) {
+  const version = publication.version
+  test(`published ${version} clients read and write hosted tickets and leave an urgent ticket urgent`, async () => {
+    const source = new FakeTicketSource()
+    await source.create({ title: 'Normal', body: 'Body' })
+    const urgent = await source.create(
+      { title: 'Urgent', body: 'Body', priority: 'urgent' },
+      { idempotencyKey: 'adopt-urgent' },
+    )
+    const server = createTicketServer({ secret, sourceFor: () => source })
+    const call = async (
+      operation: 'create' | 'get' | 'update' | 'list-ready' | 'mutate-if-revision',
+      input: unknown,
+    ) => {
+      const body = ticket120.hostedTicketRequestSchemas[operation].parse({
+        context: { teamKey: 'ENG' },
+        input,
+      })
+      const req = request(`/tickets/${operation}`, version, body, token, publication.protocol!)
+      req.headers.set(ticket120.TICKET_TREE_HEADER, ticket120.TICKET_TREE_CAPABILITY)
+      req.headers.set(ticket120.TICKET_REVISIONS_HEADER, ticket120.TICKET_REVISIONS_CAPABILITY)
+      req.headers.set(ticket120.TICKET_COMMENTS_HEADER, ticket120.TICKET_COMMENTS_CAPABILITY)
+      const response = await server.fetch(req)
+      expect(response.ok).toBe(true)
+      return response.json()
+    }
+    const fetched = ticket120.ticketWireSchema.parse(await call('get', { id: urgent.ref.id }))
+    const listing = ticket120.ticketListingWireSchema.parse(await call('list-ready', {}))
+    expect(listing.tickets.map((ticket) => ticket.title)).toEqual(['Urgent', 'Normal'])
+    ticket120.ticketWireSchema.parse(
+      await call('create', {
+        draft: { title: 'Adopt', body: 'Body' },
+        options: { idempotencyKey: 'adopt-urgent' },
+      }),
+    )
+    ticket120.successWireSchema.parse(
+      await call('update', { id: urgent.ref.id, patch: { title: 'Updated' } }),
+    )
+    const updated = ticket120.ticketWireSchema.parse(await call('get', { id: urgent.ref.id }))
+    ticket120.successWireSchema.parse(
+      await call('mutate-if-revision', {
+        id: urgent.ref.id,
+        expectedRevision: updated.revision,
+        mutation: { kind: 'update', patch: { title: 'Guarded' } },
+      }),
+    )
+    expect(await source.get(urgent.ref.id)).toMatchObject({
+      title: 'Guarded',
+      priority: 'urgent',
+    })
+    // Prove that projection, rather than permissive fixture decoding, enables compatibility.
+    expect(ticket120.ticketWireSchema.safeParse({ ...fetched, priority: 'urgent' }).success).toBe(
+      false,
+    )
+  })
+}
+
+test('a current client reports a published server refusing priority with a typed error', async () => {
+  const backend = new FakeTicketSource()
+  const current = createTicketServer({ secret, sourceFor: () => backend })
+  // Emulates the published 1.2–1.4 server: its strict request schemas refuse the
+  // unknown key, it never projects priority, and it never advertises the capability.
+  const published = async (req: Request): Promise<Response> => {
+    const operation = new URL(req.url).pathname.slice('/tickets/'.length)
+    const raw = await req.clone().json()
+    const schema =
+      ticket120.hostedTicketRequestSchemas[
+        operation as keyof typeof ticket120.hostedTicketRequestSchemas
+      ]
+    const parsed = schema.safeParse(raw)
+    if (!parsed.success)
+      return Response.json(
+        { kind: 'validation', error: `invalid request body: ${parsed.error.message}` },
+        { status: 400 },
+      )
+    const forwarded = new Request(req)
+    forwarded.headers.delete(TICKET_PRIORITY_HEADER)
+    const response = await current.fetch(forwarded)
+    const headers = new Headers(response.headers)
+    headers.delete(TICKET_PRIORITY_HEADER)
+    return new Response(response.body, { status: response.status, headers })
+  }
+  const client = new HostedTicketSource({
+    url: 'https://tickets.example',
+    token,
+    teamKey: 'ENG',
+    fetchFn: (input, init) => published(new Request(input.toString(), init)),
+  })
+  // A plain create names no priority and succeeds.
+  const plain = await client.create({ title: 'Plain', body: 'Body', priority: 'normal' })
+  expect('priority' in plain).toBe(false)
+  for (const write of [
+    () => client.create({ title: 'Urgent', body: 'Body', priority: 'urgent' }),
+    () => client.update(plain.ref.id, { priority: 'urgent' }),
+    () => client.update(plain.ref.id, { priority: 'normal' }),
+    () =>
+      client.mutateIfRevision(plain.ref.id, plain.revision, {
+        kind: 'update',
+        patch: { priority: 'urgent' },
+      }),
+  ]) {
+    const refused = await write().catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(TicketPriorityUnsupported)
+    expect((refused as TicketPriorityUnsupported).source).toBe('hosted')
+  }
+  expect((await backend.listAll()).tickets.map((ticket) => ticket.title)).toEqual(['Plain'])
+  expect((await backend.get(plain.ref.id))?.revision).toBe(plain.revision)
+  const seeded = await backend.create({ title: 'Seeded', body: 'Body', priority: 'urgent' })
+  const read = await client.get(seeded.ref.id)
+  expect(read && 'priority' in read).toBe(false)
+  expect((await client.listReady({})).tickets.every((ticket) => !('priority' in ticket))).toBe(true)
 })
 
 // Published protocol-6 clients receive the bounded legacy shapes; the current
