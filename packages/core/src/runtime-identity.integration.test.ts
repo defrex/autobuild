@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { captureRuntimeIdentity } from './runtime-identity'
+import { captureRuntimeIdentity, formatDispatcherError, runtimeIdentity } from './runtime-identity'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -95,4 +95,14 @@ test('source worktrees and symlinks retain ownership; packages validate gitHead'
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('the process identity is captured on first use and then fixed', () => {
+  const identity = runtimeIdentity()
+  expect(runtimeIdentity()).toBe(identity)
+  expect(Object.isFrozen(identity)).toBe(true)
+  expect(identity).toEqual(captureRuntimeIdentity())
+  expect(formatDispatcherError(new Error('x'))).toBe(
+    `x; autobuild=${identity.version}; commit=${identity.commit}`,
+  )
 })

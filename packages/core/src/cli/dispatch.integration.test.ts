@@ -4,7 +4,7 @@ import {
   temporaryDirectories as ownTempDirectories,
   temporaryOriginScratch,
 } from '../testing/temp-directories'
-import { RUNTIME_IDENTITY } from '../runtime-identity'
+import { runtimeIdentity } from '../runtime-identity'
 import { RepositoryAttention } from '../kernel/repository-attention'
 import { reduceBuild } from '../kernel/reducer'
 import { gitRewrite } from '../ports/forge/git-rewrite'
@@ -872,7 +872,7 @@ describe('abDispatch guards', () => {
       expect(repoEvents.find((e) => e.type === 'dispatcher.runtime-recorded')?.payload).toEqual({
         run: 'hosted-dispatcher-expired',
         startedSeq: start.seq,
-        runtime: RUNTIME_IDENTITY,
+        runtime: runtimeIdentity(),
       })
       expect(types).toContain('dispatcher.run-stopped')
       expect(types).not.toContain('dispatcher.tick-started')
@@ -6857,7 +6857,7 @@ describe('abDispatch interactive keyboard controls', () => {
           payload: {
             run: expect.stringMatching(/-dispatch-/),
             startedSeq: repoAdded[0]!.seq,
-            runtime: RUNTIME_IDENTITY,
+            runtime: runtimeIdentity(),
           },
         },
         {
@@ -12207,8 +12207,8 @@ for (const intake of [true, false]) {
             correlation: 'historical-remote',
             run: 'historical-predecessor',
             lineage: 'old-launcher',
-            from: RUNTIME_IDENTITY,
-            to: RUNTIME_IDENTITY,
+            from: runtimeIdentity(),
+            to: runtimeIdentity(),
             root: '/cache',
             cacheId: 'old',
             target: { mode: 'installed', key: 'old', source: '/old' },
@@ -13023,8 +13023,8 @@ for (const scenario of [
       correlation: 'test-handoff',
       run: 'predecessor',
       lineage: 'test-launcher',
-      from: RUNTIME_IDENTITY,
-      to: { ...RUNTIME_IDENTITY, version: '2.0.0' },
+      from: runtimeIdentity(),
+      to: { ...runtimeIdentity(), version: '2.0.0' },
       root: '/cached/target',
       cacheId: 'target',
       target: { mode: 'installed' as const, key: 'target', source: '/installation' },
@@ -13141,7 +13141,7 @@ for (const scenario of [
             instance: lease.holder,
             attachedSeq: attach.seq,
             runtime: {
-              ...RUNTIME_IDENTITY,
+              ...runtimeIdentity(),
               source: { kind: 'package', location: '/opt/autobuild' },
             },
           },

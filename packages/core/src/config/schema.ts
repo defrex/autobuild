@@ -371,7 +371,7 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
  * registry-seam declarations) are assembled in
  * `ports/workspace/builtin-capabilities.ts`, which takes this subset from
  * here — a parity now enforced by
- * `ports/workspace/builtin-capabilities.integration.test.ts` (AUT-573), so a builtin
+ * `ports/workspace/builtin-capabilities.test.ts` (AUT-573), so a builtin
  * added to only one table fails tests rather than compiling silently. The
  * construction-site refusal text differs by design from the
  * parse-site one, so it is NOT copied from this table.

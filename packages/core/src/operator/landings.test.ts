@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { expect, test } from 'bun:test'
 import { MemoryBuildStore } from '../store/memory'
 import { DISPATCHER, KERNEL } from '../events/envelope'
@@ -5,6 +6,11 @@ import { listOperatorLandings } from './landings'
 import { readBuildStreamSeed } from '../store/reduced-reads'
 import { consentIdentity, consentReady } from '../cli/attention'
 import { decodeCursor, encodeCursor } from '../cli/watch'
+import { LOCAL_STATE_DIR } from '../cli/repo-state'
+
+// Pin store selection to the default local root so selection never reads
+// `/repo/autobuild.toml`; the injected store is what the commands open.
+const STORE_REF = join('/repo', LOCAL_STATE_DIR)
 
 async function ready(
   store: MemoryBuildStore,
@@ -117,6 +123,7 @@ test('CLI JSON is the operator queue and text names every selected entry', async
   const out: string[] = []
   const opts = {
     targetRepo: '/repo',
+    storeRef: STORE_REF,
     env: {},
     openStore: () => store,
     stdout: (line: string) => out.push(line),
@@ -198,6 +205,7 @@ test('CLI queue text takes its labels from the shared vocabulary', async () => {
     Object.assign(treeVocabulary, { verify: 'CHECK', root: 'ROOT' })
     await abLandings({
       targetRepo: '/repo',
+      storeRef: STORE_REF,
       env: {},
       openStore: () => store,
       stdout: (line) => out.push(line),
@@ -221,7 +229,7 @@ test('CLI canonical merge commands and deprecated aliases share behavior and kee
     err: string[] = []
   const deps = {
     workspacePath: '/repo',
-    processEnv: {},
+    processEnv: { AB_STORE: STORE_REF },
     openStore: () => store,
     stdout: (line: string) => out.push(line),
     stderr: (line: string) => err.push(line),

@@ -1,7 +1,8 @@
 import { StoreWriteTooLargeError } from '../store/remote/errors'
 import { readVerifyPipeline } from '../config/pipeline-source'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { RUNTIME_IDENTITY } from '../runtime-identity'
+import { runtimeIdentity } from '../runtime-identity'
+import type { RuntimeIdentity } from '../events/runtime'
 import { newerFact, seedNewerMemoryFact } from '../testing/newer-writer'
 import { readBuildFacts } from '../store/reduced-reads'
 import { done } from '../cli/terminals'
@@ -324,7 +325,7 @@ interface HarnessOptions {
   checkExec?: Exec
   store?: OneShotPostAppendFaultStore
   instance?: string
-  runtimeIdentity?: typeof RUNTIME_IDENTITY
+  runtimeIdentity?: RuntimeIdentity
   beforeExec?: (cmd: string[], store: BuildStore) => Promise<void>
   nativeSessions?: boolean
   handlers?: (store: BuildStore) => Record<string, SkillHandler>
@@ -880,7 +881,7 @@ describe('attach', () => {
     expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
       instance: attached.payload.instance,
       attachedSeq: attached.seq,
-      runtime: RUNTIME_IDENTITY,
+      runtime: runtimeIdentity(),
     })
     expect(attached.payload.resumedFromSeq).toBeUndefined()
 
@@ -897,7 +898,7 @@ describe('attach', () => {
     expect(ofType(events, 'runner.runtime-recorded')[0]?.payload).toEqual({
       instance: attached.payload.instance,
       attachedSeq: attached.seq,
-      runtime: RUNTIME_IDENTITY,
+      runtime: runtimeIdentity(),
     })
     expect(attached.seq).toBe(4)
     expect(attached.payload.resumedFromSeq).toBe(3)
@@ -8128,7 +8129,7 @@ test('runtime companion append failure prevents phase work after attach', async 
 })
 
 describe('accepted runtime relaunch at phase boundaries', () => {
-  const target = { ...RUNTIME_IDENTITY, commit: 'f'.repeat(40) }
+  const target = { ...runtimeIdentity(), commit: 'f'.repeat(40) }
   async function authorize(store: BuildStore, instance = 'runner-1', to = target) {
     await store.append(SLUG, {
       actor: DISPATCHER,
@@ -8137,7 +8138,7 @@ describe('accepted runtime relaunch at phase boundaries', () => {
         instance,
         correlation: 'handoff-1',
         run: 'dispatch-old',
-        runtime: RUNTIME_IDENTITY,
+        runtime: runtimeIdentity(),
         targetRuntime: to,
       },
     })
@@ -8167,7 +8168,7 @@ describe('accepted runtime relaunch at phase boundaries', () => {
       expect(ofType(events, 'execution.relaunch-requested')[0]!.payload).toEqual({
         instance: 'runner-1',
         correlation: 'handoff-1',
-        from: RUNTIME_IDENTITY,
+        from: runtimeIdentity(),
         to: target,
       })
       await h.br.run()
@@ -8204,7 +8205,7 @@ describe('accepted runtime relaunch at phase boundaries', () => {
     await successor.br.run()
     const events = await old.store.getEvents(SLUG)
     expect(ofType(events, 'runner.runtime-recorded').map((e) => e.payload.runtime)).toEqual([
-      RUNTIME_IDENTITY,
+      runtimeIdentity(),
       target,
     ])
     expect(ofType(events, 'plan.completed')).toHaveLength(1)
@@ -8229,7 +8230,7 @@ describe('accepted runtime relaunch at phase boundaries', () => {
   test('unchanged target adds no Store reads at boundaries', async () => {
     async function countReads(equalTarget: boolean) {
       const h = await makeHarness()
-      if (equalTarget) await authorize(h.store, 'runner-1', RUNTIME_IDENTITY)
+      if (equalTarget) await authorize(h.store, 'runner-1', runtimeIdentity())
       const reads = spyOn(h.store, 'getReducerValue')
       try {
         await h.br.run()
@@ -8265,7 +8266,7 @@ describe('accepted runtime relaunch at phase boundaries', () => {
       await authorize(
         h.store,
         kind === 'foreign' ? 'another-runner' : 'runner-1',
-        kind === 'equal' ? RUNTIME_IDENTITY : target,
+        kind === 'equal' ? runtimeIdentity() : target,
       )
       if (kind === 'settled')
         await h.store.append(SLUG, {
