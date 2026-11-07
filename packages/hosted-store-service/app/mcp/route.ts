@@ -2,8 +2,8 @@
 // authorized by Better Auth's MCP plugin. maxDuration is Vercel's Pro default
 // (300 s); the binding clamps tool-requested bounded waits to
 // MCP_MAX_WAIT_SECONDS (240 s) so no single request outlives this limit — the
-// same pairing the dispatcher cron route documents
-// (docs/hosted-dispatcher.md, docs/mcp.md).
+// same pairing the dispatcher cron route documents (see "Function duration and
+// budget" in this package's SELF-HOSTING.md).
 import { mcpEndpoint } from '@defrex/autobuild-hosted-store-service/web/runtime'
 
 export const runtime = 'nodejs'

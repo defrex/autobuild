@@ -4,7 +4,8 @@
 // optional `@defrex/autobuild-hosted-dispatcher` package — a deployment that
 // only hosts state does not install it and never serves this route.
 // maxDuration is Vercel's Pro default (300 s); raise it together with
-// AB_DISPATCHER_BUDGET_SECONDS — see docs/hosted-dispatcher.md.
+// AB_DISPATCHER_BUDGET_SECONDS — see "Function duration and budget" in this
+// package's SELF-HOSTING.md.
 import { dispatcherEndpoint } from '@defrex/autobuild-hosted-dispatcher/runtime'
 
 export const runtime = 'nodejs'
