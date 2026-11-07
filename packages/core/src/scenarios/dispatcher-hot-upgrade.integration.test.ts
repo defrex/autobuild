@@ -1,5 +1,5 @@
 import { temporaryDirectories as ownTempDirectories } from '../testing/temp-directories'
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, afterEach, expect, test } from 'bun:test'
 import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,71 @@ import { openLocalStore } from '../store/local/store'
 import type { RepositoryEvent } from '../events/repository'
 
 const mkdtemp = ownTempDirectories(afterEach)
+const mkdtempForFile = ownTempDirectories(afterAll)
+
+let seed: Promise<{ root: string; layers: string }> | undefined
+/** Prepares the unmodified distribution once per file and copies it into
+ * `destination`, plus the dependency layer into `repo`'s runtime cache so the
+ * launcher's own preparation reuses it, as a per-test preparation would. */
+async function seedInstallation(repo: string, destination: string): Promise<void> {
+  seed ??= (async () => {
+    const checkout = join(await mkdtempForFile(join(tmpdir(), 'ab-hot-upgrade-seed-')), 'checkout')
+    await mkdir(checkout)
+    const prepared = await prepareRuntime(distributionRoot(), checkout)
+    releasePreparedRuntime(prepared.root)
+    return { root: prepared.root, layers: join(checkout, '.autobuild/runtime/layers') }
+  })()
+  const { root, layers } = await seed
+  await cp(root, destination, { recursive: true, verbatimSymlinks: true })
+  await cp(layers, join(repo, '.autobuild/runtime/layers'), {
+    recursive: true,
+    verbatimSymlinks: true,
+  })
+}
+
+/** Real 60 s leases make a crashed successor's authority outlive it, so the
+ * restored generation waits for expiry before it can tick or re-attach. The
+ * rollback fixtures shorten that clock in their copied installation (each
+ * heartbeat at most a fifth of its TTL); rollback still waits for and recovers
+ * from real expiry. A renamed constant fails here instead of silently testing
+ * the 60 s clock again. */
+const FIXTURE_LEASES: [file: string, from: string, to: string][] = [
+  [
+    'packages/core/src/cli/dispatch.ts',
+    'const REPO_LEASE_TTL_MS = 60_000',
+    'const REPO_LEASE_TTL_MS = 15_000',
+  ],
+  [
+    'packages/core/src/cli/dispatch.ts',
+    'const REPO_LEASE_HEARTBEAT_MS = 20_000',
+    'const REPO_LEASE_HEARTBEAT_MS = 3_000',
+  ],
+  ['packages/core/src/cli/dispatch-preflight.ts', 'launch.run, 60_000))', 'launch.run, 15_000))'],
+  [
+    'packages/core/src/ports/workspace/build-execution.ts',
+    'BUILD_EXECUTION_LEASE_TTL_MS = 60_000',
+    'BUILD_EXECUTION_LEASE_TTL_MS = 15_000',
+  ],
+  [
+    'packages/core/src/processes/build-runner.ts',
+    'opts?.heartbeatMs ?? 15_000',
+    'opts?.heartbeatMs ?? 3_000',
+  ],
+  [
+    'packages/core/src/processes/dispatcher.ts',
+    'PROVISION_HEARTBEAT_MS = 15_000',
+    'PROVISION_HEARTBEAT_MS = 3_000',
+  ],
+]
+
+async function shortenFixtureLeases(installation: string): Promise<void> {
+  for (const [file, from, to] of FIXTURE_LEASES) {
+    const path = join(installation, file)
+    const text = await readFile(path, 'utf8')
+    if (!text.includes(from)) throw new Error(`missing fixture lease constant: ${from}`)
+    await writeFile(path, text.replace(from, to))
+  }
+}
 
 test('real launcher adopts two replacements of the original installation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ab-hot-upgrade-'))
@@ -18,9 +83,7 @@ test('real launcher adopts two replacements of the original installation', async
     original = join(root, 'installation')
   await mkdir(repo)
   await mkdir(join(repo, 'tickets/ready'), { recursive: true })
-  const seed = await prepareRuntime(distributionRoot(), repo)
-  await cp(seed.root, original, { recursive: true, verbatimSymlinks: true })
-  releasePreparedRuntime(seed.root)
+  await seedInstallation(repo, original)
   const manifest = JSON.parse(await readFile(join(original, 'package.json'), 'utf8'))
   const replace = async (version: string) =>
     writeFile(join(original, 'package.json'), JSON.stringify({ ...manifest, version }))
@@ -181,9 +244,7 @@ test('real source launcher observes excluded commits and adopts same-version sou
   const repo = join(root, 'repo'),
     editor = join(root, 'editor')
   await mkdir(repo)
-  const seed = await prepareRuntime(distributionRoot(), repo)
-  await cp(seed.root, repo, { recursive: true, verbatimSymlinks: true })
-  releasePreparedRuntime(seed.root)
+  await seedInstallation(repo, repo)
   const sourceManifest = JSON.parse(
     await readFile(join(distributionRoot(), 'package.json'), 'utf8'),
   )
@@ -436,9 +497,7 @@ for (const crashed of process.platform === 'linux' ? [false, true, 'successor'] 
       original = join(root, 'installation')
     await mkdir(repo)
     await mkdir(join(repo, 'tickets/ready'), { recursive: true })
-    const seed = await prepareRuntime(distributionRoot(), repo)
-    await cp(seed.root, original, { recursive: true, verbatimSymlinks: true })
-    releasePreparedRuntime(seed.root)
+    await seedInstallation(repo, original)
     const manifest = JSON.parse(await readFile(join(original, 'package.json'), 'utf8'))
     await writeFile(
       join(original, 'package.json'),
@@ -623,15 +682,14 @@ for (const scenario of ['immediate', 'phases', 'legacy', 'expired-reader'])
     const repo = join(root, 'repo'),
       original = join(root, 'installation')
     await mkdir(join(repo, 'tickets/ready'), { recursive: true })
-    const seed = await prepareRuntime(distributionRoot(), repo)
-    await cp(seed.root, original, { recursive: true, verbatimSymlinks: true })
-    releasePreparedRuntime(seed.root)
+    await seedInstallation(repo, original)
     const manifest = JSON.parse(await readFile(join(original, 'package.json'), 'utf8'))
     const replace = (version: string) =>
       writeFile(join(original, 'package.json'), JSON.stringify({ ...manifest, version }))
     await replace('1.0.0')
     const target = join(original, 'packages/core/src/cli/dispatch-upgrade-target.ts')
     await writeFile(target, (await readFile(target, 'utf8')).replace('60_000', '100'))
+    await shortenFixtureLeases(original)
     const entry = join(original, 'bin/ab-dispatch-generation.ts')
     const bytes = await readFile(entry, 'utf8')
     const broken = `JSON.parse(await Bun.file(new URL('../package.json', import.meta.url)).text()).version === '2.0.0'`
