@@ -622,6 +622,13 @@ export const dispatcherStatusEventPayloadSchemas = {
     status: z.string().min(1).optional(),
     error: z.string().min(1).optional(),
   }),
+  /** A clean remote guest exit whose only cause is an unsettled PR-summary
+   * request; routine, never a warning. */
+  'dispatcher.summary-handoff': z.strictObject({
+    run: dispatchRun,
+    slug: z.string().min(1),
+    status: z.string().min(1).optional(),
+  }),
   'dispatcher.harvest-runner-failed': z.strictObject({
     run: dispatchRun,
     error: z.string().min(1),
@@ -996,6 +1003,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.ticket-source-recovered': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],
   'dispatcher.runner-settled': ['dispatcher'],
+  'dispatcher.summary-handoff': ['dispatcher'],
   'dispatcher.harvest-runner-failed': ['dispatcher'],
   'dispatcher.upgrade-available': ['dispatcher'],
   'dispatcher.operator-reported': ['human'],

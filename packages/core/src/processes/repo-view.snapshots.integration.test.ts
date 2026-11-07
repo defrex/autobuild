@@ -7,6 +7,7 @@ import {
   reducedReadBudget,
   targetLineageReadBudget,
   finalizePrRejectionReadBudget,
+  summaryHandoffReadBudget,
   countHistoricalRows,
   type ReducedReadCosts,
 } from '../testing/reduced-read-budget'
@@ -78,6 +79,7 @@ test('local SQL row budgets include adapter-internal persisted reads on fresh co
     await reducedReadBudget(harness)
     await targetLineageReadBudget(harness)
     await finalizePrRejectionReadBudget(harness)
+    await summaryHandoffReadBudget(harness)
   } finally {
     database.close()
   }
