@@ -770,6 +770,67 @@ describe('Dispatcher urgent intake order', () => {
     expect((await h.tickets.get('N2'))?.state).toBe('Ready')
   })
 
+  test('Linear Urgent ready work is claimed first, each class in listing order', async () => {
+    const calls: string[] = []
+    const issue = (identifier: string, title: string, priority: number) => ({
+      team: { key: 'ENG' },
+      parent: null,
+      id: `uuid-${identifier}`,
+      identifier,
+      title,
+      description: CONFORMING_BODY,
+      url: `https://linear.app/issue/${identifier}`,
+      priority,
+      state: { name: 'Ready', type: 'unstarted' },
+      labels: {
+        nodes: [{ name: 'autobuild' }],
+        pageInfo: { hasNextPage: false, endCursor: null },
+      },
+      inverseRelations: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    })
+    const listingSource = new LinearTicketSource({
+      apiKey: 'test',
+      teamKey: 'ENG',
+      fetchFn: async (_url, init) => {
+        calls.push(JSON.parse(init.body).query)
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              issues: {
+                nodes: [
+                  issue('N1', 'First normal work', 0),
+                  // High is not urgent: only Linear's Urgent dispatches first.
+                  issue('N2', 'Second normal work', 2),
+                  issue('U1', 'Urgent work filed last', 1),
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+        }
+      },
+    })
+    const h = harness({
+      tickets: [
+        readyTicket('N1', { title: 'First normal work' }),
+        readyTicket('N2', { title: 'Second normal work' }),
+        readyTicket('U1', { title: 'Urgent work filed last' }),
+      ],
+      toml: CAPACITY(2),
+      wrapTickets: (source) => {
+        Object.defineProperty(source, 'name', { value: 'linear' })
+        source.listReady = listingSource.listReady.bind(listingSource)
+        return source
+      },
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dispatched).toBe(2)
+    expect(h.tickets.claims).toEqual(['U1', 'N1'])
+    expect(calls).toHaveLength(1)
+  })
+
   test('a blocked urgent ticket does not hold back normal work', async () => {
     const h = harness({
       tickets: [
