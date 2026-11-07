@@ -46,7 +46,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `issue` — Downgrade a linked issue from closes to refs, with a reason.
 - `done` — Complete a producer phase.
 - `verdict` — Complete a review or verification phase.
-- `escalate` — Park the build with a question for you.
+- `escalate` — Park the build with a question for external judgment.
 - `harvest` — Inspect or drive observation harvesting.
 
 Phase commands (`context`, `done`, `verdict`) use runner-scoped session authority: the runner starts phase agents, never your operator agent. See [Skills](skills.md).
