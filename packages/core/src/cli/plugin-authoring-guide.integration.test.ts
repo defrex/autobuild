@@ -3,6 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PLUGIN_PORTS } from '../plugins/registry'
+import { BUN_AGENT_ENV_KEYS, BUN_REPORTER_ENVS, expectBunContractPassed } from './testkit'
 
 const DIST_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const GUIDE = join(DIST_ROOT, 'skills', 'guide', 'SKILL.md')
@@ -25,7 +26,8 @@ function fencedBlock(source: string, marker: string, language: string): string {
 
 async function run(
   root: string,
-  ...args: string[]
+  args: string[],
+  extraEnv: Record<string, string> = {},
 ): Promise<{
   status: number
   stdout: string
@@ -35,6 +37,8 @@ async function run(
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !key.startsWith('AB_')) env[key] = value
   }
+  for (const key of BUN_AGENT_ENV_KEYS) delete env[key]
+  Object.assign(env, extraEnv)
   const scratch = join(root, 'subprocess-tmp')
   await mkdir(scratch, { recursive: true })
   Object.assign(env, { TMPDIR: scratch, TMP: scratch, TEMP: scratch })
@@ -125,7 +129,7 @@ describe('plugin authoring guide', () => {
     const git = Bun.spawnSync(['git', 'init', '-q'], { cwd: root })
     expect(git.exitCode).toBe(0)
 
-    const initialized = await run(root, 'init')
+    const initialized = await run(root, ['init'])
     expect(initialized.status, initialized.stderr).toBe(0)
     expect(
       await readFile(
@@ -134,21 +138,23 @@ describe('plugin authoring guide', () => {
       ),
     ).toBe(reference)
 
-    const doctor = await run(root, 'plugin', 'doctor')
+    const doctor = await run(root, ['plugin', 'doctor'])
     expect(doctor.status, doctor.stderr).toBe(0)
     expect(doctor.stdout).toContain('OK ./autobuild-plugin.ts')
 
-    const list = await run(root, 'plugin', 'list')
+    const list = await run(root, ['plugin', 'list'])
     expect(list.status, list.stderr).toBe(0)
     expect(list.stdout).toContain('walkthrough owner=plugin:walkthrough')
     expect(list.stdout).toContain('contract=available')
 
-    const contract = await run(root, 'plugin', 'test', 'ticket-source', 'walkthrough')
-    expect(contract.status, `${contract.stdout}\n${contract.stderr}`).toBe(0)
-    expect(`${contract.stdout}\n${contract.stderr}`).toContain(
-      'create/get round-trips common fields',
-    )
-  }, 30_000)
+    for (const mode of BUN_REPORTER_ENVS) {
+      const contract = await run(root, ['plugin', 'test', 'ticket-source', 'walkthrough'], mode.env)
+      expectBunContractPassed(
+        contract.status,
+        `${mode.label} reporter\n${contract.stdout}\n${contract.stderr}`,
+      )
+    }
+  }, 60_000)
 })
 
 test('API 1.8 documents optional failures and request telemetry in every installed reference', async () => {
