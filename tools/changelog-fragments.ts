@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rmdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export const FRAGMENT_DIRECTORY = '.changelog'
@@ -25,6 +25,49 @@ export function renderFragment(number: number, url: string, title: string): stri
   const content = `- [#${number}](${url}) — ${title}\n`
   parseFragment(fragmentPath(number), content)
   return content
+}
+
+/**
+ * Add one PR entry unless its stable marker already has a representation.
+ * Counts `[#N](` across CHANGELOG.md (historical releases included) and the
+ * canonical fragment; creates `.changelog/` when a release removed it, then
+ * creates the fragment exclusively.
+ */
+export async function addFragment(
+  root: string,
+  number: number,
+  url: string,
+  title: string,
+): Promise<{ outcome: 'created' | 'present'; path: string }> {
+  const content = renderFragment(number, url, title)
+  const marker = `[#${number}](`
+  const count = (text: string) => text.split(marker).length - 1
+  let representations = count(await readFile(join(root, 'CHANGELOG.md'), 'utf8'))
+  const path = fragmentPath(number)
+  let existing: string | undefined
+  try {
+    existing = await readFile(join(root, path), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (existing !== undefined) {
+    parseFragment(path, existing)
+    representations += count(existing)
+  }
+  if (representations === 1) return { outcome: 'present', path }
+  if (representations > 1)
+    throw new Error(
+      `Duplicate changelog marker ${marker} (found ${representations} representations)`,
+    )
+  const created = await mkdir(join(root, FRAGMENT_DIRECTORY), { recursive: true })
+  try {
+    await writeFile(join(root, path), content, { flag: 'wx' })
+  } catch (error) {
+    if (created !== undefined) await rmdir(created).catch(() => {})
+    throw error
+  }
+  parseFragment(path, await readFile(join(root, path), 'utf8'))
+  return { outcome: 'created', path }
 }
 
 export async function readFragments(root: string) {
