@@ -26,13 +26,14 @@ export function resolutionOnlyWrites(
   run: string,
   key: string,
   lineage = 'launcher',
+  effectiveConfig = { kind: 'config', rev: 0 },
 ): RepositoryEventWrite[] {
   return [
     write('dispatcher.run-started', {
       run,
       lineage,
       pid: 1,
-      effectiveConfig: { kind: 'config', rev: 0 },
+      effectiveConfig,
       roleWarnings: [],
     }),
     write('dispatcher.tick-started', { run }),

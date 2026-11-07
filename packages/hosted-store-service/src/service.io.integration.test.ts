@@ -132,6 +132,7 @@ describe('hosted store service', () => {
       operator: { presence: 'unavailable', reason: OPERATOR_PRESENCE_UNAVAILABLE },
       sandboxes: [],
       upgrades: { runs: {}, holds: {}, lineages: {}, rollbackIds: [] },
+      upgradeStatus: {},
       publications: [],
     })
     expect(opens).toBe(1)
