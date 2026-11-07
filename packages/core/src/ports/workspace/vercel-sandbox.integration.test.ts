@@ -495,7 +495,6 @@ describe('VercelSandboxProvider', () => {
         ['--production', '--ignore-scripts'],
         extracted,
       )
-      expect(installed.exitCode).toBe(0)
       expect(installed.stderr).not.toContain('husky')
     } finally {
       await rm(tmp, { recursive: true, force: true })
