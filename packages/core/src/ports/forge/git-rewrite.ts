@@ -181,10 +181,12 @@ export function gitRewrite(
         }
       }
       if (!local) {
-        // Fetch by the exact archive ref, never by an unadvertised object id.
+        // Fetch by the exact archive ref, never by an unadvertised object id,
+        // and never shallow: a depth limit would write a persistent boundary
+        // that truncates ancestry the workspace already holds.
         await git(input.workspacePath, [
           'fetch',
-          ...(missing ? ['--depth=1', '--refmap='] : []),
+          ...(missing ? ['--refmap='] : []),
           '--no-tags',
           '--no-write-fetch-head',
           'origin',

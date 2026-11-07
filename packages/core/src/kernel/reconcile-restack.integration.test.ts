@@ -2,7 +2,7 @@ import { temporaryDirectories as ownTempDirectories } from '../testing/temp-dire
 import { afterEach, expect, test } from 'bun:test'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { seedStore, BUILD, BRANCH } from '../cli/testkit'
 import { bunExec, GitHubForge } from '../ports/forge/github'
 import { LocalGitForge } from '../ports/forge/local-git'
@@ -887,6 +887,8 @@ for (const automatic of [false, true]) {
     await git(['clone', '-q', '--depth=1', '--branch', 'ab/probe', `file://${remote}`, cwd], root)
     expect((await bunExec(['git', 'cat-file', '-e', base], { cwd })).exitCode).not.toBe(0)
     const head = await git(['rev-parse', 'HEAD'], cwd)
+    const shallowPath = resolve(cwd, await git(['rev-parse', '--git-path', 'shallow'], cwd))
+    const shallow = await readFile(shallowPath, 'utf8')
     const commands: string[][] = []
     const capability = gitRewrite(
       async (cmd, opts) => {
@@ -927,16 +929,20 @@ for (const automatic of [false, true]) {
     expect(commands.filter((cmd) => cmd[1] === 'fetch')).toContainEqual([
       'git',
       'fetch',
-      '--depth=1',
       '--refmap=',
       '--no-tags',
       '--no-write-fetch-head',
       'origin',
       ref,
     ])
+    expect(
+      commands.some((cmd) => cmd.some((arg) => /^--(depth|deepen|unshallow|shallow-)/.test(arg))),
+    ).toBe(false)
+    // The already-shallow clone keeps its established boundary byte for byte.
+    expect(await readFile(shallowPath, 'utf8')).toBe(shallow)
     expect(commands.some((cmd) => cmd[1] === 'push')).toBe(false)
     await capability.archive({ workspacePath: cwd, ref, sha: base })
-    // Depth-one recovery must leave the unrelated checkout usable for guarded publication.
+    // Recovery must leave the unrelated checkout usable for guarded publication.
     await git(['config', 'user.name', 'Test'], cwd)
     await git(['config', 'user.email', 'test@example.invalid'], cwd)
     await git(['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'next'], cwd)
