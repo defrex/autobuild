@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { nodeRestackDemand, presenceRestackPath } from './node-restack-demand'
+import { nodeRestackDemand, presenceRestackPath, restackLandingKey } from './node-restack-demand'
+import { confirmedLandings, type PresenceBuild } from './change-presence'
 import { reduceBuild, type BuildState } from './reducer'
 import { advanceNodeRestack, type NodeRestackState } from './node-restack-state'
 import type { AbEvent } from '../events/catalog'
@@ -278,4 +279,24 @@ test('durable negative availability uses canonical evidence and invalidates on s
   expect(restackAvailabilityFingerprint(state, 'node', 'main', 'head', 'parent', a)).toBe(
     restackAvailabilityFingerprint(state, 'node', 'main', 'head', 'parent', b),
   )
+})
+
+test('only a confirmed landing changes the landing key; an unlanded deferred build adds none', () => {
+  const entry = (slug: string, mergedSha?: string) =>
+    ({
+      record: { slug },
+      digest: {
+        slug,
+        observations: [],
+        compatibility: { decisiveFacts: 1 },
+        ...(mergedSha ? { mergedSha } : {}),
+      },
+    }) as unknown as PresenceBuild
+  const base = [entry('proof', 'a'.repeat(40))]
+  const key = restackLandingKey(confirmedLandings(base))
+  const unlanded = [...base, entry('deferred-unlanded')]
+  expect(confirmedLandings(unlanded)).toEqual(confirmedLandings(base))
+  expect(restackLandingKey(confirmedLandings(unlanded))).toBe(key)
+  const landed = [...base, entry('deferred-landed', 'b'.repeat(40))]
+  expect(restackLandingKey(confirmedLandings(landed))).not.toBe(key)
 })

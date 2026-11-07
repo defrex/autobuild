@@ -58,6 +58,8 @@ export async function runNodeTransaction(
   }
   const record = await deps.store.getBuild(deps.slug)
   if (!record) throw new Error('missing node build')
+  // Every repository build, mixed-version deferred ones included: the
+  // dispatcher's availability batch mirrors this set so both fingerprints agree.
   const records = await deps.store.listBuildsForRepo(record.repo)
   const digests = await readBuildDigests(deps.store, record.repo)
   const entries = records.flatMap((record) => {
