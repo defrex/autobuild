@@ -108,7 +108,7 @@ manifest-directed artifact paths remain authoritative. Never commit scratch.
   exactly one kind, named by `$AB_CONTEXT_DIR/context.json`'s `feedback` field:
   `findings` → resolve every finding in `$AB_CONTEXT_DIR/findings.json`; findings you
   dodge come back marked as persisting, and a chain that stays persistent
-  goes to a human. `verify` → address every failed report listed in the manifest's
+  escalates for external judgment. `verify` → address every failed report listed in the manifest's
   `verifyReports` (or the historical single report) under `$AB_CONTEXT_DIR/verify/`.
   `cancelledVerify` lists unfinished steps as not run with their fail-fast cause;
   cancellation is never a pass. A stage receipt can remain available alongside

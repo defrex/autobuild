@@ -170,7 +170,7 @@ On any round that proceeds rather than escalates, deposit a fresh
 ## If the spec is the problem
 
 If the spec is contradictory, unbuildable, or wrong — do not plan around it.
-Park the build for a human:
+Park the build for external judgment from the operator agent or a human:
 
 ```
 ab escalate "…the question, concretely…" --refs "$AB_CONTEXT_DIR/spec.md"

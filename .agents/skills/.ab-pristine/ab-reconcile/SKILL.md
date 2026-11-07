@@ -98,10 +98,11 @@ that the spec does not settle. Do not guess away either side's behavior:
 ab escalate "The target changes the session-token format but the build keys its limiter on the old format. Which behavior should the limiter adopt?" --refs src/auth.ts
 ```
 
-A human answer in guidance is authoritative while the spec remains the contract.
-If they cannot both be satisfied, escalate the contradiction. Reconcile has no
-code-review round; risky resolutions need human judgment. The only successful
-terminal commands are `ab done` and `ab escalate`.
+An operator answer in guidance is authoritative while the spec remains the
+contract. If they cannot both be satisfied, escalate the contradiction.
+Reconcile has no code-review round; escalate risky resolutions for external
+judgment. The only successful terminal commands are `ab done` and
+`ab escalate`.
 
 Read the manifest path printed by `ab context`. Its `materialized` keys are
 relative to `contextDir`: join them to locate collision-adjusted inputs.

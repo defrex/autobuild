@@ -1472,7 +1472,7 @@ publish = "bun run publish"
 `setup` is special by convention: the kernel runs it after workspace provision
 and after sandbox rehydration. A failure is recorded durably with its command,
 exit status, attempt, and output. Retries are bounded by
-`policy.maxSetupAttempts`; exhaustion blocks on a human-answerable setup
+`policy.maxSetupAttempts`; exhaustion blocks on a setup-targeted policy
 escalation without creating a phase or verification result. A later successful
 attachment clears the current error projection. Other names run only when
 referenced by a configured check. A check's `command` value is the key in this
@@ -2457,7 +2457,7 @@ Optional. Every field receives its own default. All are positive integers except
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Bound consecutive dispatch failures before human escalation.
+**Description:** Bound consecutive dispatch failures before a setup-targeted `dispatch-failure-limit` escalation.
 
 **Constraints:** safe integer; > 0
 
@@ -2470,7 +2470,7 @@ Optional. Every field receives its own default. All are positive integers except
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Bound consecutive workspace setup failures before human escalation.
+**Description:** Bound consecutive workspace setup failures before a setup-targeted policy escalation.
 
 **Constraints:** safe integer; > 0
 
@@ -2483,7 +2483,7 @@ Optional. Every field receives its own default. All are positive integers except
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget.
+**Description:** Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a `retry` answer from your operator agent or you re-arms this budget.
 
 **Constraints:** safe integer; > 0
 
