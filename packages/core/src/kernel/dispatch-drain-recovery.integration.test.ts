@@ -4,6 +4,14 @@ import { DISPATCHER, KERNEL } from '../events/envelope'
 import { readDispatchUpgrade } from '../store/reduced-reads'
 import { manualClock } from '../testing/fixed'
 import { authorizeRemoteHandoffs, recoverDispatchDrain } from './dispatch-drain-recovery'
+import { UPGRADE_HISTORY_LIMIT } from './dispatch-upgrade'
+import {
+  resolutionOnlyWrites,
+  upgradeGenerationRun,
+  upgradeGenerationWrites,
+  upgradeRuntime,
+  upgradeTarget,
+} from '../testing/upgrade-generations'
 
 for (const recoveryRun of [undefined, 'restored'])
   for (const knownEnd of [false, true])
@@ -193,6 +201,14 @@ test('remote authorization survives completed retirement, late attach and succes
   expect(
     (await store.getEvents('guest')).filter((e) => e.type === 'execution.drain-authorized'),
   ).toHaveLength(0)
+  // More resolution-only generations than the retention window cannot evict
+  // the newest accepted handoff before the guest attaches.
+  for (let i = 0; i < 20; i++)
+    for (const write of resolutionOnlyWrites(`restart-${String(i).padStart(3, '0')}`, '1.1.0'))
+      await store.appendRepo('repo', write)
+  const retained = (await readDispatchUpgrade(store, 'repo')).value
+  expect(retained.runs.old?.handoff).toBeDefined()
+  expect(Object.keys(retained.runs).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
   const attach = await store.append('guest', {
     actor: KERNEL,
     type: 'runner.attached',
@@ -299,5 +315,164 @@ test('historical remote captures add no build reads; repeated instances cost one
   reads = 0
   await authorizeRemoteHandoffs(store, 'repo', upgrades)
   expect(reads).toBe(0)
+  await store.close()
+})
+
+test('every upgrade decision answers the same after more history than the retention window', async () => {
+  const { projectHandoffs } = await import('../cli/dashboard/handoff')
+  const { projectRollback } = await import('../cli/dashboard/rollback')
+  const { repositoryStatusFromFacts } = await import('../cli/repository-status')
+  const { readDispatcherLiveness } = await import('../cli/dispatcher-liveness')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  const repo = 'repo'
+  const runtime = upgradeRuntime('1.000040.0')
+  await store.ensureRepo(repo)
+  for (let i = 0; i < 40; i++)
+    for (const write of upgradeGenerationWrites(i)) await store.appendRepo(repo, write)
+  await store.createBuild({ slug: 'build', repo })
+  await store.claimLease('build', 'execution', 1_000)
+  await store.createBuild({ slug: 'guest', repo })
+  await store.append('guest', {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: 'vercel-sandbox', workspaceRef: 'sandbox', instance: 'remote' },
+  })
+  const attach = await store.append('guest', {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: 'remote', host: 'guest' },
+  })
+  await store.append('guest', {
+    actor: KERNEL,
+    type: 'runner.runtime-recorded',
+    payload: { instance: 'remote', attachedSeq: attach.seq, runtime },
+  })
+  await store.claimLease('guest', 'remote', 60_000)
+
+  const [predecessor, current] = [upgradeGenerationRun(40), upgradeGenerationRun(41)]
+  const start = (run: string) =>
+    store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run,
+        lineage: 'launcher',
+        pid: 1,
+        effectiveConfig: { kind: 'config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+  const handoff = (run: string, successor: string, version: string) => ({
+    correlation: `c-${run}`,
+    run,
+    lineage: 'launcher',
+    from: runtime,
+    to: upgradeRuntime(version),
+    root: `/cache/${version}`,
+    cacheId: version,
+    target: upgradeTarget(version),
+    successor,
+  })
+  const accept = async (run: string, successor: string, version: string, remote: boolean) => {
+    const { successor: _, ...identity } = handoff(run, successor, version)
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.target-prepared',
+      payload: identity,
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.yield-requested',
+      payload: { ...identity, successor, mode: 'drain', evidence: 'same schema' },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.handoff-started',
+      payload: {
+        ...identity,
+        successor,
+        mode: 'drain',
+        startedAt: clock().toISOString(),
+        deadline: new Date(clock().getTime() + 900_000).toISOString(),
+        builds: remote ? [{ slug: 'build', instance: 'execution' }] : [],
+        ...(remote && { remoteBuilds: [{ slug: 'guest', instance: 'remote', runtime }] }),
+      },
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.terminal-released',
+      payload: identity,
+    })
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.takeover',
+      payload: { ...identity, successor },
+    })
+  }
+  await start(predecessor)
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-started',
+    payload: { run: predecessor },
+  })
+  await store.claimRepoLease(repo, current, 60_000)
+  await start(current)
+  await accept(predecessor, current, '1.000041.0', true)
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.runtime-rolled-back',
+    payload: {
+      correlation: 'rollback',
+      run: current,
+      lineage: 'launcher',
+      predecessor,
+      successor: current,
+      handoff: `c-${predecessor}`,
+      takeoverAt: clock().toISOString(),
+      failures: 3,
+      failed: upgradeRuntime('1.000041.0'),
+      restored: runtime,
+      failedRoot: '/cache/1.000041.0',
+      restoredRoot: '/cache/1.000040.0',
+      target: upgradeTarget('1.000041.0'),
+      reason: 'three failed exits',
+    },
+  })
+
+  let state = (await readDispatchUpgrade(store, repo)).value
+  expect(Object.keys(state.runs).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
+  expect(state.runs[upgradeGenerationRun(0)]).toBeUndefined()
+  // Watch takeover detection and dashboard draining rows.
+  expect(state.runs[predecessor]?.takeover?.payload.successor).toBe(current)
+  expect([...projectHandoffs(state).draining]).toEqual(['build'])
+  // The effective rollback hold for the current lineage.
+  expect(projectRollback(state)?.correlation).toBe('rollback')
+  const { dispatcher } = await readDispatcherLiveness(store, repo, clock())
+  const facts = (await readRepositoryFacts(store, repo)).value
+  expect(repositoryStatusFromFacts(repo, facts, dispatcher).rollbackHold?.payload.correlation).toBe(
+    'rollback',
+  )
+  // Remote authorization for an execution that is still open.
+  await authorizeRemoteHandoffs(store, repo)
+  const authorized = (await store.getEvents('guest')).filter(
+    (e) => e.type === 'execution.drain-authorized',
+  )
+  expect(authorized.map((e) => e.payload)).toMatchObject([
+    { correlation: `c-${predecessor}`, targetRuntime: { version: '1.000041.0' } },
+  ])
+  // Drain recovery of a predecessor whose handoff has not completed.
+  expect(await recoverDispatchDrain(store, repo, predecessor, clock(), current)).toBe(false)
+  clock.advance(1_001)
+  expect(await recoverDispatchDrain(store, repo, predecessor, clock(), current)).toBe(true)
+  state = (await readDispatchUpgrade(store, repo)).value
+  expect(state.runs[predecessor]?.completed?.payload.successor).toBe(current)
+  // Release and takeover of the current generation.
+  await accept(current, upgradeGenerationRun(42), '1.000042.0', false)
+  state = (await readDispatchUpgrade(store, repo)).value
+  expect(state.runs[current]?.released).toBeDefined()
+  expect(state.runs[current]?.takeover?.payload.successor).toBe(upgradeGenerationRun(42))
+  expect(state.authoritativeRun).toBe(upgradeGenerationRun(42))
   await store.close()
 })
