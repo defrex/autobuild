@@ -360,7 +360,14 @@ describe('layered CLI help catalog', () => {
         '--report',
         'phase-dependent',
       ],
-      escalate: ['escalate <question>', '--refs', 'Park the build', 'terminal command'],
+      escalate: [
+        'escalate <question>',
+        '--refs',
+        'Park the build',
+        'external judgment',
+        'operator agent or a human',
+        'terminal command',
+      ],
       harvest: [
         'harvest status',
         'harvest context',
@@ -375,6 +382,10 @@ describe('layered CLI help catalog', () => {
       const detail = renderCommandHelp(command)
       for (const fact of expected[command]) expect(detail).toContain(fact)
     }
+
+    const escalate = renderCommandHelp('escalate')
+    expect(escalate).not.toContain('for a human')
+    expect(escalate).not.toContain('human input')
 
     const dispatch = renderCommandHelp('dispatch')
     expect(renderTopLevelHelp()).not.toContain('ab server')
