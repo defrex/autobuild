@@ -16,6 +16,7 @@ import { OperatorApiClient } from './operator-api'
 import { RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
 import {
   CONFIG_TOML,
+  git,
   happyHandlers,
   makeHarness,
   readyTicket,
@@ -23,6 +24,7 @@ import {
   type E2eHarness,
 } from '@defrex/autobuild/testing'
 import { createHostedStoreService } from './service'
+import { createStoreServer } from './remote-store-server'
 
 const harnesses: E2eHarness[] = []
 afterEach(async () => {
@@ -448,4 +450,65 @@ test('local build history stays local while hosted tickets drive intake, blocker
     server.stop(true)
     await ticketStore.close()
   }
+})
+
+test('a project-credential node keeps its ab-node/ branch through creation, opening and child targeting', async () => {
+  // Every store request carries the project-owner token, so the dispatcher's
+  // creates take the server-allocated identity path under test.
+  const projects = testProjects([])
+  const { store: credentials, auth } = testCredentials(projects)
+  let projectToken = ''
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Integration node' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Child change' }), target: 'NODE' },
+    ],
+    storeAdapter: async (backing) => {
+      const server = createStoreServer({ store: backing, auth })
+      const fetchFn = (async (input: string | URL | Request, init?: RequestInit) =>
+        server.fetch(
+          new Request(input, {
+            ...init,
+            headers: {
+              ...(init?.headers as Record<string, string>),
+              authorization: `Bearer ${projectToken}`,
+            },
+          }),
+        )) as typeof fetch
+      return {
+        store: new RemoteBuildStore({ url: 'http://store', fetchFn }),
+        storeRef: 'http://store',
+      }
+    },
+  })
+  harnesses.push(h)
+  await projects.add(h.origin, 'fixture')
+  projectToken = (await credentials.issue(h.origin, 'fixture')).token
+
+  await h.dispatcher.tick()
+  const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'NODE')!
+  expect(node.slug).toMatch(/-[a-f0-9]{24}$/)
+  expect(node.branch).toBe(`ab-node/${node.slug}`)
+  const nodeEvents = await h.events(node.slug)
+  expect(nodeEvents.find((e) => e.type === 'build.created')?.payload).toMatchObject({
+    kind: 'node',
+  })
+  expect(nodeEvents.find((e) => e.type === 'node.opening')?.payload).toMatchObject({
+    branch: node.branch,
+  })
+  expect(typesOf(nodeEvents)).toContain('node.opened')
+  await git(['rev-parse', '--verify', `refs/heads/${node.branch}`], h.origin)
+
+  h.clock.advance(60_000)
+  await h.dispatcher.tick()
+  const child = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'CHILD')!
+  expect(child.branch).toBe(`ab/${child.slug}`)
+  expect(child.slug).toMatch(/-[a-f0-9]{24}$/)
+  expect(
+    (await h.events(child.slug)).find((e) => e.type === 'build.created')?.payload,
+  ).toMatchObject({ baseBranch: node.branch })
+  // Publication and recovery read the record; a fresh read returns the same identity.
+  expect((await h.store.getBuild(node.slug))?.branch).toBe(node.branch)
 })
