@@ -1829,6 +1829,8 @@ subcommands accept `--json`, which emits one bare JSON value and no prose: a
 `Ticket[]` for `list`, and the complete resulting `Ticket` for `create`,
 `update`, `block`, `unblock`, `show`, or `move`.
 
+Paged operator ticket listings may use the optional API 1.9 `TicketSource.listPage(criteria, page)` capability; without it, the operator reads the full listing and slices it. Native errors propagate. CLI ticket lists and dispatcher ready scans remain exhaustive through `listReady`/`listAll`. PostgreSQL pages natively; file, Linear and remote `HostedTicketSource` retain fallback. The POST list-ready protocol stays exhaustive. See the [custom source contract](references/plugin-authoring.md) for types and contract coverage.
+
 ### Ticket assets
 
 A ticket asset is a file or folder attached to a ticket: a design export,
@@ -3104,5 +3106,3 @@ ticket numbering from 1. Old credentials remain invalid with 401; independently
 repository-established requests receive 403 project not registered. See
 [project deletion](references/operator-api.md#permanent-project-deletion) for
 generation-bound preview tokens and API semantics.
-
-Paged operator ticket listings may use the optional API 1.9 `TicketSource.listPage(criteria, page)` capability; without it, the operator reads the full listing and slices it. Native errors propagate. CLI ticket lists and dispatcher ready scans remain exhaustive through `listReady`/`listAll`. PostgreSQL pages natively; file, Linear and remote `HostedTicketSource` retain fallback. The POST list-ready protocol stays exhaustive. See the [custom source contract](references/plugin-authoring.md) for types and contract coverage.
