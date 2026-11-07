@@ -1835,7 +1835,7 @@ issue links refuses any write naming them, names itself, and writes nothing.
 `--priority urgent` makes the dispatcher claim the ticket before normal ready
 work, each class in source order; blockers and every other gate still apply,
 and it never preempts a running build. `--priority normal` (the default)
-removes urgency. The file source stores priority; hosted, Linear and plugin
+removes urgency. The file and hosted sources store priority; Linear and plugin
 sources without the capability read every ticket as normal, refuse `urgent`
 naming themselves and writing nothing, and accept `normal` as a no-op. JSON
 ticket output always includes `priority`, and list output marks urgent tickets.

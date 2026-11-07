@@ -16,9 +16,12 @@ import {
   HostedTicketSource,
   TICKET_ISSUE_LINKS_HEADER,
   TICKET_ISSUE_LINKS_CAPABILITY,
+  TICKET_PRIORITY_HEADER,
+  TICKET_PRIORITY_CAPABILITY,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
   TicketIssueLinksUnsupported,
+  TicketPriorityUnsupported,
 } from '@defrex/autobuild/hosted-tickets'
 import { createTicketServer } from './ticket-server'
 
@@ -712,4 +715,108 @@ test('a backend without issue-link support refuses link-setting writes with a ty
   expect(guarded).toBeInstanceOf(TicketIssueLinksUnsupported)
   expect((await fake.listAll()).tickets.length).toBe(before + 1)
   expect((await fake.get(plain.ref.id))?.revision).toBe(plain.revision)
+})
+
+test('priority projects only behind its capability, every response advertises it, and the ready listing is urgent first', async () => {
+  const { server, source } = harness()
+  const n1 = await source.create({ title: 'N1', body: 'Body' })
+  const n2 = await source.create({ title: 'N2', body: 'Body' })
+  const u1 = await source.create({ title: 'U1', body: 'Body', priority: 'urgent' })
+  expect(u1.priority).toBe('urgent')
+  expect('priority' in n1).toBe(false)
+  const post = (operation: string, input: unknown, priority: boolean) =>
+    server.fetch(
+      new Request(`https://tickets.example/tickets/${operation}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          'content-type': 'application/json',
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          ...(priority ? { [TICKET_PRIORITY_HEADER]: TICKET_PRIORITY_CAPABILITY } : {}),
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+      }),
+    )
+  for (const priority of [true, false]) {
+    for (const [ticket, expected] of [
+      [n1, 'normal'],
+      [u1, 'urgent'],
+    ] as const) {
+      const response = await post('get', { id: ticket.ref.id }, priority)
+      expect(response.headers.get(TICKET_PRIORITY_HEADER)).toBe(TICKET_PRIORITY_CAPABILITY)
+      const value = (await response.json()) as Record<string, unknown>
+      if (priority) expect(value.priority).toBe(expected)
+      else expect('priority' in value).toBe(false)
+    }
+    const listing = (await (await post('list-ready', {}, priority)).json()) as {
+      tickets: Array<Record<string, unknown> & { title: string }>
+    }
+    expect(listing.tickets.map((ticket) => ticket.title)).toEqual(['U1', 'N1', 'N2'])
+    expect(listing.tickets.every((ticket) => 'priority' in ticket)).toBe(priority)
+    if (priority)
+      expect(listing.tickets.map((ticket) => ticket.priority)).toEqual([
+        'urgent',
+        'normal',
+        'normal',
+      ])
+  }
+  expect((await source.listReady({})).tickets.map((ticket) => ticket.ref.id)).toEqual([
+    u1.ref.id,
+    n1.ref.id,
+    n2.ref.id,
+  ])
+  const invalid = await post('get', { id: '' }, true)
+  expect(invalid.status).toBe(400)
+  expect(invalid.headers.get(TICKET_PRIORITY_HEADER)).toBe(TICKET_PRIORITY_CAPABILITY)
+  const unknown = await post('nope', {}, false)
+  expect(unknown.status).toBe(404)
+  expect(unknown.headers.get(TICKET_PRIORITY_HEADER)).toBe(TICKET_PRIORITY_CAPABILITY)
+})
+
+test('a backend without priority support refuses urgent writes with a typed conflict', async () => {
+  const fake = new FakeTicketSource([], { doneState: 'Done' })
+  const backend = Object.assign(Object.create(fake), { priority: false }) as FakeTicketSource
+  const { server, source } = harness(backend)
+  const raw = (operation: string, input: unknown) =>
+    server.fetch(
+      new Request(`https://tickets.example/tickets/${operation}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          'content-type': 'application/json',
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+      }),
+    )
+  const created = await raw('create', { draft: { title: 'X', body: 'Y', priority: 'urgent' } })
+  expect(created.status).toBe(409)
+  expect(await created.json()).toMatchObject({ kind: 'conflict', code: 'priority-unsupported' })
+  expect((await fake.listAll()).tickets).toHaveLength(0)
+  const refused = await source
+    .create({ title: 'X', body: 'Y', priority: 'urgent' })
+    .catch((error: unknown) => error)
+  expect(refused).toBeInstanceOf(TicketPriorityUnsupported)
+  expect((refused as TicketPriorityUnsupported).source).toBe('hosted')
+  const plain = await source.create({ title: 'Plain', body: 'Y' })
+  const updated = await raw('update', { id: plain.ref.id, patch: { priority: 'urgent' } })
+  expect(updated.status).toBe(409)
+  expect(await updated.json()).toMatchObject({ code: 'priority-unsupported' })
+  expect(
+    await source.update(plain.ref.id, { priority: 'urgent' }).catch((error: unknown) => error),
+  ).toBeInstanceOf(TicketPriorityUnsupported)
+  expect(
+    await source
+      .mutateIfRevision(plain.ref.id, plain.revision, {
+        kind: 'update',
+        patch: { priority: 'urgent' },
+      })
+      .catch((error: unknown) => error),
+  ).toBeInstanceOf(TicketPriorityUnsupported)
+  expect((await fake.listAll()).tickets).toHaveLength(1)
+  const stored = await fake.get(plain.ref.id)
+  expect(stored?.revision).toBe(plain.revision)
+  expect(stored && 'priority' in stored).toBe(false)
 })

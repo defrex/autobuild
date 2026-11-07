@@ -452,6 +452,81 @@ test('local build history stays local while hosted tickets drive intake, blocker
   }
 })
 
+test('hosted urgent ready work is claimed first', async () => {
+  // U1 is filed last; with two free slots the hosted listing still yields it first.
+  const ticketBackend = new FakeTicketSource([
+    readyTicket('N1', { title: 'First normal' }),
+    readyTicket('N2', { title: 'Second normal' }),
+    { ...readyTicket('U1', { title: 'Urgent fix' }), priority: 'urgent' },
+  ])
+  const ticketStore = new (await import('@defrex/autobuild/plugin-sdk')).MemoryBuildStore()
+  const projects = testProjects([])
+  const credentials = testCredentials(projects).store
+  const service = createHostedStoreService({
+    env: {
+      AB_STORE_SECRET: 'secret',
+      AB_POSTGRES_URL: 'postgres://unused/test',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'us-east-1',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    openStore: async () => ticketStore,
+    openProjectRegistry: async () => projects,
+    openCredentials: async () => credentials,
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+    sourceFor: () => ticketBackend,
+  })
+  const server = Bun.serve({ port: 0, fetch: service.fetch })
+  try {
+    const configToml = CONFIG_TOML.replace(
+      'source = "file"',
+      `source = "hosted"\nteamKey = "ENG"\nurl = "${server.url.origin}"\ndoneState = "Done"`,
+    )
+    expect(configToml).toContain('capacity = 2')
+    const h = await makeHarness({
+      handlers: happyHandlers(),
+      ticketSource: ticketBackend,
+      configToml,
+    })
+    harnesses.push(h)
+    await projects.add(h.remote, 'fixture')
+    const { token } = await credentials.issue(h.remote, 'fixture')
+    const { HostedTicketSource } = await import('@defrex/autobuild/hosted-tickets')
+    const tickets = new HostedTicketSource({ url: server.url.origin, token, teamKey: 'ENG' })
+    await tickets.synchronizePolicy({
+      version: 1,
+      tickets: {
+        source: 'hosted',
+        teamKey: 'ENG',
+        readyState: h.config.tickets.readyState,
+        triageState: 'triage',
+        claimedState: 'doing',
+        doneState: 'Done',
+        createState: 'triage',
+        proposalState: 'triage',
+      },
+    })
+    await abDispatch({
+      targetRepo: h.origin,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      plain: true,
+      wire: async () => ({ ...h.wiring, tickets }),
+    })
+    expect(ticketBackend.claims).toEqual(['U1', 'N1'])
+    expect((await ticketBackend.get('N2'))?.state).toBe('Ready')
+    expect(h.cliErrors).toEqual([])
+  } finally {
+    server.stop(true)
+    await ticketStore.close()
+  }
+})
+
 test('a project-credential node keeps its ab-node/ branch through creation, opening and child targeting', async () => {
   // Every store request carries the project-owner token, so the dispatcher's
   // creates take the server-allocated identity path under test.

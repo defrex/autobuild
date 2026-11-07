@@ -184,6 +184,7 @@ describe('HostedTicketSource (client half)', () => {
         'x-autobuild-ticket-tree': '1',
         'x-autobuild-ticket-comments': '1',
         'x-autobuild-ticket-issue-links': '1',
+        'x-autobuild-ticket-priority': '1',
         'x-autobuild-ticket-dependency-state': '1',
         'x-autobuild-ticket-policy-roles': '1',
         authorization: 'Bearer t0k',
@@ -581,28 +582,97 @@ test('a service predating the roles is named only when the policy maps one', asy
   expect(ok.calls[0]!.body.input).toEqual(policy())
 })
 
-test('hosted priority: urgent is refused before any request and normal sends nothing', async () => {
-  const { source, calls } = makeSource([{ body: OK }, { body: TICKET }])
-  expect((source as TicketSource).priority).toBeUndefined()
-  const urgent = await rejectionOf(
-    source.create({ title: 'Hotfix', body: 'spec', priority: 'urgent' }),
-  )
-  expect(urgent.name).toBe('TicketPriorityUnsupported')
-  await expect(source.update('ENG-42', { priority: 'urgent' })).rejects.toThrow(
-    'cannot store ticket priority',
-  )
-  await expect(
-    source.mutateIfRevision('ENG-42', 'fixture', { kind: 'update', patch: { priority: 'urgent' } }),
-  ).rejects.toThrow('cannot store ticket priority')
-  expect(calls).toHaveLength(0)
-
+test('hosted priority: writes carry it as given, plain creates omit it, reads keep only urgent', async () => {
+  const { source, calls } = makeSource([
+    { body: { ...TICKET, priority: 'urgent' } },
+    { body: { ...TICKET, priority: 'normal' } },
+    { body: OK },
+    { body: OK },
+    { body: OK },
+    { body: OK },
+    { body: { ...TICKET, priority: 'normal' } },
+    {
+      body: ticketListingWireSchema.parse({
+        tickets: [{ ...TICKET, priority: 'urgent' }],
+        diagnostics: [],
+      }),
+    },
+  ])
+  expect((source as TicketSource).priority).toBe(true)
+  const urgent = await source.create({ title: 'Hotfix', body: 'spec', priority: 'urgent' })
+  expect(urgent.priority).toBe('urgent')
+  const normal = await source.create({ title: 'Chore', body: 'spec', priority: 'normal' })
+  expect('priority' in normal).toBe(false)
+  await source.update('ENG-42', { priority: 'urgent' })
   await source.update('ENG-42', { priority: 'normal' })
-  expect(calls).toHaveLength(0)
-  await source.update('ENG-42', { title: 'Renamed', priority: 'normal' })
-  expect(calls[0]!.body.input).toEqual({ id: 'ENG-42', patch: { title: 'Renamed' } })
-  // A normal-only guarded update sends no write but still checks the revision.
-  await expect(
-    source.mutateIfRevision('ENG-42', 'stale', { kind: 'update', patch: { priority: 'normal' } }),
-  ).rejects.toThrow('changed: expected revision stale')
-  expect(calls[1]!.url.endsWith('/tickets/get')).toBe(true)
+  await source.mutateIfRevision('ENG-42', 'fixture', {
+    kind: 'update',
+    patch: { priority: 'urgent' },
+  })
+  await source.mutateIfRevision('ENG-42', 'fixture', {
+    kind: 'update',
+    patch: { priority: 'normal' },
+  })
+  expect('priority' in ((await source.get('ENG-42')) ?? {})).toBe(false)
+  expect((await source.listReady({})).tickets[0]!.priority).toBe('urgent')
+
+  expect(calls.map((call) => call.body.input)).toEqual([
+    { draft: { title: 'Hotfix', body: 'spec', priority: 'urgent' }, options: {} },
+    { draft: { title: 'Chore', body: 'spec' }, options: {} },
+    { id: 'ENG-42', patch: { priority: 'urgent' } },
+    { id: 'ENG-42', patch: { priority: 'normal' } },
+    {
+      id: 'ENG-42',
+      expectedRevision: 'fixture',
+      mutation: { kind: 'update', patch: { priority: 'urgent' } },
+    },
+    {
+      id: 'ENG-42',
+      expectedRevision: 'fixture',
+      mutation: { kind: 'update', patch: { priority: 'normal' } },
+    },
+    { id: 'ENG-42' },
+    {},
+  ])
+  for (const call of calls) expect(call.headers['x-autobuild-ticket-priority']).toBe('1')
+})
+
+test('hosted priority: a typed conflict or an older service refusing the key is TicketPriorityUnsupported', async () => {
+  const { source } = makeSource([
+    {
+      status: 409,
+      body: { kind: 'conflict', error: 'cannot store priority', code: 'priority-unsupported' },
+      headers: { 'x-autobuild-ticket-priority': '1' },
+    },
+    { status: 400, body: wireError('Unrecognized key: "priority"', 'validation') },
+    { status: 400, body: wireError('Unrecognized key: "priority"', 'validation') },
+    { status: 400, body: wireError('title must be nonblank', 'validation') },
+    {
+      status: 400,
+      body: wireError('Unrecognized key: "priority"', 'validation'),
+      headers: { 'x-autobuild-ticket-priority': '1' },
+    },
+  ])
+  expect((await rejectionOf(source.update('ENG-42', { priority: 'urgent' }))).name).toBe(
+    'TicketPriorityUnsupported',
+  )
+  expect(
+    (await rejectionOf(source.create({ title: 'Hotfix', body: 'spec', priority: 'urgent' }))).name,
+  ).toBe('TicketPriorityUnsupported')
+  expect(
+    (
+      await rejectionOf(
+        source.mutateIfRevision('ENG-42', 'fixture', {
+          kind: 'update',
+          patch: { priority: 'normal' },
+        }),
+      )
+    ).name,
+  ).toBe('TicketPriorityUnsupported')
+  const generic = await rejectionOf(source.update('ENG-42', { title: '', priority: 'urgent' }))
+  expect(generic.name).toBe('Error')
+  expect(generic.message).toBe('title must be nonblank')
+  // A current service echoing the capability refuses for an ordinary reason.
+  const echoed = await rejectionOf(source.update('ENG-42', { priority: 'urgent' }))
+  expect(echoed.name).toBe('Error')
 })

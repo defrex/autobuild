@@ -1,8 +1,8 @@
 import { normalizeTicket } from './tree'
 import { hostedRequestedIds } from './requested-id'
-import { checkTicketRevision, TicketRevisionConflict } from './revision'
+import { TicketRevisionConflict } from './revision'
 import { TicketIssueLinksUnsupported } from './issue-links'
-import { withoutUnsupportedPriority } from './priority'
+import { TicketPriorityUnsupported } from './priority'
 import { ticketLifecycle } from './lifecycle'
 import type { TicketsConfig } from '../../config/schema'
 import type {
@@ -29,6 +29,8 @@ import {
   TICKET_COMMENTS_CAPABILITY,
   TICKET_ISSUE_LINKS_HEADER,
   TICKET_ISSUE_LINKS_CAPABILITY,
+  TICKET_PRIORITY_HEADER,
+  TICKET_PRIORITY_CAPABILITY,
   TICKET_DEPENDENCY_STATE_HEADER,
   TICKET_DEPENDENCY_STATE_CAPABILITY,
   TICKET_POLICY_ROLES_HEADER,
@@ -89,6 +91,7 @@ export class HostedTicketSource implements TicketSource {
   readonly name = 'hosted'
   readonly integrationTree = true
   readonly issueLinks = true
+  readonly priority = true
   readonly requestedIds: ReturnType<typeof hostedRequestedIds>
   readonly assets: import('../types').TicketAssetStore
   private readonly base: string
@@ -125,7 +128,7 @@ export class HostedTicketSource implements TicketSource {
     const parsed = hostedTicketPolicySchema.parse(policy)
     const namesRoles =
       parsed.tickets.backlogState !== undefined || parsed.tickets.rejectedState !== undefined
-    await this.request('policy', parsed, successWireSchema, false, namesRoles)
+    await this.request('policy', parsed, successWireSchema, { policyRoles: namesRoles })
   }
 
   private project(ticket: Ticket): Ticket {
@@ -136,8 +139,7 @@ export class HostedTicketSource implements TicketSource {
     operation: string,
     input: unknown,
     schema: { parse(value: unknown): T },
-    namesIssueLinks = false,
-    namesPolicyRoles = false,
+    names: { issueLinks?: boolean; priority?: boolean; policyRoles?: boolean } = {},
   ): Promise<T> {
     const response = await this.fetchFn(`${this.base}/tickets/${operation}`, {
       method: 'POST',
@@ -148,6 +150,7 @@ export class HostedTicketSource implements TicketSource {
         authorization: `Bearer ${this.token}`,
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [TICKET_ISSUE_LINKS_HEADER]: TICKET_ISSUE_LINKS_CAPABILITY,
+        [TICKET_PRIORITY_HEADER]: TICKET_PRIORITY_CAPABILITY,
         [TICKET_DEPENDENCY_STATE_HEADER]: TICKET_DEPENDENCY_STATE_CAPABILITY,
         [TICKET_POLICY_ROLES_HEADER]: TICKET_POLICY_ROLES_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -159,7 +162,7 @@ export class HostedTicketSource implements TicketSource {
       // A service predating the roles refuses them with its strict policy schema
       // and never echoes the capability header.
       if (
-        namesPolicyRoles &&
+        names.policyRoles &&
         response.status === 400 &&
         response.headers.get(TICKET_POLICY_ROLES_HEADER) !== TICKET_POLICY_ROLES_CAPABILITY
       )
@@ -178,18 +181,30 @@ export class HostedTicketSource implements TicketSource {
           throw new TicketRevisionConflict(body.id, body.expectedRevision, body.currentRevision)
         if (body.code === 'issue-links-unsupported')
           throw new TicketIssueLinksUnsupported(this.name)
+        if (body.code === 'priority-unsupported') throw new TicketPriorityUnsupported(this.name)
         message = errorBodySchema.parse(body).error
-        // A server predating issue links refuses the unknown key with its strict
-        // request schema and never echoes the capability header.
+        // A server predating issue links or priority refuses the unknown key with
+        // its strict request schema and never echoes the capability header.
         if (
-          namesIssueLinks &&
+          names.issueLinks &&
           response.status === 400 &&
           response.headers.get(TICKET_ISSUE_LINKS_HEADER) !== TICKET_ISSUE_LINKS_CAPABILITY &&
           message.includes('issueLinks')
         )
           throw new TicketIssueLinksUnsupported(this.name)
+        if (
+          names.priority &&
+          response.status === 400 &&
+          response.headers.get(TICKET_PRIORITY_HEADER) !== TICKET_PRIORITY_CAPABILITY &&
+          message.includes('priority')
+        )
+          throw new TicketPriorityUnsupported(this.name)
       } catch (error) {
-        if (error instanceof TicketRevisionConflict || error instanceof TicketIssueLinksUnsupported)
+        if (
+          error instanceof TicketRevisionConflict ||
+          error instanceof TicketIssueLinksUnsupported ||
+          error instanceof TicketPriorityUnsupported
+        )
           throw error
         // Keep the status-only safe fallback for non-protocol responses.
       }
@@ -244,17 +259,16 @@ export class HostedTicketSource implements TicketSource {
     await this.request('transition', { id, state }, successWireSchema)
   }
 
-  // The hosted wire does not carry priority: urgent is refused before any
-  // request and normal is dropped, so requests stay byte-identical.
+  // Normal is the default, so a plain create never names priority and keeps
+  // working against a service predating it.
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
-    const write = withoutUnsupportedPriority(this, draft)
+    const { priority, ...rest } = draft
+    const write = priority === 'urgent' ? { ...rest, priority } : rest
     return this.project(
-      await this.request(
-        'create',
-        { draft: write, options },
-        ticketWireSchema,
-        write.issueLinks !== undefined,
-      ),
+      await this.request('create', { draft: write, options }, ticketWireSchema, {
+        issueLinks: write.issueLinks !== undefined,
+        priority: priority === 'urgent',
+      }),
     )
   }
 
@@ -263,35 +277,24 @@ export class HostedTicketSource implements TicketSource {
     expectedRevision: string,
     mutation: TicketMutation,
   ): Promise<void> {
-    if (mutation.kind === 'update') {
-      const patch = withoutUnsupportedPriority(this, mutation.patch)
-      if (mutation.patch.priority !== undefined && Object.keys(patch).length === 0) {
-        // Nothing to send, but a stale revision is still refused.
-        if (!expectedRevision.trim()) throw new Error('expected revision must be nonblank')
-        const current = await this.get(id)
-        if (!current) throw new Error(`hosted ticket source: unknown ticket "${id}"`)
-        checkTicketRevision(current, expectedRevision)
-        return
-      }
-      mutation = { kind: 'update', patch }
-    }
     await this.request(
       'mutate-if-revision',
       { id, expectedRevision, mutation },
       successWireSchema,
-      mutation.kind === 'update' && mutation.patch.issueLinks !== undefined,
+      mutation.kind === 'update'
+        ? {
+            issueLinks: mutation.patch.issueLinks !== undefined,
+            priority: mutation.patch.priority !== undefined,
+          }
+        : {},
     )
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
-    const write = withoutUnsupportedPriority(this, patch)
-    if (patch.priority !== undefined && Object.keys(write).length === 0) return
-    await this.request(
-      'update',
-      { id, patch: write },
-      successWireSchema,
-      write.issueLinks !== undefined,
-    )
+    await this.request('update', { id, patch }, successWireSchema, {
+      issueLinks: patch.issueLinks !== undefined,
+      priority: patch.priority !== undefined,
+    })
   }
 
   async addBlocker(id: string, blockerId: string): Promise<void> {
