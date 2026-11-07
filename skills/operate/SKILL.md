@@ -440,7 +440,10 @@ Treat every default-watch record as a call to act:
   and reason, including a rejected protocol-write preflight. The running generation stays active; the same failed input is
   suppressed until target or selected-store compatibility evidence changes or a fresh operator launch. Report
   launcher-contract changes or disabled automatic upgrades as manual restart
-  needs. Agents still never manage the process.
+  needs. Agents still never manage the process. Status shows a failure as
+  current only until a later different resolved target, a later successful
+  preparation or handoff, or a later generation supersedes it; a failure marked
+  `(superseded)` needs no action.
 - Automatic runtime rollback: repository status names the failed and restored
   runtimes and effective hold. Three failed exits within ten minutes of takeover
   restore one previous cached runtime; preflight failures do not count. The failed
