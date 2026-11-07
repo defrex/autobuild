@@ -573,6 +573,17 @@ for (const freed of ['same-tick', 'earlier-tick'] as const)
       expect(renderSummaries([summary], h.clock(), '').join('\n')).toContain(
         slotWaitText('verification'),
       )
+      const { listOperatorBuilds } = await import('../operator/query')
+      const listed = async () =>
+        (
+          await listOperatorBuilds({
+            store: h.store,
+            repo: h.origin,
+            scope: 'active',
+            now: h.clock(),
+          })
+        ).find((row) => row.slug === node.slug)?.slotWait
+      expect(await listed()).toBe('verification')
       if (freed === 'earlier-tick') {
         // Quiet ticks move the node into idle polling: the janitor stops
         // visiting it except every nodeIdlePollSeconds. Stop on the tick that
@@ -606,6 +617,7 @@ for (const freed of ['same-tick', 'earlier-tick'] as const)
       ).toBe(true)
       expect(await bySlug('COMPETITOR')).toBeUndefined()
       expect(await waiting(node.slug)).toBeUndefined()
+      expect(await listed()).toBeUndefined()
       // The reservation resolves: once the node verifies, its slot returns to intake.
       if (!h.launched.some((entry) => entry.slug === node.slug)) await h.dispatcher.tick()
       await run(node.slug)

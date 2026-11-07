@@ -169,10 +169,13 @@ export function slotWaitText(request: SlotRequest): string {
 }
 
 /** Shared wording for every node waiting on a runner slot, or `''`. */
-export function waitingExplanation(capacity?: DispatchCapacity): string {
+export function waitingExplanation(
+  capacity?: DispatchCapacity,
+  opts: { requests?: boolean } = {},
+): string {
   const waiting = capacity?.waitingNodes ?? []
   if (!waiting.length) return ''
-  return `${waiting.length} node${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of new ticket claims: ${waiting.map((node) => node.slug).join(', ')}`
+  return `${waiting.length} node${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of new ticket claims: ${waiting.map((node) => (opts.requests ? `${node.slug} (${node.request})` : node.slug)).join(', ')}`
 }
 
 /** Shared wording for the terminal and browser control lines. */

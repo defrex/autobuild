@@ -2,7 +2,7 @@ import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { migrationIdentity } from '../kernel/ticket-migrations'
 import { enrichDrainingRow, projectHandoffs } from '../cli/dashboard/handoff'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
-import { dispatchCapacity, type CapacityBuild } from '../kernel/dispatch-capacity'
+import { dispatchCapacity, slotRequest, type CapacityBuild } from '../kernel/dispatch-capacity'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { readBuildDigests } from '../store/reduced-reads'
 import {
@@ -112,7 +112,24 @@ async function listFromView(
       // build therefore cannot change the emitted summaries.
       if (digest.terminal !== undefined) continue
     }
-    const projected = summarizeFrom(record, (await view.buildFacts(record.slug)).state, opts.now)
+    const facts = await view.buildFacts(record.slug)
+    const projected = summarizeFrom(
+      record,
+      facts.state,
+      opts.now,
+      facts.state.kind === 'node'
+        ? slotRequest(
+            {
+              record,
+              state: facts.state,
+              workspace: facts.workspace !== null,
+              provisioning:
+                (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
+            },
+            opts.now,
+          )
+        : undefined,
+    )
     if (statuses.has(projected.status)) output.push(projected)
   }
   return output.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
