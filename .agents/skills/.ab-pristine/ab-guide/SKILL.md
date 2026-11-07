@@ -387,16 +387,24 @@ The distinctions that change an administrator's answer:
   confirmation. Local implementation publication failures write no completion or
   pending request and leave the same session retryable. A push
   happens at the implement terminal boundary or after the runner validates a
-  successful content-producing finalize post-step. Reconcile alone uses an exact expected-head guarded rewrite after archiving every recorded Git tip under `refs/autobuild/archive/<slug>/<sha>`.
+  successful content-producing finalize post-step. History rewrites (reconcile,
+  leaf verify-entry and waiting restacks, and node restacks on demand; see
+  [restacking](references/restacking.md)) replace a branch only with an exact
+  expected-head guard after archiving every recorded Git tip under
+  `refs/autobuild/archive/<slug>/<sha>`.
   `github` publishes through GitHub. `local-git` performs no remote/network/`gh`
-  operation: durable PR records live under private Git refs, the review locator
-  is `refs/heads/ab/<slug>`, and consent merges a local guarded, unsigned squash
-  whose message is the deposited PR description and whose author and committer
-  come from the repository's ordinary Git identity. `local-git` writes no issue
-  keyword lines; a build's issue links stay in build state. If Git cannot resolve that
-  identity, the PR remains open with actionable `user.name` / `user.email`
-  guidance and later dispatcher ticks retry. Without consent it remains open for
-  ordinary `git diff` inspection; it has no review UI or image host.
+  operation: durable PR records live under private Git refs, and the review
+  locator is `refs/heads/ab/<slug>`. Once merge authorization (auto or consent;
+  see [merge policy](references/merge-policy.md)) applies, a root-target leaf
+  lands as a local guarded, unsigned squash whose message is the deposited PR
+  description and whose author and committer come from the repository's
+  ordinary Git identity; node children and local-git root nodes land by guarded
+  fast-forward instead (see [merge methods](references/merge-policy.md#merge-methods)).
+  `local-git` writes no issue keyword lines; a build's issue links stay in build
+  state. If Git cannot resolve the squash identity, the PR remains open with
+  actionable `user.name` / `user.email` guidance and later dispatcher ticks
+  retry. Until authorized it remains open for ordinary `git diff` inspection; it
+  has no review UI or image host.
 
 For moving a project between sources, follow the [ticket migration procedure](references/ticket-migration.md).
 
