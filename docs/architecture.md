@@ -17,8 +17,9 @@ disagree, the code is authoritative.
    validation and fail-safe fallback.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
    actionable current build; each phase resumes as a function of durable state.
-   Open escalations remain parked until a human answer is recorded, while
-   pending operator commands remain actionable.
+   Open escalations remain parked until an external answer, from the operator
+   agent or you, is recorded; a build-phase agent never answers its own
+   escalation. Pending operator commands remain actionable.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
    Triage without a human grooming it to Ready, unless the repository waives
    that gate explicitly with `[tickets].proposalState`.
@@ -362,11 +363,11 @@ post-steps reuse the timer but drain expiry through their existing failure-toler
 completion and observation path. Harvest and deterministic commands do not use
 this build-phase timer.
 
-**Human guidance delivery.** The routing fact is an `escalation.answered`
+**Guidance delivery.** The routing fact is an `escalation.answered`
 event carrying `resolution: "guidance"`; nothing else routes an answer. `ab
 answer` and the dashboard's blocked-build resume control are two surfaces over
 the one `packages/core/src/cli/build-control.ts` operation that appends it, so delivery is
-identical whichever a human used.
+identical whichever surface the operator agent or you used.
 `packages/core/src/kernel/engine.ts` routes answers from `plan` and `plan-review` to the next
 `plan` round, and answers from `implement` and `code-review` to the next
 `implement` round. An agent verifier's own escalation is the deliberate

@@ -757,10 +757,12 @@ documentFields(policySchema, {
     'Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it.',
   stallRounds: 'Escalate when the same review finding survives this many rounds.',
   maxVerifyAttempts: 'Bound failure-driven verify \u2192 implement retry cycles.',
-  maxDispatchAttempts: 'Bound consecutive dispatch failures before human escalation.',
-  maxSetupAttempts: 'Bound consecutive workspace setup failures before human escalation.',
+  maxDispatchAttempts:
+    'Bound consecutive dispatch failures before a setup-targeted `dispatch-failure-limit` escalation.',
+  maxSetupAttempts:
+    'Bound consecutive workspace setup failures before a setup-targeted policy escalation.',
   maxInfrastructureAttempts:
-    'Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget.',
+    'Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a `retry` answer from your operator agent or you re-arms this budget.',
   maxReconcileAttempts:
     'Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound.',
   maxReviewRounds:

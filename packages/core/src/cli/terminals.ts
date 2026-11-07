@@ -670,7 +670,7 @@ async function reviewVerdict(
     if (opts.reason === undefined || opts.reason.trim() === '') {
       throw new Error(
         `'ab verdict escalate' requires --reason <text> — it becomes the ` +
-          'escalation question a human answers (§8.2, §11)',
+          'escalation question for external judgment (§8.2, §11)',
       )
     }
     reason = opts.reason
