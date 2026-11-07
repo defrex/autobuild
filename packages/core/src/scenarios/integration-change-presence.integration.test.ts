@@ -211,12 +211,14 @@ for (const trailerFlag of [undefined, false]) {
       // Force the legacy refresh path to retain snapshot failure/race coverage.
       const prior = journal.find((event) => event.type === 'change-presence.observed')!
       if (prior.type !== 'change-presence.observed') throw new Error('missing observation')
-      const { witness: _witness, ...legacy } = prior.payload
+      const { probe: _probe, ...legacy } = prior.payload
       await h.store.appendRepo(h.origin, {
         actor: DISPATCHER,
         type: 'change-presence.observed',
         payload: legacy,
       })
+      // As in a fresh process: no in-memory witness can stand in for the sample.
+      Reflect.get(h.dispatcher, 'presenceWitnesses').clear()
       if (trailerFlag === undefined) {
         const snapshot = h.forgeAdapter.snapshotBase!.bind(h.forgeAdapter)
         h.forgeAdapter.snapshotBase = async () => {
@@ -509,7 +511,7 @@ for (const saturated of [false, true])
     // the unit suite; retain both capacity states and all presence assertions.
   }, 15_000)
 
-test('durable destination witnesses bound unrelated history, ready-set churn and cold reuse', async () => {
+test('durable destination probes bound unrelated history, ready-set churn and cold reuse', async () => {
   const { git } = await import('./harness')
   const { DISPATCHER } = await import('../events/envelope')
   const { Dispatcher } = await import('../processes/dispatcher')
@@ -548,6 +550,12 @@ test('durable destination witnesses bound unrelated history, ready-set churn and
         payload: { outcome: 'merged' },
       })
     }
+    const contribute = (slug: string, identities: string[]) =>
+      h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'node.contribution-recorded',
+        payload: { landing: base, head: base, base, identities },
+      })
     await seed('blocker', absent, 'BLOCK')
     await seed('always-absent', 'f'.repeat(40), 'ABSENT')
     let snapshots = 0
@@ -571,124 +579,167 @@ test('durable destination witnesses bound unrelated history, ready-set churn and
       }
       return head
     }
-    await h.dispatcher.tick()
     const proof = async () =>
       (await readRepositoryFacts(h.store, h.origin)).value.presence['root:main']!
-    const original = JSON.stringify(await proof())
-    expect(snapshots).toBe(1)
-    expect(walks).toBe(1)
     const eventCount = async () =>
       (await h.store.getRepoEvents(h.origin)).filter(
         (event) =>
           event.type === 'change-presence.observed' && event.payload.destination === 'root:main',
       ).length
+    const fresh = () => new Dispatcher(Reflect.get(h.dispatcher, 'deps'))
+    const tick = async (dispatcher = h.dispatcher) => {
+      h.clock.advance(60_000)
+      await dispatcher.tick()
+    }
+    /** Ticks on `dispatcher` cost the given Git walks and appends. */
+    const expectCost = async (
+      dispatcher: InstanceType<typeof Dispatcher>,
+      cost: { walks: number; appends: number },
+    ) => {
+      const before = { snapshots, walks, events: await eventCount() }
+      await tick(dispatcher)
+      expect(snapshots - before.snapshots).toBe(cost.walks)
+      expect(walks - before.walks).toBe(cost.walks)
+      expect((await eventCount()) - before.events).toBe(cost.appends)
+    }
+    const expectBounded = async () => {
+      const observed = await proof()
+      expect(observed.witness).toBeUndefined()
+      expect(observed.probe).toBeDefined()
+      const questions = new Set<string>(observed.probe!.questions)
+      expect(observed.identities.every((id) => questions.has(id))).toBe(true)
+      expect(JSON.stringify(observed).length).toBeLessThan(2048)
+      return JSON.stringify(observed)
+    }
+    await h.dispatcher.tick()
+    expect(snapshots).toBe(1)
+    expect(walks).toBe(1)
     expect(await eventCount()).toBe(1)
+    let original = await expectBounded()
+    expect(JSON.parse(original).probe.questions).toEqual(['build:always-absent', 'build:blocker'])
+    // Unrelated landings, half at the reachable base SHA, never change the payload.
     for (const count of [10, 100]) {
       for (let i = 0; i < count; i++)
-        await seed(`unrelated-${count}-${i}`, (i + count + 100).toString(16).padStart(40, '0'))
-      h.clock.advance(60_000)
-      await h.dispatcher.tick()
+        await seed(
+          `unrelated-${count}-${i}`,
+          i % 2 ? base : (i + count + 100).toString(16).padStart(40, '0'),
+        )
+      await expectCost(h.dispatcher, { walks: 0, appends: 0 })
       expect(JSON.stringify(await proof())).toBe(original)
-      expect(snapshots).toBe(1)
-      expect(walks).toBe(1)
-      expect(await eventCount()).toBe(1)
       expect(h.tickets.claims).not.toContain('DEP')
     }
     h.tickets.add({ ...readyTicket('OTHER'), target: 'NODE', blockedBy: ['ABSENT'] })
-    h.clock.advance(60_000)
-    await h.dispatcher.tick()
+    await expectCost(h.dispatcher, { walks: 0, appends: 0 })
     expect(JSON.stringify(await proof())).toBe(original)
-    expect(snapshots).toBe(1)
-    expect(walks).toBe(1)
-    expect(await eventCount()).toBe(1)
     await h.tickets.transition('OTHER', 'Backlog')
-    h.clock.advance(60_000)
-    await h.dispatcher.tick()
+    await expectCost(h.dispatcher, { walks: 0, appends: 0 })
     expect(JSON.stringify(await proof())).toBe(original)
-    expect(snapshots).toBe(1)
-    expect(walks).toBe(1)
-    const deps = Reflect.get(h.dispatcher, 'deps')
-    const cold = new Dispatcher(deps)
-    h.clock.advance(60_000)
-    await cold.tick()
+    await expectCost(fresh(), { walks: 0, appends: 0 })
     expect(JSON.stringify(await proof())).toBe(original)
-    expect(snapshots).toBe(1)
-    expect(walks).toBe(1)
-    expect(await eventCount()).toBe(1)
-    // A legacy observation is readable, but cannot authorize admission without sampling.
-    const { witness: _witness, ...legacy } = await proof()
-    await h.store.appendRepo(h.origin, {
-      actor: DISPATCHER,
-      type: 'change-presence.observed',
-      payload: {
-        ...legacy,
-        evidence: JSON.stringify({ version: 2, revisions: [] }),
+
+    // Introducing a relevant node refreshes once by reprojection; growing its
+    // unrelated siblings afterwards changes nothing, warm or cold.
+    await seed('carrier', base, 'carrier', 'node')
+    await contribute('carrier', ['build:always-absent', 'build:leaf-a', 'build:leaf-b'])
+    await expectCost(h.dispatcher, { walks: 0, appends: 1 })
+    const introduced = await expectBounded()
+    expect(JSON.parse(introduced).identities).toEqual(['build:always-absent'])
+    await contribute('carrier', [
+      'build:always-absent',
+      'build:leaf-a',
+      'build:leaf-b',
+      ...Array.from({ length: 100 }, (_, i) => `build:sibling-${i}`),
+    ])
+    await expectCost(h.dispatcher, { walks: 0, appends: 0 })
+    expect(JSON.stringify(await proof())).toBe(introduced)
+    await expectCost(fresh(), { walks: 0, appends: 0 })
+    expect(JSON.stringify(await proof())).toBe(introduced)
+    // Withdrawing it reprojects without Git.
+    await h.store.append('carrier', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
+    await expectCost(h.dispatcher, { walks: 0, appends: 1 })
+    expect((await proof()).identities).toEqual([])
+
+    // Two dependents with different blockers share one destination sample.
+    await seed('second-blocker', 'e'.repeat(40), 'BLOCK2')
+    h.tickets.add(readyTicket('BLOCK2', { state: 'In Progress' }))
+    h.tickets.add({ ...readyTicket('DEP2'), blockedBy: ['BLOCK2'] })
+    // One append carries the union of both dependents' questions.
+    await expectCost(h.dispatcher, { walks: 0, appends: 1 })
+    original = await expectBounded()
+    expect(JSON.parse(original).probe.questions).toEqual([
+      'build:always-absent',
+      'build:blocker',
+      'build:second-blocker',
+    ])
+    await expectCost(h.dispatcher, { walks: 0, appends: 0 })
+    await expectCost(fresh(), { walks: 0, appends: 0 })
+    expect(JSON.stringify(await proof())).toBe(original)
+
+    // Observations without a probe cannot authorize admission without sampling.
+    const { probe: _probe, ...current } = await proof()
+    for (const legacy of [
+      { ...current, evidence: JSON.stringify({ version: 2, revisions: [] }) },
+      {
+        ...current,
+        evidence: `presence-v3:${'0'.repeat(64)}`,
+        witness: { version: 1 as const, commits: [base], identities: [] },
       },
-    })
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect(snapshots).toBe(2)
-    expect(walks).toBe(2)
-    expect(JSON.stringify(await proof())).toBe(original)
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect(snapshots).toBe(2)
-    expect(walks).toBe(2)
-    // Late confirmed landing facts at this immutable head require only reprojection.
-    await seed('late-landing', base)
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect((await proof()).identities).toContain('build:late-landing')
-    expect(snapshots).toBe(2)
-    expect(walks).toBe(2)
-    const changedEvents = await eventCount()
-    expect(changedEvents).toBe(4) // initial, legacy, refresh, late landing
-    await h.store.append('late-landing', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect((await proof()).identities).not.toContain('build:late-landing')
-    expect(snapshots).toBe(2)
-    expect(walks).toBe(2)
-    expect(await eventCount()).toBe(changedEvents + 1)
-    await seed('late-node', base, 'late-node', 'node')
-    await h.store.append('late-node', {
-      actor: DISPATCHER,
-      type: 'node.contribution-recorded',
-      payload: { landing: base, head: base, base, identities: ['build:nested'] },
-    })
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect((await proof()).identities).toContain('build:nested')
-    expect((await proof()).identities).not.toContain('build:deep')
-    await seed('nested', absent, 'nested', 'node')
-    await h.store.append('nested', {
-      actor: DISPATCHER,
-      type: 'node.contribution-recorded',
-      payload: { landing: absent, head: absent, base, identities: ['build:deep'] },
-    })
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect((await proof()).identities).toContain('build:deep')
-    expect(snapshots).toBe(2)
-    expect(walks).toBe(2)
-    await h.store.append('late-node', { actor: DISPATCHER, type: 'build.aborted', payload: {} })
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect((await proof()).identities).not.toContain('build:deep')
+    ]) {
+      await h.store.appendRepo(h.origin, {
+        actor: DISPATCHER,
+        type: 'change-presence.observed',
+        payload: legacy,
+      })
+      const cold = fresh()
+      await expectCost(cold, { walks: 1, appends: 1 })
+      expect(JSON.stringify(await proof())).toBe(original)
+      await expectCost(cold, { walks: 0, appends: 0 })
+    }
+
+    // A newer generation of a queried blocker lands at the unchanged head: the
+    // warm dispatcher reprojects from its in-memory witness, a fresh one walks.
+    await seed('absent-newer', base, 'ABSENT')
+    await expectCost(h.dispatcher, { walks: 0, appends: 1 })
+    expect((await proof()).identities).toContain('build:absent-newer')
+    await expectBounded()
+    await seed('absent-newest', base, 'ABSENT')
+    await expectCost(fresh(), { walks: 1, appends: 1 })
+    expect((await proof()).identities).toContain('build:absent-newest')
+    await expectBounded()
     expect(h.tickets.claims).not.toContain('DEP')
+
     // Move to the sibling landing, then force back: both changes must refresh.
+    const closure = new Set([absent, base, 'f'.repeat(40), 'e'.repeat(40)])
+    const cold = fresh()
     await git(['update-ref', 'refs/heads/main', absent], h.origin)
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect(snapshots).toBe(3)
-    expect(walks).toBe(3)
+    await expectCost(cold, { walks: 1, appends: 1 })
     expect((await proof()).identities).toContain('build:blocker')
+    expect((await proof()).probe!.commits.every((sha) => closure.has(sha))).toBe(true)
+    await expectBounded()
     await git(['update-ref', 'refs/heads/main', base], h.origin)
-    h.clock.advance(60_000)
-    await cold.tick()
-    expect(snapshots).toBe(4)
-    expect(walks).toBe(4)
+    await expectCost(cold, { walks: 1, appends: 1 })
     expect((await proof()).identities).not.toContain('build:blocker')
+    expect((await proof()).probe!.commits.every((sha) => closure.has(sha))).toBe(true)
+    await expectBounded()
+
+    // With DEP admitted, DEP2's stable query reuses the durable probe while a
+    // later dependent rotates its blocker every tick: the stored questions
+    // stay this tick's union instead of accumulating every past rotation.
+    expect(h.tickets.claims).toContain('DEP')
+    const stable = ['build:second-blocker']
+    for (let i = 0; i < 12; i++) {
+      await seed(`rotating-${i}`, (i + 600).toString(16).padStart(40, '0'), `ROT${i}`)
+      h.tickets.add(readyTicket(`ROT${i}`, { state: 'In Progress' }))
+      h.tickets.add({ ...readyTicket(`ROTDEP${i}`), blockedBy: [`ROT${i}`] })
+      if (i > 0) await h.tickets.transition(`ROTDEP${i - 1}`, 'Backlog')
+      await expectCost(cold, { walks: 0, appends: 1 })
+      const rotated = JSON.parse(await expectBounded())
+      expect(rotated.probe.questions).toEqual([...stable, `build:rotating-${i}`].sort())
+    }
+    const settled = await expectBounded()
+    await expectCost(cold, { walks: 0, appends: 0 })
+    await expectCost(fresh(), { walks: 0, appends: 0 })
+    expect(JSON.stringify(await proof())).toBe(settled)
   } finally {
     await h.cleanup()
   }
