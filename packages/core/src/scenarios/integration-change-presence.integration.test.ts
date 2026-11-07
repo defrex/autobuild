@@ -721,6 +721,25 @@ test('durable destination probes bound unrelated history, ready-set churn and co
     expect((await proof()).identities).not.toContain('build:blocker')
     expect((await proof()).probe!.commits.every((sha) => closure.has(sha))).toBe(true)
     await expectBounded()
+
+    // With DEP admitted, DEP2's stable query reuses the durable probe while a
+    // later dependent rotates its blocker every tick: the stored questions
+    // stay this tick's union instead of accumulating every past rotation.
+    expect(h.tickets.claims).toContain('DEP')
+    const stable = ['build:second-blocker']
+    for (let i = 0; i < 12; i++) {
+      await seed(`rotating-${i}`, (i + 600).toString(16).padStart(40, '0'), `ROT${i}`)
+      h.tickets.add(readyTicket(`ROT${i}`, { state: 'In Progress' }))
+      h.tickets.add({ ...readyTicket(`ROTDEP${i}`), blockedBy: [`ROT${i}`] })
+      if (i > 0) await h.tickets.transition(`ROTDEP${i - 1}`, 'Backlog')
+      await expectCost(cold, { walks: 0, appends: 1 })
+      const rotated = JSON.parse(await expectBounded())
+      expect(rotated.probe.questions).toEqual([...stable, `build:rotating-${i}`].sort())
+    }
+    const settled = await expectBounded()
+    await expectCost(cold, { walks: 0, appends: 0 })
+    await expectCost(fresh(), { walks: 0, appends: 0 })
+    expect(JSON.stringify(await proof())).toBe(settled)
   } finally {
     await h.cleanup()
   }

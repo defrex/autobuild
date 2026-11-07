@@ -301,6 +301,9 @@ interface PresenceObservation {
   head: string
   identities: ChangeIdentity[]
   probe: PresenceProbe
+  /** Questions asked this tick. A reused durable probe may cover more, but
+   * only these seed a re-compaction, so questions never accumulate across ticks. */
+  asked: ChangeIdentity[]
 }
 export interface DependencyVerdict {
   /** Unresolved blocker ids — nonempty means DO NOT dispatch. */
@@ -6710,21 +6713,24 @@ export class Dispatcher {
   ): Promise<PresenceObservation> {
     const aliases = destinationAliases(inputs, target?.target.build)
     const entry = observations.get(destination)
-    if (entry && answers(entry.probe, query, inputs.landings, aliases)) return entry
+    const asked = normalizeIdentities([...(entry?.asked ?? []), ...query])
+    if (entry && answers(entry.probe, query, inputs.landings, aliases)) {
+      entry.asked = asked
+      return entry
+    }
     const forge = this.kernelForge()
     let head = entry?.head
     if (head === undefined) {
       if (!forge.remoteBranchSha) throw new Error('forge cannot read destination head')
       head = await forge.remoteBranchSha(branch)
     }
-    const questions = normalizeIdentities([...(entry?.probe.questions ?? []), ...query])
     const cached = this.store.repositoryFacts().presence[destination]
     let probe: PresenceProbe
     if (
       cached?.head === head &&
       cached.branch === branch &&
       cached.probe &&
-      answers(cached.probe as PresenceProbe, questions, inputs.landings, aliases)
+      answers(cached.probe as PresenceProbe, asked, inputs.landings, aliases)
     )
       probe = cached.probe as PresenceProbe
     else {
@@ -6734,10 +6740,10 @@ export class Dispatcher {
           ? memo.witness
           : await this.sampleDestinationWitness(branch, head, target)
       this.presenceWitnesses.set(destination, { branch, head, witness })
-      probe = compactProbe(witness, questions, inputs.landings, aliases)
+      probe = compactProbe(witness, asked, inputs.landings, aliases)
     }
     const identities = projectProbe(probe, inputs.landings, aliases)
-    const observed = { branch, destination, head, identities, probe }
+    const observed = { branch, destination, head, identities, probe, asked }
     observations.set(destination, observed)
     return observed
   }
