@@ -726,7 +726,8 @@ export interface DispatcherDeps {
   startHarvest?: () => void
   /** Optional one-shot judgment over the final conforming spec. The dispatcher
    * supplies cancellation and treats every absence/failure/invalid result as a
-   * local deterministic fallback, so naming can never prevent build creation. */
+   * local deterministic fallback, so a failed proposal never prevents build
+   * creation. Slug deduplication (`uniqueSlug`) can still fail the claim. */
   nameSlug?: (spec: string, signal: AbortSignal) => Promise<string | null>
   /** Settle pending publication for `slug` after durable proof that the
    * guest execution ended. Supplied by the DispatchLoop; the settlement stage
