@@ -219,6 +219,57 @@ test('released clients receive build digests without the additive node targets',
   expect(projected).toBeGreaterThan(0)
 })
 
+test('released clients receive presence observations without the additive probe', () => {
+  const observed = {
+    branch: 'main',
+    destination: 'root:main',
+    head: 'a'.repeat(40),
+    evidence: `presence-v4:${'0'.repeat(64)}`,
+    identities: ['build:blocker'],
+  }
+  const value = {
+    ...repositoryReadFactsReducer.finish(repositoryReadFactsReducer.initial()),
+    presence: {
+      'root:main': {
+        ...observed,
+        probe: {
+          version: 1 as const,
+          questions: ['build:blocker' as const],
+          commits: ['a'.repeat(40)],
+          reachable: ['a'.repeat(40)],
+          builds: ['build:blocker' as const],
+          trailers: [],
+        },
+      },
+    },
+  }
+  const answer = { version: repositoryReadFactsReducer.version, cursor: 3, value }
+  let projected = 0
+  for (const release of matrixReleases) {
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]
+    if (!catalog || !Object.hasOwn(catalog.versions, 'repositoryReadFacts')) continue
+    const adapted = reducerValueForClient(
+      {
+        version: release.version,
+        projects: release.projects ?? false,
+        catalogIdentity: release.catalogIdentity,
+      },
+      'repositoryReadFacts',
+      answer,
+      matrixReleases,
+    )
+    expect(adapted.version).toBe(catalog.versions.repositoryReadFacts!)
+    expect((adapted.value as typeof value).presence['root:main']).toEqual(
+      observed as (typeof value.presence)['root:main'],
+    )
+    expect(projectReducerValue('repositoryReadFacts', adapted.value, catalog)).toEqual({
+      value: adapted.value,
+    })
+    projected++
+  }
+  expect(projected).toBeGreaterThan(0)
+})
+
 for (const release of matrixReleases) {
   test(`published ${release.version}: every named reducer fits its frozen acceptance contract`, () => {
     expect(release.protocol).toBeDefined()
