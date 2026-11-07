@@ -748,6 +748,46 @@ describe('FileTicketSource', () => {
     expect(await readFile(path('ready', created.ref.id), 'utf8')).toBe(original)
   })
 
+  test('urgent priority round-trips through TOML and normal restores the original bytes', async () => {
+    const tickets = source()
+    const created = await tickets.create(
+      { title: 'Normal', body: SPEC_BODY, labels: ['a'] },
+      { state: 'Ready', idempotencyKey: 'priority-key' },
+    )
+    const file = path('ready', created.ref.id)
+    const original = await readFile(file, 'utf8')
+    expect(original).not.toContain('priority =')
+
+    await tickets.update(created.ref.id, { priority: 'normal' })
+    expect(await readFile(file, 'utf8')).toBe(original)
+
+    await tickets.update(created.ref.id, { priority: 'urgent' })
+    expect(await readFile(file, 'utf8')).toContain('priority = "urgent"')
+    const urgent = await source().get(created.ref.id)
+    expect(urgent?.priority).toBe('urgent')
+    expect(urgent?.revision).not.toBe(created.revision)
+
+    await tickets.update(created.ref.id, { priority: 'normal' })
+    expect(await readFile(file, 'utf8')).toBe(original)
+    expect((await source().get(created.ref.id))?.revision).toBe(created.revision)
+  })
+
+  test('a hand-written normal priority reads as normal', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    await writeFile(
+      path('ready', 'hand'),
+      '+++\nid = "hand"\ntitle = "Hand"\npriority = "normal"\n+++\nbody\n',
+    )
+    await writeFile(
+      path('ready', 'bad'),
+      '+++\nid = "bad"\ntitle = "Bad"\npriority = "high"\n+++\nbody\n',
+    )
+    const listing = await source().listReady({ state: 'Ready' })
+    expect(listing.tickets.map((ticket) => ticket.ref.id).sort()).toEqual(['file-1', 'hand'])
+    expect(listing.tickets.some((ticket) => 'priority' in ticket)).toBe(false)
+    expect(listing.diagnostics.join('\n')).toContain('priority')
+  })
+
   test('invalid on-disk issue links are a listing diagnostic, not a crash', async () => {
     await seedTicket('file-1', { state: 'ready' })
     await writeFile(

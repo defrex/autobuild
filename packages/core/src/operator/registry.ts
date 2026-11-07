@@ -5,6 +5,7 @@ import { getOperatorTicketTree } from './tickets'
 import { openOperatorTickets, operatorControlTickets } from './tickets'
 import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
 import { TicketIssueLinksUnsupported } from '../ports/tickets/issue-links'
+import { TicketPriorityUnsupported } from '../ports/tickets/priority'
 /**
  * The agent tool registry — one typed table that is the single source of
  * truth for the agent-facing operator surface (AUT-338).
@@ -341,6 +342,7 @@ const ticketsUpdateInput = ticketUpdateRequestSchema
       value.body !== undefined ||
       value.labels !== undefined ||
       value.issueLinks !== undefined ||
+      value.priority !== undefined ||
       value.kind !== undefined ||
       value.target !== undefined,
     'update must name at least one field',
@@ -847,12 +849,13 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'tickets.create',
-    'Create a ticket in the configured source, optionally labelled, pre-blocked, linked to the forge issues it addresses, or filed in a nondefault state.',
+    'Create a ticket in the configured source, optionally labelled, pre-blocked, linked to the forge issues it addresses, urgent so it dispatches before normal ready work, or filed in a nondefault state.',
     ticketsCreateInput,
     '{ticket, blockers, build}: the created ticket and its (usually empty) dependency states.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketsCreateInput>
-      const { repo, title, body, labels, state, blockedBy, issueLinks, kind, target } = input
+      const { repo, title, body, labels, state, blockedBy, issueLinks, priority, kind, target } =
+        input
       return mutateOperatorTicket({
         store: ctx.store,
         repo,
@@ -867,13 +870,14 @@ export const TOOLS: readonly ToolEntry[] = [
           ...(state !== undefined ? { state } : {}),
           ...(blockedBy !== undefined ? { blockedBy } : {}),
           ...(issueLinks !== undefined ? { issueLinks } : {}),
+          ...(priority !== undefined ? { priority } : {}),
         },
       })
     },
   ),
   defineTool(
     'tickets.update',
-    'Partially replace a ticket’s editable fields (title, body, labels, issue links, kind, target); state is never changed here.',
+    'Partially replace a ticket’s editable fields (title, body, labels, issue links, priority, kind, target); urgent priority dispatches before normal ready work. State is never changed here.',
     ticketsUpdateInput,
     '{ticket, blockers, build}: the updated ticket.',
     async (raw, ctx) => {
@@ -1114,6 +1118,12 @@ function mapDomainError(error: unknown): RegistryError {
       kind: 'refusal',
       error: error.message,
       code: 'issue-links-unsupported',
+    })
+  if (error instanceof TicketPriorityUnsupported)
+    return new RegistryError('domain', error.message, {
+      kind: 'refusal',
+      error: error.message,
+      code: 'priority-unsupported',
     })
   if (error instanceof TicketOperationError) {
     return new RegistryError('domain', error.message, {

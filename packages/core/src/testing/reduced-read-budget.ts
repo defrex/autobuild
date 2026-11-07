@@ -2594,6 +2594,111 @@ export async function ticketRoleTickBudget(
   return baseline!
 }
 
+/** Urgent intake order (AUT-1027) is an in-memory partition of the one ready
+ * listing a due scan already reads: with and without an urgent ticket present,
+ * a quiet intake tick makes the same source calls and the same store reads, at
+ * 100 and 100,000 repository events, and an unchanged follow-up read costs zero
+ * rows. Returns the per-method source calls of one tick. */
+export async function urgentIntakeReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const sha = 'a'.repeat(40)
+  const config = parseConfig(
+    '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n',
+  )
+  const methods = ['listReady', 'get', 'dependencyStates', 'listAll'] as const
+  const results = new Map<string, { calls: Record<string, number>[]; rows: number[] }>()
+  for (const urgent of [false, true]) {
+    for (const length of [100, 100_000]) {
+      const source = new FakeTicketSource([], { createState: 'triage', doneState: 'done' })
+      const calls: Record<string, number> = Object.fromEntries(methods.map((name) => [name, 0]))
+      const tickets = new Proxy(source, {
+        get(target, key) {
+          const value = Reflect.get(target, key, target)
+          if (typeof value !== 'function') return value
+          return (...args: unknown[]) => {
+            if (typeof key === 'string' && key in calls) calls[key]! += 1
+            return value.apply(target, args)
+          }
+        },
+      })
+      // Every ready ticket is blocked by one unresolved ticket, so ticks claim nothing.
+      const blocker = await source.create({ title: 'Unresolved blocker', body: 'Budget' })
+      for (const [index, title] of ['N1', 'N2', 'U1'].entries()) {
+        const ticket = await source.create({
+          title,
+          body: 'Budget',
+          ...(urgent && index === 2 ? { priority: 'urgent' as const } : {}),
+        })
+        await source.addBlocker(ticket.ref.id, blocker.ref.id)
+        await source.transition(ticket.ref.id, 'ready')
+      }
+
+      let now = 1_800_000_000_000
+      const clock = () => new Date(now)
+      const store = new MemoryBuildStore({ clock })
+      const repo = `https://github.com/budget/urgent-intake-${urgent}-${length}`
+      await store.ensureRepo(repo)
+      for (let i = 0; i < length; i++)
+        await store.appendRepo(repo, {
+          actor: humanActor('budget'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        })
+      // The one serialized reduction per key happens before the measured ticks.
+      await readRepositoryFacts(store, repo)
+      await readBuildDigests(store, repo)
+      const counter = memoryRepositoryReadCounter(store, repo)
+      const perTick: Record<string, number>[] = []
+      const rows: number[] = []
+      for (let tick = 0; tick < 2; tick++) {
+        now += 60_000
+        const forge = new FakeForge()
+        forge.seedBranch('main', sha)
+        const dispatcher = new Dispatcher({
+          store,
+          tickets,
+          workspaces: new FakeWorkspaceProvider({
+            root: '/urgent-intake-budget',
+            mode: 'logical',
+            base: { source: 'remote', sha },
+          }),
+          forge,
+          config,
+          repo,
+          exec: async () => ({ stdout: `${sha}\trefs/heads/main\n`, stderr: '', exitCode: 0 }),
+          launchRunner: async () => {
+            throw new Error('no launches in the urgent intake budget')
+          },
+          ids: sequentialIds(),
+          clock,
+        })
+        const before = { ...calls }
+        counter.reset()
+        const report = await dispatcher.tick()
+        perTick.push(
+          Object.fromEntries(methods.map((name) => [name, calls[name]! - before[name]!])),
+        )
+        rows.push(counter.rows)
+        expect(report.dispatched).toBe(0)
+        expect(report.dependencyBlocked).toBe(3)
+        expect(counter.rows).toBeLessThanOrEqual(32)
+        // Prepare the tick's own tail, then prove an unchanged read costs zero rows.
+        await readRepositoryFacts(store, repo)
+        await readBuildDigests(store, repo)
+        counter.reset()
+        await readRepositoryFacts(store, repo)
+        await readBuildDigests(store, repo)
+        expect(counter.rows).toBe(0)
+      }
+      results.set(`${urgent}:${length}`, { calls: perTick, rows })
+      await store.close()
+    }
+  }
+  const [baseline, ...rest] = [...results.values()]
+  for (const result of rest) expect(result).toEqual(baseline!)
+  return baseline!.calls[0]!
+}
+
 /** Native identity maintenance (SPEC §15.7) adds one forge identity read per
  * armed, eligible poll and nothing else: a fresh dispatcher's quiet
  * maintenance tick reads no history, spends exactly the store reads of the same

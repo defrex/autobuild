@@ -43,6 +43,9 @@ const frontmatterSchema = z.strictObject({
     )
     .superRefine(refineUniqueIssues)
     .optional(),
+  /** Dispatch class. Absent ≡ normal; a hand-written `normal` is tolerated and
+   * dropped on the next write. */
+  priority: z.enum(['urgent', 'normal']).optional(),
   /** Stable external-create adoption key. It travels with the ticket across
    * state-directory moves, so retries find it in any lifecycle state. */
   idempotencyKey: z.string().min(1).optional(),
@@ -102,6 +105,8 @@ export function serializeTicketFile(front: Frontmatter, body: string): string {
   if (front.issueLinks !== undefined && front.issueLinks.length > 0) {
     data.issueLinks = front.issueLinks
   }
+  // Only urgent is written, so normal tickets round-trip byte-identically.
+  if (front.priority === 'urgent') data.priority = front.priority
   if (front.idempotencyKey !== undefined) {
     data.idempotencyKey = front.idempotencyKey
   }
