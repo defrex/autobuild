@@ -39,7 +39,7 @@ Leaves run the [normal build pipeline](builds.md). A node collects, verifies, me
 A leaf contributes one canonical net change, however many commits it took.
 
 - **Identity.** The `Autobuild-Build: <slug>` trailer carries it across SHA rewrites. Root squash merges keep it; node integration keeps each contributing identity, in order, rather than one node commit.
-- **Restacks.** When a destination moves, Autobuild restacks onto it and cascades through descendants. Clean replay is automatic; a conflict attaches a reconcile runner with the source change's context, then verification as required.
+- **Restacks.** When a destination moves, a leaf restacks onto it at its usual restack points; a node restacks only on demand, and each descendant node needs its own demand. Clean replay is automatic; a conflict attaches a reconcile runner with the source change's context, then verification as required.
 - **Reverification.** Node verification covers the exact node head and parent; a change to either voids merge eligibility until reverified, even after a clean restack. A cleanly restacked waiting leaf can keep its prior verification; reports cite their actual head and base.
 
 
@@ -51,7 +51,7 @@ A target says where work integrates; a blocker says what must be available befor
 bun ab ticket block <id> <blocker-id>
 ```
 
-- **With nodes**, a blocker that has a build resolves when its change is present in the dependent's sampled destination. Sibling work may need to merge into a common ancestor and cascade first.
+- **With nodes**, a blocker that has a build resolves when its change is present in the dependent's sampled destination. Sibling work may need to merge into a common ancestor first; presence demand then restacks only the path down to the dependent's destination.
 - **Presence** is checked at claim, without interrupting existing builds; missing or ambiguous evidence keeps the dependent queued.
 - **Without nodes**, and for blockers without builds, the source ticket's done state resolves it.
 
