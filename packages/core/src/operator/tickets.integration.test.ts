@@ -424,6 +424,45 @@ test('native pages forward criteria and window without a full read or double sli
   expect((await listOperatorTickets({ store, repo, backend: backend(native) })).total).toBe(1)
 })
 
+test('fallback pages list urgent first in dispatch order and newest reverses the source', async () => {
+  const store = await configuredStore()
+  const queued = (id: string, priority?: 'urgent') => ({
+    ...seed,
+    ref: { ...seed.ref, id },
+    blockedBy: [],
+    ...(priority ? { priority } : {}),
+  })
+  const source = new FakeTicketSource([queued('AUT-1'), queued('AUT-2', 'urgent'), queued('AUT-3')])
+  const ids = async (page?: { limit: number; offset?: number; order?: 'oldest' | 'newest' }) => {
+    const result = await listOperatorTickets({
+      store,
+      repo,
+      backend: backend(source),
+      ...(page ? { page } : {}),
+    })
+    return { ids: result.tickets.map((t) => t.ref.id), total: result.total }
+  }
+  expect(await ids()).toEqual({ ids: ['AUT-2', 'AUT-1', 'AUT-3'], total: 3 })
+  expect(await ids({ limit: 2 })).toEqual({ ids: ['AUT-2', 'AUT-1'], total: 3 })
+  expect(await ids({ limit: 2, offset: 2 })).toEqual({ ids: ['AUT-3'], total: 3 })
+  expect(await ids({ limit: 3, order: 'newest' })).toEqual({
+    ids: ['AUT-3', 'AUT-2', 'AUT-1'],
+    total: 3,
+  })
+  const native = Object.assign(source, {
+    async listPage() {
+      return { tickets: [queued('AUT-1'), queued('AUT-2', 'urgent')], diagnostics: [], total: 2 }
+    },
+  })
+  const passed = await listOperatorTickets({
+    store,
+    repo,
+    backend: backend(native),
+    page: { limit: 2 },
+  })
+  expect(passed.tickets.map((t) => t.ref.id)).toEqual(['AUT-1', 'AUT-2'])
+})
+
 test('operator association request budget stays fixed across canonical history and fresh backends', async () => {
   const { operatorTicketAssociationBudget } = await import('../testing/reduced-read-budget')
   await operatorTicketAssociationBudget()
