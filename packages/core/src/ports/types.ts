@@ -756,6 +756,9 @@ export interface Forge {
    * gate. Transient merge states defer quietly; non-transient inability to
    * inspect or apply consent returns a reason-bearing deferral. The operation
    * is idempotent and safe to retry across the forge-call/event-append crash window.
+   * With options it is also called on every eligible poll while a request is
+   * armed: a matching request returns `applied` without mutation, and any
+   * repair calls `options.canApply` first.
    */
   setAutoMerge(
     workspacePath: string,

@@ -63,6 +63,15 @@ export interface AutoMergeRecord {
   enabled: boolean
   /** False on an idempotent retry or a result that leaves native state off. */
   changed: boolean
+  /** The identity request an options-bearing enable or repair armed. */
+  armed?: FakeArmedRequest
+}
+
+/** A native request's merge method and commit message, as GitHub stores it. */
+export interface FakeArmedRequest {
+  method: 'SQUASH' | 'MERGE' | 'REBASE'
+  headline: string
+  body: string
 }
 
 export interface SquashMergeRecord {
@@ -206,6 +215,14 @@ export class FakeForge implements Forge {
   private readonly mergeStates = new Map<number, MergeStateStatus>()
   private readonly gates = new Map<number, FakeGateState>()
   private readonly autoMerge = new Map<number, boolean>()
+  /** Modelled armed requests. An enabled PR without an entry is a legacy arm
+   * (seeded or enabled without options) whose message is unmodelled and is
+   * treated as matching. */
+  private readonly armed = new Map<number, FakeArmedRequest>()
+  /** Current PR title and body: the source of GitHub's fresh default message. */
+  private readonly metadata = new Map<number, { title: string; body: string }>()
+  /** PR number of every options-bearing readback of an enabled request. */
+  readonly identityReads: number[] = []
   private readonly nativeDeferrals = new Map<number, AutoMergeDeferralReason>()
   private readonly squashErrors = new Map<number, string>()
   private readonly attachmentAssets = new Map<string, HostedPrAttachmentAsset>()
@@ -261,6 +278,8 @@ export class FakeForge implements Forge {
           throw new Error(`PR #${number} is not open; issue keywords not updated`)
         this.issueLinkUpdates.push({ number, issueLinks: issueLinks.map((link) => ({ ...link })) })
         pr.body = withIssueKeywords(pr.body, issueLinks, { trailers: false })
+        const metadata = this.metadata.get(number)
+        if (metadata) metadata.body = pr.body
         if (this.failIssueLinkReadback)
           throw new Error(`PR #${number} body readback disagrees with issue keywords`)
       }
@@ -294,6 +313,8 @@ export class FakeForge implements Forge {
     this.prs.set(number, state)
     if (!this.headShas.has(number)) this.headShas.set(number, this.resolveHeadSha(number))
     if (!this.autoMerge.has(number)) this.autoMerge.set(number, false)
+    if (!this.metadata.has(number))
+      this.metadata.set(number, { title: `Fake PR #${number}`, body: '' })
     if (!this.gates.has(number)) this.gates.set(number, this.defaultGatePresence)
     if (!this.mergeStates.has(number)) {
       const mergeState: MergeStateStatus =
@@ -468,6 +489,54 @@ export class FakeForge implements Forge {
   setAutoMergeState(number: number, enabled: boolean): void {
     this.assertPr(number)
     this.autoMerge.set(number, enabled)
+    if (!enabled) this.armed.delete(number)
+  }
+
+  /** Arm native auto-merge with exactly this method and message, as a human
+   * enabling it in the GitHub UI would. */
+  armAutoMerge(number: number, request: FakeArmedRequest): void {
+    this.assertPr(number)
+    this.autoMerge.set(number, true)
+    this.armed.set(number, { ...request })
+  }
+
+  /** The modelled armed request; undefined when disabled or a legacy arm. */
+  armedAutoMerge(number: number): FakeArmedRequest | undefined {
+    const request = this.armed.get(number)
+    return request && { ...request }
+  }
+
+  /** Edit the PR title or body. This changes GitHub's fresh default message,
+   * never the message of an already-armed request. */
+  editPr(number: number, edit: { title?: string; body?: string }): void {
+    this.assertPr(number)
+    const metadata = this.metadata.get(number)!
+    if (edit.title !== undefined) metadata.title = edit.title
+    if (edit.body !== undefined) metadata.body = edit.body
+  }
+
+  /** The identity squash request GitHub would arm for these options now:
+   * fresh viewer defaults plus the build trailer. */
+  expectedIdentity(number: number, options: BuildLandingOptions): FakeArmedRequest {
+    this.assertPr(number)
+    const { title, body } = this.metadata.get(number)!
+    const links = this.closesIssues === true ? (options.issueLinks ?? []) : []
+    return {
+      method: 'SQUASH',
+      headline: neutralizeClosingReferences(`${title} (#${number})`, links),
+      body: landingMessage(body, options.buildSlug, links),
+    }
+  }
+
+  private identityMatches(number: number, options: BuildLandingOptions): boolean {
+    const armed = this.armed.get(number)
+    if (armed === undefined) return true
+    const expected = this.expectedIdentity(number, options)
+    return (
+      armed.method === expected.method &&
+      armed.headline === expected.headline &&
+      armed.body.trimEnd() === expected.body.trimEnd()
+    )
   }
 
   /** Inspect native state in seam/integration assertions. */
@@ -598,6 +667,7 @@ export class FakeForge implements Forge {
         : {}),
     })
     this.registerPr(number, { state: 'open', mergeable: null })
+    this.metadata.set(number, { title: this.opened.at(-1)!.title, body: this.opened.at(-1)!.body })
     return {
       number,
       url: `https://fake.forge/pr/${number}`,
@@ -624,9 +694,15 @@ export class FakeForge implements Forge {
     this.assertPr(number)
     const currentlyEnabled = this.autoMerge.get(number) ?? false
 
+    if (enabled && currentlyEnabled && options !== undefined) {
+      this.identityReads.push(number)
+      if (!this.identityMatches(number, options))
+        return this.repairIdentity(workspacePath, number, options)
+    }
     if (!enabled || currentlyEnabled) {
       const changed = currentlyEnabled !== enabled
       this.autoMerge.set(number, enabled)
+      if (!enabled) this.armed.delete(number)
       this.autoMergeCalls.push({ workspacePath, number, enabled, changed })
       return { kind: 'applied' }
     }
@@ -648,11 +724,14 @@ export class FakeForge implements Forge {
         if (options?.canApply !== undefined && !(await options.canApply()))
           return { kind: 'deferred' }
         this.autoMerge.set(number, true)
+        const armed = options && this.expectedIdentity(number, options)
+        if (armed) this.armed.set(number, armed)
         this.autoMergeCalls.push({
           workspacePath,
           number,
           enabled: true,
           changed: true,
+          ...(armed ? { armed: { ...armed } } : {}),
         })
         return { kind: 'applied' }
       }
@@ -679,6 +758,32 @@ export class FakeForge implements Forge {
           reason: { code: 'unproven-gate-state', detail: disposition.reason },
         }
     }
+  }
+
+  /** Replace a mismatched armed request in GitHub's order: gate inspection,
+   * then the consent check, then disable and re-arm with the identity. */
+  private async repairIdentity(
+    workspacePath: string,
+    number: number,
+    options: BuildLandingOptions,
+  ): Promise<AutoMergeResult> {
+    const gate = this.gates.get(number) ?? this.defaultGatePresence
+    const reason = typeof gate === 'object' ? gate : this.nativeDeferrals.get(number)
+    if (reason !== undefined) {
+      this.autoMergeCalls.push({ workspacePath, number, enabled: true, changed: false })
+      return { kind: 'deferred', reason }
+    }
+    if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
+    const armed = this.expectedIdentity(number, options)
+    this.armed.set(number, armed)
+    this.autoMergeCalls.push({
+      workspacePath,
+      number,
+      enabled: true,
+      changed: true,
+      armed: { ...armed },
+    })
+    return { kind: 'applied' }
   }
 
   async squashMerge(
