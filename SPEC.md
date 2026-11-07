@@ -3804,8 +3804,10 @@ Quiet polls append no attempt facts. Native application receipts and janitor
 bookkeeping are not pipeline execution progress.
 
 Native auto-merge is reconciled on every janitor poll against durable desired
-merge state using the native state in the existing PR read, without additional
-forge reads. A native write is issued only when observed and desired state disagree. It is disabled while held, unauthorized, unready, or replacement
+merge state using the native state in the existing PR read; an armed, authorized
+request on an eligible poll additionally gets the forge's landing-identity
+readback. A native write is issued only when observed and desired state,
+including that identity, disagree. It is disabled while held, unauthorized, unready, or replacement
 publication is pending or just completed; enabling binds to the current head
 through the forge's expected-head guard. Every replacement publication confirms
 cancellation first, and its first following poll re-reads and reconciles native
