@@ -187,6 +187,52 @@ async function readBody<T>(req: Request, schema: ZodType<T>): Promise<T> {
   return parsed.data
 }
 
+// The build-slug grammar of `kernel/build-identity.ts` `validateBuildSlug`.
+const BUILD_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/**
+ * Server-owned identity for a project-credential build: a validated slug base
+ * and the build kind's branch namespace. The kind comes from the initial
+ * `build.created` payload; a supplied branch must be `ab/<slug>` or
+ * `ab-node/<slug>` for the requested slug and agree with that kind. Its suffix
+ * is never used, so a client chooses only between the two namespaces.
+ */
+function projectBuildIdentity(body: z.infer<typeof newBuildBodySchema>): {
+  base: string
+  prefix: 'ab' | 'ab-node'
+} {
+  const payload = body.created?.payload
+  const createdKind =
+    body.created === undefined
+      ? undefined
+      : typeof payload === 'object' &&
+          payload !== null &&
+          (payload as { kind?: unknown }).kind === 'node'
+        ? 'ab-node'
+        : 'ab'
+  let branchKind: 'ab' | 'ab-node' | undefined
+  if (body.branch !== undefined) {
+    if (body.branch === `ab/${body.slug}`) branchKind = 'ab'
+    else if (body.branch === `ab-node/${body.slug}`) branchKind = 'ab-node'
+    else
+      throw new RequestError(
+        400,
+        'validation',
+        `branch must be "ab/<slug>" or "ab-node/<slug>" for slug ${JSON.stringify(body.slug)}`,
+      )
+  }
+  if (branchKind !== undefined && createdKind !== undefined && branchKind !== createdKind)
+    throw new RequestError(
+      400,
+      'validation',
+      `branch ${JSON.stringify(body.branch)} conflicts with build.created kind "${createdKind === 'ab-node' ? 'node' : 'work'}"`,
+    )
+  const base = body.slug.slice(0, 60).replace(/-+$/, '')
+  if (!BUILD_SLUG.test(base))
+    throw new RequestError(400, 'validation', `invalid build slug base: ${JSON.stringify(base)}`)
+  return { base, prefix: createdKind ?? branchKind ?? 'ab' }
+}
+
 function cursorParam(url: URL, name: string): number {
   const raw = url.searchParams.get(name)
   if (raw === null) return 0
@@ -688,12 +734,19 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       await opts.requireRegistered?.(body.repo)
       if (owner && owner.kind !== 'admin') {
         requireProject(owner, body.repo)
+        // The server allocates slug and branch; the branch keeps the requested
+        // build kind's namespace (`ab/` for work, `ab-node/` for a node).
+        const { base, prefix } = projectBuildIdentity(body)
         for (let attempt = 0; attempt < 10; attempt++) {
-          const slug = `${body.slug.slice(0, 60)}-${randomBytes(12).toString('hex')}`
+          const slug = `${base}-${randomBytes(12).toString('hex')}`
           try {
             return json(
               201,
-              await store.createBuild({ ...body, slug, branch: `ab/${slug}` } as NewBuildInput),
+              await store.createBuild({
+                ...body,
+                slug,
+                branch: `${prefix}/${slug}`,
+              } as NewBuildInput),
             )
           } catch (error) {
             const code = (error as { code?: string }).code

@@ -372,7 +372,7 @@ it to exist. An unknown build returns `404 not-found`.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
-| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string, created?: event write}`; `slug`, `repo`, and a supplied `branch` are nonempty. `created`, when present, must be a valid `build.created` write; the server appends it as seq 1 atomically with the record (both exist or neither), and an invalid one is `422` with nothing created | `201` + authoritative `BuildRecord`; project credentials receive a fresh random-suffixed slug and matching branch. Owner admin/open mode keeps exact-slug semantics with `409 conflict` for duplicates |
+| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string, created?: event write}`; `slug`, `repo`, and a supplied `branch` are nonempty. `created`, when present, must be a valid `build.created` write; the server appends it as seq 1 atomically with the record (both exist or neither), and an invalid one is `422` with nothing created | `201` + authoritative `BuildRecord`; project credentials receive a fresh random-suffixed slug and a branch in the build kind's namespace (`ab/<slug>`, or `ab-node/<slug>` for a node); a supplied `branch` must be `ab/<requested slug>` or `ab-node/<requested slug>` agreeing with the `build.created` kind, otherwise `400 validation`. Owner admin/open mode keeps exact-slug semantics with `409 conflict` for duplicates |
 | `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`, filtered by the server to the credential project; owner admin may list all projects. List order is unspecified |
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
@@ -1186,7 +1186,14 @@ streams must also belong to the addressed parent.
 
 `GET /builds` is filtered by the server to the credential's project. Project
 `POST /builds` always allocates a fresh random-suffixed slug from the requested
-base and a matching `ab/<slug>` branch, even when the base is unused. The
+base, even when the base is unused, and a matching branch in the build kind's
+namespace: `ab-node/<slug>` when the `build.created` payload has `kind: "node"`,
+otherwise `ab/<slug>`. Without `created`, a supplied `branch` prefix decides the
+kind. A supplied `branch` must be exactly `ab/<requested slug>` or
+`ab-node/<requested slug>` and agree with the `build.created` kind; only its
+namespace is used. The base (the requested slug's first 60 characters, trailing
+hyphens removed) must be a kebab build slug. A malformed or conflicting branch,
+or an invalid base, is `400 validation` with nothing created. The
 returned BuildRecord slug and branch are authoritative for all subsequent
 work. A foreign or missing base returns null on GET; it neither reveals
 collisions nor blocks creation. Owner admin retains exact-slug creation and
