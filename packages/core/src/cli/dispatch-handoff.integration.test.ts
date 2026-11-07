@@ -384,25 +384,28 @@ for (const invalid of ['version', 'value'] as const) {
       { kind: 'repo', repo: 'repo' },
       { reducer: 'dispatchUpgrade' },
     ).reducer.version
-    const server = Bun.serve({
-      port: 0,
-      fetch(request) {
-        if (new URL(request.url).pathname.endsWith('/reducer-values'))
-          return Response.json({
-            version: version + (invalid === 'version' ? 1 : 0),
-            cursor: 0,
-            value: null,
-          })
-        return Response.json({
-          repo: 'repo',
-          createdAt: new Date(0).toISOString(),
-          updatedAt: new Date(0).toISOString(),
-        })
-      },
-    })
-    const runtime = await prepareLaunchRuntime(distributionRoot(), distributionRoot(), checkout)
+    let server: ReturnType<typeof Bun.serve> | undefined
+    let runtime: Awaited<ReturnType<typeof prepareLaunchRuntime>> | undefined
+    let child: Bun.Subprocess<'ignore', 'pipe', 'pipe'> | undefined
     try {
-      const child = Bun.spawn(
+      server = Bun.serve({
+        port: 0,
+        fetch(request) {
+          if (new URL(request.url).pathname.endsWith('/reducer-values'))
+            return Response.json({
+              version: version + (invalid === 'version' ? 1 : 0),
+              cursor: 0,
+              value: null,
+            })
+          return Response.json({
+            repo: 'repo',
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          })
+        },
+      })
+      runtime = await prepareLaunchRuntime(distributionRoot(), distributionRoot(), checkout)
+      child = Bun.spawn(
         [process.execPath, join(runtime.root, 'bin/ab-dispatch-generation.ts'), '--read-upgrade'],
         {
           env: {
@@ -417,6 +420,7 @@ for (const invalid of ['version', 'value'] as const) {
               journal: { storeRef: server.url.toString(), repo: 'repo' },
             }),
           },
+          stdin: 'ignore',
           stdout: 'pipe',
           stderr: 'pipe',
         },
@@ -431,9 +435,19 @@ for (const invalid of ['version', 'value'] as const) {
       expect(stderr).toContain('incompatible reducer dispatchUpgrade')
       expect(stderr).toContain(`client version ${version}`)
       expect(stderr).toContain(`server version ${version + (invalid === 'version' ? 1 : 0)}`)
+      // A Bun timeout runs afterEach while this body continues, so late runtime
+      // preparation could recreate the checkout; the body removes it last.
     } finally {
-      server.stop(true)
-      releasePreparedRuntime(runtime.root)
+      try {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          child.kill()
+          await child.exited
+        }
+        server?.stop(true)
+        if (runtime) releasePreparedRuntime(runtime.root)
+      } finally {
+        await rm(checkout, { recursive: true, force: true })
+      }
     }
   }, 90_000)
 }
