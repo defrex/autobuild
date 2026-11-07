@@ -732,7 +732,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'repository.bulk_control',
     'Pause or resume the whole repository: hold queued builds, set intake, and request per-build pause/resume in one walk.',
     bulkControlInput,
-    '{direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code "bulk-partial" and a progress object naming what merged.',
+    '{direction, slugs, paused, intake}: the direction, the slugs that received a durable request, and the repository-wide hold/intake values written. A partial walk surfaces as a refusal with code "bulk-partial" and a progress object naming which writes were recorded before the walk stopped.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof bulkControlInput>
       return bulkControlRepository({

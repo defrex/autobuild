@@ -368,7 +368,7 @@ export function decideRevise(
   if (open.length === 0) {
     const paused =
       state.status === 'paused'
-        ? ` If a revision already merged, the build remains paused; run ab resume ${slug}.`
+        ? ` If a spec revision was already recorded, the build remains paused; run ab resume ${slug}.`
         : ''
     return {
       kind: 'refuse',

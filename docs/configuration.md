@@ -3435,7 +3435,7 @@ repository settings; merge authorization follows `[[merge]]`. Pause all and
 resume all write two facts each — the
 repository pause first, then intake — so a partial failure still leaves the
 repository at least as quiesced as asked; `ab pause --all` reports on stderr
-which of them merged when a walk stops partway. The current release has no TOML
+which of them was recorded when a walk stops partway. The current release has no TOML
 field for either the harvest gate or the repository pause, and no command that
 sets the repository pause on its own without also moving intake; inspect the
 harvest gate with `ab harvest status`.
