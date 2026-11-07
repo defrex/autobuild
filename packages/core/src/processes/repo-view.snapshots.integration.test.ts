@@ -6,6 +6,7 @@ import { MemoryBlobStore } from '../store/memory'
 import {
   reducedReadBudget,
   targetLineageReadBudget,
+  replacedHeadsReadBudget,
   finalizePrRejectionReadBudget,
   countHistoricalRows,
   type ReducedReadCosts,
@@ -77,6 +78,7 @@ test('local SQL row budgets include adapter-internal persisted reads on fresh co
     }
     await reducedReadBudget(harness)
     await targetLineageReadBudget(harness)
+    await replacedHeadsReadBudget(harness)
     await finalizePrRejectionReadBudget(harness)
   } finally {
     database.close()
