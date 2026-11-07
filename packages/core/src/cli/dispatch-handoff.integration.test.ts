@@ -435,7 +435,7 @@ for (const invalid of ['version', 'value'] as const) {
       server.stop(true)
       releasePreparedRuntime(runtime.root)
     }
-  }, 120_000)
+  }, 30_000)
 }
 test('conditional helpers refresh durable facts and revalidate target files without journal reads', async () => {
   const { MemoryBuildStore } = await import('../store/memory')
