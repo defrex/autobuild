@@ -207,8 +207,8 @@ function guardMessage(family: GuardedFamily): string {
   // the un-bumped mode — the exact incident this guard exists to teach.
   const steps =
     family.version > 1
-      ? `freeze the DDL the pin currently records (${family.ddlPrefix}_V${family.pin.version}_DDL + its checksum) as that version's frozen constant, add its upgrade branch in migratePostgres, bump the schema version, and update the pinned version and checksum in schema-guard.integration.test.ts`
-      : `bump the schema version and update the pinned version and checksum in schema-guard.integration.test.ts (no frozen predecessor exists yet; the freeze-and-branch steps apply from the first version bump on)`
+      ? `freeze the DDL the pin currently records (${family.ddlPrefix}_V${family.pin.version}_DDL + its checksum) as that version's frozen constant, add its upgrade branch in migratePostgres, bump the schema version, and update the pinned version and checksum in schema-guard.test.ts`
+      : `bump the schema version and update the pinned version and checksum in schema-guard.test.ts (no frozen predecessor exists yet; the freeze-and-branch steps apply from the first version bump on)`
   return (
     `${family.marker} DDL or version no longer matches the committed pin. The current DDL ` +
     `is immutable once a database has deployed it: ${steps}. Expected version ` +
@@ -261,9 +261,7 @@ test('the guard failure message names the four-step rule and the checksum-only r
       expect(message).toContain('add its upgrade branch in migratePostgres')
     }
     expect(message).toContain('bump the schema version')
-    expect(message).toContain(
-      'update the pinned version and checksum in schema-guard.integration.test.ts',
-    )
+    expect(message).toContain('update the pinned version and checksum in schema-guard.test.ts')
     // The checksum-only re-pin trap: the failure output must teach that a
     // partial compliance (re-pin without bump) re-arms the pin over an edited
     // DDL and pushes the failure onto deployed databases.
