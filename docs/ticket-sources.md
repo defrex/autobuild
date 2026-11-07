@@ -169,8 +169,9 @@ Bounded state counts are another optional capability:
 `countStates?(names: readonly string[]): Promise<TicketStateCount[]>`. It returns
 `{name, tickets}` for each requested name that resolves (exactly, else by one
 case-insensitive match) and never returns ticket rows. A dashboard viewer polls
-it for the header's triage count. Without it, the viewer shows `–`, and it never
-falls back to a listing. A store-backed source should answer from maintained
+it at most once per 10 s, and a dispatcher feeding an interactive dashboard
+samples it once per tick, for the header's triage count. Without it, both show
+`–`, and neither falls back to a listing. A store-backed source should answer from maintained
 totals so the cost does not grow with the number of tickets: the hosted
 PostgreSQL source reads trigger-maintained totals, and the remote
 `HostedTicketSource` forwards the read to the server. The file source counts
