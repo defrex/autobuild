@@ -27,6 +27,7 @@ import {
   nodeTicketObservationKey,
 } from '../kernel/node-polling'
 import { reportIntegrationFailures } from '../kernel/integration-attention'
+import { ticketScanDeferredByJournal, ticketScanSchedule } from './ticket-scan-schedule'
 import {
   resolveTicketRef,
   migrationIdentity,
@@ -1438,34 +1439,21 @@ export class Dispatcher {
     const readinessFingerprint = hash(digest)
     const criteriaFingerprint = hash(readyCriteria(this.deps.config))
     const startedAt = this.deps.clock().toISOString()
-    const previous = this.latestScan()
-    const cached = await this.store.getScanCadence(this.deps.repo)
-    // Outcomes always come from the reduction. This row only acknowledges their cadence.
-    const valid =
-      previous !== undefined &&
-      cached !== null &&
-      cached.scanSeq === this.store.repositoryFacts().scanSeq &&
-      cached.mode === previous.mode &&
-      cached.readinessFingerprint === previous.readinessFingerprint &&
-      cached.criteriaFingerprint === previous.criteriaFingerprint &&
-      Number.isFinite(Date.parse(cached.startedAt))
-    const baseline = valid ? cached : previous
-    const elapsed =
-      baseline === undefined ? Infinity : Date.parse(startedAt) - Date.parse(baseline.startedAt)
-    return {
-      startedAt,
+    const input = {
+      previous: this.latestScan(),
+      previousSeq: this.store.repositoryFacts().scanSeq,
       mode,
       readinessFingerprint,
       criteriaFingerprint,
-      allowClockRollback: elapsed < 0,
-      due:
-        previous === undefined ||
-        elapsed < 0 ||
-        elapsed >= this.deps.config.ticketScanIntervalSeconds * 1000 ||
-        previous.readinessFingerprint !== readinessFingerprint ||
-        previous.criteriaFingerprint !== criteriaFingerprint ||
-        (mode === 'admission' && previous.mode === 'observation'),
+      startedAt,
+      intervalMs: this.deps.config.ticketScanIntervalSeconds * 1000,
     }
+    const checkpoint = { startedAt, mode, readinessFingerprint, criteriaFingerprint }
+    // The journal measurement alone proves deferral, so the cadence row is not read.
+    if (ticketScanDeferredByJournal(input))
+      return { ...checkpoint, allowClockRollback: false, due: false }
+    const cached = await this.store.getScanCadence(this.deps.repo)
+    return { ...checkpoint, ...ticketScanSchedule(input, cached) }
   }
 
   private async completeScan(
