@@ -241,7 +241,8 @@ value.
 
 A half-provisioned environment (a `workspace.cleanup-required` fact, for example after a provision
 timeout) is released and replaced automatically: expect `workspace.fenced`, an empty
-`workspace.commits-lost`, `infrastructure.cleanup-attempted` and `workspace.released`, then a
+`workspace.commits-lost` (no checkout) or `workspace.commits-preserved` (a checkout that never
+started executing), `infrastructure.cleanup-attempted` and `workspace.released`, then a
 next-generation provision. Do not delete it by hand. Manual deletion is only for automatic cleanup
 that keeps recording `infrastructure.failed` or `infrastructure.cleanup-attempted` with
 `outcome: "unknown"` for the same environment.
