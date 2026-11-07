@@ -161,6 +161,7 @@ export const buildEventPolicy = {
   'escalation.answered': 'decisive',
   'phase.failed': 'decisive',
   'session.build-read-failed': 'decisive',
+  'session.build-read-recovered': 'decisive',
   'phase.deferred': 'decisive',
   'phase.deferral-escalated': 'decisive',
 } satisfies Record<EventType, FactClassification>
