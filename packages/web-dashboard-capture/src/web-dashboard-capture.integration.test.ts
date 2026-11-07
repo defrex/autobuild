@@ -534,7 +534,7 @@ test('ticket frames list, queue, empty and page states with their moves', async 
   expect(triage).toContain('depends on')
   expect(triage).toMatch(/<span class="warn">blocked by/)
   const queue = await render('tickets-queue-wide')
-  expect(tabLine(queue)).toMatch(/aria-current="page"[^>]*>Queue/)
+  expect(tabLine(queue)).toMatch(/aria-current="page"[^>]*>Queue<span class="count">3<\/span>/)
   expect(queue).toContain('<ol class="rows ticket-rows" aria-label="Queue tickets">')
   // The queue reads in dispatch order: the urgent ticket filed second comes first, marked.
   expect(queue.indexOf('CAP-21')).toBeLessThan(queue.indexOf('CAP-20'))

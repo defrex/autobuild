@@ -684,6 +684,7 @@ function shell(
     menuOpen?: boolean
     projectMenuOpen?: boolean
     tab?: ViewTab
+    queueCount?: number
   } = {},
 ) {
   const repo = opts.repo ?? FIXTURE_REPO
@@ -704,7 +705,7 @@ function shell(
           page
           counts={{
             triage: opts.model ? FIXTURE_TICKETS.length : undefined,
-            queue: opts.model ? 0 : undefined,
+            queue: opts.model ? (opts.queueCount ?? 0) : undefined,
             active: opts.model ? activeCounterText(opts.model) : undefined,
           }}
         />
@@ -1108,7 +1109,11 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       return shell(ticketList('triage', FIXTURE_TICKETS), { model: models.mixed, tab: 'triage' })
     case 'tickets-queue-wide':
     case 'tickets-queue-narrow':
-      return shell(ticketList('queue', QUEUE_TICKETS), { model: models.mixed, tab: 'queue' })
+      return shell(ticketList('queue', QUEUE_TICKETS), {
+        model: models.mixed,
+        tab: 'queue',
+        queueCount: QUEUE_TICKETS.length,
+      })
     case 'tickets-empty-wide':
     case 'tickets-empty-narrow':
       return shell(ticketList('queue', []), { model: models.mixed, tab: 'queue' })
