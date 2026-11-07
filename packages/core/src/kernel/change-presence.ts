@@ -106,6 +106,9 @@ export async function observePresence(
   return projectPresence(await presenceWitness(git, head), landings, aliases, includeForeign)
 }
 
+/** Full reachable history of a sampled head. In-memory only: it is the
+ * compaction source for a {@link PresenceProbe} and is never persisted. Older
+ * observations may still carry one as historical evidence. */
 export interface PresenceWitness {
   version: 1
   commits: string[]
@@ -127,14 +130,144 @@ export async function presenceWitness(git: NodeGit, head: string): Promise<Prese
   }
 }
 
-export function presenceEvidence(witness: PresenceWitness, identities: ChangeIdentity[]): string {
-  return `presence-v3:${createHash('sha256')
+/** Durable, query-scoped presence evidence for one sampled head. It records
+ * only the SHAs and direct trailers in the reverse proof closure of
+ * `questions`, so its size never depends on the destination's reachable
+ * commit count, unrelated landings, or repository history. */
+export interface PresenceProbe {
+  version: 1
+  /** Sorted unique identities this observation answers. */
+  questions: ChangeIdentity[]
+  /** Sorted unique SHAs whose reachability from head was tested. */
+  commits: string[]
+  /** Sorted subset of `commits` reachable from head. */
+  reachable: string[]
+  /** Sorted build identities whose direct trailer was tested. */
+  builds: `build:${string}`[]
+  /** Sorted subset of `builds` found as trailers in head's history. */
+  trailers: `build:${string}`[]
+}
+export interface PresenceNeeds {
+  commits: string[]
+  builds: `build:${string}`[]
+}
+
+const transportedBy = (landing: LandingEvidence): ChangeIdentity[] =>
+  landing.contribution ?? [`build:${landing.slug}`]
+
+/** The reverse proof closure of `query`: every SHA and direct trailer whose
+ * reachability could derive a queried identity. A landing enters only when it
+ * transports a closure identity, and contributes only its own two keys. */
+export function presenceNeeds(
+  query: Iterable<ChangeIdentity>,
+  landings: LandingEvidence[],
+  aliases: Map<string, string>,
+): PresenceNeeds {
+  const transporters = new Map<ChangeIdentity, LandingEvidence[]>()
+  for (const landing of landings)
+    for (const item of new Set(transportedBy(landing))) {
+      const entries = transporters.get(item) ?? []
+      entries.push(landing)
+      transporters.set(item, entries)
+    }
+  const keysOf = new Map<string, string[]>()
+  for (const key of aliases.keys()) {
+    const original = originalForeign(key, aliases)
+    const keys = keysOf.get(original) ?? []
+    keys.push(key)
+    keysOf.set(original, keys)
+  }
+  const commits = new Set<string>()
+  const builds = new Set<`build:${string}`>()
+  const visited = new Set<ChangeIdentity>()
+  const pending = [...query]
+  while (pending.length) {
+    const identity = pending.pop()!
+    if (visited.has(identity)) continue
+    visited.add(identity)
+    if (identity.startsWith('build:')) builds.add(identity as `build:${string}`)
+    else {
+      const sha = identity.slice('foreign:'.length)
+      commits.add(sha)
+      for (const key of keysOf.get(sha) ?? []) commits.add(key)
+    }
+    for (const landing of transporters.get(identity) ?? [])
+      pending.push(`build:${landing.slug}`, `foreign:${landing.sha}`)
+  }
+  return { commits: [...commits].sort(), builds: [...builds].sort() }
+}
+
+export function covers(probe: PresenceProbe, needs: PresenceNeeds): boolean {
+  const commits = new Set(probe.commits)
+  const builds = new Set(probe.builds)
+  return (
+    needs.commits.every((sha) => commits.has(sha)) && needs.builds.every((id) => builds.has(id))
+  )
+}
+
+/** Whether a stored probe can answer `query` under the current landings. The
+ * needs of every stored question must be covered, because the persisted
+ * answers are recomputed for all of them. */
+export function answers(
+  probe: PresenceProbe,
+  query: Iterable<ChangeIdentity>,
+  landings: LandingEvidence[],
+  aliases: Map<string, string>,
+): boolean {
+  const questions = new Set(probe.questions)
+  for (const id of query) if (!questions.has(id)) return false
+  return covers(probe, presenceNeeds(probe.questions, landings, aliases))
+}
+
+export function compactProbe(
+  witness: PresenceWitness,
+  questions: Iterable<ChangeIdentity>,
+  landings: LandingEvidence[],
+  aliases: Map<string, string>,
+): PresenceProbe {
+  const normalized = normalizeIdentities(questions)
+  const needs = presenceNeeds(normalized, landings, aliases)
+  const reachable = new Set(witness.commits)
+  const trailers = new Set(witness.identities)
+  return {
+    version: 1,
+    questions: normalized,
+    commits: needs.commits,
+    reachable: needs.commits.filter((sha) => reachable.has(sha)),
+    builds: needs.builds,
+    trailers: needs.builds.filter((id) => trailers.has(id)),
+  }
+}
+
+/** Presence answers for only the probe's questions. The unrestricted
+ * expansion is local: it is never returned, persisted, or hashed. */
+export function projectProbe(
+  probe: PresenceProbe,
+  landings: LandingEvidence[],
+  aliases = new Map<string, string>(),
+): ChangeIdentity[] {
+  const present = new Set(
+    projectPresence(
+      { version: 1, commits: probe.reachable, identities: probe.trailers },
+      landings,
+      aliases,
+    ),
+  )
+  return normalizeIdentities(probe.questions.filter((id) => present.has(id)))
+}
+
+export function probeEvidence(probe: PresenceProbe, identities: ChangeIdentity[]): string {
+  const sorted = <T extends string>(items: Iterable<T>) => [...new Set(items)].sort()
+  return `presence-v4:${createHash('sha256')
     .update(
       JSON.stringify([
-        witness.version,
-        [...new Set(witness.commits)].sort(),
-        normalizeIdentities(witness.identities),
-        normalizeIdentities(identities),
+        probe.version,
+        sorted(probe.questions),
+        sorted(probe.commits),
+        sorted(probe.reachable),
+        sorted(probe.builds),
+        sorted(probe.trailers),
+        sorted(identities),
       ]),
     )
     .digest('hex')}`
