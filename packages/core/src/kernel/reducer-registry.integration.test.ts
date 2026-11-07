@@ -14,17 +14,23 @@ import {
   randomStatusJournal,
 } from './generators/repository-journals'
 
-/** The sorted set of JSON key paths and value types in an accumulator. */
-function fingerprint(value: unknown, path = '$', out = new Set<string>()): string[] {
+/** Adds the JSON key paths and value types in `value` to `out`. */
+function collectPaths(value: unknown, path: string, out: Set<string>): void {
   if (Array.isArray(value)) {
     out.add(`${path}: array`)
-    for (const item of value) fingerprint(item, `${path}[]`, out)
+    for (const item of value) collectPaths(item, `${path}[]`, out)
   } else if (value !== null && typeof value === 'object') {
     out.add(`${path}: object`)
-    for (const [key, item] of Object.entries(value)) fingerprint(item, `${path}.${key}`, out)
+    for (const [key, item] of Object.entries(value)) collectPaths(item, `${path}.${key}`, out)
   } else {
     out.add(`${path}: ${value === null ? 'null' : typeof value}`)
   }
+}
+
+/** The sorted set of JSON key paths and value types in an accumulator. */
+function fingerprint(value: unknown): string[] {
+  const out = new Set<string>()
+  collectPaths(value, '$', out)
   return [...out].sort()
 }
 
@@ -563,13 +569,14 @@ const fingerprints = new Map<string, string[]>()
 function unionFingerprint(name: string, reducer: RegisteredReducer['reducer']): string[] {
   const cached = fingerprints.get(name)
   if (cached !== undefined) return cached
-  const paths = new Set<string>(fingerprint(reducer.initial()))
+  const paths = new Set<string>()
+  collectPaths(reducer.initial(), '$', paths)
   for (const log of logs) {
     let acc = reducer.initial()
     try {
       for (let i = 0; i < log.length; i += CHUNK) {
         acc = reducer.advance(acc, log.slice(i, i + CHUNK))
-        fingerprint(acc, '$', paths)
+        collectPaths(acc, '$', paths)
       }
     } catch {
       // A corpus for another domain; keep what was reached.
