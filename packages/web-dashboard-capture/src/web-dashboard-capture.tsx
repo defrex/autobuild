@@ -559,6 +559,12 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       requires: ['Triage', 'Retry budget for verify steps', 'depends on', 'blocked by', 'proposal'],
     },
     {
+      id: `tickets-queue-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 1100,
+      requires: ['Queue', 'URGENT', 'Fix the stuck reconcile loop', 'Cache verify-step results'],
+    },
+    {
       id: `tickets-empty-${size}`,
       width: size === 'wide' ? 1440 : 390,
       height: 900,
@@ -678,6 +684,7 @@ function shell(
     menuOpen?: boolean
     projectMenuOpen?: boolean
     tab?: ViewTab
+    queueCount?: number
   } = {},
 ) {
   const repo = opts.repo ?? FIXTURE_REPO
@@ -698,7 +705,7 @@ function shell(
           page
           counts={{
             triage: opts.model ? FIXTURE_TICKETS.length : undefined,
-            queue: opts.model ? 0 : undefined,
+            queue: opts.model ? (opts.queueCount ?? 0) : undefined,
             active: opts.model ? activeCounterText(opts.model) : undefined,
           }}
         />
@@ -786,6 +793,28 @@ const FIXTURE_TICKETS: Ticket[] = [
     { blockedBy: ['CAP-10'], blockersResolved: false },
   ),
   FIXTURE_TICKET,
+]
+
+/** Queued tickets in filing order with the urgent one second, so the frame proves the view reorders. */
+const QUEUE_TICKETS: Ticket[] = [
+  fixtureTicket(
+    'CAP-20',
+    'Cache verify-step results',
+    'Verify steps rerun on every round even when nothing they read has changed. Reuse a passing result.',
+    { state: 'ready', labels: ['performance'] },
+  ),
+  fixtureTicket(
+    'CAP-21',
+    'Fix the stuck reconcile loop',
+    'A conflicted pull request reconciles, fails verify and reconciles again without end. Stop after one retry.',
+    { state: 'ready', priority: 'urgent' },
+  ),
+  fixtureTicket(
+    'CAP-22',
+    'Document webhook retry behaviour',
+    'Users ask what happens when a webhook delivery fails. Write it down in the forge docs.',
+    { state: 'ready', blockedBy: ['CAP-10'] },
+  ),
 ]
 
 function ticketList(tab: 'triage' | 'queue', tickets: Ticket[]) {
@@ -1078,6 +1107,13 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'tickets-triage-wide':
     case 'tickets-triage-narrow':
       return shell(ticketList('triage', FIXTURE_TICKETS), { model: models.mixed, tab: 'triage' })
+    case 'tickets-queue-wide':
+    case 'tickets-queue-narrow':
+      return shell(ticketList('queue', QUEUE_TICKETS), {
+        model: models.mixed,
+        tab: 'queue',
+        queueCount: QUEUE_TICKETS.length,
+      })
     case 'tickets-empty-wide':
     case 'tickets-empty-narrow':
       return shell(ticketList('queue', []), { model: models.mixed, tab: 'queue' })
@@ -1451,6 +1487,7 @@ export function report(frames: WebDashboardFrame[], chromium: string, outputDir:
     '- [ ] Merge consent is amber on ground with Merge/Hold. No optimistic success or unconfirmed abort.',
     '- [ ] The tab line leads with Triage, Queue, Active, Done and Settings and marks the current tab; confirmations are viewport captures promoted to native modals over the visible 72% ground backdrop; abort uses a square dialog with a red primary and ghost Cancel.',
     '- [ ] Masthead, outlined account menu and Theme choices, ruled rows, centered reading pages match ANSI. No shadow, gradient, pills or interface emoji.',
+    "- [ ] The Queue lists the urgent ticket first with an ink URGENT status word at the row's right, legible on both grounds and clear of the title at phone width.",
     '- [ ] The no-dispatcher state shows the one factual line, `–` for Active, and no error banner at both widths.',
     '- [ ] Browser-owned flow, wrapping identifiers, pending/disabled states, keyboard focus and loading without invented values remain clear at both widths.',
     '',
