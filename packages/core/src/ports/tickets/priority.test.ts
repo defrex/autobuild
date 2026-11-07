@@ -18,7 +18,7 @@ const unsupported = { name: 'hosted' }
 
 describe('ticket priority', () => {
   test('urgentFirst is a stable partition that leaves its input alone', () => {
-    const input = [
+    const input: { id: string; priority?: 'urgent' | 'normal' }[] = [
       { id: 'n1' },
       { id: 'u1', priority: 'urgent' as const },
       { id: 'n2', priority: 'normal' as const },
@@ -27,7 +27,7 @@ describe('ticket priority', () => {
     const before = [...input]
     expect(urgentFirst(input).map((t) => t.id)).toEqual(['u1', 'u2', 'n1', 'n2'])
     expect(input).toEqual(before)
-    const normal = [{ id: 'a' }, { id: 'b' }]
+    const normal: { id: string; priority?: 'urgent' }[] = [{ id: 'a' }, { id: 'b' }]
     expect(urgentFirst(normal)).toEqual(normal)
     expect(urgentFirst(normal)).not.toBe(normal)
     const urgent = [
@@ -50,9 +50,12 @@ describe('ticket priority', () => {
   })
 
   test('the strip helper removes priority only for an unsupported source', () => {
-    expect(withoutUnsupportedPriority(unsupported, { title: 'T', priority: 'normal' })).toEqual({
-      title: 'T',
-    })
+    expect(
+      withoutUnsupportedPriority<{ title: string; priority?: string }>(unsupported, {
+        title: 'T',
+        priority: 'normal',
+      }),
+    ).toEqual({ title: 'T' })
     expect(withoutUnsupportedPriority(supported, { priority: 'normal' })).toEqual({
       priority: 'normal',
     })
