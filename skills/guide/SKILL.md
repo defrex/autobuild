@@ -82,7 +82,8 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   claims tickets that pass the `[tickets]` ready
   gate — urgent tickets first, then normal ones, each in the source's order —
   chooses a short immutable slug from the final conforming spec, and
-  starts builds up to the top-level `capacity` bound. Priority never preempts
+  starts builds up to the top-level `capacity` bound, after slots reserved for
+  integration nodes awaiting verification or reconcile. Priority never preempts
   a running build.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
@@ -2020,8 +2021,9 @@ The five list steps are `spec`, `open`, `collect`, `verify`, and `merge`, with
 verification progress or failure and the merge mode in parentheses. Before
 a policy decision, label-dependent modes may read `policy pending`. A current
 verified node adds `verified`. Only restack conflicts, current verification
-failures (file a repair child targeting the node), and readiness awaiting
-consent add a list alert. Consent names `l` and `ab merge <slug>`. Branch,
+failures (file a repair child targeting the node), a node waiting for a runner
+slot ahead of new ticket claims, and readiness awaiting consent add a list
+alert. Consent names `l` and `ab merge <slug>`. Branch,
 restack state and conflicting files remain in detail, along with every child's
 ticket id, title and live phase (or queued/merged), open-first counts, verification
 steps and current outcomes, repair instructions, and the merge rule. Cancelled

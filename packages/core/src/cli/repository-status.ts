@@ -11,6 +11,7 @@ import {
 import { formatRuntimeIdentity } from '../events/runtime'
 import {
   dispatchCapacity,
+  waitingExplanation,
   type DispatchCapacity,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
@@ -431,7 +432,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `repository: ${status.repo}`,
     ...(status.capacity
       ? [
-          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}`,
+          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}${status.capacity.waitingNodes?.length ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
         ]
       : []),
     ...(status.warningLines ?? []),
