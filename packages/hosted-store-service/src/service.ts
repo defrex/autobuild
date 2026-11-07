@@ -554,12 +554,15 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     const facts = (await store.getRepo(repo)) ? await configReference(store, repo) : {}
     const ref = facts.reference
     if (!ref)
-      throw new OperatorQueryError(
-        'effective-config-unavailable',
-        facts.run === undefined
-          ? `effective config unavailable for repository "${repo}": no dispatcher run is recorded`
-          : `effective config unavailable for repository "${repo}"`,
-      )
+      throw facts.run === undefined
+        ? new OperatorQueryError(
+            'no-dispatcher-run',
+            `effective config unavailable for repository "${repo}": no dispatcher run is recorded`,
+          )
+        : new OperatorQueryError(
+            'effective-config-unavailable',
+            `effective config unavailable for repository "${repo}"`,
+          )
     const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
     if (artifact === null)
       throw new OperatorQueryError(

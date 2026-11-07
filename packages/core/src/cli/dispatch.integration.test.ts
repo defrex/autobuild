@@ -13486,7 +13486,7 @@ test('viewer routing bypasses injected execution wiring and missing execution co
       throw new Error('viewer entered execution wiring')
     },
   })
-  expect(lines.join('\n')).toContain('Waiting for dispatcher configuration')
+  expect(lines.join('\n')).toContain('No dispatcher has run for this project yet.')
   await expect(
     realAbDispatch({
       targetRepo,
