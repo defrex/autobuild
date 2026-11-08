@@ -520,7 +520,7 @@ test('abort frame confirms in the dialog over the unchanged build page', async (
   expect(html).toContain('aria-label="ABORT plan-blocked-dashboard"')
 })
 
-test('ticket frames list, empty and page states with their moves', async () => {
+test('ticket frames list, queue, empty and page states with their moves', async () => {
   const fixtures = models()
   const render = (id: string) =>
     renderWebFrame(WEB_FRAME_SPECS.find((frame) => frame.id === id)!, fixtures, {
@@ -533,6 +533,13 @@ test('ticket frames list, empty and page states with their moves', async () => {
   // Unknown blocker resolution reads as a dependency; known unresolved reads as blocked.
   expect(triage).toContain('depends on')
   expect(triage).toMatch(/<span class="warn">blocked by/)
+  const queue = await render('tickets-queue-wide')
+  expect(tabLine(queue)).toMatch(/aria-current="page"[^>]*>Queue<span class="count">3<\/span>/)
+  expect(queue).toContain('<ol class="rows ticket-rows" aria-label="Queue tickets">')
+  // The queue reads in dispatch order: the urgent ticket filed second comes first, marked.
+  expect(queue.indexOf('CAP-21')).toBeLessThan(queue.indexOf('CAP-20'))
+  expect(queue.indexOf('CAP-21')).toBeLessThan(queue.indexOf('CAP-22'))
+  expect(queue.match(/<span class="status ticket-priority">URGENT<\/span>/g)?.length).toBe(1)
   const page = await render('ticket-page-wide')
   expect(page).toMatch(/class="btn primary action"[^>]*aria-label="ENQUEUE CAP-PLAN"/)
   expect(page).toMatch(/class="btn ghost action"[^>]*aria-label="ICE CAP-PLAN"/)
