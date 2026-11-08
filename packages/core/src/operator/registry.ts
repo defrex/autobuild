@@ -329,7 +329,9 @@ const ticketsListInput = z.strictObject({
   order: z
     .enum(['oldest', 'newest'])
     .optional()
-    .describe('Oldest first (the source order, the default) or newest first.'),
+    .describe(
+      'Dispatch order, urgent tickets first and then the source order (the default), or newest filed first.',
+    ),
 })
 
 const ticketsCreateInput = ticketCreateRequestSchema.extend({ repo: repoField })

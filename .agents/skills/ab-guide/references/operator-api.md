@@ -88,7 +88,7 @@ raw session-event append. External operator harnesses own agent execution.
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. Its `operator` is `{presence: "unavailable", reason}`: this route does not load presence registrations, so it is not evidence that no operator is present. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
-| `GET …/tickets?state=S&label=L&limit=N&offset=K&order=O` | `{states,tickets,diagnostics,criteria,triageState,readyState,doneState,total}`. The three lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. `limit` (0–200) returns one page, after skipping `offset`, in `order` `oldest` (the source order, the default) or `newest`; `total` counts every match before paging. |
+| `GET …/tickets?state=S&label=L&limit=N&offset=K&order=O` | `{states,tickets,diagnostics,criteria,triageState,readyState,doneState,total}`. The three lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. `limit` (0–200) returns one page, after skipping `offset`, in `order` `oldest` (the default: dispatch order, urgent tickets first, then the source order) or `newest` (newest filed first); `total` counts every match before paging. |
 | `GET …/tickets/states` | Full state metadata `{name,tickets,about?}[]`, including empty states (`tickets.states` in MCP). |
 | `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
 
@@ -568,7 +568,7 @@ permission or retention failures leave deletion pending. Vercel Blob cleanup use
 the same store identity, token and prefixed pathname as uploads. Missing objects
 are successful cleanup; provider errors never count as completed deletion.
 
-Paged ticket listings use the source's optional native `listPage(criteria, page)` capability when present, otherwise read the full listing and reverse/slice it. Native errors propagate. PostgreSQL counts matches without bodies and reads only the requested window. Zero limits and offsets past the end still report the full matching total. Unpaged listings remain exhaustive; the wire payload is the same for both paths.
+Paged ticket listings use the source's optional native `listPage(criteria, page)` capability when present, otherwise read the full listing, order it, and slice it: by default urgent tickets first, then normal ones, each in source order; for `newest`, the reversed source order. Native errors propagate. PostgreSQL counts matches without bodies and reads only the requested window. Zero limits and offsets past the end still report the full matching total. Unpaged listings remain exhaustive; the wire payload is the same for both paths.
 
 
 ### Forge cooldown admission and explicit recovery

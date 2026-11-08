@@ -302,6 +302,7 @@ export class PostgresTicketSource implements TicketSource {
           AND labels @> ${q.array(labels, 'text')}`
       const total = Number(counts[0]!.total)
       if (page.limit === 0) return { tickets: [], diagnostics: [], total }
+      // `oldest` is dispatch order, matching `listReady`; `newest` stays newest filed first.
       const rows: Row[] =
         page.order === 'newest'
           ? await q`SELECT ab_tickets.*, revision::text AS revision,
@@ -315,7 +316,7 @@ export class PostgresTicketSource implements TicketSource {
           ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers
           FROM ab_tickets WHERE repo = ${this.repo}
           AND (${state}::text IS NULL OR state = ${state}) AND labels @> ${q.array(labels, 'text')}
-          ORDER BY created_at, id LIMIT ${page.limit} OFFSET ${offset}`
+          ORDER BY (priority = 'urgent') DESC, created_at, id LIMIT ${page.limit} OFFSET ${offset}`
       const tickets: Ticket[] = []
       for (const row of rows) tickets.push(await this.record(q, row))
       return { tickets, diagnostics: [], total }
