@@ -229,6 +229,10 @@ export function BuildsView(props: BuildsViewProps) {
     '--ticket-w': `${widths.ticket}ch`,
     '--status-w': `${widths.status}ch`,
   }
+  // Borrowed slots and nodes waiting for a slot share one capacity notice.
+  const capacityNotice = Boolean(
+    model.capacity?.borrowingNodes.length || model.capacity?.waitingNodes?.length,
+  )
   return (
     <DashboardSurface>
       {Boolean(
@@ -237,13 +241,13 @@ export function BuildsView(props: BuildsViewProps) {
           model.availableUpgrade ||
           model.handoffs?.length ||
           model.rollback ||
-          model.capacity?.borrowingNodes.length,
+          capacityNotice,
       ) && (
         <div className="messages">
           {model.configuration === 'no-dispatcher-run' && (
             <p className="slack notice">{NO_DISPATCHER_RUN_LINE}</p>
           )}
-          {model.capacity?.borrowingNodes.length ? (
+          {capacityNotice ? (
             <p className="slack notice capacity-notice">
               active {model.active.current}/{model.active.limit}
               {capacityExplanation(model.capacity)}
