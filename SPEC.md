@@ -2705,14 +2705,19 @@ the branch is open to targeting tickets immediately, without a PR. Idle integrat
 builds use no provisioned workspace, runner, execution lease, or dispatch capacity.
 
 A node requesting reconcile or verification is admitted before new ticket
-claims. Its candidate occupancy excludes itself and capacity-bearing blocked or
+claims. The request is durable: a prepared verification cycle or a restack
+conflict, with no runner yet. Until the node holds its slot, intake reserves one
+slot for it, and the dispatcher checks its admission every tick regardless of
+idle node polling, so a slot freed in any tick goes to the node, not to a new
+claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
 paused descendants, following accepted source-qualified build target ancestry.
 Running descendants and unrelated builds still count; ordinary blocked and
 paused work retains its slot for every other admission. Provisioning reserves
 node occupancy before the runner starts. This exception never raises the budget
 for new claims. Status and both dashboards report actual occupancy, configured
 capacity, effective display capacity and the nodes using descendant-held slots.
-Idle collecting nodes remain free.
+Status, `ab builds` and both dashboards report each node waiting for a slot
+ahead of new ticket claims. Idle collecting nodes remain free.
 
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts

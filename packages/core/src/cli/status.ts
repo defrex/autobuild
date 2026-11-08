@@ -9,6 +9,7 @@ import { projectTree, type TreeProjection } from './dashboard/tree'
 import { buildVocabulary } from './dashboard/model'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
+import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
 import type { BuildFacts } from '../processes/repo-view'
 /**
  * `ab builds` and `ab build status <slug>` — the read-only query surface on
@@ -126,6 +127,8 @@ export interface BuildSummary {
   lease: LeaseInfo
   /** Durable-event progress, separate from mutable lease renewal. */
   progress: BuildProgress
+  /** A node's runner request, admitted ahead of new ticket claims. */
+  slotWait?: SlotRequest
 }
 
 export interface VerifyProgress {
@@ -242,7 +245,12 @@ function leaseInfo(record: BuildRecord, now: Date): LeaseInfo {
  * The summary over an ALREADY-reduced state — so `detail` reduces the log
  * once and builds both projections from it, rather than reducing twice.
  */
-export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date): BuildSummary {
+export function summarizeFrom(
+  record: BuildRecord,
+  state: BuildState,
+  now: Date,
+  slotWait?: SlotRequest,
+): BuildSummary {
   // `phase`, `round`, and `attempt` describe ONE phase occurrence, so they come
   // from ONE source: the in-flight phase, else the last completed one — the
   // same `currentPhase ?? lastCompletedPhase` the reducer uses to derive
@@ -302,6 +310,7 @@ export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date)
     updatedAt: record.updatedAt,
     lease: leaseInfo(record, now),
     progress: buildProgress(record, state),
+    ...(slotWait ? { slotWait } : {}),
   }
 }
 
@@ -588,7 +597,7 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       summary.slug,
       summary.status,
       summary.kind === 'integration'
-        ? `integration ${summary.integration ?? ''}`
+        ? `integration ${summary.integration ?? ''}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`
         : phaseCell(summary),
       healthWord(summary.lease.health),
       summary.progress.heartbeatAt === undefined
@@ -953,10 +962,22 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
       // entry under `identity` — `getRepoBuildDigests` groups by `record.repo`
       // exactly — so it keeps its per-build history read (correct, just not
       // accelerated).
+      const facts = (await readBuildFacts(store, record.slug)).value
       const summary = summarizeFrom(
         record,
-        (await readBuildFacts(store, record.slug)).value.state,
+        facts.state,
         now,
+        facts.state.kind === 'node'
+          ? slotRequest(
+              {
+                record,
+                state: facts.state,
+                workspace: facts.workspace !== null,
+                provisioning: facts.provisionMarker !== undefined,
+              },
+              now,
+            )
+          : undefined,
       )
       if (wanted.has(summary.status)) summaries.push(summary)
     }
