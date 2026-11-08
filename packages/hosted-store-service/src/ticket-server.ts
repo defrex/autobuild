@@ -41,6 +41,8 @@ import {
   TICKET_DEPENDENCY_STATE_CAPABILITY,
   TICKET_POLICY_ROLES_HEADER,
   TICKET_POLICY_ROLES_CAPABILITY,
+  TICKET_TARGETING_HEADER,
+  TICKET_TARGETING_CAPABILITY,
   projectTicketPolicy,
   TicketIssueLinksUnsupported,
   refuseUnsupportedIssueLinks,
@@ -140,7 +142,9 @@ export function createTicketServer(options: TicketServerOptions): {
   ): Promise<MachinePrincipal> {
     const principal = await authenticate(req)
     if (principal.kind === 'ticket-grant') {
-      const read = ['get', 'list-ready', 'dependency-states', 'states'].includes(operation)
+      const read = ['get', 'list-ready', 'list-targeting', 'dependency-states', 'states'].includes(
+        operation,
+      )
       if (read || (principal.grant.kind === 'runner' && operation === 'create')) return principal
       throw new MachineAuthError(403, 'ticket grant cannot perform this operation')
     }
@@ -150,6 +154,7 @@ export function createTicketServer(options: TicketServerOptions): {
     const read =
       operation === 'get' ||
       operation === 'list-ready' ||
+      operation === 'list-targeting' ||
       operation === 'dependency-states' ||
       operation === 'states'
     if (
@@ -306,6 +311,19 @@ export function createTicketServer(options: TicketServerOptions): {
         const listing = await source.listReady(request.input)
         // Urgent first for every client and backing source; a stable in-memory
         // pass over rows already read, idempotent over an ordered listing.
+        return json(200, { ...listing, tickets: urgentFirst(listing.tickets).map(ticketResponse) })
+      }
+      case 'list-targeting': {
+        // Indexed children only; never a filtered full listing, which would hide
+        // the project-sized scan this operation exists to avoid.
+        const { input } = hostedTicketRequestSchemas['list-targeting'].parse(raw)
+        if (!source.listTargeting)
+          return json(409, {
+            kind: 'conflict',
+            error: 'ticket source does not support targeted listing',
+            code: 'targeting-unsupported',
+          })
+        const listing = await source.listTargeting(input.nodeId)
         return json(200, { ...listing, tickets: urgentFirst(listing.tickets).map(ticketResponse) })
       }
       case 'get': {
@@ -563,14 +581,15 @@ export function createTicketServer(options: TicketServerOptions): {
   }
   return {
     // Every ticket response, failures included, advertises issue-link,
-    // priority and policy-role support so a current client can recognize an
-    // older server's strict-schema refusal.
+    // priority, policy-role and targeted-listing support so a current client
+    // can recognize an older server's strict-schema refusal or missing route.
     async fetch(req: Request): Promise<Response> {
       const response = await server.fetch(req)
       const headers = new Headers(response.headers)
       headers.set(TICKET_ISSUE_LINKS_HEADER, TICKET_ISSUE_LINKS_CAPABILITY)
       headers.set(TICKET_PRIORITY_HEADER, TICKET_PRIORITY_CAPABILITY)
       headers.set(TICKET_POLICY_ROLES_HEADER, TICKET_POLICY_ROLES_CAPABILITY)
+      headers.set(TICKET_TARGETING_HEADER, TICKET_TARGETING_CAPABILITY)
       return new Response(response.body, { status: response.status, headers })
     },
   }
