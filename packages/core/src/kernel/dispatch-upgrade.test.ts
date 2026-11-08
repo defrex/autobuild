@@ -260,50 +260,63 @@ const churn = (count: number, prefix = 'churn') => {
   return writes
 }
 
-test('runs, lineages and handoffs stay within the retention window across many generations', () => {
-  const events = log([
-    ...generations(0, 20),
-    ...resolutionOnlyWrites(upgradeGenerationRun(20), 'k'),
-  ])
-  checkIncremental(dispatchUpgradeReducer, events)
-  const state = dispatchUpgradeReducer.reduce(events)
-  expect(Object.keys(state.runs).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
-  expect(Object.keys(state.lineages).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
-  expect(state.authoritativeRun).toBe(upgradeGenerationRun(20))
-  expect(state.runs[upgradeGenerationRun(20)]?.resolved).toBeDefined()
-  expect(state.lineages[upgradeGenerationRun(20)]).toBe('launcher')
-  const predecessor = state.runs[upgradeGenerationRun(19)]!
-  for (const fact of ['resolved', 'prepared', 'request', 'handoff', 'released', 'takeover'])
-    expect(predecessor[fact as keyof UpgradeRun]).toBeDefined()
-  expect(predecessor.completed).toBeDefined()
-  expect(state.runs[upgradeGenerationRun(0)]).toBeUndefined()
-})
+// checkIncremental compares every split against a whole-log reduce, so it is
+// quadratic in log length, and these logs exceed UPGRADE_HISTORY_LIMIT on purpose:
+// 1-1.5 s on a 4-vCPU build sandbox, thin against bun's 5 s default once
+// integration runs concurrently in verify (AUT-1166).
+const QUADRATIC_ORACLE_TIMEOUT_MS = 20_000
 
-test('an unfinished handoff outlives newer completed runs, and the authoritative run is never evicted', () => {
-  const unfinished = upgradeGenerationWrites(0).slice(0, -1)
-  const events = log([...unfinished, ...generations(1, 18)])
-  checkIncremental(dispatchUpgradeReducer, events)
-  const state = dispatchUpgradeReducer.reduce(events)
-  expect(Object.keys(state.runs).length).toBe(UPGRADE_HISTORY_LIMIT)
-  expect(state.runs[upgradeGenerationRun(0)]?.takeover).toBeDefined()
-  expect(state.runs[upgradeGenerationRun(0)]?.completed).toBeUndefined()
-  expect(state.runs[upgradeGenerationRun(1)]).toBeUndefined()
+test(
+  'runs, lineages and handoffs stay within the retention window across many generations',
+  () => {
+    const events = log([
+      ...generations(0, 20),
+      ...resolutionOnlyWrites(upgradeGenerationRun(20), 'k'),
+    ])
+    checkIncremental(dispatchUpgradeReducer, events)
+    const state = dispatchUpgradeReducer.reduce(events)
+    expect(Object.keys(state.runs).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
+    expect(Object.keys(state.lineages).length).toBeLessThanOrEqual(UPGRADE_HISTORY_LIMIT)
+    expect(state.authoritativeRun).toBe(upgradeGenerationRun(20))
+    expect(state.runs[upgradeGenerationRun(20)]?.resolved).toBeDefined()
+    expect(state.lineages[upgradeGenerationRun(20)]).toBe('launcher')
+    const predecessor = state.runs[upgradeGenerationRun(19)]!
+    for (const fact of ['resolved', 'prepared', 'request', 'handoff', 'released', 'takeover'])
+      expect(predecessor[fact as keyof UpgradeRun]).toBeDefined()
+    expect(predecessor.completed).toBeDefined()
+    expect(state.runs[upgradeGenerationRun(0)]).toBeUndefined()
+  },
+  QUADRATIC_ORACLE_TIMEOUT_MS,
+)
+// Quadratic like the retention-window test above.
+test(
+  'an unfinished handoff outlives newer completed runs, and the authoritative run is never evicted',
+  () => {
+    const unfinished = upgradeGenerationWrites(0).slice(0, -1)
+    const events = log([...unfinished, ...generations(1, 18)])
+    checkIncremental(dispatchUpgradeReducer, events)
+    const state = dispatchUpgradeReducer.reduce(events)
+    expect(Object.keys(state.runs).length).toBe(UPGRADE_HISTORY_LIMIT)
+    expect(state.runs[upgradeGenerationRun(0)]?.takeover).toBeDefined()
+    expect(state.runs[upgradeGenerationRun(0)]?.completed).toBeUndefined()
+    expect(state.runs[upgradeGenerationRun(1)]).toBeUndefined()
 
-  // Only the first run ticks; later runs merely resolve, so it stays oldest.
-  const resolutions = Array.from({ length: 20 }, (_, i) =>
-    write('dispatcher.upgrade-target-resolved', {
-      run: `other-${String(i).padStart(3, '0')}`,
-      lineage: 'launcher',
-      target: upgradeTarget('k'),
-    }),
-  )
-  const authority = dispatchUpgradeReducer.reduce(
-    log([...resolutionOnlyWrites('authority', 'k'), ...resolutions]),
-  )
-  expect(Object.keys(authority.runs).length).toBe(UPGRADE_HISTORY_LIMIT)
-  expect(authority.runs.authority?.resolved).toBeDefined()
-})
-
+    // Only the first run ticks; later runs merely resolve, so it stays oldest.
+    const resolutions = Array.from({ length: 20 }, (_, i) =>
+      write('dispatcher.upgrade-target-resolved', {
+        run: `other-${String(i).padStart(3, '0')}`,
+        lineage: 'launcher',
+        target: upgradeTarget('k'),
+      }),
+    )
+    const authority = dispatchUpgradeReducer.reduce(
+      log([...resolutionOnlyWrites('authority', 'k'), ...resolutions]),
+    )
+    expect(Object.keys(authority.runs).length).toBe(UPGRADE_HISTORY_LIMIT)
+    expect(authority.runs.authority?.resolved).toBeDefined()
+  },
+  QUADRATIC_ORACLE_TIMEOUT_MS,
+)
 test('resolution-only churn evicts its own runs before accepted handoffs', () => {
   const captured = upgradeGenerationWrites(0).map((write) =>
     write.type === 'dispatcher.handoff-started'
