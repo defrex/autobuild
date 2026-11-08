@@ -1,5 +1,5 @@
 ---
-name: guide
+name: ab-guide
 description: Authoritative reference for the autobuild system as installed in this repository - the build lifecycle (grooming, dispatch, plan, plan-review, implement, code-review, verify, finalize, reconcile, merge), the complete autobuild.toml configuration surface, how `ab init` and `ab upgrade` treat config and vendored skills, and what each installed ab-* skill is for. Use when asked about how autobuild works or why a build did what it did; when editing autobuild.toml; when adding or changing a verify or finalize step; when configuring roles, runners, models, policy limits, dispatch, or ticket sources; when reading, editing, or upgrading the installed ab-* skills; when a question mentions autobuild, autobuild.toml, or the `ab` CLI; or when writing the product's own name in prose, documentation, or a UI string.
 ---
 
@@ -2115,8 +2115,9 @@ basename followed by the compact counters
 main counts the web operator app shows. `triage` is the number of tickets in
 the configured triage state (`[tickets].triageState`, or the source's default).
 The dispatcher samples it at most once per 60 s, outside dispatcher ticks,
-only for an interactive dashboard, through bounded `countStates` reads, never listings;
-it reads no events, and each tick publishes the last good sample. It shows `–`
+only for an interactive dashboard, through one bounded state-count read
+(`countStates`), never a ticket listing; it reads no events, and each tick
+publishes the last good sample. It shows `–`
 when the source has no bounded state counts (Linear) or no sample has succeeded
 yet; a failed read keeps the last value, appends nothing, and never fails the
 tick. The interactive frontend of a local dispatch takes it from the
