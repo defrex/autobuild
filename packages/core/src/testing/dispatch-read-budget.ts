@@ -1026,6 +1026,194 @@ export async function ticketListReadBudget(
   for (const cost of sampleCosts) expect(cost).toBe(sampleCosts[0]!)
 }
 
+/** One fixture per population: a fresh source (no client cache can hide a
+ * read) whose node has exactly three children (open, resolved and in the
+ * rejected role) among `unrelated` other tickets, some targeting another node.
+ * `requests` are the ticket-service operations the source issued since
+ * `reset`, with their response sizes; the children's sizes must not depend on
+ * the population, so byte totals compare exactly. */
+export interface TicketTargetingFixture {
+  source: TicketSource
+  node: string
+  open: string
+  children: string[]
+  rejectedState: string
+  reset(): void
+  statements(): number
+  requests(): { operation: string; bytes: number }[]
+}
+
+/** A due node's targeted read costs the same statements, requests and bytes at
+ * 10 and 10,000 unrelated tickets, and an observation pass reads only that
+ * node's children: nothing while no node is observed, one `list-targeting`
+ * and no `list-ready` per observed node. */
+export async function ticketTargetingReadBudget(
+  fixture: (unrelated: number) => Promise<TicketTargetingFixture>,
+): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { integrationObservationInputs, observeIntegration } = await import(
+    '../kernel/integration-completeness'
+  )
+  const costs: { statements: number; requests: string[]; bytes: number }[] = []
+  for (const unrelated of [10, 10_000]) {
+    const { source, node, open, children, rejectedState, reset, statements, requests } =
+      await fixture(unrelated)
+    expect(source.listTargeting).toBeDefined()
+    reset()
+    const listing = await source.listTargeting!(node)
+    expect(listing.tickets.map((ticket) => ticket.ref.id).sort()).toEqual([...children].sort())
+    for (const ticket of listing.tickets) expect(ticket.target).toBe(node)
+    costs.push({
+      statements: statements(),
+      requests: requests().map((request) => request.operation),
+      bytes: requests().reduce((total, request) => total + request.bytes, 0),
+    })
+
+    const store = new MemoryBuildStore()
+    const ticket = { source: source.name, id: node }
+    await store.createBuild({
+      slug: 'node',
+      repo: 'repo',
+      ticket,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo: 'repo', ticket, kind: 'node', baseBranch: 'main' },
+      },
+    })
+    reset()
+    const inputs = await integrationObservationInputs(store, source, 'repo')
+    // A pass in which no node is observed reads no ticket at all.
+    expect(requests()).toEqual([])
+    const observed = await observeIntegration(store, source, 'node', async () => inputs, {
+      rejectedState,
+    })
+    expect(observed.diagnostics).toEqual([])
+    expect(observed.openChildren).toEqual([open])
+    expect(requests().map((request) => request.operation)).toEqual(['list-targeting'])
+  }
+  expect(costs[0]!.requests).toEqual(['list-targeting'])
+  expect(costs[1]).toEqual(costs[0]!)
+}
+
+/** Builds one dispatcher pass's observation inputs for a node build over a
+ * fresh memory store, reporting which listing path the source decided on
+ * before the pass; `observe` then observes the node with those inputs. */
+export async function integrationNodePass(
+  source: TicketSource,
+  nodeId: string,
+): Promise<{
+  path: 'targeted' | 'exhaustive'
+  observe(): Promise<{ openChildren: string[]; diagnostics: string[] }>
+}> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { integrationObservationInputs, observeIntegration } = await import(
+    '../kernel/integration-completeness'
+  )
+  const store = new MemoryBuildStore()
+  const ticket = { source: source.name, id: nodeId }
+  await store.createBuild({
+    slug: 'node',
+    repo: 'repo',
+    ticket,
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { repo: 'repo', ticket, kind: 'node', baseBranch: 'main' },
+    },
+  })
+  const inputs = await integrationObservationInputs(store, source, 'repo')
+  return {
+    path: inputs.targeting ? 'targeted' : 'exhaustive',
+    observe: async () => {
+      const { openChildren, diagnostics } = await observeIntegration(
+        store,
+        source,
+        'node',
+        async () => inputs,
+      )
+      return { openChildren, diagnostics }
+    },
+  }
+}
+
+/** Nested nodes, retargeted, removed, resolved and rejected-role children
+ * observe the same open children through `source`'s targeted read as through
+ * its exhaustive listing. `source` must declare `listTargeting` and accept
+ * `completed` and `rejectedState` as create states. */
+export async function targetedCompletenessParity(
+  source: TicketSource,
+  states: { completed: string; rejectedState: string },
+): Promise<void> {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const { integrationObservationInputs, observeIntegration } = await import(
+    '../kernel/integration-completeness'
+  )
+  expect(source.listTargeting).toBeDefined()
+  const exhaustive = {
+    name: source.name,
+    integrationTree: true,
+    listAll: () => source.listAll!(),
+  } as unknown as TicketSource
+  const node = await source.create({ title: 'node', body: 'node', kind: 'node' })
+  const nested = await source.create({
+    title: 'nested',
+    body: 'nested',
+    kind: 'node',
+    target: node.ref.id,
+  })
+  const child = (title: string, target: string, state?: string) =>
+    source.create({ title, body: title, target }, state === undefined ? {} : { state })
+  const moved = await child('moved', node.ref.id)
+  const removed = await child('removed', nested.ref.id)
+  await child('resolved', node.ref.id, states.completed)
+  await child('rejected', node.ref.id, states.rejectedState)
+  await child('unrelated', nested.ref.id)
+  const store = new MemoryBuildStore()
+  for (const [slug, ticket] of [
+    ['node', node],
+    ['nested', nested],
+  ] as const) {
+    const ref = { source: source.name, id: ticket.ref.id }
+    await store.createBuild({
+      slug,
+      repo: 'repo',
+      ticket: ref,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { repo: 'repo', ticket: ref, kind: 'node', baseBranch: 'main' },
+      },
+    })
+  }
+  const compare = async () => {
+    const open: Record<string, string[]> = {}
+    for (const slug of ['node', 'nested']) {
+      const observe = async (tickets: TicketSource) => {
+        const inputs = await integrationObservationInputs(store, tickets, 'repo')
+        const observed = await observeIntegration(store, tickets, slug, async () => inputs, {
+          rejectedState: states.rejectedState,
+        })
+        expect(observed.diagnostics).toEqual([])
+        return observed.openChildren
+      }
+      open[slug] = await observe(source)
+      expect(open[slug]).toEqual(await observe(exhaustive))
+    }
+    return open
+  }
+  const initial = await compare()
+  expect(initial.node).toContain(moved.ref.id)
+  expect(initial.node).not.toContain(removed.ref.id)
+  expect(initial.nested).toContain(removed.ref.id)
+  await source.update(moved.ref.id, { target: nested.ref.id })
+  await compare()
+  await source.update(removed.ref.id, { target: null })
+  await compare()
+  await source.transition(moved.ref.id, states.completed)
+  await compare()
+}
+
 /** Persisted caches isolate startup transfer from unrelated discarded history.
  * Without a usable checkpoint, startup seeds from the canonical repository value:
  * its transfer is the same at every journal and current-run length. */

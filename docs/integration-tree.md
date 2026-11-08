@@ -143,8 +143,8 @@ A node collects until every ticket targeting it is natively done or cancelled,
 or sits in the configured rejected state, all frozen child claims have settled,
 and at least one contribution has merged. Triage, backlog and ready children
 keep it incomplete; a rejected child does not. Exhaustive enumeration of the
-tickets targeting it (a source's `listTargeting` when present, otherwise
-`listAll`) fails closed. Completeness is sampled again before verification and
+tickets targeting it (a source's `listTargeting` when present, as the GitHub
+and hosted sources provide, otherwise `listAll`) fails closed. Completeness is sampled again before verification and
 publication; tracker edits cannot be transactional with a forge write.
 
 The kernel runs all configured verify steps with normal path applicability on

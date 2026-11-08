@@ -171,6 +171,7 @@ The operation names and `input` values are:
 | `add-state` | `{name, about?: string}` | `{state: {name,tickets,about?}, created: boolean}` |
 | `state-counts` | `{names: string[]}` (1–16) | `{name, tickets}[]` for the names that resolve |
 | `list-ready` | `{labels?: string[], state?: string}` | `TicketListing` |
+| `list-targeting` | `{nodeId: string}` | `TicketListing` of every state |
 | `get` | `{id}` | `Ticket \| null` |
 | `claim` | `{id}` | `{claimed: boolean}` |
 | `comment` | `{id, body}` | `{ok: true}` |
@@ -235,8 +236,8 @@ current required resolution fields; domain and storage types are unchanged.
 Build and harvest runners exchange project authority for signed, project-bound
 execution and phase credentials through `/credentials/delegate` (see the remote
 store protocol). Build-runner and build-phase credentials cannot call any ticket
-operation. Harvest-phase credentials permit only list-ready, get and
-dependency-states. Harvest-runner credentials permit those reads plus create
+operation. Harvest-phase credentials permit only list-ready, list-targeting, get
+and dependency-states. Harvest-runner credentials permit those reads plus create
 for filing proposals. Claim, comment, transition, update, add-blocker and
 remove-blocker require project or admin authority; their access is unchanged.
 Denied delegated calls return 403 with an error naming the grant kind and
@@ -353,6 +354,28 @@ client version. Without it, both fields are projected away, preserving historica
 strict decoders. Current hosted clients send every capability header and
 default absent kind to `work`. Unfiltered listing includes all ticket states and
 empty nodes for `ab ticket tree`; dispatch and merge behavior are unchanged.
+
+### Targeted listing
+
+`list-targeting` returns every ticket in every state whose `target` is exactly
+`nodeId`, equal to unfiltered `list-ready` filtered by target, read through the
+project's target index so its cost follows the node's children rather than the
+project's ticket count. An unknown id returns an empty listing. A backing source
+without targeted listing answers `409` with `code: "targeting-unsupported"`; the
+service never filters a full listing instead. Ticket grants and harvest
+delegations may call it wherever they may call `list-ready`.
+
+Every `/tickets/*` response, including errors, carries
+`x-autobuild-ticket-targeting: 1`. A current client declares `listTargeting`
+only after a response from the service has carried that header, and settles the
+decision before use: from the policy sync, or else from one `list-targeting`
+probe for the reserved id `~negotiate`, which never names a ticket. An ok
+response without the header, or a `404` or `400` refusal of `list-targeting`
+without it, means the service predates the operation. Against such a service
+the client never declares it, and integration observation uses the exhaustive
+listing by that explicit decision. An inconclusive probe (a network failure or
+an unmarked gateway error) fails source construction. A targeted read the
+service later refuses fails closed, with no fallback within the pass.
 
 ## Issue links
 

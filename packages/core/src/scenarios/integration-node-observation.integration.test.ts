@@ -420,4 +420,14 @@ test('a targeting source is observed per node, memoized per pass, and never scan
   expect(retried.diagnostics).toEqual([])
   expect(retried.openChildren).toEqual(['A1'])
   expect(calls).toEqual(['A', 'A'])
+
+  // The targeting decision is captured with the inputs: a source withdrawing
+  // it mid-pass keeps that pass targeted rather than falling back to listAll.
+  calls.length = 0
+  const captured = await integrationObservationInputs(store, targeting, 'repo')
+  const withdrawn = Object.assign(targeting, { listTargeting: undefined })
+  const kept = await observeIntegration(store, withdrawn, 'node-b', async () => captured)
+  expect(kept.diagnostics).toEqual([])
+  expect(kept.openChildren).toEqual(['B1'])
+  expect(calls).toEqual(['B'])
 })

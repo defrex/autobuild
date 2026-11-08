@@ -33,11 +33,14 @@ function canEnumerate(tickets: TicketSource): boolean {
 function memoizedTargeting(
   tickets: TicketSource & { listTargeting: NonNullable<TicketSource['listTargeting']> },
 ): (nodeId: string) => Promise<TicketListing> {
+  // Captured once: the targeting decision is fixed for the pass, so a source
+  // that withdraws it later fails closed rather than falling back to listAll.
+  const list = tickets.listTargeting.bind(tickets)
   const listings = new Map<string, Promise<TicketListing>>()
   return (nodeId) => {
     let listing = listings.get(nodeId)
     if (listing === undefined) {
-      listing = tickets.listTargeting(nodeId)
+      listing = list(nodeId)
       listings.set(nodeId, listing)
       listing.catch(() => listings.delete(nodeId))
     }

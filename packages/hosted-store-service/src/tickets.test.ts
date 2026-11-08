@@ -16,8 +16,19 @@ const env = {
   AB_S3_SECRET_ACCESS_KEY: 'unused',
 }
 
+/** A backend with indexed-style targeted listing, so the shared targeting
+ * equality check runs through the composed service. */
+function withTargeting(fake: FakeTicketSource): FakeTicketSource {
+  return Object.assign(fake, {
+    listTargeting: async (nodeId: string) => {
+      const all = await fake.listAll()
+      return { ...all, tickets: all.tickets.filter((ticket) => ticket.target === nodeId) }
+    },
+  })
+}
+
 describeTicketSourceContract('hosted service composition', async () => {
-  const backend = new FakeTicketSource([], { doneState: 'Done' })
+  const backend = withTargeting(new FakeTicketSource([], { doneState: 'Done' }))
   const project = await ticketProject('https://github.com/acme/tickets', secret, () => now)
   const service = createHostedStoreService({
     ...project,
@@ -26,18 +37,22 @@ describeTicketSourceContract('hosted service composition', async () => {
     sourceFor: () => backend,
   })
   const token = project.token
+  const source = new HostedTicketSource({
+    url: 'https://hosted.example',
+    token,
+    teamKey: 'ENG',
+    claimedState: 'Doing',
+    createState: 'Triage',
+    fetchFn: (input, init) => {
+      if (input instanceof Request) return service.fetch(new Request(input, init))
+      return service.fetch(new Request(input.toString(), init))
+    },
+  })
+  // The composed service must keep the echo, or the contract would skip targeting.
+  expect(await source.negotiateTargeting()).toBe(true)
+  expect(source.listTargeting).toBeDefined()
   return {
-    source: new HostedTicketSource({
-      url: 'https://hosted.example',
-      token,
-      teamKey: 'ENG',
-      claimedState: 'Doing',
-      createState: 'Triage',
-      fetchFn: (input, init) => {
-        if (input instanceof Request) return service.fetch(new Request(input, init))
-        return service.fetch(new Request(input.toString(), init))
-      },
-    }),
+    source,
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
     editableLabel: 'autobuild',
     // The fake backend has no state counts; the server answers 409.
