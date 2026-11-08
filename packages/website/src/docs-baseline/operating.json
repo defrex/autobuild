@@ -1,0 +1,25 @@
+{
+  "path": "/docs/operating/",
+  "label": "Working with your operator agent",
+  "title": "Working with your operator agent",
+  "group": "guides",
+  "description": "Delegate specs, tickets, monitoring, and merge to your agent while keeping product decisions and authority with you.",
+  "textHash": "102989f9488644bd397a5119fa73f334b69acedb883a49157e7468f5ea05f2ee",
+  "headings": [
+    "Choose a harness",
+    "Give the agent memory",
+    "Give steering that sticks",
+    "Watch for attention",
+    "Answer and pause",
+    "Authorize merge",
+    "Choose an operator surface",
+    "An example session"
+  ],
+  "code": [
+    "bun ab repository status --json\nbun ab watch --operator --json",
+    "bun ab wait my-build --for attention --json --timeout 5m",
+    "bun ab answer my-build \"Keep the public API compatible\"",
+    "bun ab pause my-build\nbun ab resume my-build",
+    "bun ab merge my-build\nbun ab hold my-build"
+  ]
+}

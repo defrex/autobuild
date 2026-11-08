@@ -1,0 +1,24 @@
+{
+  "path": "/docs/glossary/",
+  "label": "Glossary",
+  "title": "Glossary",
+  "group": "reference",
+  "description": "Definitions for tickets, integration, execution boundaries, and agent roles.",
+  "textHash": "4b9e9635577681af5ee509331d60693ab8bd7b9d8b6326963b374cb43eadda1d",
+  "headings": [
+    "Build",
+    "Ticket",
+    "Spec",
+    "Node",
+    "Target",
+    "Seam",
+    "Adapter",
+    "Verifier",
+    "Escalation",
+    "Merge",
+    "Restack",
+    "Reconcile",
+    "Operator agent"
+  ],
+  "code": []
+}

@@ -1,0 +1,20 @@
+{
+  "path": "/docs/troubleshooting/",
+  "label": "Troubleshooting",
+  "title": "Troubleshooting",
+  "group": "reference",
+  "description": "Diagnose configuration, idle dispatch, authentication, stalled builds, and project selection.",
+  "textHash": "aebe1622eccd7a09eb83990bb46b3481d8411641ba00fc9f404aeeb168941611",
+  "headings": [
+    "Invalid configuration",
+    "tick: idle with expected work",
+    "Authentication failures",
+    "Stuck or wedged builds",
+    "Remote project access"
+  ],
+  "code": [
+    "bun ab models --available\nbun ab init --validate",
+    "bun ab repository status\nbun ab builds --queued\nbun ab harvest status",
+    "bun ab build status my-build\nbun ab builds --queued"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "path": "/docs/",
+  "label": "Overview",
+  "title": "How Autobuild works",
+  "group": "start",
+  "description": "The ticket-driven development lifecycle, its review and verification gates, and the repositories it fits.",
+  "textHash": "9fd3996d3223ed393e2980a26c569f6c1e7a77c479ca784d176da597e6e851f8",
+  "headings": [
+    "From a ticket to a change",
+    "Where it fits",
+    "Using these docs"
+  ],
+  "code": []
+}

@@ -1,0 +1,21 @@
+{
+  "path": "/docs/forges/",
+  "label": "Forges",
+  "title": "Forges",
+  "group": "reference",
+  "description": "Choose GitHub or local git and implement safe code publication and merge.",
+  "textHash": "ab02b9f8c855782f91099d1c10a0c56648908d48a98695ee2e49be118050a381",
+  "headings": [
+    "Responsibility",
+    "Shipped adapters",
+    "Writing your own"
+  ],
+  "code": [
+    "forge = \"github\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "export GITHUB_TOKEN='<push-capable repository token>'\nbun ab init --validate",
+    "forge = \"local-git\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "bun ab plugin test forge acme",
+    "plugins = [\"./autobuild-plugin.ts\"]\nforge = \"acme\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "{ kind: 'rate-limited', resetAt }            // resetAt: a valid ISO timestamp\n{ kind: 'transient', retry: 'retryable' }    // retryable transport failures"
+  ]
+}

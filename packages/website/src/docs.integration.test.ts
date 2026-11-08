@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
@@ -11,7 +11,12 @@ import {
   REPO_REFERENCES,
 } from './docs'
 import { loadDocsPages } from './docs-content'
-import baseline from './docs-baseline.json'
+import {
+  DOCS_BASELINE_DIR,
+  REGENERATE,
+  renderDocsBaseline,
+  writeDocsBaseline,
+} from './docs-baseline'
 const DOCS_PAGES = await loadDocsPages()
 
 import { REPO_URL, SITE_URL } from './constants'
@@ -152,31 +157,59 @@ test('published pages keep navigation on-site and link only declared repository 
     expect(page.content).not.toMatch(/<figure|<svg|<img|<script/)
 })
 
-test('layout preserves article words and headings from independent HTML baselines', () => {
-  for (const original of baseline) {
-    const page = DOCS_PAGES.find((entry) => entry.path === original.path)
-    expect(page, `missing historical page ${original.path}`).toBeDefined()
-    if (!page) continue
-    const decode = (text: string) =>
-      text.replace(/&#(?:x([0-9a-f]+)|(\d+));|&(amp|lt|gt|quot|apos);/gi, (_, hex, dec, named) =>
-        hex || dec
-          ? String.fromCodePoint(parseInt(hex ?? dec, hex ? 16 : 10))
-          : ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" } as Record<string, string>)[
-              named
-            ]!,
-      )
-    const text = decode(page.content.replace(/<[^>]+>/g, ''))
-      .replace(/\s+/g, ' ')
-      .trim()
-    expect(new Bun.CryptoHasher('sha256').update(text).digest('hex')).toBe(original.textHash)
-    expect(prepareHeadings(page.content).headings.map((h) => h.label)).toEqual(original.headings)
-    expect(
-      [...page.content.matchAll(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/g)].map((m) =>
-        decode(m[1]!).replace(/\n$/, ''),
-      ),
-    ).toEqual(original.code)
-    for (const key of ['path', 'label', 'title', 'group', 'description'] as const)
-      expect(page[key]).toBe(original[key])
+test('docs pages match the committed per-page baseline', async () => {
+  const expected = renderDocsBaseline(DOCS_PAGES)
+  const names = (await readdir(DOCS_BASELINE_DIR)).filter((name) => name.endsWith('.json')).sort()
+  expect(names, `baseline files differ from published pages; run ${REGENERATE}`).toEqual(
+    [...expected.keys()].sort(),
+  )
+  for (const name of names) {
+    const text = await readFile(join(DOCS_BASELINE_DIR, name), 'utf8')
+    expect(JSON.parse(text), `${name}: regenerate with ${REGENERATE}`).toEqual(
+      JSON.parse(expected.get(name)!),
+    )
+    expect(text, `${name}: regenerate with ${REGENERATE}`).toBe(expected.get(name)!)
+  }
+})
+
+test('docs baseline regeneration is idempotent, per page, and removes stale files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'website-docs-baseline-'))
+  try {
+    const docs = join(root, 'docs')
+    const out = join(root, 'baseline')
+    await Bun.write(
+      join(docs, 'alpha.md'),
+      '---\ntitle: Alpha\ngroup: start\ndescription: First page.\norder: 1\n---\n# Alpha\n\n## One\n\nAlpha words.\n',
+    )
+    await Bun.write(
+      join(docs, 'beta.md'),
+      '---\ntitle: Beta\ngroup: concepts\ndescription: Second page.\norder: 2\n---\n# Beta\n\nBeta words.\n\n```\nbun ab\n```\n',
+    )
+    await Bun.write(join(out, 'gone.json'), '{}\n')
+    await Bun.write(join(out, 'notes.txt'), 'kept')
+    const snapshot = async () => {
+      const names = (await readdir(out)).sort()
+      return Object.fromEntries(
+        await Promise.all(
+          names.map(async (name) => [name, await readFile(join(out, name), 'utf8')]),
+        ),
+      ) as Record<string, string>
+    }
+    await writeDocsBaseline(out, docs)
+    const first = await snapshot()
+    expect(Object.keys(first)).toEqual(['alpha.json', 'beta.json', 'notes.txt'])
+    await writeDocsBaseline(out, docs)
+    expect(await snapshot()).toEqual(first)
+    await writeFile(
+      join(docs, 'beta.md'),
+      '---\ntitle: Beta\ngroup: concepts\ndescription: Second page.\norder: 2\n---\n# Beta\n\nChanged words.\n\n```\nbun ab\n```\n',
+    )
+    await writeDocsBaseline(out, docs)
+    const second = await snapshot()
+    expect(second['alpha.json']).toBe(first['alpha.json']!)
+    expect(second['beta.json']).not.toBe(first['beta.json']!)
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })
 
