@@ -1,10 +1,15 @@
 import { expect, test } from 'bun:test'
 import { reduceBuild } from './reducer'
 import {
+  capacityExplanation,
   dispatchCapacity,
+  intakeCapacity,
   nodeCapacity,
   occupiesCapacity,
+  slotRequest,
+  slotWaitText,
   type CapacityBuild,
+  type DispatchCapacity,
 } from './dispatch-capacity'
 
 const now = new Date('2026-10-20T15:00:00Z')
@@ -154,6 +159,7 @@ test('pending verification may exclude paused descendants but active unrelated n
     occupied: 2,
     effective: 2,
     borrowingNodes: ['first'],
+    waitingNodes: [{ slug: 'second', request: 'verification' }],
   })
 })
 
@@ -177,4 +183,108 @@ test('migration normalization joins remapped frozen ancestry on both sides witho
   node.record.ticket = { source: 'file', id: 'node' }
   expect(nodeCapacity([node, child], 'node', now, normalize).excludedDescendants).toEqual(['child'])
   expect(original.ticket).toEqual({ source: 'linear', id: 'OLD-NODE' })
+})
+
+test('a node awaiting verification reserves one intake slot without occupying one', () => {
+  const builds = [verifying('node'), build('a'), build('b')]
+  const capacity = dispatchCapacity(builds, 3, now)
+  expect(capacity).toEqual({
+    configured: 3,
+    occupied: 2,
+    effective: 3,
+    borrowingNodes: [],
+    waitingNodes: [{ slug: 'node', request: 'verification' }],
+  })
+  expect(intakeCapacity(capacity)).toBe(0)
+  expect(nodeCapacity(builds, 'node', now).occupied).toBe(2)
+})
+
+test('a node holding its workspace, provisioning or live lease is occupied, not waiting', () => {
+  for (const hold of ['workspace', 'provisioning', 'lease'] as const) {
+    const node = verifying('node')
+    if (hold === 'workspace') node.workspace = true
+    if (hold === 'provisioning') node.provisioning = true
+    if (hold === 'lease')
+      node.record.lease = {
+        holder: 'runner',
+        expiresAt: '2026-10-20T16:00:00Z',
+      }
+    expect(slotRequest(node, now)).toBeUndefined()
+    const capacity = dispatchCapacity([node, build('a')], 3, now)
+    expect(capacity.occupied).toBe(2)
+    expect(capacity.waitingNodes).toBeUndefined()
+    expect(intakeCapacity(capacity)).toBe(1)
+  }
+})
+
+test('paused, blocked, escalated, deferred and verified nodes do not wait', () => {
+  const variants: ((node: CapacityBuild) => void)[] = [
+    (node) => (node.state.status = 'paused'),
+    (node) => (node.state.status = 'blocked'),
+    (node) =>
+      (node.state.openEscalations = [
+        { id: 'esc', phase: 'integration', question: 'q', seq: 2 } as never,
+      ]),
+    (node) => (node.state.compatibility = { decisiveFacts: 1 } as never),
+    (node) => (node.state.prState = 'merged'),
+    (node) =>
+      (node.state.nodeComparison = {
+        headSha: 'moved',
+        parentSha: 'parent',
+        ahead: 1,
+      }),
+  ]
+  for (const change of variants) {
+    const node = verifying('node')
+    change(node)
+    expect(slotRequest(node, now)).toBeUndefined()
+    expect(intakeCapacity(dispatchCapacity([node], 2, now))).toBe(2)
+  }
+})
+
+test('an unallocated conflict node waits for reconcile without being subtracted twice', () => {
+  const node = conflict('node')
+  node.workspace = false
+  const capacity = dispatchCapacity([node, build('a')], 3, now)
+  expect(capacity.occupied).toBe(2)
+  expect(capacity.waitingNodes).toEqual([{ slug: 'node', request: 'reconcile' }])
+  expect(intakeCapacity(capacity)).toBe(1)
+  node.state.openEscalations = [{ id: 'esc' } as never]
+  expect(slotRequest(node, now)).toBeUndefined()
+})
+
+test('capacity wording covers waiting, borrowing, both and a legacy projection', () => {
+  const base: DispatchCapacity = {
+    configured: 2,
+    occupied: 2,
+    effective: 2,
+    borrowingNodes: [],
+  }
+  expect(capacityExplanation(base)).toBe('')
+  expect(capacityExplanation(undefined)).toBe('')
+  expect(
+    capacityExplanation({
+      ...base,
+      waitingNodes: [{ slug: 'n', request: 'verification' }],
+    }),
+  ).toBe(' (2 configured; 1 node waiting for a slot ahead of new ticket claims: n)')
+  expect(capacityExplanation({ ...base, borrowingNodes: ['b'] })).toBe(
+    ' (2 configured; 1 node using descendant-held slots: b)',
+  )
+  expect(
+    capacityExplanation({
+      ...base,
+      borrowingNodes: ['b'],
+      waitingNodes: [
+        { slug: 'm', request: 'reconcile' },
+        { slug: 'n', request: 'verification' },
+      ],
+    }),
+  ).toBe(
+    ' (2 configured; 1 node using descendant-held slots: b; 2 nodes waiting for a slot ahead of new ticket claims: m, n)',
+  )
+  expect(slotWaitText('verification')).toBe(
+    'verification waiting for a slot ahead of new ticket claims',
+  )
+  expect(intakeCapacity(base)).toBe(0)
 })
