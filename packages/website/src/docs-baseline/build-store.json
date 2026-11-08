@@ -1,0 +1,21 @@
+{
+  "path": "/docs/build-store/",
+  "label": "Build store",
+  "title": "Build store",
+  "group": "reference",
+  "description": "Select local SQLite or an HTTP service and understand the storage extension contract.",
+  "textHash": "75901a609739d3496c7f18ea31fa0c801e6672f985fbe2f339ad9a3f17bf3256",
+  "headings": [
+    "Responsibility",
+    "Shipped adapters",
+    "Writing your own",
+    "Hosted dispatch and local viewing",
+    "Several dispatchers on one repository"
+  ],
+  "code": [
+    "[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "bun ab builds --store /srv/autobuild/project-store",
+    "[store]\nurl = \"https://builds.example.com\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "bun ab connect https://builds.example.com\nbun ab builds"
+  ]
+}

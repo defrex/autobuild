@@ -1,0 +1,17 @@
+{
+  "path": "/docs/upgrading/",
+  "label": "Upgrading",
+  "title": "Upgrading",
+  "group": "reference",
+  "description": "Update the pinned installation, preserve customization, and resume durable work.",
+  "textHash": "b6d112f586ef45cf76672b9dff5e795ff3949a7cf63835b01a3046706e05afda",
+  "headings": [
+    "Update the installation",
+    "Review configuration and skills",
+    "Restart and resume"
+  ],
+  "code": [
+    "bun add -d --exact @defrex/autobuild@VERSION\nbun ab upgrade --no-self-update",
+    "bun ab dispatch"
+  ]
+}

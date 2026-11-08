@@ -1,0 +1,19 @@
+{
+  "path": "/docs/skills/",
+  "label": "Skills",
+  "title": "Skills",
+  "group": "concepts",
+  "description": "Understand Autobuild's agent skills, customize their defaults for your repository, and keep your edits through upgrades.",
+  "textHash": "0c6ce58f255bc5f2a25bf42ddc67fe49894e340af1cd9e7332f896559156d6d4",
+  "headings": [
+    "Strong defaults, yours to edit",
+    "The shipped skills",
+    "How upgrades preserve customization",
+    "Add a repository-local skill",
+    "Harness discovery"
+  ],
+  "code": [
+    "[verify]\nsteps = [\"acceptance\"]\n\n[verify.acceptance]\nkind = \"agent\"\nskill = \"verify-acceptance\"",
+    "mkdir -p .claude/skills\nln -s ../../.agents/skills/verify-acceptance .claude/skills/verify-acceptance"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "path": "/docs/agent-runtimes/",
+  "label": "Agent runtimes",
+  "title": "Agent runtimes",
+  "group": "reference",
+  "description": "Choose Claude Code, Codex, or Pi, route producer and reviewer models, and implement a runtime adapter.",
+  "textHash": "65b79e3d1894ce1b3b917788b3f3a60cda03336a384b0a9b3d248ed1276baa2c",
+  "headings": [
+    "Responsibility",
+    "Shipped adapters",
+    "Choosing models",
+    "Writing your own"
+  ],
+  "code": [
+    "[tickets]\nsource = \"file\"\nreadyState = \"ready\"\n\n[roles.default]\nruntime = \"claude\"",
+    "[tickets]\nsource = \"file\"\nreadyState = \"ready\"\n\n[roles.default]\nruntime = \"codex\"",
+    "[tickets]\nsource = \"file\"\nreadyState = \"ready\"\n\n[roles.default]\nruntime = \"pi\"\nmodel = \"vercel-ai-gateway/anthropic/claude-sonnet-4.6\"",
+    "[tickets]\nsource = \"file\"\nreadyState = \"ready\"\n\n[verify]\nsteps = [\"acceptance\"]\n\n[verify.acceptance]\nkind = \"agent\"\nskill = \"verify-acceptance\"\n\n[roles.default]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\"\nalternates = [{ runtime = \"claude\", model = \"claude-opus-5-5\" }]\n\n[roles.plan]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\"\nalternates = [{ runtime = \"claude\", model = \"claude-opus-5-5\" }]\n\n[roles.implement]\nruntime = \"codex\"\nmodel = \"gpt-6.1-sol\"\nalternates = [{ runtime = \"claude\", model = \"claude-opus-5-5\" }]\n\n[roles.plan-review]\nruntime = \"claude\"\nmodel = \"claude-opus-5-5\"\nalternates = [{ runtime = \"codex\", model = \"gpt-6.1-sol\" }]\n\n[roles.code-review]\nruntime = \"claude\"\nmodel = \"claude-opus-5-5\"\nalternates = [{ runtime = \"codex\", model = \"gpt-6.1-sol\" }]\n\n[roles.acceptance]\nruntime = \"claude\"\nmodel = \"claude-opus-5-5\"\nalternates = [{ runtime = \"codex\", model = \"gpt-6.1-sol\" }]",
+    "bun ab plugin test agent-runtime acme"
+  ]
+}
