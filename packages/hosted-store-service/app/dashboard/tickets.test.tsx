@@ -1,7 +1,15 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { tabLink, ticketLink } from './project-selection'
-import { bodyWithoutTitle, excerpt, tabForState, ticketMoves, ViewTabs } from './tickets'
+import {
+  bodyWithoutTitle,
+  excerpt,
+  type Ticket,
+  TicketListView,
+  tabForState,
+  ticketMoves,
+  ViewTabs,
+} from './tickets'
 
 const repo = 'https://github.com/example/happy'
 const names = { triage: 'triage', ready: 'ready', done: 'done' }
@@ -61,4 +69,34 @@ test('triage offers enqueue, and ice only where an icebox exists; the queue offe
   expect(labels('ready')).toEqual(['DEQUEUE->triage'])
   expect(labels('done')).toEqual([])
   expect(labels('doing')).toEqual([])
+})
+
+test('the queue lists urgent tickets first and marks them; other tabs keep source order', () => {
+  const ticket = (id: string, priority?: 'urgent') =>
+    ({
+      revision: '1',
+      ref: { source: 'hosted', id, title: id },
+      title: `Title ${id}`,
+      body: '',
+      state: 'ready',
+      resolved: false,
+      labels: [],
+      ...(priority ? { priority } : {}),
+    }) as Ticket
+  const page = {
+    tickets: [ticket('AUT-1'), ticket('AUT-2', 'urgent')],
+    total: 2,
+    requested: 25,
+    loadMore: () => {},
+  }
+  const render = (tab: 'queue' | 'triage') =>
+    renderToStaticMarkup(
+      <TicketListView repo={repo} tab={tab} page={page} onOpenTicket={() => {}} />,
+    )
+  const queue = render('queue')
+  expect(queue.indexOf('AUT-2')).toBeLessThan(queue.indexOf('AUT-1'))
+  expect(queue.split('<span class="status ticket-priority">URGENT</span>')).toHaveLength(2)
+  const triage = render('triage')
+  expect(triage.indexOf('AUT-1')).toBeLessThan(triage.indexOf('AUT-2'))
+  expect(triage).not.toContain('URGENT')
 })

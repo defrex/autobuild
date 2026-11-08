@@ -5,6 +5,7 @@ import {
 } from '../kernel/ticket-migrations'
 import { updateTicketTarget } from '../kernel/node-parent'
 import { normalizeIssueLinks, type IssueLinkInput } from '../ports/tickets/issue-links'
+import { urgentFirst } from '../ports/tickets/priority'
 import type { IssueLink } from '../ports/types'
 import { projectTicketTree, compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -62,7 +63,8 @@ export interface OperatorTicketQueue {
   total: number
 }
 
-/** A window over a listing. `newest` reverses the source's oldest-first order. */
+/** A window over a listing. `oldest` (default) is dispatch order: urgent first,
+ * then the source's order; `newest` reverses the source's filing order. */
 export type OperatorTicketPage = TicketPage
 
 export interface OperatorTicketBuild {
@@ -148,8 +150,12 @@ export async function listOperatorTickets(opts: {
     nativePage ? source.listPage!(criteria, opts.page!) : source.listReady(criteria),
     opts.backend.statesFor(context, source),
   ])
-  const ordered =
-    !nativePage && opts.page?.order === 'newest' ? [...listing.tickets].reverse() : listing.tickets
+  // Native pages arrive ordered; the fallback mirrors the dispatcher's claim order.
+  const ordered = nativePage
+    ? listing.tickets
+    : opts.page?.order === 'newest'
+      ? [...listing.tickets].reverse()
+      : urgentFirst(listing.tickets)
   const offset = opts.page?.offset ?? 0
   return {
     states,
