@@ -483,9 +483,6 @@ test.each([false, true])(
       await h.cleanup()
     }
   },
-  // Real-Git nested landing exceeded 5s under the full integration run while
-  // passing in about 2.4s per case focused. Keep the same headroom as above.
-  15_000,
 )
 
 test('dispatcher recovers a failed receipt without a runner, workspace or successful forge read', async () => {
