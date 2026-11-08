@@ -10,7 +10,11 @@ import {
   enrichIntegrationRows,
   type IntegrationRow,
 } from './integration-row'
-import { dispatchCapacity, type DispatchCapacity } from '../../kernel/dispatch-capacity'
+import {
+  dispatchCapacity,
+  slotWaitText,
+  type DispatchCapacity,
+} from '../../kernel/dispatch-capacity'
 import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/dispatcher-selectors'
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 export { treeVocabulary, consentQueue } from './tree'
@@ -1340,6 +1344,27 @@ export interface DashboardHeader extends DashboardFrameHeader {
  * projection here means build rows (including their phase intervals) may be
  * cached without caching dispatcher settings or Harvest state.
  */
+/** A node waiting for a runner slot says so on its row unless a more urgent
+ * alert already stands. Returns copies; cached projected rows stay intact. */
+export function decorateSlotWaits(
+  rows: readonly DashboardBuild[],
+  capacity: DispatchCapacity | undefined,
+): DashboardBuild[] {
+  const waiting = new Map((capacity?.waitingNodes ?? []).map((node) => [node.slug, node.request]))
+  if (!waiting.size) return [...rows]
+  return rows.map((row) => {
+    const request = waiting.get(row.slug)
+    if (!request || !row.integrationRow || row.integrationRow.alert) return row
+    return {
+      ...row,
+      integrationRow: {
+        ...row.integrationRow,
+        alert: { tone: 'yellow', text: slotWaitText(request) },
+      },
+    }
+  })
+}
+
 export function buildDashboardFromProjected(
   projectedBuilds: readonly DashboardBuild[],
   header: DashboardHeader,
@@ -1354,8 +1379,9 @@ export function buildDashboardFromProjected(
       : repositoryEvents.upgrades)
   const upgrade = projectHandoffs(upgradeState)
   const rollback = projectRollback(upgradeState)
-  const builds = enrichIntegrationRows(
-    projectedBuilds.map((row) => enrichDrainingRow(row, upgrade.draining)),
+  const builds = decorateSlotWaits(
+    enrichIntegrationRows(projectedBuilds.map((row) => enrichDrainingRow(row, upgrade.draining))),
+    header.capacityProjection,
   ).sort((a, b) => a.slug.localeCompare(b.slug))
   const missingAccounts = Array.isArray(repositoryEvents)
     ? repositoryReadFactsReducer.reduce(repositoryEvents).missingAccounts
