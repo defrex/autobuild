@@ -75,7 +75,7 @@ Moving a ticket back to triage, backlog or ready restores ordinary behavior. "Bu
 The dispatcher claims only tickets in the ready state with the required labels and any source-specific filter. A ready ticket still waits on:
 
 - **Blockers.** Unresolved prerequisite tickets keep it queued; they don't create a blocked build. With nodes, prerequisites with builds must be present at the sampled destination; see [integration and blocker presence](integration-overview.md).
-- **Destination and capacity.** Its target must accept new work, and a capacity slot must be free.
+- **Destination and capacity.** Its target must accept new work, and a capacity slot must be free and not reserved for an integration node awaiting verification.
 
 When a slot is free, the dispatcher takes urgent ready tickets first, then normal ones, each in the source's order. Priority changes only that order: a blocked urgent ticket waits like any other while normal work proceeds, and an urgent ticket never stops or pauses a running build. The web dashboard's Queue tab lists tickets in the same order and marks urgent ones `URGENT`; the mark shows priority, not that the ticket will dispatch next.
 
