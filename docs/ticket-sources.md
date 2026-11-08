@@ -164,7 +164,7 @@ The `file`, `hosted`, `linear` and `github` sources declare `integrationTree: tr
 - **Targets** resolve to canonical ids in the same source and pick the integration destination, not execution order; blockers are a separate graph. See [integration](integration-overview.md).
 - **Updates.** Omitted `kind` or `target` keeps the value. New tickets default to work; `kind = "work"` resets kind; `target = null` clears a target in the typed API (not TOML syntax).
 - **Validation.** Target existence, node kind, self/ancestor cycles, corrupt ancestor chains and demoting a node with children are checked before any write; invalid metadata rejects the whole patch.
-- **Enumeration.** `listAll` lists every state, ignoring ready filters. `listTargeting`, when provided, lists the tickets targeting one node and is what integration observation uses.
+- **Enumeration.** `listAll` lists every state, ignoring ready filters. `listTargeting`, when provided, lists the tickets targeting one node and is what integration observation uses; `github` and `hosted` provide it.
 - **Without the capability**, a source keeps CRUD but must refuse kind/target writes, not drop them.
 
 ## Writing your own

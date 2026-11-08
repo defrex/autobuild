@@ -35,6 +35,9 @@ import {
   TICKET_DEPENDENCY_STATE_CAPABILITY,
   TICKET_POLICY_ROLES_HEADER,
   TICKET_POLICY_ROLES_CAPABILITY,
+  TICKET_TARGETING_HEADER,
+  TICKET_TARGETING_CAPABILITY,
+  TICKET_TARGETING_PROBE_NODE,
   dependencyStatesWireSchema,
   type HostedTicketContext,
   successWireSchema,
@@ -86,7 +89,10 @@ export function hostedTicketPolicy(tickets: TicketsConfig): HostedTicketPolicy {
   }
 }
 
-/** Full TicketSource client for a hosted Autobuild service. */
+/** Full TicketSource client for a hosted Autobuild service. Targeted listing
+ * is declared only after a response from the service has carried the
+ * targeting echo; product code obtains the source through `createTicketSource`,
+ * which settles that decision before returning it. */
 export class HostedTicketSource implements TicketSource {
   readonly name = 'hosted'
   readonly integrationTree = true
@@ -98,6 +104,9 @@ export class HostedTicketSource implements TicketSource {
   private readonly token: string
   private readonly fetchFn: HostedTicketFetch
   private readonly context: HostedTicketContext
+  /** Unknown until a response settles it; see `noteTargeting`. */
+  private targetingSupport: boolean | undefined
+  private readonly targeted = (nodeId: string) => this.targetedListing(nodeId)
 
   constructor(options: HostedTicketSourceOptions) {
     this.requestedIds = hostedRequestedIds(options.teamKey)
@@ -131,16 +140,38 @@ export class HostedTicketSource implements TicketSource {
     await this.request('policy', parsed, successWireSchema, { policyRoles: namesRoles })
   }
 
-  private project(ticket: Ticket): Ticket {
-    return normalizeTicket({ ...ticket, ref: { ...ticket.ref, source: this.name } })
+  /** Present only once the service has positively advertised `list-targeting`;
+   * while support is unknown or refused, observation keeps the exhaustive path. */
+  get listTargeting(): TicketSource['listTargeting'] {
+    return this.targetingSupport === true ? this.targeted : undefined
   }
 
-  private async request<T>(
-    operation: string,
-    input: unknown,
-    schema: { parse(value: unknown): T },
-    names: { issueLinks?: boolean; priority?: boolean; policyRoles?: boolean } = {},
-  ): Promise<T> {
+  /** Settles targeted-listing support before any observation runs: free when a
+   * response already settled it, otherwise one `list-targeting` probe for a
+   * node id that can never exist. Throws when the answer is inconclusive. */
+  async negotiateTargeting(): Promise<boolean> {
+    if (this.targetingSupport !== undefined) return this.targetingSupport
+    const response = await this.send('list-targeting', { nodeId: TICKET_TARGETING_PROBE_NODE })
+    if (this.targetingSupport === undefined && (response.status === 404 || response.status === 400))
+      this.targetingSupport = false
+    await response.body?.cancel()
+    if (this.targetingSupport === undefined)
+      throw new Error(
+        `could not negotiate targeted listing with the ticket service (HTTP ${response.status})`,
+      )
+    return this.targetingSupport
+  }
+
+  /** Any response carrying the echo declares support; an ok response without
+   * it comes from a service predating `list-targeting`. A non-ok response
+   * without it (a gateway page, say) proves nothing. */
+  private noteTargeting(response: Response): void {
+    if (response.headers.get(TICKET_TARGETING_HEADER) === TICKET_TARGETING_CAPABILITY)
+      this.targetingSupport = true
+    else if (response.ok) this.targetingSupport = false
+  }
+
+  private async send(operation: string, input: unknown): Promise<Response> {
     const response = await this.fetchFn(`${this.base}/tickets/${operation}`, {
       method: 'POST',
       headers: {
@@ -153,12 +184,41 @@ export class HostedTicketSource implements TicketSource {
         [TICKET_PRIORITY_HEADER]: TICKET_PRIORITY_CAPABILITY,
         [TICKET_DEPENDENCY_STATE_HEADER]: TICKET_DEPENDENCY_STATE_CAPABILITY,
         [TICKET_POLICY_ROLES_HEADER]: TICKET_POLICY_ROLES_CAPABILITY,
+        [TICKET_TARGETING_HEADER]: TICKET_TARGETING_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
       },
       body: JSON.stringify({ context: this.context, input }),
     })
+    this.noteTargeting(response)
+    return response
+  }
+
+  private project(ticket: Ticket): Ticket {
+    return normalizeTicket({ ...ticket, ref: { ...ticket.ref, source: this.name } })
+  }
+
+  private async request<T>(
+    operation: string,
+    input: unknown,
+    schema: { parse(value: unknown): T },
+    names: { issueLinks?: boolean; priority?: boolean; policyRoles?: boolean } = {},
+  ): Promise<T> {
+    const response = await this.send(operation, input)
     if (!response.ok) {
+      // A service predating targeted listing has no such route (or refuses it
+      // with a strict schema) and never echoes the capability header. The read
+      // fails closed; the next observation takes the negotiated exhaustive path.
+      if (
+        operation === 'list-targeting' &&
+        (response.status === 404 || response.status === 400) &&
+        response.headers.get(TICKET_TARGETING_HEADER) !== TICKET_TARGETING_CAPABILITY
+      ) {
+        this.targetingSupport = false
+        throw new Error(
+          'ticket service predates targeted listing (list-targeting); upgrade the service',
+        )
+      }
       // A service predating the roles refuses them with its strict policy schema
       // and never echoes the capability header.
       if (
@@ -226,8 +286,15 @@ export class HostedTicketSource implements TicketSource {
     return { ...listing, tickets: listing.tickets.map((ticket) => this.project(ticket)) }
   }
 
+  /** The exhaustive listing: non-recurring callers, and integration
+   * observation against a service that negotiated no targeted listing. */
   listAll(): Promise<TicketListing> {
     return this.listReady({})
+  }
+
+  private async targetedListing(nodeId: string): Promise<TicketListing> {
+    const listing = await this.request('list-targeting', { nodeId }, ticketListingWireSchema)
+    return { ...listing, tickets: listing.tickets.map((ticket) => this.project(ticket)) }
   }
 
   async listStates() {

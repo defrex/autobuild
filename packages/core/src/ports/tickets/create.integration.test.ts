@@ -45,6 +45,44 @@ describe('createTicketSource — hosted', () => {
     }
   })
 
+  test('every hosted source leaves the factory with a settled targeting decision', async () => {
+    const env = { AB_STORE: 'https://store.example/', AB_TOKEN: 'operator-token' }
+    const echo = { 'x-autobuild-ticket-targeting': '1' }
+    const original = globalThis.fetch
+    const calls: string[] = []
+    const answer = (respond: (url: string) => Response) => {
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        calls.push(new URL(String(url)).pathname)
+        return respond(String(url))
+      }) as unknown as typeof fetch
+    }
+    try {
+      // The policy sync settles it: no probe.
+      answer(() => Response.json({ ok: true }, { headers: echo }))
+      const synced = await createTicketSource(config, env, REPO)
+      expect(calls).toEqual(['/tickets/policy'])
+      expect(synced.listTargeting).toBeDefined()
+      // A delegated phase skips the sync and spends exactly one probe.
+      calls.length = 0
+      answer(() => Response.json({ tickets: [], diagnostics: [] }, { headers: echo }))
+      const current = await createTicketSource(config, { ...env, AB_PHASE: 'implement' }, REPO)
+      expect(calls).toEqual(['/tickets/list-targeting'])
+      expect(current.listTargeting).toBeDefined()
+      calls.length = 0
+      answer(() => Response.json({ error: 'no route', kind: 'not-found' }, { status: 404 }))
+      const older = await createTicketSource(config, { ...env, AB_PHASE: 'implement' }, REPO)
+      expect(calls).toEqual(['/tickets/list-targeting'])
+      expect(older.listTargeting).toBeUndefined()
+      // An inconclusive probe yields no source at all.
+      answer(() => new Response('bad gateway', { status: 502 }))
+      await expect(
+        createTicketSource(config, { ...env, AB_PHASE: 'implement' }, REPO),
+      ).rejects.toThrow('could not negotiate targeted listing')
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
   test('requires an HTTP(S) service, token, and team', async () => {
     await expect(createTicketSource(config, {}, REPO)).rejects.toThrow('AB_STORE')
     await expect(
