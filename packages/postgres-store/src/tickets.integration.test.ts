@@ -1351,3 +1351,50 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl)
+  test('targeted listing reads one indexed statement and only exact readable ids', async () => {
+    const isolated = await isolatedDatabase()
+    const database = await openPostgresTicketDatabase(isolated.url)
+    const repo = 'https://github.com/acme/one'
+    const source = database.source({
+      teamKey: 'AUT',
+      repo,
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+      rejectedState: 'Rejected',
+    })
+    const sql = new SQL(isolated.url)
+    try {
+      const node = await source.create({ title: 'Node', body: 'Body', kind: 'node' })
+      const open = await source.create({ title: 'Open', body: 'Body', target: node.ref.id })
+      const done = await source.create(
+        { title: 'Done', body: 'Body', target: node.ref.id },
+        { state: 'Done' },
+      )
+      const rejected = await source.create(
+        { title: 'Rejected', body: 'Body', target: node.ref.id },
+        { state: 'Rejected' },
+      )
+      await source.create({ title: 'Unrelated', body: 'Body' })
+      const ids = async (id: string) =>
+        (await source.listTargeting(id)).tickets.map((ticket) => ticket.ref.id).sort()
+      expect(await ids(node.ref.id)).toEqual([open.ref.id, done.ref.id, rejected.ref.id].sort())
+      expect(await ids(node.ref.id.toLowerCase())).toEqual([])
+      expect(await ids('~negotiate')).toEqual([])
+      // Index eligibility, independent of the planner's choice for tiny tables.
+      const plan = await sql.begin(async (tx) => {
+        await tx`SET LOCAL enable_seqscan = off`
+        return tx`EXPLAIN SELECT ab_tickets.* FROM ab_tickets
+          WHERE repo = ${repo}
+            AND target_id = (SELECT n.id FROM ab_tickets n
+              WHERE n.repo = ${repo} AND lower(n.readable_id) = lower(${node.ref.id})
+                AND n.readable_id = ${node.ref.id})`
+      })
+      const text = (plan as Record<string, string>[]).map((row) => Object.values(row)[0]).join('\n')
+      expect(text).toContain('ab_tickets_target_idx')
+    } finally {
+      await sql.close()
+      await database.close()
+      await isolated.cleanup()
+    }
+  })

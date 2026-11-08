@@ -47,7 +47,17 @@ const operator = mintToken(secret, {
   exp: now.getTime() + 60_000,
 })
 
-function harness(backend = new FakeTicketSource([], { doneState: 'Done' })) {
+/** A fake backend with targeted listing, as the Postgres store declares it. */
+function withTargeting(fake: FakeTicketSource): FakeTicketSource {
+  return Object.assign(fake, {
+    listTargeting: async (nodeId: string) => {
+      const all = await fake.listAll()
+      return { ...all, tickets: all.tickets.filter((ticket) => ticket.target === nodeId) }
+    },
+  })
+}
+
+function harness(backend = withTargeting(new FakeTicketSource([], { doneState: 'Done' }))) {
   const contexts: unknown[] = []
   const server = createTicketServer({
     secret,
@@ -71,11 +81,16 @@ function harness(backend = new FakeTicketSource([], { doneState: 'Done' })) {
   return { backend, contexts, server, source }
 }
 
-describeTicketSourceContract('HostedTicketSource (HTTP → FakeTicketSource)', async () => ({
-  source: harness().source,
-  states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
-  editableLabel: 'autobuild',
-}))
+describeTicketSourceContract('HostedTicketSource (HTTP → FakeTicketSource)', async () => {
+  const { source } = harness()
+  // Negotiated first, so the contract's targeting check cannot silently skip.
+  expect(await source.negotiateTargeting()).toBe(true)
+  return {
+    source,
+    states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+    editableLabel: 'autobuild',
+  }
+})
 
 describe('hosted ticket protocol', () => {
   test('forwards repository context and preserves exact body bytes while projecting source identity', async () => {

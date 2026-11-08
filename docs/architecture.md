@@ -1748,7 +1748,9 @@ both inventory and active items, retaining original identities after rewrites.
 Integration completion is sampled by `kernel/integration-completeness.ts` from
 exhaustive source listings (a source's `listTargeting` per node, memoized for
 the dispatcher pass, else one shared `listAll`), frozen claims and retained
-contribution identities.
+contribution identities. The hosted source serves `listTargeting` through the
+`list-targeting` ticket operation, which the PostgreSQL ticket store answers with
+one statement on the `(repo, target_id)` index.
 `integration.*` events retain observations, immutable cycle inputs, merge
 intents, provenance and tree audits. The build reducer projects these facts and
 `engine.ts` routes nodes directly through verification, without producer phases.
