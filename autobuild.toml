@@ -219,6 +219,14 @@ maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5     # queued observations that trigger a harvest on back-pressure
 
+# Merge policy. Releases are cut explicitly from main, so landing on main does
+# not ship to production; integration nodes merge automatically once complete
+# and verified, like leaves. `ab hold <slug>` still stops any one merge.
+# (Without a rule, nodes default to consent.)
+[[merge]]
+from = "node"
+mode = "auto"
+
 # Ticket source and lifecycle states. Tickets live in the hosted service at
 # app.autobuild.run, so this repository dogfoods it (since 2026-10-27). Before
 # that they were local files: this repository moved off Linear on 2026-10-21
