@@ -250,6 +250,29 @@ export class PostgresTicketSource implements TicketSource {
     return this.listReady({})
   }
 
+  /** Every ticket in every state targeting the node whose readable id is
+   * exactly `nodeId`, in one statement on the readable-id and
+   * `(repo, target_id)` indexes: O(children), whatever the project holds. */
+  async listTargeting(nodeId: string): Promise<TicketListing> {
+    return this.retry.run(this.sql, async (q) => {
+      // `lower()` lets the unique readable-id index serve the lookup; the exact
+      // match keeps the result equal to the listing filtered by `target`.
+      const rows: Row[] = await q`SELECT ab_tickets.*, revision::text AS revision,
+        (SELECT t.readable_id FROM ab_tickets t WHERE t.repo = ab_tickets.repo AND t.id = ab_tickets.target_id) AS target_readable_id,
+        ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers
+        FROM ab_tickets
+        WHERE repo = ${this.repo}
+          AND target_id = (SELECT n.id FROM ab_tickets n
+            WHERE n.repo = ${this.repo} AND lower(n.readable_id) = lower(${nodeId})
+              AND n.readable_id = ${nodeId})
+        ORDER BY (priority = 'urgent') DESC, created_at, id`
+      // Sequential for the same pinned-connection reason as `listReady`.
+      const tickets: Ticket[] = []
+      for (const row of rows) tickets.push(await this.record(q, row))
+      return { tickets, diagnostics: [] }
+    })
+  }
+
   // Creates and metadata mutations take this project lock before any ticket row
   // lock, so ancestor validation cannot race reparenting or node demotion.
   private async graphLock(q: Exec): Promise<void> {

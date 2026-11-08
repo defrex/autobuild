@@ -65,7 +65,14 @@ export { buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } fro
 export { abConnect, abDisconnect } from '../cli/connect'
 export { ProjectCredentials } from '../cli/project-credentials'
 
-export { dispatchReadBudget, ticketListReadBudget } from './dispatch-read-budget'
+export {
+  dispatchReadBudget,
+  integrationNodePass,
+  targetedCompletenessParity,
+  ticketListReadBudget,
+  ticketTargetingReadBudget,
+  type TicketTargetingFixture,
+} from './dispatch-read-budget'
 
 export {
   catalogSkewReadBudget,

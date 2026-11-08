@@ -27,6 +27,9 @@ import {
   hostedTicketRequestSchemas,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
+  TICKET_TARGETING_HEADER,
+  TICKET_TARGETING_CAPABILITY,
+  TICKET_TARGETING_PROBE_NODE,
   dependencyStatesWireSchema,
   successWireSchema,
   ticketStateCountsWireSchema,
@@ -187,6 +190,7 @@ describe('HostedTicketSource (client half)', () => {
         'x-autobuild-ticket-priority': '1',
         'x-autobuild-ticket-dependency-state': '1',
         'x-autobuild-ticket-policy-roles': '1',
+        'x-autobuild-ticket-targeting': '1',
         authorization: 'Bearer t0k',
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -691,4 +695,136 @@ test('hosted priority: a typed conflict or an older service refusing the key is 
   // A current service echoing the capability refuses for an ordinary reason.
   const echoed = await rejectionOf(source.update('ENG-42', { priority: 'urgent' }))
   expect(echoed.name).toBe('Error')
+})
+
+describe('hosted targeted listing negotiation', () => {
+  const ECHO = { [TICKET_TARGETING_HEADER]: TICKET_TARGETING_CAPABILITY }
+  const EMPTY = ticketListingWireSchema.parse({ tickets: [], diagnostics: [] })
+  const NO_ROUTE = errorBodySchema.parse({ error: 'no route', kind: 'not-found' })
+
+  test('a fresh source declares nothing and has made no request', () => {
+    const { source, calls } = makeSource([])
+    expect(source.listTargeting).toBeUndefined()
+    expect(calls).toHaveLength(0)
+  })
+
+  test('a current service settles support with one probe for the reserved node', async () => {
+    const { source, calls } = makeSource([{ body: EMPTY, headers: ECHO }])
+    expect(await source.negotiateTargeting()).toBe(true)
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://tickets.example/tickets/list-targeting',
+    ])
+    const request = hostedTicketRequestSchemas['list-targeting'].parse(calls[0]!.body)
+    expect(request.input.nodeId).toBe(TICKET_TARGETING_PROBE_NODE)
+    expect(source.listTargeting).toBeDefined()
+    expect(source.listTargeting).toBe(source.listTargeting)
+    expect(await source.negotiateTargeting()).toBe(true)
+    expect(calls).toHaveLength(1)
+  })
+
+  test.each([403, 409])('an echoing %i still settles support', async (status) => {
+    const { source } = makeSource([
+      { status, body: wireError('refused', status === 403 ? 'auth' : 'conflict'), headers: ECHO },
+    ])
+    expect(await source.negotiateTargeting()).toBe(true)
+    expect(source.listTargeting).toBeDefined()
+  })
+
+  test.each([404, 400])(
+    'an older service answering %i without the echo settles no support',
+    async (status) => {
+      const { source, calls } = makeSource([{ status, body: NO_ROUTE }])
+      expect(await source.negotiateTargeting()).toBe(false)
+      expect(source.listTargeting).toBeUndefined()
+      expect(await source.negotiateTargeting()).toBe(false)
+      expect(calls).toHaveLength(1)
+    },
+  )
+
+  test('an inconclusive answer throws, stays unknown, and a later negotiation settles it', async () => {
+    const { source } = makeSource([
+      { status: 502, jsonThrows: true },
+      { body: EMPTY, headers: ECHO },
+    ])
+    expect((await rejectionOf(source.negotiateTargeting())).message).toBe(
+      'could not negotiate targeted listing with the ticket service (HTTP 502)',
+    )
+    expect(source.listTargeting).toBeUndefined()
+    expect(await source.negotiateTargeting()).toBe(true)
+  })
+
+  test('a fetch rejection leaves support unknown', async () => {
+    const source = new HostedTicketSource({
+      url: 'https://tickets.example',
+      token: 't0k',
+      ...CONTEXT,
+      fetchFn: async () => {
+        throw new Error('connection refused')
+      },
+    })
+    expect((await rejectionOf(source.negotiateTargeting())).message).toBe('connection refused')
+    expect(source.listTargeting).toBeUndefined()
+  })
+
+  test.each([true, false])(
+    'an ok policy sync settles support (echo: %p) without a probe',
+    async (echo) => {
+      const { source, calls } = makeSource([{ body: OK, ...(echo ? { headers: ECHO } : {}) }])
+      await source.synchronizePolicy(
+        hostedTicketPolicy(ticketsSchema.parse({ source: 'hosted', teamKey: 'ENG' })),
+      )
+      expect(await source.negotiateTargeting()).toBe(echo)
+      expect(calls).toHaveLength(1)
+      expect(source.listTargeting === undefined).toBe(!echo)
+    },
+  )
+
+  test('support follows the service over the source life', async () => {
+    const { source } = makeSource([
+      { body: EMPTY, headers: ECHO },
+      { body: OK }, // an ok answer without the echo: the service was downgraded
+      { body: EMPTY, headers: ECHO },
+      { status: 404, body: NO_ROUTE },
+      { body: OK, headers: ECHO },
+    ])
+    await source.negotiateTargeting()
+    expect(source.listTargeting).toBeDefined()
+    await source.comment('ENG-1', 'x')
+    expect(source.listTargeting).toBeUndefined()
+    await source.listReady({})
+    const list = source.listTargeting!
+    expect((await rejectionOf(list('ENG-1'))).message).toBe(
+      'ticket service predates targeted listing (list-targeting); upgrade the service',
+    )
+    expect(source.listTargeting).toBeUndefined()
+    await source.comment('ENG-1', 'y')
+    expect(source.listTargeting).toBeDefined()
+  })
+
+  test('a targeted read posts the node id and projects the hosted identity', async () => {
+    const { source, calls } = makeSource([
+      { body: EMPTY, headers: ECHO },
+      {
+        body: ticketListingWireSchema.parse({ tickets: [TICKET], diagnostics: [] }),
+        headers: ECHO,
+      },
+      {
+        status: 409,
+        body: {
+          kind: 'conflict',
+          error: 'ticket source does not support targeted listing',
+          code: 'targeting-unsupported',
+        },
+        headers: ECHO,
+      },
+    ])
+    await source.negotiateTargeting()
+    const listing = await source.listTargeting!('ENG-7')
+    expect(calls[1]!.body).toEqual({ context: CONTEXT, input: { nodeId: 'ENG-7' } })
+    expect(listing.tickets.map((ticket) => ticket.ref.source)).toEqual(['hosted'])
+    expect((await rejectionOf(source.listTargeting!('ENG-7'))).message).toBe(
+      'ticket source does not support targeted listing',
+    )
+    expect(source.listTargeting).toBeDefined()
+  })
 })

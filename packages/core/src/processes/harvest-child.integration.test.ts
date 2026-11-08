@@ -7,6 +7,10 @@ import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 import type { BuildStore } from '../store/types'
 import { createTicketSource } from '../ports/tickets/create'
+import {
+  TICKET_TARGETING_CAPABILITY,
+  TICKET_TARGETING_HEADER,
+} from '../ports/tickets/remote-protocol'
 import { guestTicketSourceArgs, runHarvestChild } from './harvest-child'
 
 const mkdtemp = ownTempDirectories(afterEach)
@@ -187,6 +191,7 @@ describe('harvest child (guest runner composition)', () => {
   })
 
   test('hosted composition is inert for the guest ticket args', async () => {
+    const originalFetch = globalThis.fetch
     const workspace = await guestWorkspace([
       'source = "hosted"',
       'teamKey = "AUT"',
@@ -199,6 +204,16 @@ describe('harvest child (guest runner composition)', () => {
         AB_TOKEN: 'scoped-token',
         AB_HARVEST: 'harvest-fixture',
       }
+      // A delegated harvest source settles targeted listing with one probe;
+      // the current service echoes the capability, so no real network is used.
+      const requests: string[] = []
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        requests.push(String(url))
+        return Response.json(
+          { ok: true, value: [] },
+          { headers: { [TICKET_TARGETING_HEADER]: TICKET_TARGETING_CAPABILITY } },
+        )
+      }) as unknown as typeof fetch
       const withGuestArgs = await createTicketSource(
         { source: 'hosted', teamKey: 'AUT', readyState: 'Todo' },
         env,
@@ -216,7 +231,12 @@ describe('harvest child (guest runner composition)', () => {
       expect(withGuestArgs.name).toBe('hosted')
       expect(withLegacyArgs.name).toBe('hosted')
       expect(withGuestArgs).toBeInstanceOf(withLegacyArgs.constructor as new () => unknown)
+      expect(requests).toEqual([
+        'https://store.example.test/tickets/list-targeting',
+        'https://store.example.test/tickets/list-targeting',
+      ])
     } finally {
+      globalThis.fetch = originalFetch
       await rm(workspace, { recursive: true, force: true })
     }
   })
