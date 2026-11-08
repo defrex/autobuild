@@ -132,7 +132,9 @@ assets.
 Before any write, import reports every problem together: states that cannot be
 `autobuild:` labels (for example `proposal`, or names that are not lowercase),
 a rejected state when `[tickets].rejectedState` is unset, and ticket labels that
-start with `autobuild:` or `autobuild-link:`. Node kinds become the exact `node`
+would collide with a state label (`autobuild:<state>`) or an issue-link label
+(`autobuild-link:…`). The `autobuild:proposal` and `autobuild:aborted` marker
+labels are ordinary labels and import as-is. Node kinds become the exact `node`
 label, and targets become sub-issue relationships to the remapped node issues.
 Issue links are kept. They are rewritten through the mapping only when the export
 came from GitHub, because only then do they name the exported tickets.
