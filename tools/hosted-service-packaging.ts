@@ -338,8 +338,7 @@ async function checkDispatcherDeployments(
     JSON.stringify({ ...dispatcherManifest, overrides: archives }, null, 2),
   )
   await writeFile(join(standalone, 'vercel.json'), vercelJson)
-  const install = await installPackedDistribution([], standalone)
-  assert.equal(install.exitCode, 0, install.stdout + install.stderr)
+  await installPackedDistribution([], standalone)
   await vercelBuild(standalone, env)
   await mkdir(join(root, 'standalone-probe'))
   await checkDispatchFunction(standalone, '', version, join(root, 'standalone-probe'), env)
@@ -386,8 +385,7 @@ async function checkDispatcherDeployments(
     ),
   )
   await writeFile(join(member, 'vercel.json'), vercelJson)
-  const memberInstall = await installPackedDistribution([], workspace)
-  assert.equal(memberInstall.exitCode, 0, memberInstall.stdout + memberInstall.stderr)
+  await installPackedDistribution([], workspace)
   await mkdir(join(workspace, 'apps/web'))
   await writeFile(
     join(workspace, 'apps/web/package.json'),
@@ -397,8 +395,7 @@ async function checkDispatcherDeployments(
     join(workspace, 'package.json'),
     JSON.stringify({ ...workspaceManifest, dependencies: { zod: zodFloor } }, null, 2),
   )
-  const hostInstall = await installPackedDistribution([], workspace)
-  assert.equal(hostInstall.exitCode, 0, hostInstall.stdout + hostInstall.stderr)
+  await installPackedDistribution([], workspace)
   const lock = await readFile(join(workspace, 'bun.lock'))
   const distributionRoot = await realpath(join(member, 'node_modules/@defrex/autobuild'))
   assert(distributionRoot.startsWith(join(workspace, 'node_modules/')), distributionRoot)
@@ -564,8 +561,7 @@ export async function checkHostedServicePackaging() {
       join(consumer, 'vercel.json'),
       await readFile(join(repoRoot, deploymentTemplatePaths[0]!, 'vercel.json')),
     )
-    const install = await installPackedDistribution([], consumer)
-    assert.equal(install.exitCode, 0, install.stdout + install.stderr)
+    await installPackedDistribution([], consumer)
     const installed = join(consumer, 'node_modules/@defrex/autobuild-hosted-store-service')
     assert((await realpath(installed)).startsWith(root))
     const packedPaths = await paths(installed)

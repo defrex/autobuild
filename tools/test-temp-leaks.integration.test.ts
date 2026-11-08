@@ -44,6 +44,8 @@ test('leaks fail successful children, failed children retain exit status, and la
     )
     expect(code).toBe(exit || 1)
     expect(reports.join()).toContain('ab-dispatch-route-leak')
+    // A green child prints no digest; a failed one always ends with one.
+    expect(reports.some((message) => message.startsWith('=== failure digest'))).toBe(exit !== 0)
   }
 })
 
@@ -239,7 +241,9 @@ test('fixture ownership survives failed beforeEach setup', async () => {
         report: (message) => reports.push(message),
       }),
     ).toBe(1)
-    expect(reports).toEqual([])
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toStartWith('=== failure digest: 1 failing test(s)')
+    expect(reports[0]).toContain('error: setup failed')
   } finally {
     await rm(fixture, { recursive: true, force: true })
   }
@@ -255,6 +259,7 @@ test('failed child diagnostics survive leak reporting and the owned root is remo
       writeFileSync(${JSON.stringify(record)},tmpdir());
       mkdirSync(tmpdir()+'/arbitrary-leak');
       console.error('original child diagnostic');
+      console.error('tools/sample.test.ts:\\nerror: expect(received).toBe(expected)\\n      at <anonymous> (sample.test.ts:1:1)\\n(fail) sample failure [0.10ms]');
       process.exit(7);
     `
     const wrapper = Bun.spawn(
@@ -272,8 +277,53 @@ test('failed child diagnostics survive leak reporting and the owned root is remo
     expect(code).toBe(7)
     expect(stderr).toContain('original child diagnostic')
     expect(stderr).toContain('arbitrary-leak')
+    // The digest follows the child diagnostic and the leak report, as the final write.
+    const digest = stderr.indexOf('=== failure digest: 1 failing test(s)')
+    expect(digest).toBeGreaterThan(stderr.indexOf('arbitrary-leak'))
+    expect(stderr.slice(digest)).toContain(
+      '--- (fail) tools/sample.test.ts > sample failure ---\nerror: expect(received).toBe(expected)\n      at <anonymous> (sample.test.ts:1:1)',
+    )
+    expect(stderr.trimEnd().endsWith('at <anonymous> (sample.test.ts:1:1)')).toBe(true)
     await expect(stat(await readFile(record, 'utf8'))).rejects.toMatchObject({ code: 'ENOENT' })
   } finally {
     await rm(fixture, { recursive: true, force: true })
   }
+})
+
+test('a failing command reports a digest of early failures that later noise would push out', async () => {
+  const reports: string[] = []
+  const childScript = `
+    process.stderr.write('tools/early.test.ts:\\n');
+    process.stderr.write('error: expect(received).toEqual(expected)\\n\\n- Expected  - 1\\n+ Received  + 1\\n');
+    process.stderr.write('      at <anonymous> (early.test.ts:3:9)\\n(fail) early failure [0.20ms]\\n');
+    process.stderr.write('later noise '.repeat(2000) + '\\n');
+    process.exit(1);
+  `
+  const wrapper = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `
+      import {runInspected} from ${JSON.stringify(join(checkoutRoot, 'tools/test-temp-leaks.ts'))};
+      process.exitCode=await runInspected([${JSON.stringify(inline(childScript))}],{report:(message)=>console.log(JSON.stringify(message))});
+    `,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  const [code, stdout, stderr] = await Promise.all([
+    wrapper.exited,
+    new Response(wrapper.stdout).text(),
+    new Response(wrapper.stderr).text(),
+  ])
+  for (const line of stdout.split('\n').filter(Boolean)) reports.push(JSON.parse(line))
+  expect(code).toBe(1)
+  // The child's stderr still reaches the parent unchanged.
+  expect(stderr).toContain('(fail) early failure [0.20ms]')
+  expect(stderr).toContain('later noise later noise')
+  expect(reports).toHaveLength(1)
+  expect(reports[0]).toContain('--- (fail) tools/early.test.ts > early failure ---')
+  expect(reports[0]).toContain('error: expect(received).toEqual(expected)')
+  expect(reports[0]).toContain('- Expected  - 1\n+ Received  + 1')
+  expect(reports[0]).toContain('at <anonymous> (early.test.ts:3:9)')
+  expect(reports[0]).not.toContain('later noise')
 })
