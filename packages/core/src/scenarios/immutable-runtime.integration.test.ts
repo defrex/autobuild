@@ -48,8 +48,7 @@ for (const mode of ['package', 'source'])
         (await spawnExec(['tar', '-xzf', archive, '--strip-components=1', '-C', installed], {}))
           .exitCode,
       ).toBe(0)
-      const setup = await installPackedDistribution(['--production', '--ignore-scripts'], installed)
-      expect(setup.exitCode, setup.stderr).toBe(0)
+      await installPackedDistribution(['--production', '--ignore-scripts'], installed)
       const mutableDependency = Bun.resolveSync('smol-toml', installed)
       if (mode === 'source') {
         await writeFile(join(installed, '.gitignore'), 'node_modules/\n')

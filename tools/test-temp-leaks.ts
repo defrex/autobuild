@@ -1,6 +1,7 @@
 import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
+import { createFailureCollector, formatFailureDigest } from './test-failure-digest'
 
 export const checkoutRoot = resolve(import.meta.dir, '..')
 
@@ -38,6 +39,28 @@ export async function inspectionRoot(root = checkoutRoot): Promise<string> {
   throw new Error('No external OS temporary directory outside a Git worktree is available')
 }
 
+/** Forward a child stream unchanged, feeding each decoded chunk to `observe`. */
+async function forward(
+  stream: ReadableStream<Uint8Array>,
+  sink: NodeJS.WriteStream,
+  observe?: (text: string) => void,
+): Promise<void> {
+  const decoder = new TextDecoder()
+  for await (const chunk of stream) {
+    sink.write(chunk)
+    observe?.(decoder.decode(chunk, { stream: true }))
+  }
+  observe?.(decoder.decode())
+}
+
+/**
+ * Run each command with an isolated external temporary root, reporting leaks
+ * it leaves behind. Child output is piped and forwarded unchanged; stderr also
+ * feeds a failure collector, because the kernel stores only the last 10,000
+ * characters of a verify step's output. When a command fails, a bounded
+ * failure digest (each failing test's message, diff and stack) is reported as
+ * the runner's final write, so the stored report keeps every failure's detail.
+ */
 export async function runInspected(
   commands: readonly (readonly string[])[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv; report?: (message: string) => void } = {},
@@ -51,16 +74,21 @@ export async function runInspected(
         cwd: options.cwd ?? checkoutRoot,
         env: { ...process.env, ...options.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
         stdin: 'inherit',
-        stdout: 'inherit',
-        stderr: 'inherit',
+        stdout: 'pipe',
+        stderr: 'pipe',
       })
+      const collector = createFailureCollector()
       const interrupt = () => child.kill('SIGINT')
       const terminate = () => child.kill('SIGTERM')
       process.on('SIGINT', interrupt)
       process.on('SIGTERM', terminate)
       let code: number
       try {
-        code = await child.exited
+        ;[code] = await Promise.all([
+          child.exited,
+          forward(child.stdout, process.stdout),
+          forward(child.stderr, process.stderr, (text) => collector.push(text)),
+        ])
       } finally {
         process.off('SIGINT', interrupt)
         process.off('SIGTERM', terminate)
@@ -68,7 +96,13 @@ export async function runInspected(
       const leaked = (await readdir(scratch)).filter((name) => !before.has(name))
       if (leaked.length)
         report(`Temporary entry leaks after ${command.join(' ')}: ${leaked.join(', ')}`)
-      if (code !== 0) return code
+      if (code !== 0) {
+        report(
+          formatFailureDigest(collector.failures(), { omitted: collector.omitted() }) ||
+            `=== failure digest: no (fail) lines parsed from ${command.slice(0, 2).join(' ')} (exit ${code}); if bun tests failed, its reporter format may have changed ===`,
+        )
+        return code
+      }
       if (leaked.length) return 1
     }
     return 0
