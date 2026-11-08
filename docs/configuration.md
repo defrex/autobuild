@@ -2692,7 +2692,7 @@ To move an existing project between sources, follow the
 
 Required in practice: `readyState` deliberately has no default, so omitting the
 table fails at `tickets.readyState` rather than allowing tickets from every
-state. Within a present table, `source` is required; hosted tickets default `readyState` to `ready`. Other sources require it.
+state. Within a present table, `source` is required; `hosted` and `github` default `readyState` to `ready`; `file`, `linear` and plugin sources require it.
 
 <!-- configuration-reference:tickets -->
 
@@ -2919,11 +2919,12 @@ field reloads without a restart; a reload that names it for a source without
 the capability, or a GitHub `"me"` the startup credential couldn't resolve, is
 rejected and the previous configuration stays active.
 
-When `readyLabels` is absent, direct Linear uses `["autobuild"]`; hosted, file,
+When `readyLabels` is absent, direct Linear and GitHub use `["autobuild"]`; hosted, file,
 and plugin sources use `[]`, meaning no host-imposed label gate. An explicit value always
 wins. A nonempty list is
-conjunctive: every configured label must be present. `readyState` remains
-mandatory regardless of labels (hosted defaults to `ready`). Linear compares state and label names exactly
+conjunctive: every configured label must be present. `readyState` is
+independent of labels: it is required except for hosted and GitHub, which
+default it to `ready`. Linear compares state and label names exactly
 and case-sensitively. The file source matches state names case-insensitively against the directories
 under the tracker root: the four lifecycle directories (`triage/`, `ready/`,
 `doing/`, `done/`, always present) plus any directory the repository adds, such
