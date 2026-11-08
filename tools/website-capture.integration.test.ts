@@ -14,9 +14,13 @@ import {
   parseProbe,
   probeProblems,
   renderReport,
+  SEGMENT_HEIGHT,
+  segmentId,
+  segmentRanges,
   serveSite,
   tileId,
   WEBSITE_FRAMES,
+  wrapperPage,
 } from './website-capture'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -118,7 +122,32 @@ describe('website capture', () => {
     expect(parseProbe(`<head><meta name="capture-probe" content="${content}"></head>`)).toEqual(
       value,
     )
-    expect(() => parseProbe('<html></html>')).toThrow('no capture-probe')
+    expect(() => parseProbe('<html></html>')).toThrow(
+      "did not produce its capture probe before the browser's time budget expired (no load diagnostics: the wrapper itself did not run)",
+    )
+    const failure = JSON.stringify({
+      loaded: false,
+      readyState: 'loading',
+      href: 'about:blank',
+      body: false,
+    }).replace(/"/g, '&quot;')
+    const error = (() => {
+      try {
+        parseProbe(
+          `<head><meta name="capture-load-failure" content="${failure}"></head>`,
+          'docs-x-390 screenshot at 390x16000',
+        )
+      } catch (e) {
+        return String(e)
+      }
+    })()
+    expect(error).toContain(
+      'website capture docs-x-390 screenshot at 390x16000: the page did not produce its capture probe',
+    )
+    expect(error).toContain('"loaded":false')
+    expect(error).toContain('"readyState":"loading"')
+    expect(error).toContain('"href":"about:blank"')
+    expect(error).toContain('"body":false')
   })
 
   test('probeProblems checks the stylesheet and the remote contract', () => {
@@ -195,7 +224,6 @@ describe('website capture', () => {
         frame,
         probe: probe({ scrollWidth, sectionGaps: [frame.width >= 720 ? 288 : 192] }),
         height: 1000,
-        capped: false,
       }))
     const pass = renderReport(results(390))
     expect(pass).toContain('design/website/reference-phone.png')
@@ -599,15 +627,23 @@ test('new Markdown page flows through output, navigation, pager and both real ca
         frames: added,
         includeMotionSamples: false,
       })
-      const inventory: { frame: WebsiteFrame; probe: Probe; height: number; capped: boolean }[] =
-        await Bun.file(join(outputDir, 'inventory.json')).json()
+      const inventory: {
+        frame: WebsiteFrame
+        probe: Probe
+        height: number
+        tiles?: { id: string }[]
+        segments?: unknown[]
+      }[] = await Bun.file(join(outputDir, 'inventory.json')).json()
       expect(inventory).toHaveLength(2)
       for (const entry of inventory) {
         expect(entry.probe.scrollHeight).toBeGreaterThan(12_000)
         expect(entry.height).toBe(entry.probe.scrollHeight)
-        expect(entry.capped).toBe(false)
         expect(probeProblems(entry.frame, entry.probe)).toEqual([])
-        expect(existsSync(join(outputDir, `${entry.frame.id}.png`))).toBe(true)
+        // A page over one window's height is shot in segments and stored as page-ordered tiles.
+        const segmented = entry.height > SEGMENT_HEIGHT
+        expect(Boolean(entry.segments)).toBe(segmented)
+        for (const id of segmented ? entry.tiles!.map((t) => t.id) : [entry.frame.id])
+          expect(existsSync(join(outputDir, `${id}.png`))).toBe(true)
       }
     }
     await rm(join(root, 'added.md'))
@@ -748,7 +784,6 @@ describe('frame tiling under the artifact ceiling', () => {
           frame,
           probe: probe({ sectionGaps: [288] }),
           height: 1000,
-          capped: false,
           tiles,
         },
       ],
@@ -760,6 +795,199 @@ describe('frame tiling under the artifact ceiling', () => {
     )
     expect(report).not.toContain('`.ab/website-frames/desktop.png`')
   })
+
+  test('segmentRanges splits pages taller than one window into balanced contiguous ranges', () => {
+    expect(SEGMENT_HEIGHT).toBe(16_384)
+    expect(segmentRanges(900)).toEqual([{ top: 0, height: 900 }])
+    expect(segmentRanges(SEGMENT_HEIGHT)).toEqual([{ top: 0, height: SEGMENT_HEIGHT }])
+    for (const [height, count] of [
+      [SEGMENT_HEIGHT + 1, 2],
+      [34_110, 3],
+      [40_000, 3],
+      [262_144, 16],
+    ] as const) {
+      const ranges = segmentRanges(height)
+      expect(ranges).toHaveLength(count)
+      let top = 0
+      for (const range of ranges) {
+        expect(range.top).toBe(top)
+        expect(range.height).toBeLessThanOrEqual(SEGMENT_HEIGHT)
+        top += range.height
+      }
+      expect(top).toBe(height)
+      const heights = ranges.map((r) => r.height)
+      expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1)
+    }
+    expect(segmentRanges(40_000).map((r) => r.height)).toEqual([13_334, 13_333, 13_333])
+    for (const bad of [0, -1, 1.5, Number.NaN])
+      expect(() => segmentRanges(bad)).toThrow('positive integer')
+  })
+
+  test('segment ids are safe and ordered', () => {
+    expect(segmentId('docs-ab-390', 2, 3)).toBe('docs-ab-390-segment-2-of-3')
+    expect(segmentId('docs-ab-390', 2, 12)).toBe('docs-ab-390-segment-02-of-12')
+    expect(segmentId('docs-ab-390', 2, 12)).toMatch(/^[a-z0-9-]+$/)
+  })
+
+  test('a segment wrapper keeps the page full height and clips to the segment rows', () => {
+    const frame = WEBSITE_FRAMES[1]!
+    const whole = wrapperPage(frame, 40_000)
+    expect(whole).toContain('html,body{margin:0;background:#fff}iframe{')
+    expect(whole).toContain('height:40000px}')
+    expect(whole).not.toContain('margin-top')
+    expect(whole).not.toContain('overflow:hidden')
+    expect(whole).toContain('capture-load-failure')
+    const segment = wrapperPage(frame, 40_000, { top: 13_334, height: 13_333 })
+    expect(segment).toContain('html,body{margin:0;background:#fff;height:13333px;overflow:hidden}')
+    expect(segment).toContain('height:40000px;margin-top:-13334px')
+  })
+
+  test('renderReport lists the segments and segment tiles of a segmented frame', () => {
+    const frame = WEBSITE_FRAMES[0]!
+    const segments = [1, 2].map((index) => ({
+      id: segmentId('desktop', index, 2),
+      frame: 'desktop',
+      index,
+      count: 2,
+      top: (index - 1) * 20_000,
+      height: 20_000,
+    }))
+    const tiles = [
+      [0, 20_000, 1],
+      [20_000, 10_000, 2],
+      [30_000, 10_000, 2],
+    ].map(([top, height, segment], i) => ({
+      id: tileId('desktop', i + 1, 3),
+      frame: 'desktop',
+      index: i + 1,
+      count: 3,
+      top: top!,
+      height: height!,
+      png: `.ab/website-frames/${tileId('desktop', i + 1, 3)}.png`,
+      segment: segment!,
+    }))
+    const report = renderReport(
+      [{ frame, probe: probe({ sectionGaps: [288] }), height: 40_000, tiles, segments }],
+      100,
+    )
+    expect(report).toContain(
+      '`desktop` — 2 segments, tiled into 3 PNGs (each ≤ 100 bytes), 1440x40000',
+    )
+    expect(report).toContain('  - segment 2/2 `desktop-segment-2-of-2` — rows 20000–39999')
+    expect(report).toContain(
+      '  - tile 3/3 `desktop-tile-3-of-3` — `.ab/website-frames/desktop-tile-3-of-3.png`, rows 30000–39999, segment 2/2',
+    )
+    const order = ['segment 1/2', 'segment 2/2 `', 'tile 1/3', 'tile 2/3', 'tile 3/3'].map(
+      (needle) => report.indexOf(needle),
+    )
+    expect(order.every((at) => at >= 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+  })
+
+  // 400 solid 100px blocks with unique colours: block k fills page rows 100k..100k+99.
+  const blockColour = (k: number) => [k % 256, Math.floor(k / 256) * 80 + 40, 255 - (k % 256)]
+  const tallFiles = () =>
+    fixtureFiles(
+      Array.from(
+        { length: 400 },
+        (_, k) => `<div style="height:100px;background:rgb(${blockColour(k).join(',')})"></div>`,
+      ).join(''),
+    )
+  const tallFixture = (files: ReturnType<typeof tallFiles>) => ({
+    ...files,
+    // The fixture body is exactly 40,000px: no heading, no margins.
+    'docs/index.html': String(files['docs/index.html']).replace('<h1>Documentation</h1>', ''),
+  })
+
+  test.skipIf(!chromiumBinary())(
+    'a 40,000px page captures in ordered segments with no gaps or overlaps at both widths',
+    async () => {
+      const { decodePng } = await import('./website-capture-png')
+      const { readdir } = await import('node:fs/promises')
+      const files = tallFixture(tallFiles())
+      const frames = discoverFrames(files).filter(
+        (f) => f.kind === 'docs' && f.page === 'docs/index.html',
+      )
+      expect(frames.map((f) => f.width)).toEqual([1440, 390])
+      for (const [name, maxFrameBytes] of [
+        ['website-segments', undefined],
+        ['website-segment-tiles', 40_000],
+      ] as const) {
+        const dir = scratchDir(name)
+        await capture({ files, frames, outputDir: dir, includeMotionSamples: false, maxFrameBytes })
+        const inventory = await Bun.file(join(dir, 'inventory.json')).json()
+        const report = await Bun.file(join(dir, 'verify-report.md')).text()
+        expect(inventory).toHaveLength(2)
+        for (const entry of inventory) {
+          expect(entry.height).toBe(40_000)
+          expect(entry.segments).toHaveLength(3)
+          let top = 0
+          for (const [i, segment] of entry.segments.entries()) {
+            expect(segment.id).toBe(segmentId(entry.frame.id, i + 1, 3))
+            expect(segment.top).toBe(top)
+            top += segment.height
+            expect(report).toContain(`\`${segment.id}\``)
+          }
+          expect(top).toBe(40_000)
+          if (maxFrameBytes) expect(entry.tiles.length).toBeGreaterThan(3)
+          else expect(entry.tiles).toHaveLength(3)
+          let rows = 0
+          for (const [i, tile] of entry.tiles.entries()) {
+            expect(tile.index).toBe(i + 1)
+            expect(tile.count).toBe(entry.tiles.length)
+            expect(tile.id).toBe(tileId(entry.frame.id, i + 1, entry.tiles.length))
+            expect(tile.top).toBe(rows)
+            const owner = entry.segments[tile.segment - 1]
+            expect(tile.top).toBeGreaterThanOrEqual(owner.top)
+            expect(tile.top + tile.height).toBeLessThanOrEqual(owner.top + owner.height)
+            expect(report).toContain(`\`${tile.id}\``)
+            const image = decodePng(await Bun.file(join(dir, `${tile.id}.png`)).bytes())
+            expect(image.width).toBe(entry.frame.width)
+            expect(image.height).toBe(tile.height)
+            // Every page row shows its own block: nothing is missing, repeated or shifted.
+            for (let y = 0; y < tile.height; y++) {
+              const page = tile.top + y
+              if (page % 100 !== 0 && page % 100 !== 99 && y !== 0 && y !== tile.height - 1)
+                continue
+              const pixel = [...image.rows[y]!.subarray(0, 3)]
+              expect([page, ...pixel]).toEqual([page, ...blockColour(Math.floor(page / 100))])
+            }
+            rows += tile.height
+          }
+          expect(rows).toBe(40_000)
+        }
+        const pngs = (await readdir(dir)).filter((n) => n.endsWith('.png'))
+        expect(pngs.some((n) => n.includes('-segment-'))).toBe(false)
+        for (const entry of inventory) expect(pngs).not.toContain(`${entry.frame.id}.png`)
+        for (const name of pngs)
+          expect((await stat(join(dir, name))).size).toBeLessThanOrEqual(maxFrameBytes ?? 2_621_440)
+      }
+    },
+    360_000,
+  )
+
+  test.skipIf(!chromiumBinary())(
+    'a page whose probe never runs fails with load diagnostics, not a bare missing meta',
+    async () => {
+      const files = fixtureFiles('<script>window.addEventListener = () => {}</script>')
+      // The override must precede the injected probe; fixture content sits before </body>.
+      const frames = discoverFrames(files).filter(
+        (f) => f.kind === 'docs' && f.page === 'docs/index.html' && f.width === 390,
+      )
+      const dir = scratchDir('website-load-failure')
+      const error = await capture({
+        files,
+        frames,
+        outputDir: dir,
+        includeMotionSamples: false,
+      }).catch((e) => String(e))
+      expect(error).toContain('did not produce its capture probe')
+      expect(error).toContain('390x900')
+      expect(error).toContain('"loaded":true')
+      expect(await Bun.file(join(dir, 'verify-report.md')).text()).toContain('FAIL:')
+    },
+    120_000,
+  )
 
   test.skipIf(!chromiumBinary())(
     'a tall docs page captures as ceiling-bounded tiles; a fitting frame stays whole',

@@ -46,8 +46,10 @@ compare the rendered site with the approved design in `design/website/`, using t
 2. Run `bun run capture:website`. Chromium is required. Read
    `.ab/website-frames/verify-report.md` and `inventory.json`. Capture failure,
    a partial inventory, missing or unopenable PNG or tile, an inventory
-   `tiles` sequence whose `index` values are not contiguous `1..count`, or
-   missing final motion evidence is a failure; attach nothing.
+   `tiles` sequence whose `index` values are not contiguous `1..count`, tiles
+   whose `top` and `height` rows are not contiguous from 0 to the entry's
+   `height`, `segments` whose ranges do not cover the page, or missing final
+   motion evidence is a failure; attach nothing.
 3. Read the materialized spec, `design/website/README.md` and
    `design/website/design-system.md`. Open **every** PNG named by the inventory
    with the image-capable file tool and every paired landing reference.
@@ -57,6 +59,11 @@ compare the rendered site with the approved design in `design/website/`, using t
    a tile boundary is an artifact of tiling, not a finding, but content must
    read continuously across the boundary (use each tile's `top` and `height`
    rows).
+   An entry with `tiles` may also list `segments`: a very tall page is shot in
+   vertical segments, and each segment is then tiled under the ceiling. Its
+   `tiles` are still the complete page-ordered sequence, each naming its
+   `segment`. Open them in `index` order and judge one page; a segment boundary
+   is a tile boundary, judged the same way.
    Check still reduced-motion evidence and all 390px overflow results. Require
    start, midpoint and final samples at both widths for every marked animated
    figure; verify completion acknowledgement and visible state progression.
