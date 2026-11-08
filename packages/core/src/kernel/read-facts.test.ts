@@ -13,26 +13,39 @@ import { KERNEL, humanActor } from '../events/envelope'
 
 const roundtrip = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 
-test('persisted stream seed preserves every prefix and first-eligibility order through JSON', () => {
-  for (let id = 1; id <= 12; id++) {
-    const events = randomBuildLog(id, 100)
-    let seed = buildStreamSeedReducer.initial()
-    const expected: number[] = []
-    for (let i = 0; i < events.length; i++) {
-      seed = buildStreamSeedReducer.advance(roundtrip(seed), [events[i]!])
-      const prefix = events.slice(0, i + 1)
-      const decision = mergeDecision(prefix, new Date(0))
-      if (decision && !expected.includes(decision.pr.number)) expected.push(decision.pr.number)
-      expect(buildReducer.finish(seed.build)).toEqual(reduceBuild(prefix))
-      expect(seed.deferral).toEqual(currentDeferralObservationReducer.reduce(prefix))
-      expect(seed.mergeAttentionPrs).toEqual(expected)
-      const before = roundtrip(seed)
-      const finished = buildStreamSeedReducer.finish(seed)
-      finished.mergeAttentionPrs.push(-1)
-      expect(seed).toEqual(before)
+// Every prefix is checked against a whole-prefix oracle, so this is quadratic by
+// design: ~3 s on a 4-vCPU build sandbox and over 5 s with integration running
+// concurrently in verify (AUT-1166).
+const QUADRATIC_ORACLE_TIMEOUT_MS = 20_000
+
+test(
+  'persisted stream seed preserves every prefix and first-eligibility order through JSON',
+  () => {
+    for (let id = 1; id <= 12; id++) {
+      const events = randomBuildLog(id, 100)
+      let seed = buildStreamSeedReducer.initial()
+      let carried = roundtrip(seed)
+      const expected: number[] = []
+      for (let i = 0; i < events.length; i++) {
+        seed = buildStreamSeedReducer.advance(carried, [events[i]!])
+        const prefix = events.slice(0, i + 1)
+        const state = reduceBuild(prefix)
+        const decision = mergeDecision(prefix, new Date(0), state)
+        if (decision && !expected.includes(decision.pr.number)) expected.push(decision.pr.number)
+        expect(buildReducer.finish(seed.build)).toEqual(state)
+        expect(seed.deferral).toEqual(currentDeferralObservationReducer.reduce(prefix))
+        expect(seed.mergeAttentionPrs).toEqual(expected)
+        const before = roundtrip(seed)
+        const finished = buildStreamSeedReducer.finish(seed)
+        finished.mergeAttentionPrs.push(-1)
+        expect(seed).toEqual(before)
+        // `before` is a fresh JSON copy equal to `seed`, so it is the next step's input.
+        carried = before
+      }
     }
-  }
-})
+  },
+  QUADRATIC_ORACLE_TIMEOUT_MS,
+)
 
 test('JSON-safe build facts reconstruct collection and publication contracts', () => {
   for (let id = 1; id <= 8; id++) {
