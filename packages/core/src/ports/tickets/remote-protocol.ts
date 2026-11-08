@@ -51,6 +51,18 @@ export const TICKET_DEPENDENCY_STATE_CAPABILITY = '1'
 export const TICKET_POLICY_ROLES_HEADER = 'x-autobuild-ticket-policy-roles'
 export const TICKET_POLICY_ROLES_CAPABILITY = '1'
 
+/** Services that answer `list-targeting` echo it on every ticket response,
+ * failures included. A client treats an ok response without it, or a 404/400
+ * refusal of `list-targeting` without it, as a service predating the operation,
+ * and declares targeted listing only after a response carried it. */
+export const TICKET_TARGETING_HEADER = 'x-autobuild-ticket-targeting'
+export const TICKET_TARGETING_CAPABILITY = '1'
+
+/** The node id a client's `list-targeting` negotiation probe names. Hosted
+ * readable ids are `<teamKey>-<n>` or legacy `ticket-<uuid>`, so it never
+ * names a ticket and the probe is an indexed miss. */
+export const TICKET_TARGETING_PROBE_NODE = '~negotiate'
+
 export const issueLinkWireSchema = z.strictObject({
   issue: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   intent: z.enum(['closes', 'refs']),
@@ -161,6 +173,7 @@ export const hostedTicketRequestSchemas = {
     }),
   ),
   'list-ready': envelope(criteriaSchema),
+  'list-targeting': envelope(z.strictObject({ nodeId: z.string().min(1) })),
   states: envelope(z.strictObject({})),
   'state-counts': envelope(z.strictObject({ names: z.array(z.string().min(1)).min(1).max(16) })),
   'add-state': envelope(z.strictObject({ name: z.string(), about: z.string().optional() })),

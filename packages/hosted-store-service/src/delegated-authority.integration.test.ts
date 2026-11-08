@@ -479,6 +479,7 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
   ]
   const inputs = {
     'list-ready': {},
+    'list-targeting': { nodeId: 'unknown' },
     get: { id: 'unknown' },
     'dependency-states': { ids: ['unknown'] },
     states: {},
@@ -527,12 +528,20 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
         auth: f.auth,
         sourceFor: () => {
           opened = true
-          return new FakeTicketSource([])
+          const backend = new FakeTicketSource([])
+          return Object.assign(backend, {
+            listTargeting: async (nodeId: string) => {
+              const all = await backend.listAll()
+              return { ...all, tickets: all.tickets.filter((t) => t.target === nodeId) }
+            },
+          })
         },
       })
       const allowed =
         target.kind.startsWith('harvest') &&
-        (['list-ready', 'get', 'dependency-states', 'states'].includes(operation) ||
+        (['list-ready', 'list-targeting', 'get', 'dependency-states', 'states'].includes(
+          operation,
+        ) ||
           (target.kind === 'harvest-runner' && operation === 'create'))
       const response = await server.fetch(
         request(`/tickets/${operation}`, token, {

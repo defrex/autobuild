@@ -1542,8 +1542,8 @@ authorizations and fresh grants. Project removal denies all its grants immediate
 Local-store projects require no exchange.
 
 Hosted ticket operations are gated by grant kind: build-runner and build-phase
-grants have no access; harvest-phase grants can only list-ready, get and read
-dependency-states; harvest-runner grants can also create proposals. All other
+grants have no access; harvest-phase grants can only list-ready, list-targeting,
+get and read dependency-states; harvest-runner grants can also create proposals. All other
 ticket mutations require project or admin authority. Refusals name the grant
 kind and operation.
 

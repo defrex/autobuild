@@ -1270,8 +1270,8 @@ a guessed ID cannot bypass the boundary. Only the runner can heartbeat or re-acq
 adopted repository lease holder; another current holder still fences it. Recovery acknowledgements remain dispatcher-side.
 
 Hosted ticket access is gated by grant kind. Build-runner and build-phase grants
-cannot call ticket routes. Harvest-phase grants may call only list-ready, get
-and dependency-states; harvest-runner grants may additionally create proposals.
+cannot call ticket routes. Harvest-phase grants may call only list-ready,
+list-targeting, get and dependency-states; harvest-runner grants may additionally create proposals.
 Other ticket mutations require project or admin authority. A denied operation
 returns 403 naming the grant kind and operation before parsing or source construction.
 Ticket admission and repository-keyed assets use the authenticated project;

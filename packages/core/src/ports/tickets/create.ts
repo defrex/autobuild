@@ -99,6 +99,9 @@ async function rawTicketSource(
     if (!ticketSession && !env.AB_HARVEST && !env.AB_PHASE) {
       await source.synchronizePolicy(hostedTicketPolicy(config))
     }
+    // The source leaves with a settled targeting decision, so no observation
+    // pass ever runs on undecided support; the policy sync usually settled it.
+    await source.negotiateTargeting()
     return source
   }
 
