@@ -485,24 +485,56 @@ test('a real local child suspends on shutdown and a new child resumes the native
       children.push(child)
       return child
     }
+    // Unloaded, the native handle appears about 1 s after spawn. On a 4-vCPU
+    // sandbox with the CPU oversubscribed, a cold child boot alone took about
+    // 3 s and the whole test 7-11 s, and verify runs unit, build and
+    // integration concurrently, so allow well over 5x that. Every wait is on
+    // an event that either arrives or never does: a larger deadline only
+    // delays a real failure, it never hides one.
+    const childDeadlineMs = 20_000
+    const requireEvent = async (type: AbEvent['type']) => {
+      const events = await store.getEvents(slug)
+      const event = events.find((e) => e.type === type)
+      if (event) return event
+      throw new Error(`missing ${type}: ${JSON.stringify(events)}`)
+    }
     const waitForEvent = async (type: AbEvent['type']) => {
-      const deadline = Date.now() + 8000
+      const deadline = Date.now() + childDeadlineMs
       for (;;) {
         const event = (await store.getEvents(slug)).find((e) => e.type === type)
         if (event) return event
-        if (Date.now() > deadline)
-          throw new Error(`missing ${type}: ${JSON.stringify(await store.getEvents(slug))}`)
+        if (Date.now() > deadline) return requireEvent(type)
         await Bun.sleep(20)
       }
+    }
+    const exitWithin = async (child: ReturnType<typeof Bun.spawn>, label: string) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        child.exited,
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, childDeadlineMs)
+        }),
+      ])
+      clearTimeout(timer)
+      if (child.exitCode === null)
+        throw new Error(
+          `${label} did not exit after shutdown: ${JSON.stringify(await store.getEvents(slug))}`,
+        )
     }
     const first = start('child-1')
     const identity = await waitForEvent('session.native-handle-recorded')
     const stoppedAt = Date.now()
-    signalProcessGroup(first.pid, 'SIGINT')
-    signalProcessGroup(first.pid, 'SIGTERM')
-    await first.exited
+    // Signal the leader only, as LocalBuildExecution.stop() does: the native
+    // CLI must survive until the runner has recorded the suspension, and the
+    // exit reaper owns the rest of the group. A group signal kills the CLI
+    // too and races the runner's own shutdown handling.
+    first.kill('SIGINT')
+    first.kill('SIGTERM')
+    await exitWithin(first, 'child-1')
     expect(Date.now() - stoppedAt).toBeLessThan(5000)
-    const suspension = await waitForEvent('session.suspended')
+    // The child records the suspension before it exits, so the event is
+    // already durable or will never arrive; read it once instead of polling.
+    const suspension = await requireEvent('session.suspended')
     expect(suspension.type).toBe('session.suspended')
     await store.releaseLease(slug, 'child-1')
     const second = start('child-2')
@@ -511,23 +543,24 @@ test('a real local child suspends on shutdown and a new child resumes the native
       throw new Error('wrong events')
     expect(acceptance.payload.handle.nativeId).toBe(identity.payload.handle.nativeId)
     expect((await store.getEvents(slug)).filter((e) => e.type === 'plan.started')).toHaveLength(1)
-    signalProcessGroup(second.pid, 'SIGTERM')
-    await second.exited
+    second.kill('SIGTERM')
+    await exitWithin(second, 'child-2')
     expect(await readFile(join(workspace, 'committed.txt'), 'utf8')).toBe('committed work')
     expect(await readFile(join(workspace, 'uncommitted.txt'), 'utf8')).toBe('work in flight')
     const log = await store.getEvents(slug)
     expect(log.filter((e) => e.type === 'session.suspended')).toHaveLength(2)
     expect(log.filter((e) => e.type === 'phase.failed')).toHaveLength(0)
   } finally {
-    for (const child of children)
-      if (child.exitCode === null) {
-        child.kill('SIGKILL')
-        await child.exited
-      }
+    // Each child is detached, so its pid is its group id; killing the group
+    // also stops a native CLI fixture orphaned by a failed run.
+    for (const child of children) {
+      signalProcessGroup(child.pid, 'SIGKILL')
+      if (child.exitCode === null) await child.exited
+    }
     await store.close()
     await rm(tmp, { recursive: true, force: true })
   }
-}, 25000)
+}, 90_000)
 
 for (const kind of ['work', 'node'] as const) {
   test(`real ${kind} child executes serialized stage members concurrently`, async () => {
