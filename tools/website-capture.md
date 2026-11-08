@@ -13,7 +13,7 @@ All baseline frames use actual reduced-motion media preference. The report
 records stylesheet readiness, stillness and phone overflow for every page.
 Landing seam and spacing assertions apply only to landing pages.
 `inventory.json` lists successful nonempty PNGs with descriptors and probes,
-and the ordered tiles of any tiled frame;
+and the ordered tiles and segments of any tiled or segmented frame;
 `verify-report.md` includes the same evidence and records failures plus the
 expected inventory if capture aborts. Never interpret a partial inventory as a pass.
 
@@ -27,6 +27,28 @@ written. Its inventory entry keeps the frame and probe and adds `tiles`: each
 tile's `id`, `frame`, `index` (1-based), `count`, `top`, `height` and `png`
 path. Tiles are contiguous and together cover every row of the page. Frames
 that fit are unchanged.
+
+## Tall pages
+
+A full-page frame taller than 16,384 px is shot in balanced vertical segments
+(`ceil(height / 16384)` of them, within a pixel of each other) instead of one
+very tall browser window. Each segment is its own Chromium run against the
+whole page laid out at full height and never scrolled, so sticky sidebars and
+the probe measure exactly as in a single shot; the wrapper only clips to the
+segment's rows. Each segment must re-measure the same page height and produce
+a PNG of exactly its height, so segments cannot gap or overlap.
+
+Each segment is then ceiling-tiled as above. A segmented frame writes no
+`<frame-id>.png` and leaves no segment PNG on disk: its `tiles` are the single
+page-ordered, contiguous sequence with global `index` and `count`, page-absolute
+`top`, and a 1-based `segment`. Its entry also lists `segments`, each with `id`
+(`<frame-id>-segment-<i>-of-<n>`), `frame`, `index`, `count`, `top` and
+`height`. Pages taller than the 262,144 px sanity ceiling fail capture.
+
+When a page never produces its probe before the browser's time budget expires,
+the failure names the frame, the window size and the wrapper's load
+diagnostics: whether the iframe loaded, its `readyState`, `location.href` and
+whether its body exists.
 
 ## Animated figures
 

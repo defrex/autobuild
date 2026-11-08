@@ -9,8 +9,10 @@ import { ARTIFACT_MAX_BYTES, tilePng } from './website-capture-png'
 const REPO_ROOT = join(import.meta.dir, '..')
 export const DEFAULT_OUTPUT_DIR = join(REPO_ROOT, '.ab', 'website-frames')
 
-/** Tallest page the capture will screenshot. */
-export const MAX_PAGE_HEIGHT = 32_768
+/** Sanity ceiling on page height; taller pages are captured in segments up to it. */
+export const MAX_PAGE_HEIGHT = 262_144
+/** Tallest browser window one screenshot uses; taller pages are shot in vertical segments. */
+export const SEGMENT_HEIGHT = 16_384
 const ATTEMPTS = 2
 
 export type CaptureFiles = Record<string, string | Uint8Array<ArrayBuffer>> & {
@@ -348,28 +350,66 @@ export function injectProbe(html: string, options: WebsiteFrame | { remote: bool
  * the page in an iframe of the exact frame width. The wrapper copies the
  * probe out of the iframe so `--dump-dom` can read it.
  */
-export function wrapperPage(frame: WebsiteFrame, height: number): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}iframe{display:block;border:0;width:${frame.width}px;height:${height}px}</style></head><body><iframe id="page" src="/__page-${frame.id}.html"></iframe><script>
-document.getElementById('page').addEventListener('load', () => {
- const timer = setInterval(() => {
-  const probe = document.getElementById('page').contentDocument.querySelector('meta[name="capture-probe"]')
-  if (probe) { document.head.append(probe.cloneNode()); clearInterval(timer) }
- }, 50)
- setTimeout(() => clearInterval(timer), 4500)
-})
+export function wrapperPage(
+  frame: WebsiteFrame,
+  height: number,
+  segment?: { top: number; height: number },
+): string {
+  // A segment keeps the iframe at full page height, so the page never scrolls,
+  // and clips the wrapper to the segment's rows by shifting the iframe up.
+  const style = segment
+    ? `html,body{margin:0;background:#fff;height:${segment.height}px;overflow:hidden}iframe{display:block;border:0;width:${frame.width}px;height:${height}px;margin-top:-${segment.top}px}`
+    : `html,body{margin:0;background:#fff}iframe{display:block;border:0;width:${frame.width}px;height:${height}px}`
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${style}</style></head><body><iframe id="page" src="/__page-${frame.id}.html"></iframe><script>
+let loaded = false
+let copied = false
+const timer = setInterval(() => {
+ if (!loaded) return
+ const probe = document.getElementById('page').contentDocument?.querySelector('meta[name="capture-probe"]')
+ if (probe) { document.head.append(probe.cloneNode()); copied = true; clearInterval(timer) }
+}, 50)
+document.getElementById('page').addEventListener('load', () => { loaded = true })
+// Record why no probe was copied in time; a late probe still wins in parseProbe.
+setTimeout(() => {
+ if (copied) return
+ const failure = { loaded }
+ try {
+  const inner = document.getElementById('page').contentDocument
+  Object.assign(failure, { readyState: inner?.readyState ?? null, href: inner?.location.href ?? null, body: Boolean(inner?.body) })
+ } catch (e) { failure.error = String(e) }
+ const meta = document.createElement('meta')
+ meta.name = 'capture-load-failure'
+ meta.content = JSON.stringify(failure)
+ document.head.append(meta)
+}, 4500)
 </script></body></html>`
 }
 
+function metaContent(dom: string, name: string): string | undefined {
+  const match = new RegExp(`<meta[^>]*name="${name}"[^>]*content="([^"]*)"`, 'i').exec(dom)
+  return match
+    ? (match[1] as string)
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+    : undefined
+}
+
 /** Read the probe `injectProbe` writes into a `--dump-dom` document. */
-export function parseProbe(dom: string): Probe {
-  const match = /<meta[^>]*name="capture-probe"[^>]*content="([^"]*)"/i.exec(dom)
-  if (!match) throw new Error('website capture: the page produced no capture-probe meta')
-  const json = (match[1] as string)
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
+export function parseProbe(dom: string, context?: string): Probe {
+  const json = metaContent(dom, 'capture-probe')
+  if (json === undefined) {
+    const failure = metaContent(dom, 'capture-load-failure')
+    throw new Error(
+      `website capture${context ? ` ${context}` : ''}: the page did not produce its capture probe before the browser's time budget expired (${
+        failure === undefined
+          ? 'no load diagnostics: the wrapper itself did not run'
+          : `load diagnostics ${failure}`
+      })`,
+    )
+  }
   return JSON.parse(json) as Probe
 }
 
@@ -475,20 +515,64 @@ export interface CaptureTile {
   height: number
   /** Repo-relative PNG path. */
   png: string
+  /** 1-based segment this tile was cut from, when the frame was shot in segments. */
+  segment?: number
+}
+
+/** One vertical browser shot of a page too tall for a single window. */
+export interface CaptureSegment {
+  id: string
+  frame: string
+  /** 1-based position in the frame's segment sequence. */
+  index: number
+  count: number
+  /** First page row this segment covers. */
+  top: number
+  height: number
 }
 
 export interface CaptureResult {
   frame: WebsiteFrame
   probe: Probe
   height: number
-  capped: boolean
-  /** Present only when the frame exceeded the PNG ceiling and was cut into row tiles. */
+  /** Present when the frame exceeded the PNG ceiling or was shot in segments; page-ordered. */
   tiles?: CaptureTile[]
+  /** Present only when the page was taller than `SEGMENT_HEIGHT` and shot in segments. */
+  segments?: CaptureSegment[]
 }
+
+const ordinal = (index: number, count: number) =>
+  `${String(index).padStart(String(count).length, '0')}-of-${count}`
 
 /** Safe, in-order id for tile `index` of `count` within a frame. */
 export function tileId(frameId: string, index: number, count: number): string {
-  return `${frameId}-tile-${String(index).padStart(String(count).length, '0')}-of-${count}`
+  return `${frameId}-tile-${ordinal(index, count)}`
+}
+
+/** Safe, in-order id for segment `index` of `count` within a frame. */
+export function segmentId(frameId: string, index: number, count: number): string {
+  return `${frameId}-segment-${ordinal(index, count)}`
+}
+
+/** Balanced contiguous row ranges covering `0..height`, each at most `segmentHeight`. */
+export function segmentRanges(
+  height: number,
+  segmentHeight: number = SEGMENT_HEIGHT,
+): { top: number; height: number }[] {
+  if (!Number.isInteger(height) || height <= 0) {
+    throw new Error(`segment height must be a positive integer, got ${height}`)
+  }
+  const count = Math.ceil(height / segmentHeight)
+  const base = Math.floor(height / count)
+  const extra = height % count
+  const ranges: { top: number; height: number }[] = []
+  let top = 0
+  for (let i = 0; i < count; i++) {
+    const rows = base + (i < extra ? 1 : 0)
+    ranges.push({ top, height: rows })
+    top += rows
+  }
+  return ranges
 }
 
 export function renderReport(
@@ -496,16 +580,22 @@ export function renderReport(
   maxFrameBytes: number = ARTIFACT_MAX_BYTES,
 ): string {
   const lines = ['# Website capture report', '', '## Frames', '']
-  for (const { frame, probe, height, capped, tiles } of results) {
+  for (const { frame, probe, height, tiles, segments } of results) {
     lines.push(
       `- \`${frame.id}\` — ${
         tiles
-          ? `tiled into ${tiles.length} PNGs (each ≤ ${maxFrameBytes} bytes)`
+          ? `${segments ? `${segments.length} segments, ` : ''}tiled into ${tiles.length} PNGs (each ≤ ${maxFrameBytes} bytes)`
           : `\`.ab/website-frames/${frame.id}.png\``
-      }, ${frame.width}x${height}${capped ? ` (page height capped at ${MAX_PAGE_HEIGHT}px)` : ''}`,
+      }, ${frame.width}x${height}`,
+      ...(segments ?? []).map(
+        (segment) =>
+          `  - segment ${segment.index}/${segment.count} \`${segment.id}\` — rows ${segment.top}–${segment.top + segment.height - 1}`,
+      ),
       ...(tiles ?? []).map(
         (tile) =>
-          `  - tile ${tile.index}/${tile.count} \`${tile.id}\` — \`${tile.png}\`, rows ${tile.top}–${tile.top + tile.height - 1}`,
+          `  - tile ${tile.index}/${tile.count} \`${tile.id}\` — \`${tile.png}\`, rows ${tile.top}–${tile.top + tile.height - 1}${
+            tile.segment && segments ? `, segment ${tile.segment}/${segments.length}` : ''
+          }`,
       ),
       `  - URL: /${frame.page ?? 'index.html'}; duration: ${frame.duration ?? 'none'}ms; page: ${frame.page ?? 'index.html'}; kind: ${frame.kind ?? 'landing'}; motion: ${frame.motion ?? 'reduce'}; figure: ${frame.figure ?? 'none'}; sample: ${frame.sample ?? 'still'}`,
       `  - reduced-motion: ${probe.reducedMotion}; still: ${probe.still}; figures (${probe.figures.length}): ${JSON.stringify(probe.figures)}`,
@@ -572,11 +662,17 @@ export function serveSite(
       if (variant) {
         const frame = frames.find((f) => f.id === variant[2])
         if (!frame) return new Response('unknown frame', { status: 404 })
-        const height = Number(new URL(request.url).searchParams.get('h')) || 900
+        const params = new URL(request.url).searchParams
+        const height = Number(params.get('h')) || 900
+        const seg = Number(params.get('seg'))
         const body =
           variant[1] === 'page'
             ? injectProbe(String(files[frame.page ?? 'index.html']), frame)
-            : wrapperPage(frame, height)
+            : wrapperPage(
+                frame,
+                height,
+                seg > 0 ? { top: Number(params.get('top')) || 0, height: seg } : undefined,
+              )
         return new Response(body, { headers: { 'content-type': CONTENT_TYPES.html as string } })
       }
       const name = pathname.endsWith('/') ? `${pathname.slice(1)}index.html` : pathname.slice(1)
@@ -875,7 +971,8 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
   try {
     profileRoot = await mkdtemp(join(tmpdir(), 'ab-website-capture-'))
     for (const frame of frames) {
-      const frameUrl = (height: number) => `${site.url}/__frame-${frame.id}.html?h=${height}`
+      const frameUrl = (height: number, segment?: { top: number; height: number }) =>
+        `${site.url}/__frame-${frame.id}.html?h=${height}${segment ? `&top=${segment.top}&seg=${segment.height}` : ''}`
       const probe = await attempt(`${frame.id} probe`, async (n) =>
         parseProbe(
           await runChromium(
@@ -888,6 +985,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
             frame.motion,
             frame.docsState === 'scrolled',
           ),
+          `${frame.id} probe at ${frame.width}x900`,
         ),
       )
       if (options.includeMotionSamples ?? true) {
@@ -899,62 +997,127 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
       }
       if (!frame.viewportHeight && probe.scrollHeight > MAX_PAGE_HEIGHT) {
         throw new Error(
-          `website capture ${frame.id}: page height ${probe.scrollHeight}px exceeds complete capture limit ${MAX_PAGE_HEIGHT}px`,
+          `website capture ${frame.id}: page height ${probe.scrollHeight}px exceeds the capture's sanity limit ${MAX_PAGE_HEIGHT}px`,
         )
       }
       const height = frame.viewportHeight ?? probe.scrollHeight
-      const png = join(outputDir, `${frame.id}.png`)
-      await attempt(`${frame.id} screenshot`, async (n) => {
-        await rm(png, { force: true })
-        const shotDom = await runChromium(
-          chromium,
-          join(profileRoot!, `${frame.id}-shot-${n}`),
-          frame.width,
-          height,
-          { screenshot: png },
-          frameUrl(height),
-          frame.motion,
-          frame.docsState === 'scrolled',
-        )
-        const shotProbe = parseProbe(shotDom)
-        const shotProblems = probeProblems(frame, shotProbe)
-        if (JSON.stringify(shotProbe.figures) !== JSON.stringify(probe.figures))
-          shotProblems.push('screenshot figure inventory/state differs from measurement')
-        if (shotProblems.length) throw Error(shotProblems.join('; '))
-        if (!existsSync(png) || (await stat(png)).size === 0) {
-          throw new Error(`no screenshot written at ${png}`)
+      const ranges = frame.viewportHeight ? [{ top: 0, height }] : segmentRanges(height)
+      const segmented = ranges.length > 1
+      const segments: CaptureSegment[] = ranges.map((range, i) => ({
+        id: segmentId(frame.id, i + 1, ranges.length),
+        frame: frame.id,
+        index: i + 1,
+        count: ranges.length,
+        ...range,
+      }))
+      for (const segment of segments) {
+        const where = segmented ? ` segment ${segment.index}/${segment.count}` : ''
+        const png = join(outputDir, `${segmented ? segment.id : frame.id}.png`)
+        await attempt(`${frame.id}${where} screenshot`, async (n) => {
+          await rm(png, { force: true })
+          const shotDom = await runChromium(
+            chromium,
+            join(profileRoot!, `${segmented ? segment.id : frame.id}-shot-${n}`),
+            frame.width,
+            segment.height,
+            { screenshot: png },
+            frameUrl(height, segmented ? segment : undefined),
+            frame.motion,
+            frame.docsState === 'scrolled',
+          )
+          const shotProbe = parseProbe(
+            shotDom,
+            `${frame.id}${where} screenshot at ${frame.width}x${segment.height}`,
+          )
+          const shotProblems = probeProblems(frame, shotProbe)
+          if (JSON.stringify(shotProbe.figures) !== JSON.stringify(probe.figures))
+            shotProblems.push('screenshot figure inventory/state differs from measurement')
+          if (segmented && shotProbe.scrollHeight !== probe.scrollHeight)
+            shotProblems.push(
+              `page height changed between measurement and${where} (${probe.scrollHeight}px, then ${shotProbe.scrollHeight}px)`,
+            )
+          if (shotProblems.length) throw Error(shotProblems.join('; '))
+          if (!existsSync(png) || (await stat(png)).size === 0) {
+            throw new Error(`no screenshot written at ${png}`)
+          }
+          if (segmented) {
+            const bytes = await readFile(png)
+            const shot = bytes.byteLength >= 24 ? bytes.readUInt32BE(20) : 0
+            if (shot !== segment.height)
+              throw new Error(`${where.trim()} is ${shot}px, expected ${segment.height}px`)
+          }
+        })
+      }
+      const result: CaptureResult = { frame, probe, height }
+      const tiling = async (png: string) => {
+        try {
+          return tilePng(new Uint8Array(await readFile(png)), maxFrameBytes)
+        } catch (error) {
+          throw new Error(
+            `website capture ${frame.id} tiling: ${error instanceof Error ? error.message : error}`,
+          )
         }
-      })
-      const result: CaptureResult = {
-        frame,
-        probe,
-        height,
-        capped: probe.scrollHeight > MAX_PAGE_HEIGHT,
       }
-      let tiled: ReturnType<typeof tilePng>
-      try {
-        tiled = tilePng(new Uint8Array(await readFile(png)), maxFrameBytes)
-      } catch (error) {
-        throw new Error(
-          `website capture ${frame.id} tiling: ${error instanceof Error ? error.message : error}`,
-        )
-      }
-      if (tiled) {
+      if (!segmented) {
+        const png = join(outputDir, `${frame.id}.png`)
+        const tiled = await tiling(png)
+        if (tiled) {
+          result.tiles = []
+          for (const tile of tiled) {
+            const id = tileId(frame.id, tile.index, tile.count)
+            await writeFile(join(outputDir, `${id}.png`), tile.bytes)
+            result.tiles.push({
+              id,
+              frame: frame.id,
+              index: tile.index,
+              count: tile.count,
+              top: tile.top,
+              height: tile.height,
+              png: `.ab/website-frames/${id}.png`,
+            })
+          }
+          await rm(png)
+        }
+      } else {
+        // Every segment's rows join one page-ordered tile sequence with global numbering.
+        const pieces: { segment: number; top: number; height: number; bytes: Uint8Array }[] = []
+        for (const segment of segments) {
+          const png = join(outputDir, `${segment.id}.png`)
+          const tiled = await tiling(png)
+          if (tiled) {
+            for (const tile of tiled)
+              pieces.push({
+                segment: segment.index,
+                top: segment.top + tile.top,
+                height: tile.height,
+                bytes: tile.bytes,
+              })
+          } else {
+            pieces.push({
+              segment: segment.index,
+              top: segment.top,
+              height: segment.height,
+              bytes: new Uint8Array(await readFile(png)),
+            })
+          }
+          await rm(png)
+        }
         result.tiles = []
-        for (const tile of tiled) {
-          const id = tileId(frame.id, tile.index, tile.count)
-          await writeFile(join(outputDir, `${id}.png`), tile.bytes)
+        for (const [k, piece] of pieces.entries()) {
+          const id = tileId(frame.id, k + 1, pieces.length)
+          await writeFile(join(outputDir, `${id}.png`), piece.bytes)
           result.tiles.push({
             id,
             frame: frame.id,
-            index: tile.index,
-            count: tile.count,
-            top: tile.top,
-            height: tile.height,
+            index: k + 1,
+            count: pieces.length,
+            top: piece.top,
+            height: piece.height,
             png: `.ab/website-frames/${id}.png`,
+            segment: piece.segment,
           })
         }
-        await rm(png)
+        result.segments = segments
       }
       results.push(result)
     }
@@ -963,6 +1126,7 @@ export async function captureWebsite(options: CaptureOptions = {}): Promise<stri
     const ids = [
       ...results.map((r) => r.frame.id),
       ...results.flatMap((r) => r.tiles ?? []).map((t) => t.id),
+      ...results.flatMap((r) => r.segments ?? []).map((s) => s.id),
     ]
     const duplicate = ids.find((id, i) => ids.indexOf(id) !== i)
     if (duplicate) throw Error(`duplicate capture id ${duplicate}`)
