@@ -34,6 +34,11 @@ const RECORD: BuildRecord = {
 
 const roundTrip = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
+// Every split is checked against whole-prefix oracles, so this is quadratic by
+// design: ~1.9 s on a 4-vCPU build sandbox, thin against bun's 5 s default once
+// integration runs concurrently in verify (AUT-1166).
+const QUADRATIC_ORACLE_TIMEOUT_MS = 20_000
+
 describe('dashboardFacts reducer', () => {
   test('satisfies the incremental contract over generated build logs', () => {
     for (const log of generatedLogs(buildLog, randomBuildItem, [1, 2, 3, 4, 5, 6])) {
@@ -42,42 +47,46 @@ describe('dashboardFacts reducer', () => {
     for (const seed of [1, 2, 3]) checkIncremental(dashboardFactsReducer, randomBuildLog(seed, 60))
   })
 
-  test('a row from facts advanced in splits through JSON equals the whole-array row', () => {
-    let rows = 0
-    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
-      const events: AbEvent[] = randomBuildLog(seed, 120)
-      for (const chunk of [1, 7, 25]) {
-        let build = buildReducer.initial()
-        let dashboard = dashboardFactsReducer.initial()
-        let log = logIndexReducer.initial()
-        let deferral = currentDeferralObservationReducer.initial()
-        for (let at = 0; at < events.length; at += chunk) {
-          const slice = events.slice(at, at + chunk)
-          build = roundTrip(buildReducer.advance(build, slice))
-          dashboard = roundTrip(dashboardFactsReducer.advance(dashboard, slice))
-          log = roundTrip(logIndexReducer.advance(log, slice))
-          deferral = roundTrip(currentDeferralObservationReducer.advance(deferral, slice))
-          const prefix = events.slice(0, at + slice.length)
-          const state = buildReducer.finish(build)
-          expect(state).toEqual(reduceBuild(prefix))
-          const expected = projectBuild(RECORD, state, CONFIG, prefix)
-          const actual = projectBuildFromFacts(
-            RECORD,
-            state,
-            {
-              dashboard: dashboardFactsReducer.finish(dashboard),
-              log: logIndexReducer.finish(log),
-              deferral: currentDeferralObservationReducer.finish(deferral),
-            },
-            CONFIG,
-          )
-          expect(actual).toEqual(expected)
-          if (expected !== null) rows += 1
+  test(
+    'a row from facts advanced in splits through JSON equals the whole-array row',
+    () => {
+      let rows = 0
+      for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const events: AbEvent[] = randomBuildLog(seed, 120)
+        for (const chunk of [1, 7, 25]) {
+          let build = buildReducer.initial()
+          let dashboard = dashboardFactsReducer.initial()
+          let log = logIndexReducer.initial()
+          let deferral = currentDeferralObservationReducer.initial()
+          for (let at = 0; at < events.length; at += chunk) {
+            const slice = events.slice(at, at + chunk)
+            build = roundTrip(buildReducer.advance(build, slice))
+            dashboard = roundTrip(dashboardFactsReducer.advance(dashboard, slice))
+            log = roundTrip(logIndexReducer.advance(log, slice))
+            deferral = roundTrip(currentDeferralObservationReducer.advance(deferral, slice))
+            const prefix = events.slice(0, at + slice.length)
+            const state = buildReducer.finish(build)
+            expect(state).toEqual(reduceBuild(prefix))
+            const expected = projectBuild(RECORD, state, CONFIG, prefix)
+            const actual = projectBuildFromFacts(
+              RECORD,
+              state,
+              {
+                dashboard: dashboardFactsReducer.finish(dashboard),
+                log: logIndexReducer.finish(log),
+                deferral: currentDeferralObservationReducer.finish(deferral),
+              },
+              CONFIG,
+            )
+            expect(actual).toEqual(expected)
+            if (expected !== null) rows += 1
+          }
         }
+        // The whole-array wrapper is the same projection over the reducers.
+        expect(indexLog(events)).toEqual(logIndexReducer.reduce(events))
       }
-      // The whole-array wrapper is the same projection over the reducers.
-      expect(indexLog(events)).toEqual(logIndexReducer.reduce(events))
-    }
-    expect(rows).toBeGreaterThan(0)
-  })
+      expect(rows).toBeGreaterThan(0)
+    },
+    QUADRATIC_ORACLE_TIMEOUT_MS,
+  )
 })
