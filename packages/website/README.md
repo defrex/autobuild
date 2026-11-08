@@ -44,6 +44,14 @@ registry edit. `bun run capture:website` captures every generated docs page at
 `.ab/website-frames/`. Static hosts must serve directory index files. The dev
 server redirects slashless docs URLs to canonical trailing-slash paths.
 
+Each published page has a snapshot of its text hash, headings, code and
+metadata in `packages/website/src/docs-baseline/<source stem>.json`, and the
+website docs integration test fails when one is stale. After changing,
+adding or removing a published page, or when a reconcile meets a conflict in
+that directory, run `bun run docs:baseline` and commit its output instead of
+hand-editing or hand-merging it. The command is idempotent and removes files
+for pages that are no longer published.
+
 `bun run check` enforces complete-byte parity for same-named files shared by
 `docs/` and `skills/guide/references/`, including their live and pristine installed
 copies. Edit docs first and synchronize all three guide copies in the same

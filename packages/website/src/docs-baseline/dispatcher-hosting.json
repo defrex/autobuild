@@ -1,0 +1,20 @@
+{
+  "path": "/docs/dispatcher-hosting/",
+  "label": "Dispatcher hosting",
+  "title": "Dispatcher hosting",
+  "group": "reference",
+  "description": "Run a local dispatcher with local or remote workspaces over durable state.",
+  "textHash": "1ebf712adb4a062ab38233baed86b8e1a2333d6b0fb1f79df1f0824bed8ab3da",
+  "headings": [
+    "Responsibility",
+    "Viewing from a local checkout",
+    "Shipped arrangements",
+    "Writing your own"
+  ],
+  "code": [
+    "forge = \"github\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "bun ab dispatch\n# Or perform one bounded pass:\nbun ab dispatch --once",
+    "forge = \"github\"\nplugins = [\"@defrex/autobuild-vercel-sandbox\"]\n\n[store]\nurl = \"https://builds.example.com\"\n\n[tickets]\nsource = \"hosted\"\nteamKey = \"ENG\"\n\n[workspace]\nprovider = \"vercel-sandbox\"\n\n[workspace.config]\ntimeoutSeconds = 2700\nenvironmentVariables = [\"AI_GATEWAY_API_KEY\"]\n\n[workspace.config.runtimeProvisioning.pi]\ninstall = \"npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4\"\npreflight = \"test \\\"$(pi --version)\\\" = \\\"0.84.4\\\" && pi update --models\"\n\n[roles.default]\nruntime = \"pi\"\nmodel = \"vercel-ai-gateway/anthropic/claude-sonnet-4.6\"",
+    "bun ab dispatch --repository https://github.com/acme/app --plain --store https://builds.example.com"
+  ]
+}

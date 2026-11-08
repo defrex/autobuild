@@ -1,0 +1,19 @@
+{
+  "path": "/docs/getting-started/",
+  "label": "Getting started",
+  "title": "Getting started",
+  "group": "start",
+  "description": "Install Autobuild in your repository, configure it with ab init, validate setup, start the dispatcher, and ask your operator agent for the first change.",
+  "textHash": "a6a9a125c4fb51bdf9dd3eea10020ddaac4d799914a88ca296bd487fb79bc381",
+  "headings": [
+    "1. Install in the repository",
+    "2. Initialize and configure",
+    "3. Start dispatch",
+    "4. Ask your operator agent for the first change"
+  ],
+  "code": [
+    "bun add -D @defrex/autobuild",
+    "bun ab init",
+    "bun ab dispatch"
+  ]
+}

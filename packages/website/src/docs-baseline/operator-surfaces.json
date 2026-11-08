@@ -1,0 +1,19 @@
+{
+  "path": "/docs/operator-surfaces/",
+  "label": "Operator surfaces",
+  "title": "Operator surfaces",
+  "group": "reference",
+  "description": "Watch and act through the terminal, CLI, local stdio MCP, or Operator API with your operator agent.",
+  "textHash": "5c6fff287ee2a72dc64bcbd134860bbececb312bf3586d69f91082ecfc5821b0",
+  "headings": [
+    "Responsibility",
+    "Shipped arrangements",
+    "Writing your own"
+  ],
+  "code": [
+    "[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "bun ab dispatch\nbun ab builds\nbun ab build status example-build --json",
+    "[store]\nurl = \"https://builds.example.com\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "bun ab mcp"
+  ]
+}

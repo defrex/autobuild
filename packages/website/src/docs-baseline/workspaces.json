@@ -1,0 +1,20 @@
+{
+  "path": "/docs/workspaces/",
+  "label": "Workspaces",
+  "title": "Workspaces",
+  "group": "reference",
+  "description": "Provision local git worktrees or Vercel Sandboxes, handle private repositories, and implement a workspace provider.",
+  "textHash": "cb13f8a8bdf14b9be36a266ac3b081eaf5500a4a3aa7022ad41855765e4b9b3b",
+  "headings": [
+    "Responsibility",
+    "Shipped adapters",
+    "Writing your own"
+  ],
+  "code": [
+    "forge = \"local-git\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"\n\n[commands]\nsetup = \"bun install --frozen-lockfile\"\n\n[workspace]\nprovider = \"git-worktree\"",
+    "forge = \"github\"\nplugins = [\"@defrex/autobuild-vercel-sandbox\"]\n\n[store]\nurl = \"https://builds.example.com\"\n\n[tickets]\nsource = \"hosted\"\nteamKey = \"ENG\"\n\n[commands]\nsetup = \"bun install --frozen-lockfile\"\n\n[workspace]\nprovider = \"vercel-sandbox\"\n\n[workspace.config]\nimage = \"vercel/sandbox/universal:latest\"\nvcpus = 4\ntimeoutSeconds = 2700\nenvironmentVariables = [\"AI_GATEWAY_API_KEY\"]\nprovisioning = [\n  { name = \"system-install\", command = \"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y jq\" },\n  { name = \"system-preflight\", command = \"jq --version\" },\n]\ngitUsernameEnv = \"AB_GIT_READ_USER\"\ngitPasswordEnv = \"AB_GIT_READ_TOKEN\"\n\n[workspace.config.runtimeProvisioning.pi]\ninstall = \"npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4\"\npreflight = \"test \\\"$(pi --version)\\\" = \\\"0.84.4\\\" && pi update --models\"\n\n[roles.default]\nruntime = \"pi\"\nmodel = \"vercel-ai-gateway/anthropic/claude-sonnet-4.6\"",
+    "bun ab connect https://builds.example.com",
+    "export AB_GIT_READ_USER='x-access-token'\nexport AB_GIT_READ_TOKEN='<read-only repository token>'",
+    "bun ab plugin test workspace-provider acme"
+  ]
+}

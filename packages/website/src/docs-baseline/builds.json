@@ -1,0 +1,20 @@
+{
+  "path": "/docs/builds/",
+  "label": "Builds",
+  "title": "One build, end to end",
+  "group": "concepts",
+  "description": "Follow a work ticket through planning, review, verification, pull request creation, and merge.",
+  "textHash": "0ee418199b487d434c4db3e5e0dec88410d13b2f1a5a5c1ff5e540c6c3a7ff55",
+  "headings": [
+    "The spec is the contract",
+    "Produce, then review",
+    "Verify, then publish",
+    "When a human is needed",
+    "The reconcile epilogue"
+  ],
+  "code": [
+    "spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → finalize",
+    "bun ab answer <slug> --revise-spec revised-spec.md",
+    "(pr.conflicted → reconcile → verify:*)* → merged or closed"
+  ]
+}

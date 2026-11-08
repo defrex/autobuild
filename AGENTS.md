@@ -258,6 +258,8 @@ and verification of this tooling must not restart the live dispatcher.
 - Preserve narrow port interfaces. New BuildStore adapters must pass the shared suite in `packages/core/src/store/contract.ts`.
 - Validate every event write and derive status through `packages/core/src/kernel/reducer.ts`; events record facts, never derived state.
 - Keep phase behavior centralized in `packages/core/src/kernel/phases.ts` and deterministic transitions in `packages/core/src/kernel/engine.ts`.
+- Published docs pages have per-page snapshots in `packages/website/src/docs-baseline/`. After changing a published docs page, or when resolving a conflict in that directory during a reconcile, run `bun run docs:baseline` and stage its output instead of hand-merging; the website docs integration test fails when they are stale.
+- Published docs pages have per-page snapshots in `packages/website/src/docs-baseline/`. After changing a published docs page, or when resolving a conflict in that directory during a reconcile, run `bun run docs:baseline` and stage its output instead of hand-merging; the website docs integration test fails when they are stale.
 - Do not commit `.ab/`, `.autobuild/`, `.env`, build artifacts, or transcripts.
 
 ## Working on the dashboards

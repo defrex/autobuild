@@ -1,0 +1,36 @@
+{
+  "path": "/docs/plugin-authoring/",
+  "label": "Plugins",
+  "title": "Writing a plugin",
+  "group": "guides",
+  "description": "Build, contract-test, package, and publish an Autobuild infrastructure adapter.",
+  "textHash": "ae13ab463eb907d2de9a2b3104f5393f498ca2654da46877669c355c414dbeb0",
+  "headings": [
+    "1. Choose the port and preserve its semantics",
+    "2. Create a repository-local module",
+    "3. Keep secrets out of source and config",
+    "4. Add the contract harness first",
+    "5. Zero-network wiring walkthrough",
+    "6. Package and publish when reuse warrants it",
+    "Optional ticket tree capability",
+    "Optional issue links capability",
+    "Optional priority capability",
+    "Optional ticket paging capability"
+  ],
+  "code": [
+    "// Rate limit, with a valid ISO reset timestamp:\nthrow new ForgeFailure(message, { kind: 'rate-limited', resetAt })\n// Retryable transport error:\nthrow new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })",
+    "observeRequests(observer: ForgeRequestObserver) {\n  this.observers.add(observer)\n  return () => { this.observers.delete(observer) }\n}\n// Capture context before awaiting the transport. After response/failure:\nfor (const observer of this.observers) {\n  observer({ build: context.build, ...(outcome ? { outcome } : {}) })\n}",
+    "my-repository/\n├── autobuild.toml\n└── autobuild-plugin.ts",
+    "import type {\n  AutobuildPluginManifest,\n  ForgePluginFactory,\n} from '@defrex/autobuild/plugin-sdk'\nimport { AcmeForge } from '@acme/forge-client'\n\nconst createForge: ForgePluginFactory = ({ config, env, repoRoot }) => {\n  const token = env.ACME_FORGE_TOKEN\n  if (!token) throw new Error('ACME_FORGE_TOKEN is required')\n  return new AcmeForge({ token, config, repoRoot })\n}\n\nexport default {\n  name: 'acme-forge',\n  apiVersion: '^1.2.0',\n  forges: { acme: createForge },\n} satisfies AutobuildPluginManifest",
+    "plugins = [\"./autobuild-plugin.ts\"]\nforge = \"acme\"\n\n[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
+    "const manifest = {\n  name: 'acme',\n  apiVersion: '^1.2.0',\n  ticketSources: {\n    acme: {\n      factory: createAcmeTicketSource,\n      contract: { factory: createAcmeTicketContract },\n    },\n  },\n} satisfies AutobuildPluginManifest",
+    "AB_RUN_LIVE_PORT_CONTRACTS=1 ab plugin test forge acme",
+    "ab plugin list\nab plugin doctor\nab plugin test ticket-source acme",
+    "import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'\nimport type {\n  AutobuildPluginManifest,\n  TicketSourceContractFactory,\n  TicketSourcePluginFactory,\n} from '@defrex/autobuild/plugin-sdk'\n\nconst createSource: TicketSourcePluginFactory = () => new FakeTicketSource()\n\nconst ticketContract: TicketSourceContractFactory = async () => ({\n  source: new FakeTicketSource([], {\n    createState: 'Triage',\n    doneState: 'Done',\n  }),\n  states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },\n  editableLabel: 'contract',\n})\n\nexport default {\n  name: 'walkthrough',\n  apiVersion: '^1.2.0',\n  ticketSources: {\n    walkthrough: {\n      factory: createSource,\n      contract: { factory: () => ticketContract },\n    },\n  },\n} satisfies AutobuildPluginManifest",
+    "plugins = [\"./autobuild-plugin.ts\"]\n\n[tickets]\nsource = \"walkthrough\"\nreadyState = \"ready\"",
+    "ab init\nab plugin doctor\nab plugin list\nab plugin test ticket-source walkthrough",
+    "acme-autobuild-plugin/\n├── src/index.ts\n├── package.json\n├── tsconfig.json\n└── bun.lock",
+    "{\n  \"name\": \"@acme/autobuild-plugin\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": { \".\": \"./src/index.ts\" },\n  \"files\": [\"src\", \"README.md\"],\n  \"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"bun test\",\n    \"prepublishOnly\": \"bun run typecheck && bun test\"\n  },\n  \"devDependencies\": { \"@defrex/autobuild\": \"<tested-version>\", \"typescript\": \"5.9.3\" },\n  \"peerDependencies\": { \"@defrex/autobuild\": \"<tested-version>\" },\n  \"peerDependenciesMeta\": { \"@defrex/autobuild\": { \"optional\": true } }\n}",
+    "bun run typecheck\nbun test\nnpm pack --dry-run\nnpm pack\n# inspect the tarball, then install that exact .tgz in a scratch consumer\nnpm publish --access public"
+  ]
+}

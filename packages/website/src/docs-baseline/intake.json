@@ -1,0 +1,17 @@
+{
+  "path": "/docs/intake/",
+  "label": "Intake and harvest",
+  "title": "Intake and harvest",
+  "group": "concepts",
+  "description": "Turn outside signals and agent observations into reviewed proposals for your operator agent to triage and groom.",
+  "textHash": "2f73989f20ce1504451617c5d0627256bb1d5b72c1fd8299726a686380bb329c",
+  "headings": [
+    "Sources carry proposals",
+    "Observations become reviewed tickets",
+    "Triage is the default gate"
+  ],
+  "code": [
+    "ab observe --kind followup --files src/retry.ts \"Retry budget ignores jitter\"",
+    "[tickets]\nsource = \"file\"\nreadyState = \"ready\"\nproposalState = \"ready\""
+  ]
+}
