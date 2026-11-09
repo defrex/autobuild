@@ -1,5 +1,6 @@
 import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
 import { expect, test } from 'bun:test'
+import semver from 'semver'
 import {
   clientSupportsIntegrationAuditPending,
   classifyClient,
@@ -179,15 +180,22 @@ const supportedReleases = RELEASED_CLIENTS.filter((entry) =>
   ),
 )
 // Model the first header-sending published line using an immutable old catalog.
+// The base is published before this service's version: a release gate adds the
+// target's own entry, whose contract is the current catalog, not an old one.
 const matrixReleases = [
   ...supportedReleases,
   {
-    ...supportedReleases.at(-1)!,
+    ...supportedReleases.findLast((entry) => semver.lt(entry.version, AUTOBUILD_VERSION))!,
     version: '1.4.0',
     projects: true,
     catalogIdentity: 'frozen-published-1.4-catalog',
   },
 ]
+/** Whether a frozen catalog's schemas declare the property: additive fields
+ * reach only the clients whose published contract already names them. */
+const catalogDeclares = (catalog: object, property: string) =>
+  JSON.stringify(catalog).includes(JSON.stringify(property))
+
 test('released clients receive build digests without the additive node targets', async () => {
   const { buildDigestReducer } = await import('../digest')
   const value = buildDigestReducer.finish({
@@ -210,7 +218,9 @@ test('released clients receive build digests without the additive node targets',
       matrixReleases,
     )
     expect(adapted.version).toBe(catalog.versions.buildDigest!)
-    expect(adapted.value).not.toHaveProperty('nodeTargets')
+    if (catalogDeclares(catalog, 'nodeTargets'))
+      expect(adapted.value).toHaveProperty('nodeTargets', ['node-a'])
+    else expect(adapted.value).not.toHaveProperty('nodeTargets')
     expect(projectReducerValue('buildDigest', adapted.value, catalog)).toEqual({
       value: adapted.value,
     })
@@ -260,7 +270,9 @@ test('released clients receive presence observations without the additive probe'
     )
     expect(adapted.version).toBe(catalog.versions.repositoryReadFacts!)
     expect((adapted.value as typeof value).presence['root:main']).toEqual(
-      observed as (typeof value.presence)['root:main'],
+      catalogDeclares(catalog, 'probe')
+        ? value.presence['root:main']
+        : (observed as (typeof value.presence)['root:main']),
     )
     expect(projectReducerValue('repositoryReadFacts', adapted.value, catalog)).toEqual({
       value: adapted.value,
