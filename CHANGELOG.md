@@ -2,6 +2,96 @@
 
 ## Unreleased
 
+## v1.5.0 — 2026-11-09
+
+This release adds a GitHub Issues ticket source, with support for migrating tickets, importing selected states, and storing node kinds and targets as labels and sub-issues. Tickets now carry a priority, mapped from Linear's Urgent level, so urgent ready tickets are dispatched first and appear first in the web Queue tab. New backlog and rejected lifecycle roles map to each source's native states, and linked forge issues now carry their intent into pull requests and landed commits. The release also adds triage, queue and active counts to both dashboards, ships Git with hosted dispatcher deployments, bounds several recurring store reads, and makes many tests more reliable and faster.
+
+- [#914](https://github.com/defrex/autobuild/pull/914) — Bound hosted node observation to targeted ticket reads
+- [#913](https://github.com/defrex/autobuild/pull/913) — Correct ticket-source documentation drift
+- [#912](https://github.com/defrex/autobuild/pull/912) — Remove fixed-sleep races from hot-upgrade supervision tests
+- [#911](https://github.com/defrex/autobuild/pull/911) — Stabilize the real-child suspend test under sandbox load
+- [#910](https://github.com/defrex/autobuild/pull/910) — Capture tall website pages in ordered vertical segments
+- [#909](https://github.com/defrex/autobuild/pull/909) — Give CPU-heavy unit tests headroom under concurrent verify load
+- [#908](https://github.com/defrex/autobuild/pull/908) — Regenerate the GitHub Issues node's docs baseline
+- [#907](https://github.com/defrex/autobuild/pull/907) — Show urgent tickets first in the web Queue tab
+- [#906](https://github.com/defrex/autobuild/pull/906) — Split docs baselines by page to avoid concurrent edit conflicts
+- [#905](https://github.com/defrex/autobuild/pull/905) — Reconcile ab-guide dashboard wording and installed mirrors
+- [#904](https://github.com/defrex/autobuild/pull/904) — Retry transient packed installs and preserve test failure details
+- [#903](https://github.com/defrex/autobuild/pull/903) — Reduce integration verification time while preserving coverage
+- [#902](https://github.com/defrex/autobuild/pull/902) — Remove the incompatible-reader test's temporary checkout
+- [#901](https://github.com/defrex/autobuild/pull/901) — Admit waiting integration nodes before new ticket claims
+- [#900](https://github.com/defrex/autobuild/pull/900) — Record repositoryReadFacts version 38 in the registry snapshot
+- [#899](https://github.com/defrex/autobuild/pull/899) — Map Linear's Urgent priority to ticket priority
+- [#898](https://github.com/defrex/autobuild/pull/898) — Store and serve ticket priority in hosted tickets
+- [#897](https://github.com/defrex/autobuild/pull/897) — Defer runtime identity capture until first use
+- [#896](https://github.com/defrex/autobuild/pull/896) — Use bounded ticket-state counts in the interactive dispatcher
+- [#895](https://github.com/defrex/autobuild/pull/895) — Keep hosted dispatch viewer guidance in one authoritative passage
+- [#894](https://github.com/defrex/autobuild/pull/894) — Clarify which build naming failures permit fallback
+- [#893](https://github.com/defrex/autobuild/pull/893) — Preserve hosted node branch identity during slug allocation
+- [#892](https://github.com/defrex/autobuild/pull/892) — Prevent missing-directory changelog failures and recover #828
+- [#891](https://github.com/defrex/autobuild/pull/891) — Bound execution-mode feed startup with canonical repository facts
+- [#890](https://github.com/defrex/autobuild/pull/890) — Describe local dispatch startup failures accurately
+- [#889](https://github.com/defrex/autobuild/pull/889) — Repoint removed hosted-service references to the self-hosting guide
+- [#888](https://github.com/defrex/autobuild/pull/888) — Bound destination-presence evidence by queried proof closure
+- [#887](https://github.com/defrex/autobuild/pull/887) — Preserve Git ancestry during remote archive recovery
+- [#886](https://github.com/defrex/autobuild/pull/886) — Reuse the pinned Bun helper in hosted readiness tests
+- [#885](https://github.com/defrex/autobuild/pull/885) — Align node availability fingerprints across mixed-version deferrals
+- [#884](https://github.com/defrex/autobuild/pull/884) — Surface abandoned ticket preparations in dispatcher diagnostics
+- [#883](https://github.com/defrex/autobuild/pull/883) — Preserve live hosted harvest sessions across dispatcher invocations
+- [#882](https://github.com/defrex/autobuild/pull/882) — Release half-provisioned workspaces with missing Git objects
+- [#881](https://github.com/defrex/autobuild/pull/881) — Prioritize urgent ready tickets during dispatch
+- [#880](https://github.com/defrex/autobuild/pull/880) — Skip ticket-scan checkpoint reads when the journal proves deferral
+- [#879](https://github.com/defrex/autobuild/pull/879) — Pin Vercel Sandbox Bun to 1.4.4 and repair reused runtimes
+- [#878](https://github.com/defrex/autobuild/pull/878) — Align escalation wording with the external operator role
+- [#877](https://github.com/defrex/autobuild/pull/877) — Open the dashboard before the first dispatcher run
+- [#876](https://github.com/defrex/autobuild/pull/876) — Bound dispatch-upgrade state and focus status on current outcomes
+- [#875](https://github.com/defrex/autobuild/pull/875) — Validate hosted Claude and Kimi secrets by metadata
+- [#874](https://github.com/defrex/autobuild/pull/874) — Place native ticket paging notes with ticket-source guidance
+- [#873](https://github.com/defrex/autobuild/pull/873) — Consolidate node verification context guidance
+- [#872](https://github.com/defrex/autobuild/pull/872) — Keep plugin authoring host-version guidance accurate across releases
+- [#871](https://github.com/defrex/autobuild/pull/871) — Repair the guide role account field table
+- [#870](https://github.com/defrex/autobuild/pull/870) — Bound dispatcher deprecation warnings to configuration changes
+- [#869](https://github.com/defrex/autobuild/pull/869) — Correct architecture guidance for demand-driven node restacking
+- [#868](https://github.com/defrex/autobuild/pull/868) — Describe recorded control and revision facts accurately
+- [#867](https://github.com/defrex/autobuild/pull/867) — Return typed conflicts when merge requests are not ready
+- [#866](https://github.com/defrex/autobuild/pull/866) — Settle recovered own-build read deferrals
+- [#865](https://github.com/defrex/autobuild/pull/865) — Clarify authoritative readback requirements for node merges
+- [#864](https://github.com/defrex/autobuild/pull/864) — Remove website capture test output after each run
+- [#863](https://github.com/defrex/autobuild/pull/863) — Judge nested plugin contract runs by outcome
+- [#862](https://github.com/defrex/autobuild/pull/862) — Align guide forge plumbing with restacks and root landing
+- [#861](https://github.com/defrex/autobuild/pull/861) — Skip preserved branch heads superseded by recorded rewrites
+- [#860](https://github.com/defrex/autobuild/pull/860) — Keep acknowledged native squash messages current after PR edits
+- [#859](https://github.com/defrex/autobuild/pull/859) — Coalesce remote PR summaries across verify cycles
+- [#858](https://github.com/defrex/autobuild/pull/858) — Guard every dispatcher runner launch against no progress
+- [#857](https://github.com/defrex/autobuild/pull/857) — Label build slugs as identifiers in runtime prompts
+- [#856](https://github.com/defrex/autobuild/pull/856) — Document the missing runtime CLI exception in the agent guide
+- [#855](https://github.com/defrex/autobuild/pull/855) — Distinguish unavailable operator presence from confirmed absence
+- [#854](https://github.com/defrex/autobuild/pull/854) — Explain build-wide verify budget exhaustion accurately
+- [#853](https://github.com/defrex/autobuild/pull/853) — Treat the first janitor rate limit as repository cooldown
+- [#852](https://github.com/defrex/autobuild/pull/852) — Escalate empty implement contributions and rejected PR creation
+- [#851](https://github.com/defrex/autobuild/pull/851) — Fail promptly when hosted ticket disconnect has no service URL
+- [#850](https://github.com/defrex/autobuild/pull/850) — Move IO tests into integration and enforce in-memory unit tests
+- [#849](https://github.com/defrex/autobuild/pull/849) — Require streaming monitors for the operator standing watch
+- [#848](https://github.com/defrex/autobuild/pull/848) — Store GitHub node kinds and targets with labels and sub-issues
+- [#847](https://github.com/defrex/autobuild/pull/847) — Make readyAssignee a source capability and support GitHub
+- [#846](https://github.com/defrex/autobuild/pull/846) — Support GitHub ticket migration and selected-state imports
+- [#845](https://github.com/defrex/autobuild/pull/845) — Find node child builds without reading every build's facts
+- [#844](https://github.com/defrex/autobuild/pull/844) — Add a GitHub Issues ticket source
+- [#843](https://github.com/defrex/autobuild/pull/843) — Route shell-wrapped kernel Git to the shipped Git
+- [#842](https://github.com/defrex/autobuild/pull/842) — Carry backlog and rejected roles in hosted ticket policy
+- [#841](https://github.com/defrex/autobuild/pull/841) — Add backlog and rejected lifecycle roles mapped to native states
+- [#840](https://github.com/defrex/autobuild/pull/840) — Tile website verify frames to fit the artifact ceiling
+- [#839](https://github.com/defrex/autobuild/pull/839) — Show the triage count in viewer dashboards
+- [#837](https://github.com/defrex/autobuild/pull/837) — Guard against dispatchers using separate stores
+- [#836](https://github.com/defrex/autobuild/pull/836) — Ship Git with hosted dispatcher deployments
+- [#834](https://github.com/defrex/autobuild/pull/834) — Pin the terminal dashboard legend to the bottom of the screen
+- [#833](https://github.com/defrex/autobuild/pull/833) — Reference node and node-targeted PR issues with keyword lines
+- [#831](https://github.com/defrex/autobuild/pull/831) — Carry children's issue links into the root node's PR
+- [#830](https://github.com/defrex/autobuild/pull/830) — Carry linked issue intent into PRs and landed commits
+- [#829](https://github.com/defrex/autobuild/pull/829) — Persist forge issue links in hosted tickets
+- [#828](https://github.com/defrex/autobuild/pull/828) — Record forge issue links on tickets
+- [#827](https://github.com/defrex/autobuild/pull/827) — Show triage, queue and active counts in the terminal dashboard
+
 ## v1.4.2 — 2026-11-03
 
 This release contains two reliability fixes. Monorepo-hosted deployments work again now that zod is declared as a dependency. When the dispatcher tries to preserve a Vercel sandbox that was only half provisioned, it now releases the sandbox instead of crashing.
