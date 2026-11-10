@@ -66,9 +66,17 @@ export function epilogueLeaf(state: BuildState): boolean {
   )
 }
 
+/** A provider-observable execution (one with a command id) stays open until
+ * supervision records its end on provider proof, so it holds its runner past
+ * an expired lease, unknown liveness included. A local execution's liveness
+ * is its lease. */
+function executionOpen(state: BuildState): boolean {
+  return state.openExecution?.commandId !== undefined
+}
+
 /** A finished leaf with no runner working. It holds no slot; its workspace does not count. */
 export function parkedLeaf(build: CapacityBuild, now: Date): boolean {
-  return epilogueLeaf(build.state) && !runnerAllocated(build, now)
+  return epilogueLeaf(build.state) && !runnerAllocated(build, now) && !executionOpen(build.state)
 }
 
 /** A finished leaf whose latest verify cycle or finalize has not been settled

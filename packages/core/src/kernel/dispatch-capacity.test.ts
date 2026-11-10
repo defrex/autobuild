@@ -341,6 +341,14 @@ test('a settled leaf with no runner is parked and free; a runner makes it occupy
   const expired = finished('a', { settled: 10 })
   expired.record.lease = { holder: 'r', expiresAt: '2026-10-20T14:00:00Z' } as never
   expect(occupiesCapacity(expired, now)).toBe(false)
+  // An open provider-observable execution holds its runner past lease expiry
+  // until its end is recorded; a local one's liveness is its lease.
+  const execution = { provider: 'p', workspaceRef: 'w', instance: 'i', seq: 12 }
+  expired.state.openExecution = { ...execution, commandId: 'cmd' }
+  expect(occupiesCapacity(expired, now)).toBe(true)
+  expect(slotRequest({ ...expired, restackDue: true }, now)).toBeUndefined()
+  expired.state.openExecution = execution
+  expect(occupiesCapacity(expired, now)).toBe(false)
   for (const status of ['paused', 'blocked'] as const) {
     const leaf = finished('a', { settled: 10, status })
     expect(occupiesCapacity(leaf, now)).toBe(false)

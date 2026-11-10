@@ -396,6 +396,8 @@ export interface BuildState {
   dispatchFailures: Array<EventPayload<'dispatch.failed'> & { seq: number }>
   /** Provider identities and failures are durable even after recovery clears the current error. */
   executions: Array<EventPayload<'execution.started'> & { seq: number }>
+  /** The latest execution, while no instance-matched `execution.ended` follows it. */
+  openExecution?: EventPayload<'execution.started'> & { seq: number }
   infrastructureFailures: Array<EventPayload<'infrastructure.failed'> & { seq: number }>
   infrastructureFailure?: EventPayload<'infrastructure.failed'> & { seq: number }
   cleanupAttempts: Array<EventPayload<'infrastructure.cleanup-attempted'> & { seq: number }>
@@ -1388,6 +1390,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     discardRequest,
     pending,
   } = acc
+  const latestExecution = acc.executions.at(-1)
 
   // §15.5 precedence: aborted/done (terminal, latest wins) > paused >
   // blocked > running > queued. See BuildState.status for the paused+blocked
@@ -1464,6 +1467,9 @@ function finishBuild(acc: BuildAcc): BuildState {
     setupFailure: acc.setupFailure,
     dispatchFailures: acc.dispatchFailures,
     executions: acc.executions,
+    ...(latestExecution && !acc.endedExecutionInstances[latestExecution.instance]
+      ? { openExecution: latestExecution }
+      : {}),
     infrastructureFailures: acc.infrastructureFailures,
     infrastructureFailure: acc.infrastructureFailure,
     cleanupAttempts: acc.cleanupAttempts,

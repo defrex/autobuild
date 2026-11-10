@@ -16495,8 +16495,11 @@ describe('capacity counts builds running work, not builds parked for a merge dec
   })
 
   /** A recovery-capable provider whose reaps and releases are counted. */
-  function remoteHarness(effects: string[]) {
-    const provider = continuationProvider(effects)
+  function remoteHarness(effects: string[], execution?: WorkspaceProvider['buildExecution']) {
+    const provider = {
+      ...continuationProvider(effects),
+      ...(execution ? { buildExecution: execution } : {}),
+    }
     const recovery = provider.recovery!
     const reap = recovery.reap.bind(recovery)
     recovery.reap = async (...args) => {
@@ -16571,6 +16574,88 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     await h.dispatcher.tick()
     expect(await released(h, held)).toBe(1)
     expect(await types(h, held)).toContain('build.completed')
+  })
+
+  test('a re-verifying parked build keeps its slot past lease expiry while its execution runs', async () => {
+    const effects: string[] = []
+    let observes = 0
+    const h = remoteHarness(effects, {
+      async start() {
+        throw new Error('must not launch')
+      },
+      async observe() {
+        observes++
+        return { state: 'running' }
+      },
+    })
+    const running = await parkedBuild(h, 'a-running', 2, true)
+    const waiting = await parkedBuild(h, 'b-waiting', 3, true)
+    await h.dispatcher.tick()
+    expect(await settlements(h, running)).toBe(1)
+    expect(await settlements(h, waiting)).toBe(1)
+
+    // A reconciled, now re-verifying on a provider-confirmed execution whose lease expires.
+    await h.store.append(running, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'base-old' },
+    })
+    await h.store.append(running, {
+      actor: agentActor('reconcile', 's_reconcile'),
+      type: 'reconcile.completed',
+      payload: { mergeCommit: 'merge-1', artifact: { kind: 'reconcile-notes', rev: 0 } },
+    })
+    await h.store.append(running, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        instance: 'remote-1',
+        provider: 'remote-test',
+        workspaceRef: `sandbox-${running}`,
+        commandId: 'cmd-1',
+      },
+    })
+    await h.store.claimLease(running, 'runner-remote', 100)
+    h.clock.advance(60_000)
+    h.forge.setPrState(3, { state: 'open', mergeable: false })
+    h.tickets.add(readyTicket('T-next'))
+    for (let tick = 0; tick < 2; tick++) {
+      const report = await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+      expect(report.dispatched).toBe(0)
+      h.clock.advance(60_000)
+    }
+    expect(observes).toBeGreaterThan(0)
+    expect(h.launches).toEqual([])
+    expect(effects).toEqual([])
+    expect(await slotWait(h, waiting)).toBe('reconcile')
+    expect(await failures(h, waiting)).toEqual([])
+
+    // The runner re-verifies; provider-proved completion ends the execution and frees the slot.
+    await h.store.append(running, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'unit', attempt: 2 },
+    })
+    await h.store.append(running, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'unit', attempt: 2, pass: true },
+    })
+    await h.store.append(running, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: {
+        instance: 'remote-1',
+        workspaceRef: `sandbox-${running}`,
+        outcome: 'completed',
+        exitCode: 0,
+      },
+    })
+    await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
+    expect(await settlements(h, running)).toBe(2)
+    expect(h.launches).toEqual([waiting])
   })
 
   test('a settled build that is then paused keeps its workspace; an unfinished paused build is still reaped', async () => {
