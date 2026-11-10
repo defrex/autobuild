@@ -112,6 +112,7 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
 export const BUILD_ATTENTION_EVENTS = [
   'target.rewritten',
   'build.janitor-failing',
+  'build.janitor-escalated',
   'build.compatibility-deferred',
   'escalation.raised',
   'phase.deferral-escalated',
@@ -462,6 +463,7 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
     case 'dispatcher.kernel-git-recovered':
       return `Kernel Git recovered (${event.payload.executable})`
     case 'phase.deferral-escalated':
+    case 'build.janitor-escalated':
     case 'escalation.raised':
       return `${event.payload.id}: ${singleLine(event.payload.question)}`
     case 'build.compatibility-deferred':
