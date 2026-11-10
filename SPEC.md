@@ -3157,8 +3157,9 @@ The repository dispatch lease lasts `policy.dispatchLeaseTimeoutSeconds`
 without renewal (60 by default) and is renewed every
 `policy.dispatchLeaseRenewalSeconds` (20 by default; it must be less than the
 timeout). A claim stores the timeout with the lease, so a reloaded pair is
-adopted at the next tick through a same-holder claim, and the holder's local
-deadline, renewal cadence and stored renewal always agree. A holder whose own
+adopted at the next tick through a same-holder claim. Claims and adoption are
+serialized, and a renewal answered under an earlier pair is discarded, so the
+holder's local deadline never outlasts the stored expiry. A holder whose own
 lease lapsed — a host stall longer than the timeout, or renewals lost to a store
 outage — starts no ticket claim, launch, execution start, provisioning, forge
 write, `git push` or status publication, including from a continuation that

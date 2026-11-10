@@ -892,6 +892,13 @@ class DispatchLoop {
    * only by a claim, so the local deadline, the beat cadence and the store's
    * renewal TTL always agree. */
   private heldLease: RepoLeaseTiming | undefined
+  /** Advances whenever the stored lease timing may change or the lease is
+   * released. A beat answers for the timing it was sent under, so a response
+   * from an older generation is discarded rather than trusted. */
+  private leaseGeneration = 0
+  /** Serializes lease claims and timing adoption, so a claim never captures a
+   * timing pair that a concurrent claim is replacing. */
+  private leaseMutation: Promise<unknown> = Promise.resolve()
   /** Set only when the lease resolver proves another run took the repository
    * lease: stop accepting launches, detach/reap, signal continuations, and
    * exit watch mode cleanly. An expired lease of our own is never proof. */
@@ -4360,11 +4367,22 @@ class DispatchLoop {
       // Only the resolver decides between "reclaim" and "replaced".
       return await this.reconfirmRepoLease()
     }
-    const lease = this.configuredLease()
-    const requestedAt = this.wiring.clock().getTime()
-    const claimed = await this.wiring.store
-      .claimRepoLease(this.repoIdentity, holder, lease.ttlMs)
-      .catch(() => false)
+    const claimed = await this.mutateLease(async () => {
+      if (this.superseded) return false
+      if (this.repoLeaseHolder === holder) return this.holdsRepoAuthority()
+      const lease = this.configuredLease()
+      const requestedAt = this.wiring.clock().getTime()
+      const granted = await this.wiring.store
+        .claimRepoLease(this.repoIdentity, holder, lease.ttlMs)
+        .catch(() => false)
+      if (!granted || this.superseded) return false
+      this.leaseGeneration++
+      this.heldLease = lease
+      this.repoLeaseValidUntil = requestedAt + lease.ttlMs
+      this.repoLeaseHolder = holder
+      this.restartRepoLeaseHeartbeat()
+      return true
+    })
     if (this.dashboard && !this.opts.once) {
       this.standbyResolver ??= new StandbyIdentityResolver(this.wiring.store, this.repoIdentity)
       this.standby = claimed
@@ -4377,12 +4395,14 @@ class DispatchLoop {
       this.syncModelControls()
       this.paint()
     }
-    if (!claimed) return false
-    this.heldLease = lease
-    this.repoLeaseValidUntil = requestedAt + lease.ttlMs
-    this.repoLeaseHolder = holder
-    this.restartRepoLeaseHeartbeat()
-    return true
+    return claimed
+  }
+
+  /** Run one lease claim or timing change after every earlier one settles. */
+  private mutateLease<T>(mutation: () => Promise<T>): Promise<T> {
+    const result = this.leaseMutation.then(mutation)
+    this.leaseMutation = result.catch(() => {})
+    return result
   }
 
   /** Resolve a lease that looks lapsed: reclaim it when the record still
@@ -4390,10 +4410,16 @@ class DispatchLoop {
    * nothing on a store error (the next beat or tick asks again). True only
    * when this run holds the lease again. A released lease is never
    * resurrected. */
-  private async reconfirmRepoLease(): Promise<boolean> {
+  private reconfirmRepoLease(): Promise<boolean> {
+    return this.mutateLease(() => this.reconfirmHeldLease())
+  }
+
+  /** `reconfirmRepoLease` for a caller already inside `mutateLease`. */
+  private async reconfirmHeldLease(): Promise<boolean> {
     const holder = this.repoLeaseHolder
     if (this.superseded || holder === undefined) return false
     const lease = this.heldLease ?? this.configuredLease()
+    const generation = this.leaseGeneration
     const requestedAt = this.wiring.clock().getTime()
     const resolution = await resolveLapsedRepoLease(
       this.wiring.store,
@@ -4401,7 +4427,8 @@ class DispatchLoop {
       holder,
       lease.ttlMs,
     )
-    if (this.superseded || this.repoLeaseHolder !== holder) return false
+    if (this.superseded || this.repoLeaseHolder !== holder || this.leaseGeneration !== generation)
+      return false
     if (resolution === 'held') {
       this.repoLeaseValidUntil = Math.max(this.repoLeaseValidUntil, requestedAt + lease.ttlMs)
       return true
@@ -4418,29 +4445,48 @@ class DispatchLoop {
 
   /** Adopt a changed `[policy]` lease pair through a same-holder claim, which
    * rewrites the stored TTL in every adapter. Unchanged configuration costs
-   * no store request. */
-  private async adoptConfiguredLease(): Promise<void> {
-    const holder = this.repoLeaseHolder
-    const held = this.heldLease
-    if (holder === undefined || held === undefined || !this.holdsRepoAuthority()) return
-    const wanted = this.configuredLease()
-    if (wanted.ttlMs === held.ttlMs && wanted.renewalMs === held.renewalMs) return
-    const requestedAt = this.wiring.clock().getTime()
-    let claimed: boolean
-    try {
-      claimed = await this.wiring.store.claimRepoLease(this.repoIdentity, holder, wanted.ttlMs)
-    } catch {
-      // Keep the held pair; the next tick retries.
-      return
-    }
-    if (this.superseded || this.repoLeaseHolder !== holder) return
-    if (!claimed) {
-      await this.reconfirmRepoLease()
-      return
-    }
-    this.heldLease = wanted
-    this.repoLeaseValidUntil = requestedAt + wanted.ttlMs
-    this.restartRepoLeaseHeartbeat()
+   * no store request.
+   *
+   * While the claim is in flight the stored TTL may be either pair, so the
+   * beat stops, the generation advances (an in-flight beat's answer is
+   * discarded) and the deadline is held to the shorter TTL. An ambiguous
+   * failure keeps the shorter of both pairs until a later claim settles it. */
+  private adoptConfiguredLease(): Promise<void> {
+    return this.mutateLease(async () => {
+      const holder = this.repoLeaseHolder
+      const held = this.heldLease
+      if (holder === undefined || held === undefined || !this.holdsRepoAuthority()) return
+      const wanted = this.configuredLease()
+      if (wanted.ttlMs === held.ttlMs && wanted.renewalMs === held.renewalMs) return
+      const requestedAt = this.wiring.clock().getTime()
+      this.stopRepoLeaseHeartbeat()
+      this.leaseGeneration++
+      this.repoLeaseValidUntil = Math.min(this.repoLeaseValidUntil, requestedAt + wanted.ttlMs)
+      let claimed: boolean
+      try {
+        claimed = await this.wiring.store.claimRepoLease(this.repoIdentity, holder, wanted.ttlMs)
+      } catch {
+        // The claim may or may not have landed. The next tick retries.
+        claimed = false
+        if (!this.superseded && this.repoLeaseHolder === holder) {
+          this.heldLease = {
+            ttlMs: Math.min(held.ttlMs, wanted.ttlMs),
+            renewalMs: Math.min(held.renewalMs, wanted.renewalMs),
+          }
+          this.restartRepoLeaseHeartbeat()
+        }
+        return
+      }
+      if (this.superseded || this.repoLeaseHolder !== holder) return
+      if (!claimed) {
+        this.restartRepoLeaseHeartbeat()
+        await this.reconfirmHeldLease()
+        return
+      }
+      this.heldLease = wanted
+      this.repoLeaseValidUntil = requestedAt + wanted.ttlMs
+      this.restartRepoLeaseHeartbeat()
+    })
   }
 
   /** (Re)start the beat at the held renewal interval. A beat that finds the
@@ -4452,11 +4498,13 @@ class DispatchLoop {
     const lease = this.heldLease
     if (holder === undefined || lease === undefined) return
     this.repoLeaseHeartbeat = setInterval(() => {
+      const generation = this.leaseGeneration
       const requestedAt = this.wiring.clock().getTime()
       this.wiring.store.heartbeatRepo(this.repoIdentity, holder).then(
         (alive) => {
-          // Released (retirement, shutdown) since this beat was sent.
-          if (this.repoLeaseHolder !== holder) return
+          // Released (retirement, shutdown), or the stored timing may have
+          // changed, since this beat was sent: its answer no longer applies.
+          if (this.repoLeaseHolder !== holder || this.leaseGeneration !== generation) return
           if (alive) {
             this.repoLeaseValidUntil = requestedAt + lease.ttlMs
             return
@@ -4506,6 +4554,7 @@ class DispatchLoop {
     const holder = this.repoLeaseHolder
     this.repoLeaseHolder = undefined
     this.repoLeaseValidUntil = 0
+    this.leaseGeneration++
     if (holder === undefined) return
     try {
       await this.wiring.store.releaseRepoLease(this.repoIdentity, holder)
