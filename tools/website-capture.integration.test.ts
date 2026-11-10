@@ -169,16 +169,16 @@ describe('website capture', () => {
       chips: [
         { seam: 'tickets', adapter: 'linear', pressed: 'true' },
         { seam: 'tickets', adapter: 'local-files', pressed: 'false' },
-        { seam: 'dispatcher', adapter: 'local-process', pressed: 'true' },
+        { seam: 'dispatcher', adapter: 'cron', pressed: 'true' },
       ],
     })
     expect(probeProblems(remote, ok)).toEqual([])
     expect(
       probeProblems(remote, {
         ...ok,
-        chips: [{ seam: 'dispatcher', adapter: 'local-process', pressed: 'false' }],
+        chips: [{ seam: 'dispatcher', adapter: 'local-process', pressed: 'true' }],
       }),
-    ).toEqual(['fixed local chip dispatcher/local-process is not pressed'])
+    ).toEqual(['local chip dispatcher/local-process is still pressed'])
     ok.chips[0]!.pressed = 'false'
     expect(probeProblems(remote, ok)).toHaveLength(1)
     ok.chips[0]!.pressed = 'true'
@@ -287,9 +287,7 @@ describe('website capture', () => {
                 pressed: (
                   seam.id === 'runtime'
                     ? adapter.id === 'codex'
-                    : seam.id === 'dispatcher'
-                      ? adapter.id === 'local-process'
-                      : adapter.side === 'remote'
+                    : adapter.side === 'remote'
                 )
                   ? 'true'
                   : 'false',

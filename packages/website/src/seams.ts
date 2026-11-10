@@ -34,7 +34,10 @@ export const SEAMS: Seam[] = [
     id: 'dispatcher',
     name: 'dispatcher',
     caption: 'what starts builds',
-    adapters: [{ id: 'local-process', label: 'local process', side: 'local' }],
+    adapters: [
+      { id: 'local-process', label: 'local process', side: 'local' },
+      { id: 'cron', label: 'cron', side: 'remote' },
+    ],
   },
   {
     id: 'workspace',
@@ -113,7 +116,7 @@ export function selectAdapter(state: SeamState, seamId: string, adapterId: strin
 }
 
 /**
- * Two-sided seams move to `side`; a seam without both sides (dispatcher and runtime) selects its
+ * Two-sided seams move to `side`; a seam without both sides (runtime) selects its
  * `sideDefault` adapter for that side, or keeps its selection when it has none.
  */
 export function setAll(state: SeamState, side: Side): SeamState {

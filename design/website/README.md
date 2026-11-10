@@ -514,3 +514,21 @@ all 59 captured PNGs in overview sheets and the four landing frames separately.
 Every 390px overflow probe passes. Desktop section gaps remain 288px and phone
 gaps 192px; phones gain 56px from the authorized chip wrapping. No layout,
 typography, palette or interaction-model changes accompany the new labels.
+
+
+## Intake joins the figures, cron returns, throughput goes (2026-11-10)
+
+Maintainer decisions (2026-11-10):
+
+- The intake section moves directly below the dispatcher section. The operator
+  agent filing tickets is now the standard operating model, so the three
+  figures read as one zoom-out: a build, the dispatcher that starts builds, the
+  operator agent that feeds the dispatcher.
+- The dispatcher seam regains `cron` as its remote adapter. Six seams switch
+  again, and the fully remote state selects it.
+- The throughput section is removed, along with its `.two` and `.point` styles.
+
+`reference.html` carries the same order and no throughput section. All four
+local/remote desktop/phone reference PNGs were refreshed from `bun run
+capture:website`. Section gaps stay 288px on desktop and 192px on phones, and
+both 390px overflow probes pass.

@@ -307,21 +307,6 @@ a.dim {
   color: #888888;
 }
 
-.two {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 48px 4ch;
-}
-.point {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.point p {
-  margin: 0;
-  color: #888888;
-}
-
 .terminal {
   background: #141414;
   padding: 24px 3ch;
@@ -364,7 +349,6 @@ a.dim {
     line-height: 24px;
   }
   .seam,
-  .two,
   .cmd {
     grid-template-columns: minmax(0, 1fr);
   }

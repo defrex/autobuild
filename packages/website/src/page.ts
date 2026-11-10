@@ -29,13 +29,11 @@ const pipeline = `<section class="section">${intro('autobuild · how it works', 
 
 const dispatcher = `<section class="section">${intro('autobuild · the map', 'A dispatcher spawns builds', 'The dispatcher claims ready tickets and starts a build-runner for each. Runners are isolated, all state is logged.')}${dispatcherDiagram()}${dispatcherLegend()}</section>`
 
+const intake = `<section class="section">${intro('autobuild · intake', 'Let the queue fill itself', 'Once tickets are the interface, anything that can write a ticket can put work in front of you.')}${intakeDiagram()}</section>`
+
 const integration = `<section class="section">${intro('autobuild · integration', 'Break it down. Merge it whole.', 'Split a big feature into as many tickets as it needs. Each build merges on the feature’s own branch, siblings stay in sync automatically, and main sees the whole thing once, verified, when you say so.')}${integrationDiagram()}</section>`
 
 const seams = `<section class="section">${intro('autobuild · seams', 'All local, all remote, or anywhere between', 'Every seam is an adapter you can customize for your project. The build pipeline stays the same.')}${seamSelector()}</section>`
-
-const throughput = `<section class="section">${intro('autobuild · throughput', 'Built for throughput, not latency', 'One build may take longer than a chat with an agent. The trade is far more changes merging every day, and with much greater reliability.', 'why')}<div class="two"><div class="point"><b>File it and walk away</b><p>Nothing in the pipeline waits on you. You don't approve tool calls, paste errors back, or watch a terminal.</p></div><div class="point"><b>As many builds as you can groom</b><p>Builds run side by side, each in its own workspace, up to the limit you set. Your attention stops being the ceiling.</p></div></div></section>`
-
-const intake = `<section class="section">${intro('autobuild · intake', 'Let the queue fill itself', 'Once tickets are the interface, anything that can write a ticket can put work in front of you.')}${intakeDiagram()}</section>`
 
 const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}${startTerminal}<div class="actions links"><a class="btn" href="/docs/getting-started/">Getting started</a><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
 
@@ -70,7 +68,7 @@ export function renderPage(): string {
 </head>
 <body>
 ${renderSiteHeader('home')}
-<main class="wrap"><div class="sections">${hero}${pipeline}${dispatcher}${integration}${seams}${throughput}${intake}${start}</div></main>
+<main class="wrap"><div class="sections">${hero}${pipeline}${dispatcher}${intake}${integration}${seams}${start}</div></main>
 <footer class="wrap"><div class="foot"><span>Autobuild · Apache-2.0</span><a class="dim" href="${REPO_URL}">github.com/defrex/autobuild</a></div></footer>
 </body>
 </html>
