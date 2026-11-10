@@ -237,6 +237,14 @@ import {
 import { availableRelease } from './self-update'
 import { TriageCountSampler, triageReader } from './triage-count-sampler'
 import {
+  fenceEffects,
+  fenceExec,
+  fenceForge,
+  isRepositoryAuthorityLapse,
+  RepositoryAuthorityLapsed,
+  resolveLapsedRepoLease,
+} from './repo-lease'
+import {
   startUpgradeNotice,
   type AvailableReleaseProbe,
   type UpgradeNoticeScheduler,
@@ -245,11 +253,13 @@ import {
 /** Watch-loop default cadence between ticks (§3.3 re-run safety makes this a
  * pure knob — a shorter interval only polls the forge more often). */
 const DEFAULT_INTERVAL_MS = 10_000
-/** Repository supervisor lease (§12 serialization): TTL and heartbeat cadence.
- * The heartbeat renews at a third of the TTL, so one lost beat still leaves a
- * full interval of margin before a peer can take over. */
-const REPO_LEASE_TTL_MS = 60_000
-const REPO_LEASE_HEARTBEAT_MS = 20_000
+/** Repository supervisor lease (§12 serialization) timing, as stored by the
+ * claim that set it: `[policy].dispatchLeaseTimeoutSeconds` and
+ * `dispatchLeaseRenewalSeconds`. */
+interface RepoLeaseTiming {
+  ttlMs: number
+  renewalMs: number
+}
 /** Repository artifact containing the schema-validated composed Config used by
  * one dispatch run. It is the frontend's only config source. Defined in
  * `store/retention.ts` beside the other kind constants and re-exported here
@@ -743,6 +753,10 @@ class DispatchLoop {
    * frontend's tick-path journal reads and writes share. Resident for a
    * watch loop; `--once` builds it cold for its single tick. */
   private readonly repoView: RepoViewStore
+  /** This loop's adapters, with every effect fenced on repository authority. */
+  private readonly wiring: DispatchWiring
+  /** `opts.exec` with `git push` fenced on repository authority. */
+  private readonly exec: Exec
   private readonly host = hostname()
   private readonly maxHarvestRecoveryAttempts = DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
@@ -874,9 +888,13 @@ class DispatchLoop {
   private repoLeaseValidUntil = 0
   private repoLeaseHolder: string | undefined
   private repoLeaseHeartbeat: ReturnType<typeof setInterval> | undefined
-  /** Set when the store reports this supervisor's repo lease was taken over:
-   * stop accepting launches, detach/reap, signal continuations, and exit watch
-   * mode cleanly. */
+  /** The timing pair the last successful repository-lease claim stored. Set
+   * only by a claim, so the local deadline, the beat cadence and the store's
+   * renewal TTL always agree. */
+  private heldLease: RepoLeaseTiming | undefined
+  /** Set only when the lease resolver proves another run took the repository
+   * lease: stop accepting launches, detach/reap, signal continuations, and
+   * exit watch mode cleanly. An expired lease of our own is never proof. */
   private superseded = false
   /** Public teardown fact for the durable `dispatcher.run-stopped` reason. */
   get supersededByPeer(): boolean {
@@ -905,11 +923,62 @@ class DispatchLoop {
 
   constructor(
     private readonly liveConfig: LiveConfig,
-    private readonly wiring: DispatchWiring,
+    wiring: DispatchWiring,
     private readonly opts: DispatchOpts,
     /** The view `abDispatch` already used for its lifecycle appends. */
     view?: RepoViewStore,
   ) {
+    // Every effect this loop or its Dispatcher calls is fenced where it
+    // happens: a continuation that resumes after this run's repository lease
+    // lapsed throws `RepositoryAuthorityLapsed` instead of starting it. The
+    // caller's wiring object is never mutated, so a second loop over the same
+    // wiring cannot inherit this loop's guard.
+    const guard = () => this.requireRepoAuthority()
+    const fencedWorkspaces = (provider: WorkspaceProvider): WorkspaceProvider =>
+      fenceEffects(
+        provider,
+        {
+          methods: ['provision'],
+          nested: {
+            publication: { methods: ['recoverCandidate', 'preserve', 'rewrite', 'publish'] },
+            buildExecution: { methods: ['start'] },
+            harvestExecution: { methods: ['start'] },
+          },
+        },
+        guard,
+      )
+    wiring = {
+      ...wiring,
+      tickets: fenceEffects(
+        wiring.tickets,
+        {
+          methods: [
+            'claim',
+            'comment',
+            'transition',
+            'create',
+            'update',
+            'addBlocker',
+            'removeBlocker',
+            'addState',
+            'mutateIfRevision',
+          ],
+        },
+        guard,
+      ),
+      workspaces: fencedWorkspaces(wiring.workspaces),
+      buildExecution: fenceEffects(wiring.buildExecution, { methods: ['start'] }, guard),
+      ...(wiring.retiredWorkspaces === undefined
+        ? {}
+        : {
+            retiredWorkspaces: wiring.retiredWorkspaces.map((runtime) => ({
+              provider: fencedWorkspaces(runtime.provider),
+              execution: fenceEffects(runtime.execution, { methods: ['start'] }, guard),
+            })),
+          }),
+    }
+    this.wiring = wiring
+    this.exec = fenceExec(opts.exec, guard)
     const config = liveConfig.current().config
     this.startupRootBranch = config.baseBranch
     // Minted exactly once per invocation: `wiring.ids` is `randomIds()` and a
@@ -964,13 +1033,18 @@ class DispatchLoop {
 
     // `abDispatch` hands over a view it already used for the lifecycle appends,
     // so those rows are folded, not re-read, and one flush covers them all.
-    this.repoView =
+    this.repoView = fenceEffects(
       view ??
-      new RepoViewStore(wiring.store, {
-        repo: this.repoIdentity,
-        resident: opts.once !== true,
-      })
-    wiring.forge = guardForge(wiring.forge, {
+        new RepoViewStore(wiring.store, {
+          repo: this.repoIdentity,
+          resident: opts.once !== true,
+        }),
+      { methods: ['createBuild', 'claimLease'] },
+      guard,
+    )
+    // The fence sits under the health guard, so the Dispatcher's own
+    // `guardForge` call recognises this object and adds no second wrapper.
+    wiring.forge = guardForge(fenceForge(wiring.forge, guard), {
       store: this.repoView,
       repo: this.repoIdentity,
       name: config.forge,
@@ -996,7 +1070,8 @@ class DispatchLoop {
         ? { repoOrigin: normalizeGitRemoteUrl(opts.repository) }
         : {}),
       checkout: opts.targetRepo,
-      exec: opts.exec,
+      exec: this.exec,
+      holdsRepoAuthority: () => this.holdsRepoAuthority(),
       launchRunner: (slug) => this.launchRunner(slug),
       startHarvest: () => this.launchHarvest(),
       nameSlug,
@@ -1051,7 +1126,7 @@ class DispatchLoop {
         mode: this.opts.repository !== undefined ? 'origin' : 'checkout',
         forge: this.wiring.forge,
         checkout: this.opts.targetRepo,
-        exec: this.opts.exec,
+        exec: this.exec,
         ...(workspace !== null ? { workspacePath: workspace.path } : {}),
         onFailure: (failure) => failures.push(failure),
       })
@@ -1229,7 +1304,17 @@ class DispatchLoop {
     )
   }
 
+  /** Status telemetry is new work: a run that held the repository lease
+   * writes none once a peer replaced it, and a lapsed holder resolves its
+   * lease first. A standby that never held it reports as before. */
   private async appendStatus(event: RepositoryEventWrite): Promise<void> {
+    if (this.superseded) return
+    if (
+      this.repoLeaseHolder !== undefined &&
+      !this.holdsRepoAuthority() &&
+      !(await this.reconfirmRepoLease())
+    )
+      return
     await this.repoView.appendRepo(this.repoIdentity, event)
   }
 
@@ -1327,15 +1412,19 @@ class DispatchLoop {
         await this.recordTickYielded()
         return emptyTickReport()
       }
+      // A reloaded `[policy]` lease pair takes effect here, through a claim.
+      await this.adoptConfiguredLease()
+      if (this.superseded) return emptyTickReport()
       // Initialization can read/write the store. Retry it at the tick boundary
       // after a transient failure, even while our repository lease stays valid.
       await this.initializeAutomaticUpgrade()
       await this.reportForgeReadiness()
-      const startedAt = await this.repoView.beginRepoTick(this.repoIdentity, this.runId)
-      if (startedAt === null) {
-        this.superseded = true
-        return emptyTickReport()
-      }
+      let startedAt = await this.repoView.beginRepoTick(this.repoIdentity, this.runId)
+      // The store refuses a boundary on an expired lease. Ours may only have
+      // lapsed: reclaim it and retry once; the resolver decides supersession.
+      if (startedAt === null && (await this.reconfirmRepoLease()))
+        startedAt = await this.repoView.beginRepoTick(this.repoIdentity, this.runId)
+      if (startedAt === null) return emptyTickReport()
       this.tickStartedAt = startedAt
 
       // Refresh inside the serialized tick so claims and the display both see
@@ -2430,6 +2519,7 @@ class DispatchLoop {
     let tracked: Promise<void>
     tracked = this.launchHarvestIfNeeded()
       .catch((error: unknown) => {
+        if (isRepositoryAuthorityLapse(error)) return
         if (this.stopped || this.localHarvestShutdown.signal.aborted)
           this.localHarvestFailure = error
         // The gate may read the backing store after tick work dirties the view.
@@ -2493,11 +2583,14 @@ class DispatchLoop {
       clock,
       instance: `${this.host}-harvest-${ids('inst')}`,
       ...(this.repoLeaseHolder !== undefined ? { leaseHolder: this.repoLeaseHolder } : {}),
+      holdsAuthority: () => this.holdsRepoAuthority(),
       sessionEnv: {
         AB_STORE: storeRef,
       },
       opts: {
         maxRecoveryAttempts: this.maxHarvestRecoveryAttempts,
+        // Harvest renews this loop's lease; it must never rewrite its TTL.
+        ...(this.heldLease !== undefined ? { leaseTtlMs: this.heldLease.ttlMs } : {}),
       },
     }
 
@@ -2531,6 +2624,7 @@ class DispatchLoop {
               return prepared
             }
             preparedRun = { run: prepared.run }
+            this.requireRepoAuthority()
             await this.repoView.appendRepo(this.repoIdentity, {
               actor: DISPATCHER,
               type: 'harvest.execution.authorized',
@@ -2609,6 +2703,7 @@ class DispatchLoop {
       if (!/^https?:/i.test(storeRef)) return new HarvestRunner(harvestDeps).run()
       const prepared = await new HarvestRunner(harvestDeps).run(true)
       if (prepared.outcome !== 'prepared') return prepared
+      this.requireRepoAuthority()
       await this.repoView.appendRepo(this.repoIdentity, {
         actor: DISPATCHER,
         type: 'harvest.execution.authorized',
@@ -2681,6 +2776,8 @@ class DispatchLoop {
           this.localHarvestFailure = error
           return
         }
+        // Nothing started without authority; a later tick retries.
+        if (isRepositoryAuthorityLapse(error)) return
         this.pendingHarvest.harvestFailed += 1
         await this.appendStatus({
           actor: DISPATCHER,
@@ -2718,7 +2815,11 @@ class DispatchLoop {
       clock: this.wiring.clock,
       instance,
       ...(this.repoLeaseHolder ? { leaseHolder: this.repoLeaseHolder } : {}),
-      opts: { maxRecoveryAttempts: this.maxHarvestRecoveryAttempts },
+      holdsAuthority: () => this.holdsRepoAuthority(),
+      opts: {
+        maxRecoveryAttempts: this.maxHarvestRecoveryAttempts,
+        ...(this.heldLease !== undefined ? { leaseTtlMs: this.heldLease.ttlMs } : {}),
+      },
     }).run(true)
   }
 
@@ -2776,6 +2877,7 @@ class DispatchLoop {
 
       const prepared = await this.prepareHarvest(execution)
       if (prepared.outcome !== 'prepared') return
+      this.requireRepoAuthority()
       await this.repoView.appendRepo(repo, {
         actor: DISPATCHER,
         type: 'harvest.execution.authorized',
@@ -2909,6 +3011,8 @@ class DispatchLoop {
         await this.dispatcher.holdForMissingAccounts(error)
         return
       }
+      // Nothing started without authority; a later tick retries.
+      if (isRepositoryAuthorityLapse(error)) return
       this.pendingHarvest.harvestFailed += 1
       await this.appendStatus({
         actor: DISPATCHER,
@@ -3115,11 +3219,10 @@ class DispatchLoop {
             completed,
           ]
         : []
-      const result = await this.finishTick({ outcome: 'completed', counters }, events)
-      if (result === null) {
-        this.superseded = true
-        throw new Error('repository tick lease lost')
-      }
+      let result = await this.finishTick({ outcome: 'completed', counters }, events)
+      if (result === null && (await this.reconfirmRepoLease()))
+        result = await this.finishTick({ outcome: 'completed', counters }, events)
+      if (result === null) throw new Error('repository tick lease lost')
       this.tickStartedAt = undefined
     }
 
@@ -3178,6 +3281,15 @@ class DispatchLoop {
     | { original: string; first: string; last: string; count: number }
     | undefined
 
+  /** A tick stopped by a fenced effect is not a failed tick: publish no
+   * `tick-failed`, abandon the open boundary (a successor's or our own next
+   * `beginRepoTick` overwrites it), and resolve the lease. That either stops
+   * this run as superseded or reclaims so the next tick runs normally. */
+  private async settleAuthorityLapse(): Promise<void> {
+    this.tickStartedAt = undefined
+    await this.reconfirmRepoLease()
+  }
+
   /** Reporting is diagnostic: its failure must never replace the operational error. */
   private async reportTickFailure(error: unknown): Promise<void> {
     const original = formatDispatcherError(error)
@@ -3228,25 +3340,23 @@ class DispatchLoop {
       await this.wiring.store.appendRepo(this.repoIdentity, failed)
       return
     }
-    const result = await this.finishTick(
-      {
-        outcome: 'failed',
-        error: failed.payload.error,
-        forgeRequests: this.dispatcher.lastForgeRequests,
-      },
-      [
-        {
-          actor: DISPATCHER,
-          type: 'dispatcher.tick-started',
-          payload: { run: this.runId, startedAt: this.tickStartedAt },
-        },
-        failed,
-      ],
-    )
-    if (result === null) {
-      this.superseded = true
-      return
+    const completion: RepoTickCompletion = {
+      outcome: 'failed',
+      error: failed.payload.error,
+      forgeRequests: this.dispatcher.lastForgeRequests,
     }
+    const events: RepositoryEventWrite[] = [
+      {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run: this.runId, startedAt: this.tickStartedAt },
+      },
+      failed,
+    ]
+    let result = await this.finishTick(completion, events)
+    if (result === null && (await this.reconfirmRepoLease()))
+      result = await this.finishTick(completion, events)
+    if (result === null) return
     this.tickStartedAt = undefined
   }
 
@@ -3287,7 +3397,7 @@ class DispatchLoop {
         forge: this.wiring.forge,
         workspacePath: this.opts.targetRepo,
         checkoutless: this.opts.repository !== undefined,
-        exec: this.opts.exec,
+        exec: this.exec,
         ids: this.wiring.ids,
         runId: this.runId,
         clock: this.wiring.clock,
@@ -3311,7 +3421,9 @@ class DispatchLoop {
     try {
       await this.settlePendingPublication(slug)
     } catch (error) {
-      if (!(error instanceof ForgeRequestDeferred)) throw error
+      // A lapsed run publishes nothing; the successor settles from durable facts.
+      if (!(error instanceof ForgeRequestDeferred) && !isRepositoryAuthorityLapse(error))
+        throw error
     }
   }
 
@@ -3541,6 +3653,14 @@ class DispatchLoop {
       this.inFlightKinds.set(tracked, handle.supervision)
       return 'scheduled'
     } catch (error) {
+      if (isRepositoryAuthorityLapse(error)) {
+        // Nothing was started. Release the execution lease (teardown) so a
+        // successor can launch at once, and record no settlement or failure.
+        if (leaseClaimed) await this.repoView.releaseLease(slug, instance).catch(() => {})
+        if (this.activeBuildRuns.get(slug)?.reservation === reservation)
+          this.activeBuildRuns.delete(slug)
+        return 'already-active'
+      }
       if (error instanceof MissingAccountCredentialsError) {
         await this.dispatcher.holdForMissingAccounts(error)
         if (leaseClaimed) await this.repoView.releaseLease(slug, instance)
@@ -4203,16 +4323,47 @@ class DispatchLoop {
 
   // ── Repository supervisor lease (§12 serialization) ────────────────────────
 
+  /** The timing pair the accepted configuration asks for. */
+  private configuredLease(): RepoLeaseTiming {
+    const policy = this.currentConfig().config.policy
+    return {
+      ttlMs: policy.dispatchLeaseTimeoutSeconds * 1000,
+      renewalMs: policy.dispatchLeaseRenewalSeconds * 1000,
+    }
+  }
+
+  /** Whether this run may start an effect now. No I/O: the deadline is the
+   * claim or beat request time plus the held TTL, never later than the
+   * store's expiry, so no peer can have claimed the lease before it. */
+  private holdsRepoAuthority(): boolean {
+    return (
+      !this.superseded &&
+      this.repoLeaseHolder !== undefined &&
+      this.wiring.clock().getTime() < this.repoLeaseValidUntil
+    )
+  }
+
+  /** The synchronous effect fence: throw instead of starting an effect. */
+  private requireRepoAuthority(): void {
+    if (!this.holdsRepoAuthority()) throw new RepositoryAuthorityLapsed()
+  }
+
   /** Claim an unknown or expired repository lease and start the
-   * heartbeat timer. False means another supervisor holds it: the caller
-   * yields — no claims, launches, or publications. */
+   * heartbeat timer. False means this run may not act this tick: another
+   * supervisor holds the lease, or our own lapsed lease could not be
+   * confirmed yet. The caller yields — no claims, launches, or publications. */
   private async ensureRepoLease(holder: string): Promise<boolean> {
     if (this.superseded) return false
-    if (this.repoLeaseHolder === holder && this.wiring.clock().getTime() < this.repoLeaseValidUntil)
-      return true
+    if (this.repoLeaseHolder === holder) {
+      if (this.wiring.clock().getTime() < this.repoLeaseValidUntil) return true
+      // Our own deadline lapsed (a stall, or beats lost to a store outage).
+      // Only the resolver decides between "reclaim" and "replaced".
+      return await this.reconfirmRepoLease()
+    }
+    const lease = this.configuredLease()
     const requestedAt = this.wiring.clock().getTime()
     const claimed = await this.wiring.store
-      .claimRepoLease(this.repoIdentity, holder, REPO_LEASE_TTL_MS)
+      .claimRepoLease(this.repoIdentity, holder, lease.ttlMs)
       .catch(() => false)
     if (this.dashboard && !this.opts.once) {
       this.standbyResolver ??= new StandbyIdentityResolver(this.wiring.store, this.repoIdentity)
@@ -4226,44 +4377,98 @@ class DispatchLoop {
       this.syncModelControls()
       this.paint()
     }
-    if (!claimed) {
-      if (this.repoLeaseHolder !== undefined) {
-        // We held the lease and the store says it is gone: a peer took over.
-        this.superseded = true
-      }
-      return false
-    }
-    this.repoLeaseValidUntil = requestedAt + REPO_LEASE_TTL_MS
-    if (this.repoLeaseHolder === undefined) {
-      this.repoLeaseHolder = holder
-      this.startRepoLeaseHeartbeat(holder)
-    }
+    if (!claimed) return false
+    this.heldLease = lease
+    this.repoLeaseValidUntil = requestedAt + lease.ttlMs
+    this.repoLeaseHolder = holder
+    this.restartRepoLeaseHeartbeat()
     return true
   }
 
-  private startRepoLeaseHeartbeat(holder: string): void {
-    if (this.repoLeaseHeartbeat !== undefined) return
+  /** Resolve a lease that looks lapsed: reclaim it when the record still
+   * names this run, stop as superseded when another run took it, and do
+   * nothing on a store error (the next beat or tick asks again). True only
+   * when this run holds the lease again. A released lease is never
+   * resurrected. */
+  private async reconfirmRepoLease(): Promise<boolean> {
+    const holder = this.repoLeaseHolder
+    if (this.superseded || holder === undefined) return false
+    const lease = this.heldLease ?? this.configuredLease()
+    const requestedAt = this.wiring.clock().getTime()
+    const resolution = await resolveLapsedRepoLease(
+      this.wiring.store,
+      this.repoIdentity,
+      holder,
+      lease.ttlMs,
+    )
+    if (this.superseded || this.repoLeaseHolder !== holder) return false
+    if (resolution === 'held') {
+      this.repoLeaseValidUntil = Math.max(this.repoLeaseValidUntil, requestedAt + lease.ttlMs)
+      return true
+    }
+    if (resolution === 'superseded') {
+      // A peer holds or held the repository since. Exit watch mode cleanly
+      // after the same teardown every stop takes (detach remote / reap local,
+      // signal continuations, release the lease).
+      this.superseded = true
+      this.inputStop.abort()
+    }
+    return false
+  }
+
+  /** Adopt a changed `[policy]` lease pair through a same-holder claim, which
+   * rewrites the stored TTL in every adapter. Unchanged configuration costs
+   * no store request. */
+  private async adoptConfiguredLease(): Promise<void> {
+    const holder = this.repoLeaseHolder
+    const held = this.heldLease
+    if (holder === undefined || held === undefined || !this.holdsRepoAuthority()) return
+    const wanted = this.configuredLease()
+    if (wanted.ttlMs === held.ttlMs && wanted.renewalMs === held.renewalMs) return
+    const requestedAt = this.wiring.clock().getTime()
+    let claimed: boolean
+    try {
+      claimed = await this.wiring.store.claimRepoLease(this.repoIdentity, holder, wanted.ttlMs)
+    } catch {
+      // Keep the held pair; the next tick retries.
+      return
+    }
+    if (this.superseded || this.repoLeaseHolder !== holder) return
+    if (!claimed) {
+      await this.reconfirmRepoLease()
+      return
+    }
+    this.heldLease = wanted
+    this.repoLeaseValidUntil = requestedAt + wanted.ttlMs
+    this.restartRepoLeaseHeartbeat()
+  }
+
+  /** (Re)start the beat at the held renewal interval. A beat that finds the
+   * lease no longer renewable hands the decision to the resolver; it never
+   * concludes takeover by itself. */
+  private restartRepoLeaseHeartbeat(): void {
+    this.stopRepoLeaseHeartbeat()
+    const holder = this.repoLeaseHolder
+    const lease = this.heldLease
+    if (holder === undefined || lease === undefined) return
     this.repoLeaseHeartbeat = setInterval(() => {
       const requestedAt = this.wiring.clock().getTime()
       this.wiring.store.heartbeatRepo(this.repoIdentity, holder).then(
         (alive) => {
-          if (this.retirement && this.repoLeaseHolder === undefined) return
+          // Released (retirement, shutdown) since this beat was sent.
+          if (this.repoLeaseHolder !== holder) return
           if (alive) {
-            this.repoLeaseValidUntil = requestedAt + REPO_LEASE_TTL_MS
+            this.repoLeaseValidUntil = requestedAt + lease.ttlMs
             return
           }
-          // A peer holds the repository now. Exit watch mode cleanly after
-          // the same teardown every stop takes (detach remote / reap local,
-          // signal continuations, release the lease).
-          this.superseded = true
-          this.inputStop.abort()
+          void this.reconfirmRepoLease()
         },
         () => {
-          // Store unreachable: retry on the next beat; a later false result
-          // proves takeover.
+          // Store unreachable: retry on the next beat. Tick start reclaims
+          // once the store answers again.
         },
       )
-    }, REPO_LEASE_HEARTBEAT_MS)
+    }, lease.renewalMs)
     this.repoLeaseHeartbeat.unref?.()
   }
 
@@ -4280,7 +4485,8 @@ class DispatchLoop {
     try {
       const record = await this.wiring.store.getRepo(this.repoIdentity).catch(() => null)
       const holder = record?.lease?.holder
-      if (holder === undefined || this.yieldedTo === holder) return
+      // Never a yield to ourselves: our own lapsed lease is resolved, not yielded to.
+      if (holder === undefined || holder === this.runId || this.yieldedTo === holder) return
       this.yieldedTo = holder
       await this.repoView.appendRepo(this.repoIdentity, {
         actor: DISPATCHER,
@@ -4377,14 +4583,7 @@ class DispatchLoop {
       this.abandonUpgradeYield()
       return false
     }
-    const lease = (await this.wiring.store.getRepo(this.repoIdentity))?.lease
-    if (
-      lease?.holder !== this.runId ||
-      Date.parse(lease.expiresAt) <= this.wiring.clock().getTime()
-    ) {
-      this.superseded = true
-      return false
-    }
+    if (!(await this.upgradeLeaseCurrent())) return false
     // No launch, claim, tick or target continuation may cross this boundary.
     this.yieldPending = true
     this.acceptingBuildLaunches = false
@@ -4401,12 +4600,8 @@ class DispatchLoop {
       ])
     }
     await this.dispatcher.stopProvisioning()
-    const currentLease = (await this.wiring.store.getRepo(this.repoIdentity))?.lease
-    if (
-      currentLease?.holder !== this.runId ||
-      Date.parse(currentLease.expiresAt) <= this.wiring.clock().getTime()
-    ) {
-      this.superseded = true
+    if (!(await this.upgradeLeaseCurrent())) {
+      if (!this.superseded) this.abandonUpgradeYield()
       return false
     }
     const startedAt = this.wiring.clock().toISOString()
@@ -4484,6 +4679,19 @@ class DispatchLoop {
       return false
     }
     return this.adoptUpgradeYield(accepted)
+  }
+
+  /** Repository authority may transfer only from a current holder. A record
+   * naming another run, or no record, means a peer replaced us. An expired
+   * lease that still names us is resolved like any other lapse. */
+  private async upgradeLeaseCurrent(): Promise<boolean> {
+    const lease = (await this.wiring.store.getRepo(this.repoIdentity))?.lease
+    if (lease?.holder !== this.runId) {
+      this.superseded = true
+      return false
+    }
+    if (Date.parse(lease.expiresAt) > this.wiring.clock().getTime()) return true
+    return await this.reconfirmRepoLease()
   }
 
   /** Reopen admission after a yield that did not durably transfer authority. */
@@ -4741,7 +4949,7 @@ class DispatchLoop {
       ),
       enabled: () =>
         !this.stopped &&
-        !this.superseded &&
+        this.holdsRepoAuthority() &&
         this.currentConfig().config.upgrade.automatic &&
         this.upgradeRetirementSettled,
       resolve: (signal) =>
@@ -4751,7 +4959,7 @@ class DispatchLoop {
           originalInstall: launch.originalInstall!,
           sourceLaunch: launch.sourceLaunch,
           forge: this.wiring.forge,
-          exec: this.opts.exec,
+          exec: this.exec,
           signal,
         }),
       prepare: (target, signal) =>
@@ -4837,6 +5045,10 @@ class DispatchLoop {
         // One background triage read before the single tick, never inside it.
         this.triageSampler?.poke()
         const initial = await this.dispatcherTick(true).catch(async (error: unknown) => {
+          if (isRepositoryAuthorityLapse(error)) {
+            await this.settleAuthorityLapse()
+            return emptyTickReport()
+          }
           await this.reportTickFailure(error)
           throw error
         })
@@ -4890,8 +5102,12 @@ class DispatchLoop {
           startup = false
         } catch (error) {
           if (this.forgePublicationFailed) throw error
-          failed = true
-          await this.reportTickFailure(error)
+          if (isRepositoryAuthorityLapse(error)) {
+            await this.settleAuthorityLapse()
+          } else {
+            failed = true
+            await this.reportTickFailure(error)
+          }
         }
         this.triageSampler?.poke()
         if (this.watchStopped || this.superseded) break

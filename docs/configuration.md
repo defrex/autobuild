@@ -2422,6 +2422,32 @@ Optional. Every field receives its own default. All are positive integers except
 
 **Constraints:** safe integer; > 0
 
+#### `policy.dispatchLeaseTimeoutSeconds`
+
+**TOML key:** `policy.dispatchLeaseTimeoutSeconds`
+
+- **Type:** `number`
+- **Default:** `60`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** How long the repository dispatch lease survives without renewal. A dispatcher that stalls longer reclaims it on waking unless another run took it; a standby takes over a dead holder within this bound. A change takes effect at the dispatcher's next tick.
+
+**Constraints:** safe integer; > 0; Must be greater than `dispatchLeaseRenewalSeconds`.
+
+#### `policy.dispatchLeaseRenewalSeconds`
+
+**TOML key:** `policy.dispatchLeaseRenewalSeconds`
+
+- **Type:** `number`
+- **Default:** `20`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Interval between repository dispatch lease renewals; adopted together with the timeout.
+
+**Constraints:** safe integer; > 0; Must be less than `dispatchLeaseTimeoutSeconds`.
+
 #### `policy.sessionBudgetSeconds`
 
 **TOML key:** `policy.sessionBudgetSeconds`
@@ -2661,8 +2687,16 @@ Unclaimed observation pressure is not shown in the dashboard header, which
 reads `triage <count> | queue <depth> | active <current>/<limit>`. A running or
 paused Harvest row shows its run's observations, and `ab harvest status`
 reports Harvest state. Neither `policy.harvestThreshold` nor
-`policy.harvestMaxDrift` is displayed in the header. The repository lease and fixed per-run recovery budget are implementation
-invariants, not additional configuration fields.
+`policy.harvestMaxDrift` is displayed in the header. The fixed per-run recovery budget is an implementation
+invariant, not an additional configuration field.
+
+The repository dispatch lease is configured by
+`policy.dispatchLeaseTimeoutSeconds` (default 60) and
+`policy.dispatchLeaseRenewalSeconds` (default 20). The renewal interval must be
+less than the timeout; configuration that breaks this is refused when it loads.
+A dispatcher adopts a changed pair at its next tick. A dispatcher that stalls
+longer than the timeout reclaims its lease on waking unless another dispatcher
+took it, and a standby takes over from a dead holder within the timeout.
 
 ## `[tickets]`
 
