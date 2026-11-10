@@ -15927,6 +15927,67 @@ test('a kernel Git outage has bounded reads on fresh dispatchers at 100 and 1000
   ).toEqual([])
 }, 60_000)
 
+test('a failing janitor costs fresh dispatchers the pinned requests at 100 and 100000 events', async () => {
+  const h = harness()
+  const slug = await seedAwaitingPr(h)
+  const poll = h.forge.getPrState.bind(h.forge)
+  h.forge.setPrState(1, { state: 'open', mergeable: null })
+  let failing = false
+  h.forge.getPrState = async (...args) => {
+    if (failing) throw new Error('provider unavailable')
+    return poll(...args)
+  }
+  const { janitorEscalationRequestBudget } = await import('../testing/reduced-read-budget')
+  const result = await janitorEscalationRequestBudget({
+    store: h.store as MemoryBuildStore,
+    repo: REPO,
+    slug,
+    now: () => h.clock(),
+    advance: (ms) => h.clock.advance(ms),
+    failing: (value) => {
+      failing = value
+    },
+    limitSeconds: 3600,
+    attentionSeconds: 600,
+    tick: () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        forge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+  // Pinned from the implementation before janitor escalation existed, which
+  // never escalated: each class is the failing tick at the same point in the
+  // scenario. The threshold tick adds exactly the one escalation append.
+  const failing = {
+    append: 1,
+    getLatestArtifactMeta: 1,
+    getReducerValue: 15,
+    getRepo: 4,
+    getRepoBuildDigests: 1,
+    listBuilds: 2,
+  }
+  expect(result.vectors).toEqual({
+    start: failing,
+    preAttention: failing,
+    attention: { ...failing, append: 2 },
+    preLimit: failing,
+    threshold: { ...failing, append: 2 },
+    escalated: failing,
+    recovery: {
+      append: 1,
+      getArtifact: 2,
+      getLatestArtifactMeta: 1,
+      getReducerValue: 22,
+      getRepo: 5,
+      getRepoBuildDigests: 1,
+      listBuilds: 2,
+    },
+  })
+  expect(result.escalations).toEqual([1, 1])
+}, 240_000)
+
 describe('native identity (AUT-812/AUT-821)', () => {
   const trailers = (body: string) =>
     body.split('\n').filter((line) => line.startsWith('Autobuild-Build:'))

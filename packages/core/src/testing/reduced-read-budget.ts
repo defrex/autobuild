@@ -9,6 +9,7 @@ import { REPLACED_HEADS_CAP } from '../kernel/read-facts'
 import { observeTarget } from '../kernel/target-observation'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DashboardBuildPollCache } from '../cli/dashboard/poll'
@@ -2946,4 +2947,143 @@ export async function noDispatcherRunDashboardBudget() {
     await poll()
     expect(counter.rows).toBe(0)
   }
+}
+
+/** Tally the store requests callers make, by method name: every
+ * function-valued store method is counted when entered from outside the store,
+ * never when the adapter calls its own methods. `restore` removes the
+ * instrumentation. */
+export function memoryStoreRequestCounter(store: BuildStore) {
+  const inside = new AsyncLocalStorage<true>()
+  const counts = new Map<string, number>()
+  const names = new Set<string>()
+  for (
+    let proto: object | null = store;
+    proto && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  )
+    for (const name of Object.getOwnPropertyNames(proto))
+      if (name !== 'constructor' && typeof Reflect.get(store, name) === 'function') names.add(name)
+  const wrapped = new Map<string, { own: boolean; original: (...args: unknown[]) => unknown }>()
+  for (const name of names) {
+    const original = Reflect.get(store, name) as (...args: unknown[]) => unknown
+    wrapped.set(name, { own: Object.prototype.hasOwnProperty.call(store, name), original })
+    Reflect.set(store, name, (...args: unknown[]) => {
+      if (inside.getStore()) return original.apply(store, args)
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+      return inside.run(true, () => original.apply(store, args))
+    })
+  }
+  return {
+    /** Calls since the last reset, by method name, in sorted order. */
+    vector(): Record<string, number> {
+      return Object.fromEntries([...counts].sort(([a], [b]) => a.localeCompare(b)))
+    },
+    reset() {
+      counts.clear()
+    },
+    restore() {
+      for (const [name, { own, original }] of wrapped)
+        if (own) Reflect.set(store, name, original)
+        else Reflect.deleteProperty(store, name)
+    },
+  }
+}
+
+/** A janitor that keeps failing for one build costs every fresh-dispatcher tick
+ * the same store requests at 100 and at 100,000 events. The vectors are
+ * returned per tick class so a caller can pin them against an earlier
+ * implementation: episode start, a failure before attention, the attention
+ * failure, a failure before the escalation limit, the threshold failure, a
+ * failure after it, and the recovering attempt. */
+export async function janitorEscalationRequestBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  repo: string
+  slug: string
+  /** One tick on a fresh dispatcher. */
+  tick: () => Promise<unknown>
+  now: () => Date
+  advance: (ms: number) => void
+  /** Make the build's janitor work fail (true) or succeed (false). */
+  failing: (value: boolean) => void
+  /** Episode age at which the threshold failure is expected. */
+  limitSeconds: number
+  attentionSeconds: number
+}) {
+  const { store, repo, slug } = opts
+  type Vectors = Record<
+    'start' | 'preAttention' | 'attention' | 'preLimit' | 'threshold' | 'escalated' | 'recovery',
+    Record<string, number>
+  >
+  const escalations = async () =>
+    (await store.getEvents(slug)).filter(
+      (event) => String(event.type) === 'build.janitor-escalated',
+    ).length
+  const results: { length: number; vectors: Vectors; escalations: number }[] = []
+  await store.ensureRepo(repo)
+  let seeded = 0
+  for (const length of [100, 100_000]) {
+    for (; seeded < length; seeded++) {
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+      if (seeded % 10 === 0)
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'observation.recorded',
+          payload: { id: `obs-${seeded}`, kind: 'followup', summary: `budget padding ${seeded}` },
+        })
+    }
+    // Warm up: a fresh dispatcher folds the padding once while nothing fails.
+    opts.failing(false)
+    await opts.tick()
+    opts.failing(true)
+    const before = await escalations()
+    const counter = memoryStoreRequestCounter(store)
+    const vectors: Partial<Vectors> = {}
+    try {
+      const measure = async () => {
+        counter.reset()
+        await opts.tick()
+        return counter.vector()
+      }
+      const due = async () => {
+        const { state } = (await readBuildFacts(store, slug)).value
+        const next = state.janitor && Date.parse(state.janitor.nextAttemptAt)
+        if (next) opts.advance(Math.max(0, next - opts.now().getTime()))
+        return state.janitor ? Date.parse(state.janitor.firstFailureAt) : undefined
+      }
+      vectors.start = await measure()
+      const first = (await due())!
+      vectors.preAttention = await measure()
+      for (;;) {
+        await due()
+        const age = opts.now().getTime() - first
+        const vector = await measure()
+        if (age >= opts.limitSeconds * 1000) {
+          vectors.threshold = vector
+          break
+        }
+        if (age >= opts.attentionSeconds * 1000 && !vectors.attention) vectors.attention = vector
+        else if (vectors.attention) vectors.preLimit = vector
+      }
+      await due()
+      vectors.escalated = await measure()
+      opts.failing(false)
+      await due()
+      vectors.recovery = await measure()
+    } finally {
+      counter.restore()
+    }
+    expect((await readBuildFacts(store, slug)).value.state.janitor).toBeUndefined()
+    results.push({
+      length,
+      vectors: vectors as Vectors,
+      escalations: (await escalations()) - before,
+    })
+  }
+  expect(results[1]!.vectors).toEqual(results[0]!.vectors)
+  return { vectors: results[0]!.vectors, escalations: results.map((r) => r.escalations) }
 }
