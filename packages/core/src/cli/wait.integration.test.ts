@@ -2118,6 +2118,48 @@ test('janitor failure wakes default watchers and satisfies current attention unt
   ).toBeNull()
 })
 
+test('janitor escalation wakes default watchers and satisfies attention until recovery closes it', async () => {
+  const { BUILD_ATTENTION_EVENTS, renderWatchLine } = await import('./watch')
+  const { reduceBuild } = await import('../kernel/reducer')
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'build.janitor-attempt-failed',
+    payload: {
+      firstFailureAt: '2026-07-15T11:00:00.000Z',
+      attempt: 13,
+      message: 'publication failed',
+      nextAttemptAt: '2026-07-15T12:05:00.000Z',
+    },
+  })
+  const escalated = await store.append('b1', {
+    actor: DISPATCHER,
+    type: 'build.janitor-escalated',
+    payload: {
+      id: 'janitor:2026-07-15T11:00:00.000Z',
+      operation: 'PR check',
+      message: 'publication failed',
+      attempt: 13,
+      firstFailureAt: '2026-07-15T11:00:00.000Z',
+      question: 'Janitor PR check has failed 13 consecutive attempts.',
+    },
+  })
+  expect(BUILD_ATTENTION_EVENTS).toContain('build.janitor-escalated')
+  expect(renderWatchLine(escalated, reduceBuild(await store.getEvents('b1')))).toContain(
+    'janitor:2026-07-15T11:00:00.000Z: Janitor PR check has failed 13 consecutive attempts.',
+  )
+  const h = harness(store, { forValues: ['attention'] })
+  expect(await abWait({ ...h.base, slugs: ['b1'], timeout: '1' })).toBe(0)
+  await store.append('b1', { actor: DISPATCHER, type: 'build.janitor-recovered', payload: {} })
+  expect(
+    matchState(
+      parseConditions(['attention'], []).conditions,
+      reduceBuild(await store.getEvents('b1')),
+    ),
+  ).toBeNull()
+})
+
 test('attention wait finds an already-failed node before notification, including with --since', async () => {
   const store = makeStore()
   await store.createBuild({

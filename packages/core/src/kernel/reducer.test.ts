@@ -2519,3 +2519,72 @@ describe('nodeIssueLinks (SPEC "Forge issue links")', () => {
     })
   })
 })
+
+describe('janitor escalation', () => {
+  const id = 'janitor:2026-07-15T12:00:00.000Z'
+  const failed = (attempt: number) =>
+    ev('build.janitor-attempt-failed', {
+      firstFailureAt: '2026-07-15T12:00:00.000Z',
+      attempt,
+      message: 'restore failed',
+      nextAttemptAt: '2026-07-15T13:05:00.000Z',
+    })
+  const escalated = ev('build.janitor-escalated', {
+    id,
+    operation: 'PR check',
+    message: 'restore failed',
+    attempt: 13,
+    firstFailureAt: '2026-07-15T12:00:00.000Z',
+    question: 'Janitor PR check has failed 13 consecutive attempts.',
+  })
+
+  test('opens a janitor-marked escalation that blocks, and recovery closes it unanswered', () => {
+    const before = reduceBuild(toLog([...prelude(), failed(12)])).status
+    const log = toLog([
+      ...prelude(),
+      failed(12),
+      failed(13),
+      escalated,
+      ev('build.janitor-recovered', {}),
+    ])
+    const open = stateAfter(log, 'build.janitor-escalated')
+    expect(open.status).toBe('blocked')
+    expect(open.openEscalations).toEqual([
+      {
+        id,
+        phase: 'setup',
+        source: 'policy',
+        janitor: true,
+        question: 'Janitor PR check has failed 13 consecutive attempts.',
+        seq: 7,
+      },
+    ])
+    expect(open.janitor?.escalation).toBe(id)
+    const recovered = reduceBuild(log)
+    expect(recovered.openEscalations).toEqual([])
+    expect(recovered.answeredEscalations).toEqual([])
+    expect(recovered.janitor).toBeUndefined()
+    expect(recovered.status).toBe(before)
+  })
+
+  test('an answer requests a prompt retry; the next failure clears it and keeps the escalation', () => {
+    const log = toLog([
+      ...prelude(),
+      failed(12),
+      escalated,
+      ev('escalation.answered', { id, answer: 'retry', resolution: 'retry' }),
+      failed(13),
+    ])
+    const answered = stateAfter(log, 'escalation.answered')
+    expect(answered.janitor).toMatchObject({ escalation: id, retryRequested: true })
+    expect(answered.openEscalations).toEqual([])
+    const escalation = answered.answeredEscalations[0]!
+    expect(escalation).toMatchObject({ id, janitor: true, phase: 'setup' })
+    // Inert routing: no phase's failure budget is re-armed.
+    expect(resetsPhaseFailureBudget(escalation, 'implement', 1)).toBe(false)
+    const next = reduceBuild(log).janitor!
+    expect(next.retryRequested).toBeUndefined()
+    expect(next.escalation).toBe(id)
+    expect(next.attempt).toBe(13)
+  })
+})

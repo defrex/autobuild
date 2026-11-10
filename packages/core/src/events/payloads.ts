@@ -890,6 +890,16 @@ export const eventPayloadSchemas = {
     nextAttemptAt: z.iso.datetime(),
   }),
   'build.janitor-failing': z.strictObject({ message: z.string().min(1) }),
+  /** One per janitor failure episode that outlasts the escalation limit. The
+   * reducer opens it as a policy escalation and closes it on recovery. */
+  'build.janitor-escalated': z.strictObject({
+    id: z.string().min(1),
+    operation: z.string().min(1),
+    message: z.string().min(1),
+    attempt: z.number().int().positive(),
+    firstFailureAt: z.iso.datetime(),
+    question: z.string().min(1),
+  }),
   'build.janitor-recovered': empty,
   'landing.application-failed': z.strictObject({
     candidate: landingCandidateSchema,
