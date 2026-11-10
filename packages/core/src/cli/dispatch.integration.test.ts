@@ -12727,6 +12727,91 @@ for (const point of ['after-execution-lease', 'last-await'] as const) {
   })
 }
 
+test('a child that exits after a peer took over settles nothing on the forge', async () => {
+  const clock = manualClock()
+  const fx = await makeFixture(
+    readyTicket('late-exit'),
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML,
+    clock,
+  )
+  const stop = new AbortController()
+  let slug: string | undefined
+  let pushesAtTakeover: number | undefined
+  let forgeCallsAfter = 0
+  try {
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      wire: () => {
+        const wiring = fx.wire()
+        const execution = wiring.buildExecution
+        wiring.buildExecution = {
+          start: async (input, auth) => {
+            slug = input.slug
+            const handle = await execution.start(input, auth)
+            return {
+              ...handle,
+              completion: handle.completion.then(async (exit) => {
+                // The host stalls while the child finishes; a peer takes over.
+                clock.advance(61_000)
+                expect(await fx.store.claimRepoLease(fx.origin, 'peer', 60_000)).toBe(true)
+                pushesAtTakeover = fx.forge.pushes.length
+                return exit
+              }),
+            }
+          },
+        }
+        const forge = wiring.forge
+        wiring.forge = new Proxy(forge, {
+          get(target, key) {
+            const value = Reflect.get(target, key, target)
+            if (typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              if (
+                pushesAtTakeover !== undefined &&
+                !['observeRequests', 'withReadScope'].includes(String(key))
+              )
+                forgeCallsAfter++
+              return value.apply(target, args)
+            }
+          },
+        })
+        return wiring
+      },
+      signal: stop.signal,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      sleep: async () => {
+        await waitFor(async () =>
+          slug === undefined
+            ? false
+            : (await fx.store.getEvents(slug)).some((event) => event.type === 'execution.ended'),
+        )
+        stop.abort()
+      },
+    })
+    expect(slug).toBeDefined()
+    const events = await fx.store.getEvents(slug!)
+    expect(events.filter((event) => event.type === 'execution.ended')).toHaveLength(1)
+    const repoEvents = await fx.store.getRepoEvents(fx.origin)
+    expect(repoEvents.filter((event) => event.type === 'dispatcher.runner-settled')).toEqual([])
+    expect(
+      repoEvents
+        .filter((event) => event.type === 'dispatcher.run-stopped')
+        .map((event) => (event.payload as { reason?: string }).reason),
+    ).toEqual(['superseded'])
+    expect(fx.forge.pushes.length).toBe(pushesAtTakeover!)
+    expect(forgeCallsAfter).toBe(0)
+    // The execution lease was released: the peer can launch at once.
+    expect(await fx.store.claimLease(slug!, 'peer-execution', 60_000)).toBe(true)
+  } finally {
+    stop.abort()
+    await fx.cleanup()
+  }
+})
+
 for (const failingRead of ['listBuilds', 'getReducerValue'] as const) {
   test(`harvest launch gate contains a transient ${failingRead} failure and retries next tick`, async () => {
     const fx = await makeFixture(readyTicket('gate-read-failure'), happyHandlers())

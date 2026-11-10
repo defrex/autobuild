@@ -1,5 +1,9 @@
 import { proveTargetLineage } from '../kernel/target-lineage'
-import { isRepositoryAuthorityLapse, rethrowAuthorityLapse } from '../cli/repo-lease'
+import {
+  isRepositoryAuthorityLapse,
+  RepositoryAuthorityLapsed,
+  rethrowAuthorityLapse,
+} from '../cli/repo-lease'
 import { assertTargetOid, observeTarget } from '../kernel/target-observation'
 import {
   MissingAccountCredentialsError,
@@ -6295,6 +6299,8 @@ export class Dispatcher {
           beforeReplay,
           canWrite: async () => {
             if (await deferMixedVersion(this.store, record.slug)) return false
+            // A lapse is not lost writer authority: it must escape unrecorded.
+            if (this.deps.holdsRepoAuthority?.() === false) throw new RepositoryAuthorityLapsed()
             if (this.outOfBudget(opts)) return false
             if (state.pr && (await forge.getPrState(checkout, state.pr.number)).state !== 'open')
               return false
