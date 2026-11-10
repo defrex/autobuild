@@ -15,6 +15,7 @@ export const executionProgress = {
   'build.compatibility-deferred': 'bookkeeping',
   'build.janitor-attempt-failed': 'bookkeeping',
   'build.janitor-failing': 'bookkeeping',
+  'build.janitor-escalated': 'bookkeeping',
   'build.janitor-recovered': 'bookkeeping',
   'landing.application-failed': 'failure',
   'landing.decided': 'progress',

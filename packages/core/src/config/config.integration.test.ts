@@ -165,6 +165,7 @@ describe('parseConfig — complete flattened surface', () => {
         harvestThreshold: 7,
         harvestMaxDrift: 9,
         janitorFailureAttentionSeconds: 600,
+        janitorFailureEscalationSeconds: 3600,
         janitorBackoffMaxSeconds: 300,
         nodeIdleAfterSeconds: 600,
         nodeIdlePollSeconds: 120,
@@ -217,6 +218,7 @@ describe('parseConfig — defaults', () => {
         harvestThreshold: 5,
         harvestMaxDrift: 3,
         janitorFailureAttentionSeconds: 600,
+        janitorFailureEscalationSeconds: 3600,
         janitorBackoffMaxSeconds: 300,
         nodeIdleAfterSeconds: 600,
         nodeIdlePollSeconds: 120,
@@ -711,6 +713,9 @@ harvestThreshold = 2
         /policy\.sessionBudgetSeconds/,
       )
       expect(() =>
+        parseConfig(`${READY}[policy]\njanitorFailureEscalationSeconds = ${value}\n`),
+      ).toThrow(/policy\.janitorFailureEscalationSeconds/)
+      expect(() =>
         parseConfig(`${READY}[roles.default]\nruntime = "pi"\nsessionBudgetSeconds = ${value}\n`),
       ).toThrow(/roles\.default\.sessionBudgetSeconds/)
     }
@@ -744,6 +749,7 @@ skill = "ab-verify-e2e"
       harvestThreshold: 5,
       harvestMaxDrift: 3,
       janitorFailureAttentionSeconds: 600,
+      janitorFailureEscalationSeconds: 3600,
       janitorBackoffMaxSeconds: 300,
       nodeIdleAfterSeconds: 600,
       nodeIdlePollSeconds: 120,
