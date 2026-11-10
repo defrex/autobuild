@@ -83,12 +83,12 @@ export const SEAMS: Seam[] = [
   {
     id: 'operators',
     name: 'operators',
-    caption: 'how you watch',
+    caption: 'how they watch',
     adapters: [
-      { id: 'terminal', label: 'terminal', side: 'local' },
-      { id: 'operator-api', label: 'Operator API', side: 'remote' },
-      { id: 'mcp', label: 'stdio MCP' },
+      { id: 'cli', label: 'CLI', side: 'local' },
+      { id: 'operator-mcp', label: 'Operator MCP', side: 'remote' },
     ],
+    open: '+ Operator API',
   },
 ]
 

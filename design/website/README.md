@@ -541,3 +541,13 @@ The pipeline figure's first node and its description now read "ticket" at both
 widths, and `reference.html` matches. The `/ab-spec` command keeps its name
 because it is the real skill. All four landing reference PNGs were refreshed
 from `bun run capture:website`; the node label is the only difference.
+
+
+## Operators seam is the operator agent's (2026-11-10)
+
+Maintainer decision (2026-11-10): the operators seam describes how the operator
+agent watches, so its caption reads "how they watch". Its local adapter is
+`CLI`, its remote adapter is `Operator MCP`, and `+ Operator API` is the dashed
+open entry. The `terminal` and `stdio MCP` chips are gone. `reference.html`
+matches, and all four landing reference PNGs were refreshed from `bun run
+capture:website`; the operators row is the only difference.

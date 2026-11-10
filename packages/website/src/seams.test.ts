@@ -36,7 +36,7 @@ describe('seam model', () => {
       ['workspace', 'vercel-sandbox'],
       ['forge', 'github'],
       ['store', 'remote-store'],
-      ['operators', 'operator-api'],
+      ['operators', 'operator-mcp'],
     ] as const)
       state = selectAdapter(state, seam, adapter)
     expect(summary(state).label).toBe('fully remote')
@@ -76,16 +76,14 @@ describe('seam model', () => {
   })
 })
 
-test('dispatcher follows the extremes and removed offerings cannot select', () => {
-  expect(setAll(initialState(), 'local').dispatcher).toBe('local-process')
-  expect(setAll(initialState(), 'remote').dispatcher).toBe('cron')
-  for (const side of ['local', 'remote'] as const) {
-    const state = setAll(initialState(), side)
-    expect(selectAdapter(state, 'operators', 'web-ui')).toBe(state)
-    expect(selectAdapter(state, 'operators', 'mcp').operators).toBe('mcp')
-  }
-  expect(
-    SEAMS.find((seam) => seam.id === 'operators')?.adapters.find((adapter) => adapter.id === 'mcp')
-      ?.label,
-  ).toBe('stdio MCP')
+test('dispatcher and operators follow the extremes and removed offerings cannot select', () => {
+  expect(setAll(initialState(), 'local')).toMatchObject({
+    dispatcher: 'local-process',
+    operators: 'cli',
+  })
+  const remote = setAll(initialState(), 'remote')
+  expect(remote).toMatchObject({ dispatcher: 'cron', operators: 'operator-mcp' })
+  for (const removed of ['terminal', 'web-ui', 'operator-api', 'mcp'])
+    expect(selectAdapter(remote, 'operators', removed)).toBe(remote)
+  expect(SEAMS.find((seam) => seam.id === 'operators')?.open).toBe('+ Operator API')
 })
