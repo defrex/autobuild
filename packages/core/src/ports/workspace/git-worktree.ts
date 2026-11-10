@@ -334,7 +334,9 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         branch: opts.branch,
         heads: opts.restoration,
         replaced: opts.restorationReplaced,
-        local: true,
+        // A remote forge's archive fetch writes no local ref, so restoration
+        // has to fetch the exact ref itself; local-git never consults origin.
+        local: opts.restorationArchives !== 'remote',
       })
       if (skipped.length) handle.restorationSkipped = skipped
       handle.base = {

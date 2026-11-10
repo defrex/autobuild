@@ -4236,6 +4236,11 @@ export class Dispatcher {
         ...input,
         restoration,
         ...(facts.replacedHeads.length ? { restorationReplaced: facts.replacedHeads } : {}),
+        // Same predicate preservation archives under: only local-git keeps
+        // archive refs in the local repository.
+        ...(restoration?.length
+          ? { restorationArchives: this.deps.forge.name === 'local-git' ? 'local' : 'remote' }
+          : {}),
       })
       const skipped = [
         ...superseded.map((sha) => ({ sha, reason: 'superseded' as const })),
