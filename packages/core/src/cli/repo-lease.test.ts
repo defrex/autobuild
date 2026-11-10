@@ -211,6 +211,42 @@ describe('fenceEffects', () => {
     expect(await fenced.publication.isPublished()).toBe(true)
     expect(port.publication.calls).toEqual(['publish r1'])
   })
+
+  test('frozen plugin members and frozen nested capabilities are still fenced', async () => {
+    const { state, guard } = authority()
+    state.held = false
+    const calls: string[] = []
+    const provider = Object.freeze({
+      async provision(id: string) {
+        calls.push(`provision ${id}`)
+      },
+      async inspect() {
+        return 'ok'
+      },
+      buildExecution: Object.freeze({
+        async start(id: string) {
+          calls.push(`start ${id}`)
+        },
+      }),
+    })
+    const fenced = fenceEffects(
+      provider,
+      { methods: ['provision'], nested: { buildExecution: { methods: ['start'] } } },
+      guard,
+    )
+    expect(isRepositoryAuthorityLapse(await rejection(fenced.provision('p')))).toBe(true)
+    expect(isRepositoryAuthorityLapse(await rejection(fenced.buildExecution.start('s')))).toBe(true)
+    expect(await fenced.inspect()).toBe('ok')
+    expect(Object.keys(fenced)).toEqual(['provision', 'inspect', 'buildExecution'])
+    expect(calls).toEqual([])
+
+    const port = Object.freeze(new Port())
+    const fencedPort = fenceEffects(port, { methods: ['claim'] }, guard)
+    expect(fencedPort instanceof Port).toBe(true)
+    expect(isRepositoryAuthorityLapse(await rejection(fencedPort.claim('c')))).toBe(true)
+    expect(await fencedPort.get('g')).toBe('g')
+    expect(port.calls).toEqual(['get g private'])
+  })
 })
 
 describe('fenceExec', () => {

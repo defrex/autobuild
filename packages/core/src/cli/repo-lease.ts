@@ -76,7 +76,12 @@ export interface EffectFence {
  * The guard throws to refuse; a refused call returns a rejected promise and
  * never reaches the port. Unlisted members, reads, and data properties pass
  * through. Methods are applied to the real target, so class `this` and
- * private fields keep working, and the prototype is unchanged.
+ * private fields keep working, and the view reports the target's prototype.
+ *
+ * The proxy wraps an empty facade rather than the port itself. A proxy over
+ * the port would have to return a frozen (non-configurable, non-writable)
+ * member unchanged, so `Object.freeze` on a plugin would let its effects and
+ * nested capabilities escape the fence. The facade has no such invariant.
  *
  * An effect that had already been called before a stall still completes:
  * cancelling it could tear external state. Only effects called afterwards
@@ -85,12 +90,19 @@ export function fenceEffects<T extends object>(port: T, fence: EffectFence, guar
   const methods = new Set(fence.methods)
   const nested = new Map<PropertyKey, { raw: object; wrapped: object }>()
   const bound = new WeakMap<object, unknown>()
-  return new Proxy(port, {
-    get(target, key) {
-      const value: unknown = Reflect.get(target, key, target)
-      const descriptor = Reflect.getOwnPropertyDescriptor(target, key)
-      if (descriptor && !descriptor.configurable && !descriptor.writable && 'value' in descriptor)
-        return value
+  return new Proxy(Object.create(null) as T, {
+    getPrototypeOf: () => Reflect.getPrototypeOf(port),
+    has: (_facade, key) => Reflect.has(port, key),
+    ownKeys: () => Reflect.ownKeys(port),
+    getOwnPropertyDescriptor: (_facade, key) => {
+      const descriptor = Reflect.getOwnPropertyDescriptor(port, key)
+      return descriptor ? { ...descriptor, configurable: true } : undefined
+    },
+    set: (_facade, key, value) => Reflect.set(port, key, value, port),
+    defineProperty: (_facade, key, descriptor) => Reflect.defineProperty(port, key, descriptor),
+    deleteProperty: (_facade, key) => Reflect.deleteProperty(port, key),
+    get(_facade, key) {
+      const value: unknown = Reflect.get(port, key, port)
       const inner = typeof key === 'string' ? fence.nested?.[key] : undefined
       if (inner && value && typeof value === 'object') {
         const cached = nested.get(key)
@@ -108,11 +120,11 @@ export function fenceEffects<T extends object>(port: T, fence: EffectFence, guar
           } catch (error) {
             return Promise.reject(error)
           }
-          return fn.apply(target, args)
+          return fn.apply(port, args)
         }
       let cached = bound.get(fn)
       if (!cached) {
-        cached = fn.bind(target)
+        cached = fn.bind(port)
         bound.set(fn, cached)
       }
       return cached
