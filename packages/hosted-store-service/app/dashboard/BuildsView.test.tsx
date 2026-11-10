@@ -445,3 +445,37 @@ test('no borrowed or waiting nodes renders no capacity notice; a legacy projecti
   expect(legacy).toContain('capacity-notice')
   expect(legacy).toContain('using descendant-held slots: website-node')
 })
+
+test('a parked build waiting for a slot opens the capacity notice and alerts on its row', () => {
+  const html = renderToStaticMarkup(
+    <BuildsView
+      repo="owner/repo"
+      model={{
+        ...model({
+          ...pinnedBuild({}),
+          alert: {
+            tone: 'yellow',
+            text: 'verification waiting for a slot ahead of new ticket claims',
+          },
+        }),
+        capacity: {
+          configured: 2,
+          occupied: 2,
+          effective: 2,
+          borrowingNodes: [],
+          waitingBuilds: [{ slug: 'demo', request: 'verification' }],
+        },
+      }}
+      now={0}
+      onActivate={noop}
+      onHoverPreview={noop}
+      onOpenBuild={noop}
+      onRowBuildControl={noop}
+      onRowHarvest={noop}
+    />,
+  )
+  expect(html).toContain('capacity-notice')
+  expect(html).toContain('1 parked build waiting for a slot ahead of new ticket claims: demo')
+  expect(html).toContain('class="sub integration-alert warn" role="status"')
+  expect(html).toContain('verification waiting for a slot ahead of new ticket claims</p>')
+})

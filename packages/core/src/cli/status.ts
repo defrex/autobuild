@@ -10,6 +10,7 @@ import { buildVocabulary } from './dashboard/model'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
 import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
+import { landingRestackDue } from '../kernel/engine'
 import type { BuildFacts } from '../processes/repo-view'
 /**
  * `ab builds` and `ab build status <slug>` — the read-only query surface on
@@ -127,7 +128,7 @@ export interface BuildSummary {
   lease: LeaseInfo
   /** Durable-event progress, separate from mutable lease renewal. */
   progress: BuildProgress
-  /** A node's runner request, admitted ahead of new ticket claims. */
+  /** A node's or parked build's runner request, admitted ahead of new ticket claims. */
   slotWait?: SlotRequest
 }
 
@@ -598,7 +599,7 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       summary.status,
       summary.kind === 'integration'
         ? `integration ${summary.integration ?? ''}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`
-        : phaseCell(summary),
+        : `${phaseCell(summary)}${summary.slotWait ? `, ${slotWaitText(summary.slotWait)}` : ''}`,
       healthWord(summary.lease.health),
       summary.progress.heartbeatAt === undefined
         ? '—'
@@ -967,17 +968,16 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
         record,
         facts.state,
         now,
-        facts.state.kind === 'node'
-          ? slotRequest(
-              {
-                record,
-                state: facts.state,
-                workspace: facts.workspace !== null,
-                provisioning: facts.provisionMarker !== undefined,
-              },
-              now,
-            )
-          : undefined,
+        slotRequest(
+          {
+            record,
+            state: facts.state,
+            workspace: facts.workspace !== null,
+            provisioning: facts.provisionMarker !== undefined,
+            restackDue: landingRestackDue(facts.state, facts.log),
+          },
+          now,
+        ),
       )
       if (wanted.has(summary.status)) summaries.push(summary)
     }

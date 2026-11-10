@@ -23,6 +23,7 @@ export const buildEventPolicy = {
   'landing.forge-merged': 'decisive',
   'landing.native-applied': 'decisive',
   'target.distance': 'advisory',
+  'pipeline.settled': 'advisory',
   'target.rewritten': 'decisive',
   'target.rewrite-cleared': 'decisive',
   'target.moved': 'decisive',

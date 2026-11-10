@@ -229,9 +229,11 @@ export function BuildsView(props: BuildsViewProps) {
     '--ticket-w': `${widths.ticket}ch`,
     '--status-w': `${widths.status}ch`,
   }
-  // Borrowed slots and nodes waiting for a slot share one capacity notice.
+  // Borrowed slots and nodes or parked builds waiting for a slot share one capacity notice.
   const capacityNotice = Boolean(
-    model.capacity?.borrowingNodes.length || model.capacity?.waitingNodes?.length,
+    model.capacity?.borrowingNodes.length ||
+      model.capacity?.waitingNodes?.length ||
+      model.capacity?.waitingBuilds?.length,
   )
   return (
     <DashboardSurface>
@@ -572,6 +574,15 @@ function BuildRow({
         <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
       ) : (
         <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
+      )}
+      {!row.integrationRow && row.alert && (
+        <p
+          className={`sub integration-alert ${row.alert.tone === 'red' ? 'alert' : 'warn'}`}
+          role="status"
+        >
+          <span aria-hidden>! </span>
+          {row.alert.text}
+        </p>
       )}
       {!row.integrationRow && row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />

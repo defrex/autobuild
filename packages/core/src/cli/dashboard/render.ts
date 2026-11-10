@@ -471,6 +471,9 @@ function renderBuild(
       ),
     )
   }
+  if (build.alert)
+    for (const line of wrappedText(build.alert.text, Math.max(1, width - 4), ''))
+      lines.push(paint(`  ! ${line}`, build.alert.tone, color))
   // Setup failures and blocker questions are dense-list previews. Their model
   // strings remain untouched; newline-aware wrapping and capping happen only
   // at this presentation seam.

@@ -19,7 +19,13 @@ import {
 import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { CorePhase, Feedback, Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
-import { decideNext, decideNextFromFacts, type Decision, type WaitReason } from './engine'
+import {
+  decideNext,
+  decideNextFromFacts,
+  landingRestackDue,
+  type Decision,
+  type WaitReason,
+} from './engine'
 import { leafTransaction } from './generators/leaf-restack-log'
 import { randomBuildLog } from './generators/build-log'
 import { buildReducer, reduceBuild } from './reducer'
@@ -4074,4 +4080,34 @@ test('verifier escalation holds only its member; fail-fast supersedes it without
     }),
   ]
   expect(decideNext(toLog(unrelated), fast)).toEqual({ kind: 'wait', reason: 'blocked' })
+})
+
+describe('landingRestackDue', () => {
+  const state = reduceBuild([])
+  const moved = { branch: 'main', sha: 'b'.repeat(40), seq: 9 } as never
+  test('due when the target moved past the last restack base or a post-step landed after it', () => {
+    expect(landingRestackDue(state, { restack: { gates: {} } })).toBe(false)
+    expect(
+      landingRestackDue(state, {
+        restack: { gates: {}, initialBase: 'a'.repeat(40), target: moved },
+      }),
+    ).toBe(true)
+    expect(
+      landingRestackDue(state, {
+        restack: { gates: {}, initialBase: 'b'.repeat(40), target: moved },
+      }),
+    ).toBe(false)
+    const targeted = { ...state, target: { build: 'node', ticket: { source: 'file', id: 'n' } } }
+    expect(
+      landingRestackDue(targeted, {
+        restack: {
+          gates: {},
+          initialBase: 'b'.repeat(40),
+          target: moved,
+          postStepAt: 12,
+          completedAt: 10,
+        },
+      }),
+    ).toBe(true)
+  })
 })
