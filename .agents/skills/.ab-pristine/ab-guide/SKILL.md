@@ -2648,8 +2648,10 @@ The default watch reports actionable conditions only:
 - `build.janitor-escalated`: a build's janitor failure episode outlasted the escalation threshold and raised one escalation. The janitor keeps retrying; a successful attempt closes it unanswered, and a bare retry answer attempts on the next tick.
 - `dispatcher.forge-persistent`: forge degradation remains after a post-reset retry tick; recovery clears the episode.
 
-- Build `escalation.raised`, `phase.deferral-escalated` or
-  `build.janitor-escalated`: an operator answer is required. A read deferral asks for CLI/store repair before retry or guidance.
+- Build `escalation.raised` or `phase.deferral-escalated`: an operator answer
+  is required. A read deferral asks for CLI/store repair before retry or guidance.
+  A `build.janitor-escalated` escalation needs no answer to recover; a bare
+  retry answer only brings the next attempt forward.
 - Build `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and
