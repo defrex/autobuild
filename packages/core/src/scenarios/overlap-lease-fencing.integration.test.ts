@@ -23,7 +23,7 @@ import type { BuildExecution } from '../ports/workspace/build-execution'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { RepositoryEvent } from '../events/repository'
 import type { BuildRecord, BuildStore } from '../store/types'
-import { happyHandlers, makeHarness, readyTicket, type E2eHarness } from './harness'
+import { CONFIG_TOML, happyHandlers, makeHarness, readyTicket, type E2eHarness } from './harness'
 
 // ── Local helpers ────────────────────────────────────────────────────────────
 
@@ -315,6 +315,10 @@ describe('concurrent-pair overlap lease fencing', () => {
         readyTicket('T-FENCE-A', { title: 'Fence the lease handshake' }),
         readyTicket('T-FENCE-B', { title: 'Overlap the dispatch pair' }),
       ],
+      // The in-process child advances the shared stepping clock while the
+      // winner's pass still prepares the second ticket; no renewal runs on
+      // that synthetic clock, so a 60 s lease would lapse mid-pass.
+      configToml: LONG_LEASE_TOML,
     })
     const winnerStore = recordingStore(h.store)
     const winnerExec = recordingBuildExecution(h.wiring.buildExecution)
@@ -375,4 +379,151 @@ describe('concurrent-pair overlap lease fencing', () => {
       await h.cleanup()
     }
   }, 120_000)
+})
+
+// ── A stalled holder that wakes after its lease expired ──────────────────────
+
+/** An hour-long repository lease: the stepping clock advances on every read,
+ * so a pass must not lapse unless a scenario stalls it on purpose. */
+const LONG_LEASE_TOML = CONFIG_TOML.replace(
+  '[policy]\n',
+  '[policy]\ndispatchLeaseTimeoutSeconds = 3600\ndispatchLeaseRenewalSeconds = 20\n',
+)
+const STALL_MS = 3_601_000
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+/** Block the ticket path on the durable `ticket-preparation.intended` append:
+ * it commits, then the host stalls until `release`. */
+function stallAtIntended(store: BuildStore) {
+  const stalled = deferred()
+  const release = deferred()
+  const append = store.appendRepo.bind(store)
+  store.appendRepo = async (repo, event) => {
+    const appended = await append(repo, event)
+    if (event.type === 'ticket-preparation.intended') {
+      stalled.resolve()
+      await release.promise
+    }
+    return appended
+  }
+  return { stalled: stalled.promise, release: release.resolve }
+}
+
+/** Repository telemetry and stop facts authored by one run. */
+async function runFacts(h: E2eHarness, run: string) {
+  const events = await h.store.getRepoEvents(h.remote)
+  const own = events.filter((event) => (event.payload as { run?: string }).run === run)
+  return {
+    telemetry: own.filter((event) =>
+      ['dispatcher.tick-started', 'dispatcher.tick-completed', 'dispatcher.tick-failed'].includes(
+        event.type,
+      ),
+    ).length,
+    selfYields: events.filter(
+      (event) => event.type === 'dispatcher.tick-yielded' && event.payload.holder === run,
+    ).length,
+    stops: own
+      .filter((event) => event.type === 'dispatcher.run-stopped')
+      .map((event) => (event.payload as { reason?: string }).reason ?? 'normal'),
+  }
+}
+
+describe('a stalled holder wakes after its repository lease expired', () => {
+  test('a peer took over: the stalled holder claims nothing, launches nothing and stops superseded', async () => {
+    const h = await makeHarness({
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-STALL')],
+      configToml: LONG_LEASE_TOML,
+    })
+    const stalledStore = recordingStore(h.store)
+    const stall = stallAtIntended(stalledStore.store)
+    const stalledExec = recordingBuildExecution(h.wiring.buildExecution)
+    const peerStore = recordingStore(h.store)
+    const peerExec = recordingBuildExecution(h.wiring.buildExecution)
+    try {
+      const stalled = startOnce(h, { store: stalledStore.store, execution: stalledExec.execution })
+      await stall.stalled
+      h.clock.advance(STALL_MS)
+      const peer = startOnce(h, { store: peerStore.store, execution: peerExec.execution })
+      await peer.promise
+      stall.release()
+      await stalled.promise
+
+      const stalledRun = stalledStore.calls[0]!.holder
+      // Only the peer reached the ticket source and the executor.
+      expect(h.tickets.claims).toEqual(['T-STALL'])
+      expect(stalledExec.launched).toEqual([])
+      const builds = await h.store.listBuilds()
+      expect(builds).toHaveLength(1)
+      expect(peerExec.launched).toEqual([builds[0]!.slug])
+      expect(builds[0]!.ticket?.id).toBe('T-STALL')
+      expect(await runFacts(h, stalledRun)).toEqual({
+        telemetry: 0,
+        selfYields: 0,
+        stops: ['superseded'],
+      })
+      expect(h.cliErrors).toEqual([])
+    } finally {
+      stall.release()
+      await h.cleanup()
+    }
+  }, 60_000)
+
+  test('no peer: the stalled holder reclaims its lease and later claims the ticket', async () => {
+    const h = await makeHarness({
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-RECLAIM')],
+      configToml: LONG_LEASE_TOML,
+    })
+    const recorded = recordingStore(h.store)
+    const stall = stallAtIntended(recorded.store)
+    const execution = recordingBuildExecution(h.wiring.buildExecution)
+    const stop = new AbortController()
+    const stderr: string[] = []
+    let ticks = 0
+    try {
+      const running = abDispatch({
+        targetRepo: h.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => stderr.push(line),
+        signal: stop.signal,
+        plain: true,
+        sleep: async () => {
+          ticks++
+          if (execution.launched.length > 0 || ticks > 10) stop.abort()
+        },
+        wire: () => ({ ...h.wiring, store: recorded.store, buildExecution: execution.execution }),
+      })
+      await stall.stalled
+      h.clock.advance(STALL_MS)
+      stall.release()
+      await running
+
+      const run = recorded.calls[0]!.holder
+      const claims = recorded.calls.filter((call) => call.op === 'claimRepoLease')
+      expect(claims.length).toBeGreaterThanOrEqual(2)
+      expect(claims.every((call) => call.result === true && call.holder === run)).toBe(true)
+      const builds = await h.store.listBuilds()
+      expect(builds).toHaveLength(1)
+      expect(builds[0]!.ticket?.id).toBe('T-RECLAIM')
+      expect(execution.launched).toEqual([builds[0]!.slug])
+      const facts = await runFacts(h, run)
+      expect(facts.selfYields).toBe(0)
+      expect(facts.stops).toEqual(['normal'])
+      expect(stderr.some((line) => line.includes('superseded'))).toBe(false)
+    } finally {
+      stall.release()
+      stop.abort()
+      await h.cleanup()
+    }
+  }, 60_000)
 })

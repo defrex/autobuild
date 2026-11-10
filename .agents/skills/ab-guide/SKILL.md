@@ -1217,6 +1217,8 @@ nonnegative integer so zero can disable that trigger.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `upgradeDrainSeconds` | `900` | positive integer | Local generation drain deadline from handoff start; hot-reloaded while draining. |
+| `dispatchLeaseTimeoutSeconds` | `60` | positive integer, greater than `dispatchLeaseRenewalSeconds` | How long the repository dispatch lease survives without renewal. A dispatcher that stalls longer reclaims it on waking unless another dispatcher took it, in which case it stops as `superseded`; a standby takes over a dead holder within this bound. Adopted at the dispatcher's next tick. |
+| `dispatchLeaseRenewalSeconds` | `20` | positive integer, less than `dispatchLeaseTimeoutSeconds` | Interval between repository dispatch lease renewals; adopted together with the timeout. Configuration with renewal at or above the timeout is refused when it loads. |
 | `sessionBudgetSeconds` | `3600` | positive integer | Active-time bound for each build agent session unless its logical role overrides it; native continuation retains accumulated time and excludes suspension. |
 | `stallRounds` | `3` | positive integer | The same finding surviving this many review rounds auto-escalates for external judgment — the anti-loop guard. |
 | `maxVerifyAttempts` | `3` | positive integer | Caps distinct failed verify cycles since the latest spec revision; passed and skipped cycles cost zero. |

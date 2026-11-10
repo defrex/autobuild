@@ -1487,6 +1487,59 @@ describe('HarvestRunner', () => {
     expect((await store.getRepo('/repo'))?.lease?.holder).toBe('dispatch-run-1')
   })
 
+  test('the owning loop’s lapsed authority stops the turn before it starts, without a claim', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-authority-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    expect(await store.claimRepoLease('/repo', 'dispatch-run-1', 3_600_000)).toBe(true)
+    let claims = 0
+    const originalClaim = store.claimRepoLease.bind(store)
+    store.claimRepoLease = async (...args) => {
+      claims += 1
+      return originalClaim(...args)
+    }
+    // The loop's lease lapses while the session-started fact is in flight: the
+    // last moment before the turn starts.
+    let held = true
+    const append = store.appendRepo.bind(store)
+    store.appendRepo = async (repo, event) => {
+      const appended = await append(repo, event)
+      if (event.type === 'harvest.session.started') held = false
+      return appended
+    }
+    await seedObservation(store, 'authority', 'the owning loop stalled')
+
+    let starts = 0
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        starts += 1
+        return defaultTurnResult('done')
+      },
+    })
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'harvest-child',
+      opts: { heartbeatMs: 100_000 },
+      leaseHolder: 'dispatch-run-1',
+      holdsAuthority: () => held,
+    }).run()
+
+    expect(result).toEqual({ outcome: 'held' })
+    expect(starts).toBe(0)
+    // The loop's resolver owns reclaiming; harvest never claims the lease.
+    expect(claims).toBe(0)
+    expect((await store.getRepo('/repo'))?.lease?.holder).toBe('dispatch-run-1')
+  })
+
   test('a rejected heartbeat is contained and a later false beat stops at the next durable boundary', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-heartbeat-loss-'))
     roots.push(workspace)

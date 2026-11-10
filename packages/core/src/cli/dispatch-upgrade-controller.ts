@@ -10,6 +10,7 @@ import {
 } from './dispatch-upgrade-target'
 import type { CachedRuntime } from './dispatch-runtime-cache'
 import { releasePreparedRuntime, reservePreparedRuntime } from './dispatch-runtime-use'
+import { isRepositoryAuthorityLapse } from './repo-lease'
 import { captureRuntimeIdentity } from '../runtime-identity'
 import type { DispatchUpgradeState, Handoff } from '../kernel/dispatch-upgrade'
 
@@ -195,6 +196,8 @@ export class DispatchUpgradeController {
       }
     } catch (error) {
       if (preparation.signal.aborted || this.abort.signal.aborted) return
+      // A fenced effect during a lapsed repository lease skips the check.
+      if (isRepositoryAuthorityLapse(error)) return
       if (error instanceof TargetResolutionError) target = error.target
       if (target && !this.failed.has(target.key)) {
         await this.input.append({
