@@ -282,6 +282,7 @@ The default watch reports actionable conditions only:
 - `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled.
 
 - `build.janitor-failing`: a build has reached the configured consecutive-failure threshold; a successful janitor attempt clears it.
+- `build.janitor-escalated`: a build's janitor failure episode outlasted `policy.janitorFailureEscalationSeconds` and raised one escalation naming the operation, last error, attempt count and episode start. The janitor keeps retrying; a successful attempt closes the escalation, and a bare retry answer attempts on the next tick.
 - `dispatcher.forge-persistent`: forge degradation remains after a completed post-reset retry opportunity; successful recovery clears it.
 
 - Build `escalation.raised`, `integration.landed`, `node.item-conflicted`, `target.rewritten`, or
@@ -377,10 +378,11 @@ HTTP merge controls retain the wire actions `land` and `hold` with acknowledged 
 requires readiness and survives restacks; hold persists until merge. Repository
 auto-merge settings are retired; configure ordered `[[merge]]` rules.
 
-Default attention includes `build.janitor-failing` and
+Default attention includes `build.janitor-failing`, `build.janitor-escalated` and
 `dispatcher.forge-persistent`. Raw `dispatcher.forge-degraded` and
 `dispatcher.forge-recovered` facts are available through explicit event filters.
-Active janitor attention clears on a successful attempt. Repository status
+Active janitor attention and an open janitor escalation clear on a successful
+attempt. Repository status
 includes forge degradation/reset and available request counts; `dispatcher.forge-persistent` requires a completed retry opportunity past
 the original reset, which later rate limits cannot postpone indefinitely.
 

@@ -75,6 +75,9 @@ export interface OpenEscalation {
   /** Policy guard identity. Absent only on historical policy raises. */
   policyCause?: PolicyEscalationCause
   deferral?: 'own-build-read'
+  /** Raised by `build.janitor-escalated`. Its routing is inert (`setup`
+   * target, no cause); the janitor's recovery closes it unanswered. */
+  janitor?: true
   question: string
   refs?: string[]
   /** seq of the `escalation.raised` event — what `spec.revised` cites (§15.3). */
@@ -253,6 +256,10 @@ export interface BuildState {
    * a still-blocked build reports 'blocked' again. No information is lost.
    */
   status: BuildStatus
+  /** The status this build would have without its janitor escalation; present
+   * only while one is open. The janitor reads it so its own escalation never
+   * gates the work that would recover it. */
+  statusWithoutJanitorEscalation?: BuildStatus
   /** From `build.completed` — present only once status is 'done'. */
   outcome?: BuildOutcome
   /** currentPhase if one is started-but-not-completed, else the latest
@@ -286,6 +293,10 @@ export interface BuildState {
     message: string
     nextAttemptAt: string
     attention?: true
+    /** Id of this episode's escalation, once raised. */
+    escalation?: string
+    /** The escalation was answered: attempt again without waiting out backoff. */
+    retryRequested?: true
   }
   landing?: LandingState
   /** Historical auto-merge controls retained for replay compatibility. */
@@ -467,6 +478,10 @@ export interface BuildAcc {
     message: string
     nextAttemptAt: string
     attention?: true
+    /** Id of this episode's escalation, once raised. */
+    escalation?: string
+    /** The escalation was answered: attempt again without waiting out backoff. */
+    retryRequested?: true
   }
   landing?: LandingState
   autoMerge: AutoMergeProjection
@@ -505,7 +520,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 30
+export const BUILD_REDUCER_VERSION = 31
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -667,9 +682,16 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       acc.janitor = {
         ...event.payload,
         ...(acc.janitor?.attention ? { attention: true as const } : {}),
+        ...(acc.janitor?.escalation ? { escalation: acc.janitor.escalation } : {}),
       }
     if (event.type === 'build.janitor-failing' && acc.janitor) acc.janitor.attention = true
-    if (event.type === 'build.janitor-recovered') delete acc.janitor
+    if (event.type === 'build.janitor-escalated' && acc.janitor)
+      acc.janitor.escalation = event.payload.id
+    if (event.type === 'build.janitor-recovered') {
+      delete acc.janitor
+      for (const escalation of [...openEscalations.values()])
+        if (escalation.janitor) openEscalations.delete(escalation.id)
+    }
     if (event.type === 'target.rewritten') acc.targetRewrite = event
     if (
       event.type === 'target.moved' ||
@@ -1260,6 +1282,17 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           seq: event.seq,
         })
         break
+      case 'build.janitor-escalated':
+        if (!openEscalations.has(event.payload.id))
+          openEscalations.set(event.payload.id, {
+            id: event.payload.id,
+            phase: 'setup',
+            source: 'policy',
+            janitor: true,
+            question: event.payload.question,
+            seq: event.seq,
+          })
+        break
       case 'escalation.raised': {
         const escalation: OpenEscalation = {
           id: event.payload.id,
@@ -1298,6 +1331,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
               : {}),
             answeredSeq: event.seq,
           })
+          if (open.janitor && acc.janitor?.escalation === open.id) acc.janitor.retryRequested = true
           if (
             event.payload.reviewRoundCeiling !== undefined &&
             open.source === 'policy' &&
@@ -1384,17 +1418,21 @@ function finishBuild(acc: BuildAcc): BuildState {
   // §15.5 precedence: aborted/done (terminal, latest wins) > paused >
   // blocked > running > queued. See BuildState.status for the paused+blocked
   // overlap rule.
-  const status: BuildStatus =
+  const statusOf = (escalations: readonly OpenEscalation[]): BuildStatus =>
     terminal ??
     (pausedFlag
       ? 'paused'
-      : acc.openEscalations.length > 0 || integrationFailed(acc)
+      : escalations.length > 0 || integrationFailed(acc)
         ? 'blocked'
         : acc.kind === 'node' && acc.nodeOpened !== undefined
           ? 'collecting'
           : attached
             ? 'running'
             : 'queued')
+  const status = statusOf(acc.openEscalations)
+  const statusWithoutJanitorEscalation = acc.openEscalations.some((e) => e.janitor)
+    ? statusOf(acc.openEscalations.filter((e) => !e.janitor))
+    : undefined
 
   const active = currentPhase ?? lastCompletedPhase
 
@@ -1412,6 +1450,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.nodeIssueLinks !== undefined ? { nodeIssueLinks: acc.nodeIssueLinks } : {}),
     nodeRestack: acc.nodeRestack,
     status,
+    ...(statusWithoutJanitorEscalation !== undefined ? { statusWithoutJanitorEscalation } : {}),
     outcome: acc.outcome,
     phase: active?.phase,
     round: acc.round,

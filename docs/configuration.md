@@ -2552,6 +2552,19 @@ Optional. Every field receives its own default. All are positive integers except
 
 **Constraints:** safe integer; > 0
 
+#### `policy.janitorFailureEscalationSeconds`
+
+**TOML key:** `policy.janitorFailureEscalationSeconds`
+
+- **Type:** `number`
+- **Default:** `3600`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Consecutive janitor failure duration before the build raises one escalation; the janitor keeps retrying.
+
+**Constraints:** safe integer; > 0
+
 #### `policy.nodeIdleAfterSeconds`
 
 **TOML key:** `policy.nodeIdleAfterSeconds`

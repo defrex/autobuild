@@ -2,6 +2,7 @@ import { observeTarget } from './target-observation'
 import { deferMixedVersion, MixedVersionDeferral } from './mixed-version'
 import { inspectIntegrationStack } from './integration-stack'
 import { integrationFailed } from './integration-state'
+import { janitorBlocked } from './janitor-failure'
 import type { BuildStore } from '../store/types'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { Forge, AutoMergeDeferralReason } from '../ports/types'
@@ -83,7 +84,7 @@ export async function landIntoNode(
       state.status === 'aborted' ||
       state.status === 'done' ||
       state.status === 'paused' ||
-      (state.status === 'blocked' && !integrationFailed(state)) ||
+      (janitorBlocked(state) && !integrationFailed(state)) ||
       state.prState === 'closed' ||
       state.prState === 'merged' ||
       state.pendingCommands.length ||
