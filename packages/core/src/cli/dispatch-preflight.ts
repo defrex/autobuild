@@ -207,6 +207,8 @@ async function runGenerationPreflight(
     )
       return false
     prepared = true
+    // The successor claims with its own configured lease timeout.
+    let leaseTtlMs = 60_000
     for (;;) {
       signal.throwIfAborted()
       const current = (await readDispatchUpgrade(opened.store, opened.repo)).value.runs[handoff.run]
@@ -228,6 +230,7 @@ async function runGenerationPreflight(
             facts.stop.payload.outcome === 'normal'))
       if (ready) {
         const config = await loadConfig(join(launch.checkout, 'autobuild.toml'))
+        leaseTtlMs = config.policy.dispatchLeaseTimeoutSeconds * 1000
         const accounts = selectedExecutionAccounts(config)
         const available = inspectLocalAccountEnvironment(
           new LocalCredentials(join(launch.checkout, '.autobuild')),
@@ -245,7 +248,7 @@ async function runGenerationPreflight(
           return false
         }
       }
-      if (ready && (await opened.store.claimRepoLease(opened.repo, launch.run, 60_000))) {
+      if (ready && (await opened.store.claimRepoLease(opened.repo, launch.run, leaseTtlMs))) {
         await opened.store.appendRepo(opened.repo, {
           actor: DISPATCHER,
           type: 'dispatcher.takeover',

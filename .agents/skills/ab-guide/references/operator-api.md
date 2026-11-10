@@ -268,6 +268,9 @@ expiry. Successor loss and upgrade-failure/rollback attention remain independent
 `observation` instead of `event`, with run, observedAt, leaseExpiresAt and available
 identity, plus the usual repo/build/state/cursor fields. It invents no durable
 sequence or actor. Retain the cursor to avoid repeat reports across invocations.
+A loss can be transient: a holder that stalled past
+`policy.dispatchLeaseTimeoutSeconds` with no successor reclaims its lease on
+waking and returns to `held`.
 A watch retains sampled owners after authoritative lease release. Once-run teardown
 stops heartbeat and releases only its own lease; release is best effort because
 expiry fences ambiguous ownership. A retained sample or failed release cannot

@@ -729,8 +729,23 @@ export type RoleConfig = z.infer<typeof roleSchema>
 
 // ── [policy] ─────────────────────────────────────────────────────────────────
 
+const DISPATCH_LEASE_PAIR_MESSAGE =
+  'policy.dispatchLeaseTimeoutSeconds and policy.dispatchLeaseRenewalSeconds must be positive integers, with dispatchLeaseRenewalSeconds less than dispatchLeaseTimeoutSeconds'
+
 export const policySchema = z.strictObject({
   upgradeDrainSeconds: z.number().int().positive().default(900),
+  /** Repository dispatch lease lifetime without renewal (SPEC §12). */
+  dispatchLeaseTimeoutSeconds: z
+    .number()
+    .int(DISPATCH_LEASE_PAIR_MESSAGE)
+    .positive(DISPATCH_LEASE_PAIR_MESSAGE)
+    .default(60),
+  /** Interval between repository dispatch lease renewals; below the timeout. */
+  dispatchLeaseRenewalSeconds: z
+    .number()
+    .int(DISPATCH_LEASE_PAIR_MESSAGE)
+    .positive(DISPATCH_LEASE_PAIR_MESSAGE)
+    .default(20),
   /** Wall-clock bound for an agent phase session; roles may override it. */
   sessionBudgetSeconds: z.number().int().positive().default(3600),
   /** Same-finding survival threshold before auto-escalate (§10, §15.4). */
@@ -758,6 +773,10 @@ export const policySchema = z.strictObject({
 documentFields(policySchema, {
   upgradeDrainSeconds:
     'Deadline for a retiring generation, relative to handoff start; hot-reloaded during drain.',
+  dispatchLeaseTimeoutSeconds:
+    "How long the repository dispatch lease survives without renewal. A dispatcher that stalls longer reclaims it on waking unless another run took it; a standby takes over a dead holder within this bound. A change takes effect at the dispatcher's next tick.",
+  dispatchLeaseRenewalSeconds:
+    'Interval between repository dispatch lease renewals; adopted together with the timeout.',
   sessionBudgetSeconds:
     'Active-time bound for each build agent session unless its logical role overrides it. Native continuation retains the original ceiling; suspension does not consume it.',
   stallRounds: 'Escalate when the same review finding survives this many rounds.',
@@ -779,6 +798,12 @@ documentFields(policySchema, {
   janitorBackoffMaxSeconds: 'Cap on exponential janitor retry delay, starting at 30 seconds.',
   harvestMaxDrift:
     'Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift.',
+})
+documentSchema(policySchema.shape.dispatchLeaseTimeoutSeconds, {
+  constraints: 'Must be greater than `dispatchLeaseRenewalSeconds`.',
+})
+documentSchema(policySchema.shape.dispatchLeaseRenewalSeconds, {
+  constraints: 'Must be less than `dispatchLeaseTimeoutSeconds`.',
 })
 export type PolicyConfig = z.infer<typeof policySchema>
 
@@ -1255,6 +1280,14 @@ const normalizedConfigSchema = configRootSchema.transform((input, ctx) => {
 })
 
 export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => {
+  const { dispatchLeaseTimeoutSeconds: leaseTimeout, dispatchLeaseRenewalSeconds: leaseRenewal } =
+    config.policy
+  if (leaseRenewal >= leaseTimeout)
+    ctx.addIssue({
+      code: 'custom',
+      path: ['policy', 'dispatchLeaseRenewalSeconds'],
+      message: `${DISPATCH_LEASE_PAIR_MESSAGE} (dispatchLeaseRenewalSeconds = ${leaseRenewal}, dispatchLeaseTimeoutSeconds = ${leaseTimeout})`,
+    })
   for (const [name, account] of Object.entries(config.accounts)) {
     if (account.kind !== 'chatgpt-subscription') continue
     if (
