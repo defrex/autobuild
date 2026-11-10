@@ -2334,7 +2334,8 @@ export class Dispatcher {
             (state.pr &&
               state.landing?.command &&
               state.landing.command.seq !== state.landing.acknowledgedSeq)
-          if (!controlDue && !janitorDue(previous, this.deps.clock())) return
+          // Read the clock only inside an episode, as before episodes could escalate.
+          if (!controlDue && previous && !janitorDue(previous, this.deps.clock())) return
           if (mixedVersionDeferred(state)) {
             await deferMixedVersion(this.store, record.slug)
             return
