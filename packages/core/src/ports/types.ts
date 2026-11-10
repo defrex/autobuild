@@ -559,6 +559,10 @@ export interface WorkspaceProvider {
      * branch head it covers must not be restored over the branch; report it
      * in `restorationSkipped`. */
     restorationReplaced?: string[]
+    /** Where the forge keeps `restoration` archive refs: `local` (local-git)
+     * means the repository already holds them and restoration must not
+     * consult a remote; `remote` means they may exist only on origin. */
+    restorationArchives?: 'local' | 'remote'
     /** Immutable recovery checkpoint, never a moved base branch. */
     revision?: string
     /** Monotonic environment generation used in provider idempotency keys. */

@@ -1832,3 +1832,102 @@ describe('preserved branch heads superseded by a recorded rewrite', () => {
     expect(await run(['git', 'rev-parse', 'HEAD'], workspace)).toBe(h.q)
   })
 })
+
+describe('local worktree restoration from forge archives (#916)', () => {
+  /** A cloned repository whose provisioned branch is published, with one
+   * unpublished commit preserved through `archive` and the worktree released. */
+  async function preserved(local: boolean) {
+    const { preserveGitCommits } = await import('./commit-preservation')
+    const { gitRewrite } = await import('../forge/git-rewrite')
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-remote-restore-'))
+    const origin = join(tmp, 'origin.git')
+    const upstream = join(tmp, 'upstream')
+    const repo = join(tmp, 'repo')
+    const root = join(tmp, 'worktrees')
+    await mkdir(origin, { recursive: true })
+    await run(['git', 'init', '--bare', '-q', '-b', 'main'], origin)
+    await initRepo(upstream)
+    await run(['git', 'remote', 'add', 'origin', origin], upstream)
+    await run(['git', 'push', '-q', '-u', 'origin', 'main'], upstream)
+    await run(['git', 'clone', '-q', origin, repo], tmp)
+    const base = await run(['git', 'rev-parse', 'refs/heads/main'], repo)
+    const branch = 'ab/remote-restore'
+    const calls: string[][] = []
+    const provider = new GitWorktreeProvider({
+      root,
+      exec: async (cmd, opts) => {
+        calls.push([...cmd])
+        return spawnExec(cmd, opts)
+      },
+    })
+    const handle = await provider.provision({ repo, baseBranch: 'main', branch })
+    await run(['git', 'push', '-q', 'origin', branch], handle.path)
+    const published = await run(['git', 'rev-parse', 'HEAD'], handle.path)
+    const work = await commitFile(handle.path, 'work.ts', 'export const work = 1\n', 'work')
+    const heads = await preserveGitCommits({
+      exec: spawnExec,
+      workspacePath: handle.path,
+      slug: 'remote-restore',
+      branch,
+      base,
+      candidates: [],
+      archive: gitRewrite(spawnExec, local).archive,
+      local,
+    })
+    expect(heads.map((head) => head.sha)).toEqual([work])
+    await provider.release(handle)
+    // The branch moved back after preservation, as a restack does, so
+    // restoration must actually advance it to the preserved head.
+    await run(['git', 'update-ref', `refs/heads/${branch}`, published], repo)
+    const ref = heads[0]!.remoteRef
+    const localRef = () =>
+      spawnExec(['git', 'rev-parse', '--verify', '--quiet', ref], { cwd: repo })
+    const restore = (restorationArchives: 'local' | 'remote') =>
+      provider.provision({
+        repo,
+        baseBranch: 'main',
+        branch,
+        restoration: heads,
+        restorationArchives,
+      })
+    return { provider, origin, repo, base, work, ref, calls, localRef, restore }
+  }
+
+  test('a remote forge archive that exists only on origin restores without a manual fetch', async () => {
+    const h = await preserved(false)
+    // The stuck state from #916: archived on origin, absent locally.
+    expect(await run(['git', 'ls-remote', 'origin', h.ref], h.repo)).toContain(h.work)
+    expect((await h.localRef()).exitCode).toBe(1)
+
+    const handle = await h.restore('remote')
+    expect(await run(['git', 'rev-parse', 'HEAD'], handle.path)).toBe(h.work)
+    expect(handle.base).toEqual({ source: 'existing', sha: h.work })
+    expect((await h.localRef()).stdout.trim()).toBe(h.work)
+
+    // Strict: an archive ref naming a different commit still fails.
+    await h.provider.release(handle)
+    await run(['git', 'update-ref', h.ref, h.base], h.origin)
+    await run(['git', 'update-ref', '-d', h.ref], h.repo)
+    await expect(h.restore('remote')).rejects.toThrow(/changed/)
+
+    // A ref missing on both sides fails and names the ref.
+    await run(['git', 'update-ref', '-d', h.ref], h.origin)
+    await run(['git', 'update-ref', '-d', h.ref], h.repo)
+    await expect(h.restore('remote')).rejects.toThrow(h.ref)
+  })
+
+  test('the local-git forge restores from the local repository without a fetch', async () => {
+    const h = await preserved(true)
+    expect((await h.localRef()).stdout.trim()).toBe(h.work)
+    h.calls.length = 0
+    const handle = await h.restore('local')
+    expect(await run(['git', 'rev-parse', 'HEAD'], handle.path)).toBe(h.work)
+    expect(h.calls.some((cmd) => cmd.includes('fetch') || cmd.includes('ls-remote'))).toBe(false)
+
+    await h.provider.release(handle)
+    await run(['git', 'update-ref', '-d', h.ref], h.repo)
+    await expect(h.restore('local')).rejects.toThrow(
+      `workspace restoration archive ref ${h.ref} is missing from the local repository`,
+    )
+  })
+})

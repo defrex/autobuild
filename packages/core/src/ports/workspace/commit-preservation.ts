@@ -171,18 +171,34 @@ export async function restoreGitCommits(input: {
       !head.remoteRef.endsWith(`/${head.sha}`)
     )
       throw new Error('invalid workspace restoration ref')
-    if (!input.local)
-      await git([
-        'fetch',
-        '--no-tags',
-        '--no-write-fetch-head',
-        '--refmap=',
-        'origin',
-        `+${head.remoteRef}:${head.remoteRef}`,
-      ])
-    const actual = (
-      await git(['rev-parse', '--verify', `${head.remoteRef}^{commit}`])
-    ).stdout.trim()
+    if (!input.local) {
+      const fetched = await git(
+        [
+          'fetch',
+          '--no-tags',
+          '--no-write-fetch-head',
+          '--refmap=',
+          'origin',
+          `+${head.remoteRef}:${head.remoteRef}`,
+        ],
+        true,
+      )
+      if (fetched.exitCode !== 0)
+        throw new Error(
+          `workspace restoration archive ref ${head.remoteRef} could not be fetched from origin: ${fetched.stderr}`,
+        )
+    }
+    const resolveArgs = ['rev-parse', '--verify', '--quiet', `${head.remoteRef}^{commit}`]
+    const resolved = await git(resolveArgs, true)
+    const actual = resolved.stdout.trim()
+    if (resolved.exitCode === 1 || (resolved.exitCode === 0 && !actual))
+      throw new Error(
+        `workspace restoration archive ref ${head.remoteRef} is missing from the ${input.local ? 'local repository' : 'repository after fetching from origin'}`,
+      )
+    if (resolved.exitCode !== 0)
+      throw new Error(
+        `workspace restoration git ${resolveArgs.join(' ')} failed: ${resolved.stderr}`,
+      )
     if (actual !== head.sha) throw new Error(`workspace restoration ref ${head.remoteRef} changed`)
     for (const sha of [head.sha, ...head.commits]) await git(['cat-file', '-e', `${sha}^{commit}`])
     if (head.role !== 'branch') continue
