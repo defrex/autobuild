@@ -34,22 +34,15 @@ async function seedInstallation(repo: string, destination: string): Promise<void
 
 /** Real 60 s leases make a crashed successor's authority outlive it, so the
  * restored generation waits for expiry before it can tick or re-attach. The
- * rollback fixtures shorten that clock in their copied installation (each
- * heartbeat at most a fifth of its TTL); rollback still waits for and recovers
- * from real expiry. A renamed constant fails here instead of silently testing
- * the 60 s clock again. */
+ * rollback fixtures shorten that clock: the repository dispatch lease through
+ * `FIXTURE_REPO_LEASE_POLICY` in their autobuild.toml, and the execution and
+ * provisioning leases in their copied installation (each heartbeat at most a
+ * fifth of its TTL); rollback still waits for and recovers from real expiry.
+ * A renamed constant fails here instead of silently testing the 60 s clock
+ * again. */
+const FIXTURE_REPO_LEASE_POLICY =
+  '[policy]\ndispatchLeaseTimeoutSeconds=15\ndispatchLeaseRenewalSeconds=3\n'
 const FIXTURE_LEASES: [file: string, from: string, to: string][] = [
-  [
-    'packages/core/src/cli/dispatch.ts',
-    'const REPO_LEASE_TTL_MS = 60_000',
-    'const REPO_LEASE_TTL_MS = 15_000',
-  ],
-  [
-    'packages/core/src/cli/dispatch.ts',
-    'const REPO_LEASE_HEARTBEAT_MS = 20_000',
-    'const REPO_LEASE_HEARTBEAT_MS = 3_000',
-  ],
-  ['packages/core/src/cli/dispatch-preflight.ts', 'launch.run, 60_000))', 'launch.run, 15_000))'],
   [
     'packages/core/src/ports/workspace/build-execution.ts',
     'BUILD_EXECUTION_LEASE_TTL_MS = 60_000',
@@ -940,13 +933,13 @@ for (const crash of ['immediate', 'phases', 'legacy', 'expired-reader'])
       await writeFile(join(repo, 'package.json'), '{}')
       await writeFile(
         join(repo, 'autobuild.toml'),
-        'forge="local-git"\n[roles.default]\nruntime="claude"\n[tickets]\nsource="file"\ndir="tickets"\nreadyState="ready"\n',
+        `forge="local-git"\n[roles.default]\nruntime="claude"\n[tickets]\nsource="file"\ndir="tickets"\nreadyState="ready"\n${FIXTURE_REPO_LEASE_POLICY}`,
       )
       if (phaseWork) {
         await writeFile(join(repo, '.gitignore'), '.autobuild/\ntickets/\n')
         await writeFile(
           join(repo, 'autobuild.toml'),
-          'forge="local-git"\ncapacity=2\nticketScanIntervalSeconds=1\nplugins=["./fixture-plugin.ts"]\n[roles.default]\nruntime="proof"\n[tickets]\nsource="file"\ndir="tickets"\nreadyState="ready"\n',
+          `forge="local-git"\ncapacity=2\nticketScanIntervalSeconds=1\nplugins=["./fixture-plugin.ts"]\n[roles.default]\nruntime="proof"\n[tickets]\nsource="file"\ndir="tickets"\nreadyState="ready"\n${FIXTURE_REPO_LEASE_POLICY}`,
         )
         await writeFile(
           join(repo, 'fixture-plugin.ts'),
