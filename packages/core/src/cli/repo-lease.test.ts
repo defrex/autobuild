@@ -219,7 +219,7 @@ describe('fenceExec', () => {
     const seen: string[][] = []
     const exec: Exec = async (cmd) => {
       seen.push(cmd)
-      return { code: 0, stdout: '', stderr: '' }
+      return { exitCode: 0, stdout: '', stderr: '' }
     }
     const fenced = fenceExec(exec, guard)
     state.held = false
@@ -264,7 +264,7 @@ describe('fenceForge', () => {
       pluginWrite: record('pluginWrite'),
       kernelExec: (async (cmd: string[]) => {
         calls.push(`kernelExec ${cmd.join(' ')}`)
-        return { code: 0, stdout: '', stderr: '' }
+        return { exitCode: 0, stdout: '', stderr: '' }
       }) as Exec,
     }
     for (const name of FORGE_READ_ALLOWLIST)
