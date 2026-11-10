@@ -297,6 +297,10 @@ export interface BuildState {
    * read it. Compare this against `restartSince`, exactly as engine.ts:707-708
    * post-filters its own `finalizeCompleted`. */
   finalizeCompletedSeq: number
+  /** Largest settlement key the dispatcher observed at the engine's leaf
+   * `wait awaiting-pr` decision (`pipeline.settled`); capacity evidence only,
+   * never a pipeline decision input. */
+  pipelineSettled?: number
   /** Full-log `finalize.step-completed` facts, in event order (§5).
    * Post-steps are failure-tolerant, so a completion counts whether `ok` is
    * true or false. Current-spec membership is determined by
@@ -476,6 +480,7 @@ export interface BuildAcc {
   issueLinks: BuildIssueLink[]
   issueLinksSealedSeq?: number
   finalizeCompletedSeq: number
+  pipelineSettled?: number
   finalizeSteps: BuildState['finalizeSteps']
   plan: BuildState['plan']
   implement: BuildState['implement']
@@ -505,7 +510,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 30
+export const BUILD_REDUCER_VERSION = 31
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -1177,6 +1182,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         finalizeCompletedSeq = event.seq
         complete('finalize', event.seq)
         break
+      case 'pipeline.settled':
+        acc.pipelineSettled = Math.max(acc.pipelineSettled ?? 0, event.payload.cycle)
+        break
       case 'finalize.step-completed':
         // §5: post-steps are independent and failure-tolerant — a completion
         // counts whether `ok` is true or false. Retain full-log history with
@@ -1427,6 +1435,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     landing: acc.landing,
     autoMerge: acc.autoMerge,
     finalizeCompletedSeq: acc.finalizeCompletedSeq,
+    ...(acc.pipelineSettled !== undefined ? { pipelineSettled: acc.pipelineSettled } : {}),
     finalizeSteps: acc.finalizeSteps,
     lastEvent,
     lastSeq: Math.max(lastEvent?.seq ?? 0, acc.compatibility.lastSeq),

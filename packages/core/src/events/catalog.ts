@@ -56,6 +56,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'landing.forge-merged': ['kernel'],
   'landing.native-applied': ['dispatcher', 'kernel'],
   'target.distance': ['dispatcher'],
+  'pipeline.settled': ['dispatcher'],
   'target.rewritten': ['dispatcher', 'kernel'],
   'target.rewrite-cleared': ['dispatcher', 'kernel'],
   'target.moved': ['dispatcher', 'kernel'],

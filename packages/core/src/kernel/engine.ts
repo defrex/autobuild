@@ -782,12 +782,7 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
       state.reconcileAttempts
     return { kind: 'run-phase', phase: 'reconcile', round: attempt, reconcile: { attempt } }
   }
-  if (
-    log.restack.target !== undefined &&
-    (log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase) ||
-      (state.target !== undefined &&
-        (log.restack.postStepAt ?? 0) > (log.restack.completedAt ?? 0)))
-  ) {
+  if (landingRestackDue(state, log)) {
     return { kind: 'restack', trigger: 'awaiting-landing', cycle: cycleBoundary }
   }
   if (state.prState === 'conflicted' && log.lastConflict !== undefined) {
@@ -839,6 +834,18 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // open → the janitor is watching the PR; merged/closed → the janitor
   // releases the workspace and emits build.completed (§15.7).
   return { kind: 'wait', reason: 'awaiting-pr' }
+}
+
+/** The §9 awaiting-landing restack condition: the target moved since the
+ * build's last restack base, or a target post-step landed after it. Shared
+ * with dispatch capacity, which admits a parked build that must restack. */
+export function landingRestackDue(state: BuildState, log: Pick<LogIndex, 'restack'>): boolean {
+  return (
+    log.restack.target !== undefined &&
+    (log.restack.target.sha !== (log.restack.completed?.targetBase ?? log.restack.initialBase) ||
+      (state.target !== undefined &&
+        (log.restack.postStepAt ?? 0) > (log.restack.completedAt ?? 0)))
+  )
 }
 
 // ── Review-loop transition (rules 5 and 6 share one structure — §10) ─────────
