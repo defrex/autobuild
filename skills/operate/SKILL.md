@@ -224,7 +224,10 @@ use process lists to decide whether a dispatcher owns this repository. The
 identity resolves a yield message to run, pid, host, start time, and heartbeat
 age. Historical identity and a new holder's heartbeat may be unknown until its
 first attributable renewal. Source degradation or an old tick alone does not
-establish loss: a healthy lease can accompany a slow tick.
+establish loss: a healthy lease can accompany a slow tick. `lost` can also be
+transient: a dispatcher that stalled past `policy.dispatchLeaseTimeoutSeconds`
+with no successor reclaims its lease on waking and returns to `held`, while one
+that finds another holder stops as `superseded`.
 
 An unscoped watch, or a named watch with `--repository`, reports loss as a
 read-only observation: `{repo, build:null, state:null, observation:{type:

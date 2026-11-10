@@ -3153,6 +3153,25 @@ stands in for tick completion. Telemetry survives lease release. Safe shutdown
 uses the matching run's open observation, historical journal boundaries when
 absent, and refuses forced termination when the observation cannot be read.
 
+The repository dispatch lease lasts `policy.dispatchLeaseTimeoutSeconds`
+without renewal (60 by default) and is renewed every
+`policy.dispatchLeaseRenewalSeconds` (20 by default; it must be less than the
+timeout). A claim stores the timeout with the lease, so a reloaded pair is
+adopted at the next tick through a same-holder claim. Claims and adoption are
+serialized, and a renewal answered under an earlier pair is discarded, so the
+holder's local deadline never outlasts the stored expiry. A holder whose own
+lease lapsed — a host stall longer than the timeout, or renewals lost to a store
+outage — starts no ticket claim, launch, execution start, provisioning, forge
+write, `git push` or status publication, including from a continuation that
+resumes mid-operation; those effects are fenced where they are called. It then
+reads the repository record: when the record still names it, expired or not, it
+claims the lease again and carries on; when the record names another run, or
+there is no record (only a holder's release clears it), it stops as
+`superseded`. An expired lease of its own is never treated as a takeover, and it
+never records a `tick-yielded` naming itself. A store error is retried at the
+next renewal or tick. An effect already in flight when the stall began
+completes; cancelling it could tear external state.
+
 Both dashboards show each accepted unfinished generation handoff, naming its source
 and target runtimes (version and abbreviated commit), mode and drain deadline
 (`unknown` for missing historical facts). A drain-mode outstanding execution
@@ -4220,6 +4239,8 @@ sessionBudgetSeconds = 7200       # optional role override
 
 [policy]
 upgradeDrainSeconds = 900         # local generation drain deadline, hot-reloaded
+dispatchLeaseTimeoutSeconds = 60  # repository dispatch lease lifetime without renewal
+dispatchLeaseRenewalSeconds = 20  # renewal interval; less than the timeout
 sessionBudgetSeconds = 3600       # non-infinite default for build agent sessions
 stallRounds = 3
 maxVerifyAttempts = 3
