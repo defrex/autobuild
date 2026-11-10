@@ -6430,7 +6430,8 @@ export class Dispatcher {
     launched: Set<string>,
     sampling: { refreshOnly?: boolean } = {},
   ): Promise<void> {
-    if (!integrationAdmissible(state)) return
+    // The janitor's own escalation never skips the preparation that would recover it.
+    if (!integrationAdmissible(withoutJanitorEscalation(state))) return
     const forge = this.kernelForge()
     if (!record.branch || !state.baseBranch || !forge.compareBranches) return
     const comparison = await forge.compareBranches(state.baseBranch!, record.branch!)
