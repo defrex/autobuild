@@ -702,6 +702,9 @@ per client and fall back to full artifact reads, never event replay.
 build-owned identity and source ancestry at settled stage boundaries. Typed
 `verify.config-captured` and `verify.config-superseded` facts advance the result
 boundary in the reducer and log index, independently of reconcile identity.
+The advisory `pipeline.settled` fact records that the engine reached a leaf's
+`wait awaiting-pr`; `kernel/dispatch-capacity.ts` reads it so a finished build
+parked for its merge decision holds no slot.
 The runner refreshes after workspace mutation and before constructing members;
 concurrent siblings settle before another stage is selected. Recovery and
 readiness compose live deployment settings onto the captured artifact revision.

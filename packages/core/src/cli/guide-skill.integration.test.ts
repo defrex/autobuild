@@ -225,7 +225,7 @@ describe('ab-guide — dispatch dashboard summary', () => {
     expect(compact).toContain('never reads the ticket source')
     expect(compact).toContain('`queue` is the ready-ticket queue depth')
     expect(compact).toContain(
-      '`active` is the current nonterminal-build count against root `capacity`',
+      '`active` is occupied capacity (every unfinished build, plus finished builds running work again) against root `capacity`',
     )
     expect(compact).not.toContain('`obs`')
     expect(compact).not.toContain('`drift`')

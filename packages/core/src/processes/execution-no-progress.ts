@@ -25,6 +25,7 @@ export const executionProgress = {
   'landing.forge-merged': 'progress',
   'landing.native-applied': 'bookkeeping',
   'target.distance': 'bookkeeping',
+  'pipeline.settled': 'bookkeeping',
   'target.rewritten': 'bookkeeping',
   'target.rewrite-cleared': 'bookkeeping',
   'target.moved': 'bookkeeping',

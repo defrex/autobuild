@@ -90,6 +90,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'rollback-narrow',
     'handoff-wide',
     'handoff-narrow',
+    'parked-slot-wait-wide',
     'harvest-suspended-wide',
     'harvest-suspended-narrow',
     'capacity-wide',
@@ -237,6 +238,12 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
         expect(frame.text).toContain('run ab upgrade')
         expect(frame.text).toContain('Unicode warning')
       }
+    } else if (frame.id === 'parked-slot-wait-wide') {
+      expect(frame.text).toContain('1 parked build waiting for a slot ahead of new ticket claims')
+      expect(frame.text).toContain('! reconcile waiting for a slot ahead of new ticket claims')
+      expect(frame.model.capacity?.waitingBuilds).toEqual([
+        { slug: 'cache-warm-on-deploy', request: 'reconcile' },
+      ])
     } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')
@@ -280,6 +287,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       frame.id !== 'website-hero' &&
       !frame.id.startsWith('harvest-suspended-') &&
       !frame.id.startsWith('handoff-') &&
+      frame.id !== 'parked-slot-wait-wide' &&
       !frame.id.startsWith('rollback-') &&
       !frame.id.startsWith('session-') &&
       !frame.id.startsWith('integration-detail-') &&

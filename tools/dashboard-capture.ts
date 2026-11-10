@@ -7,6 +7,7 @@ import { verifyStagesCapture } from './verify-stages-capture'
 import { reportIntegrationFailures } from '../packages/core/src/kernel/integration-attention'
 import { rollbackCapture, ROLLBACK_AT } from './rollback-capture'
 import { handoffCapture } from './handoff-capture'
+import { parkedSlotWaitCapture } from './parked-slot-wait-capture'
 import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
 import { readBuildFacts } from '../packages/core/src/store/reduced-reads'
@@ -63,6 +64,7 @@ export interface FrameSpec {
   harvestSuspended?: boolean
   rollback?: boolean
   handoff?: boolean
+  parkedSlotWait?: boolean
   nativeSessions?: boolean
   verifyStages?: boolean
   accountCredentials?: 'missing' | 'recovered'
@@ -217,6 +219,18 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'RUNNING',
     ],
   })),
+  {
+    id: 'parked-slot-wait-wide',
+    scenario: 'happy',
+    columns: 180,
+    rows: 50,
+    parkedSlotWait: true,
+    requires: [
+      '1 parked build waiting for a slot ahead of new ticket claims',
+      'PR open',
+      '! reconcile waiting for a slot ahead of new ticket claims',
+    ],
+  },
   {
     id: 'harvest-suspended-wide',
     scenario: 'happy',
@@ -1889,7 +1903,9 @@ async function capturePaint(
             ? rollbackCapture(model)
             : spec.handoff
               ? handoffCapture(model)
-              : model
+              : spec.parkedSlotWait
+                ? parkedSlotWaitCapture(model)
+                : model
       const presented = {
         ...sourceModel,
         ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),

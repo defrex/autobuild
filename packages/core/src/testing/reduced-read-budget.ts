@@ -1383,6 +1383,7 @@ export async function parkedSweepReadBudget(opts: {
     },
   })
   let seeded = 0
+  const idleRequests: Record<string, number>[] = []
   for (const length of [100, 100_000]) {
     for (; seeded < length; seeded++) {
       await store.append(slugs[0]!, {
@@ -1469,6 +1470,31 @@ export async function parkedSweepReadBudget(opts: {
     expect(metrics.bodies).toBe(slugs.length)
     expect(blobReads).toBe(slugs.length)
     expect(metrics.historicalRows).toBe(0)
+    // Idle admission ticks over settled parked builds: capacity adds no
+    // recurring read and writes nothing, at either history length.
+    reset()
+    await dispatcher.tick({ acceptNewWork: false })
+    const baseline = { meta: metrics.meta, bodies: metrics.bodies }
+    const idle = opts.dispatcher()
+    opts.advance()
+    // Warm intake's own projections and persist their snapshots.
+    for (const _ of [0, 1]) {
+      await idle.tick({ acceptNewWork: true })
+      opts.advance()
+    }
+    for (const _ of [0, 1]) {
+      opts.advance()
+      reset()
+      const requests = await countStoreRequests(store, () =>
+        idle.tick({ acceptNewWork: true }).then(() => undefined),
+      )
+      expect(requests.append ?? 0).toBe(0)
+      expect(requests.appendIfCurrent ?? 0).toBe(0)
+      expect(metrics.historicalRows).toBe(0)
+      expect({ meta: metrics.meta, bodies: metrics.bodies }).toEqual(baseline)
+      if (idleRequests.length) expect(requests).toEqual(idleRequests[0]!)
+      idleRequests.push(requests)
+    }
     console.log('parked sweep read budget', {
       history: length,
       builds: slugs.length,
@@ -1481,6 +1507,35 @@ export async function parkedSweepReadBudget(opts: {
     })
     Reflect.deleteProperty(events, 'slice')
   }
+}
+
+/** Count every MemoryBuildStore method call made while `run` executes. */
+async function countStoreRequests(
+  store: import('../store/memory').MemoryBuildStore,
+  run: () => Promise<void>,
+): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {}
+  const names = Object.getOwnPropertyNames(Object.getPrototypeOf(store)).filter(
+    (name) => name !== 'constructor' && typeof Reflect.get(store, name) === 'function',
+  )
+  const restore: (() => void)[] = []
+  for (const name of names) {
+    const own = Object.getOwnPropertyDescriptor(store, name)
+    const original = Reflect.get(store, name) as (...args: unknown[]) => unknown
+    Reflect.set(store, name, (...args: unknown[]) => {
+      counts[name] = (counts[name] ?? 0) + 1
+      return original.apply(store, args)
+    })
+    restore.push(() =>
+      own ? Object.defineProperty(store, name, own) : Reflect.deleteProperty(store, name),
+    )
+  }
+  try {
+    await run()
+  } finally {
+    for (const undo of restore) undo()
+  }
+  return counts
 }
 
 /** Append filler facts to one build until its log holds `length` events. */

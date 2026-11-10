@@ -12,6 +12,8 @@ import { GitHubForge } from '../ports/forge/github'
 import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
 import { buildNeedsAttention, mergeDecision } from '../cli/attention'
 import { decideNext } from '../kernel/engine'
+import { epilogueLeaf } from '../kernel/dispatch-capacity'
+import { listOperatorBuilds } from '../operator/query'
 import { publicationPending } from './publication-state'
 import { RepoViewStore } from './repo-view'
 import {
@@ -9881,14 +9883,15 @@ describe('durable ticket scan cadence', () => {
     expect(h.scans()).toBe(3)
   })
 
-  test('janitor merge releases capacity and forces a scan within the same tick', async () => {
+  test('a parked build frees its slot before intake; janitor merge forces a scan within the same tick', async () => {
     const h = counted({ tickets: [readyTicket('next')] })
     await seedAwaitingPr(h)
-    await h.dispatcher.tick()
+    // The sweep settles the parked build ahead of intake, so its slot is claimed at once.
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
     expect(h.scans()).toBe(1)
     h.forge.setPrState(PR.number, { state: 'merged', sha: 'squash-1' })
     h.clock.advance(30_000)
-    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    await h.dispatcher.tick()
     expect(h.scans()).toBe(2)
   })
 
@@ -10390,6 +10393,20 @@ command = "run"
       slugs.push(slug)
       await pin(h, slug, budgetConfig)
     }
+    // The first sweep settles each parked build exactly once; later sweeps write nothing.
+    const settled = async () =>
+      (
+        await Promise.all(
+          slugs.map(async (slug) =>
+            (await store.getEvents(slug)).filter((e) => e.type === 'pipeline.settled'),
+          ),
+        )
+      ).map((events) => events.length)
+    await harness({ store, clock, forge: h.forge }).dispatcher.tick({ acceptNewWork: false })
+    expect(await settled()).toEqual([1, 1, 1])
+    clock.advance(120_000)
+    await harness({ store, clock, forge: h.forge }).dispatcher.tick({ acceptNewWork: false })
+    expect(await settled()).toEqual([1, 1, 1])
     await parkedSweepReadBudget({
       store,
       slugs,
@@ -16158,4 +16175,558 @@ describe('native identity (AUT-812/AUT-821)', () => {
         }).dispatcher.tick({ acceptNewWork: false }),
     })
   }, 60_000)
+})
+
+describe('capacity counts builds running work, not builds parked for a merge decision', () => {
+  const VERIFY_TOML = [
+    '[commands]',
+    'run = "true"',
+    '[verify]',
+    'steps = ["unit"]',
+    '[verify.unit]',
+    'kind = "check"',
+    'command = "run"',
+  ].join('\n')
+  /** A green build at `awaiting-pr` on its own PR, with every verify step passed. */
+  async function ticketed(h: Harness, slug: string, remote = false): Promise<void> {
+    await h.tickets.create(
+      { title: slug, body: CONFORMING_BODY, labels: [] },
+      { requestedId: `T-${slug}` },
+    )
+    await seedBuild(h, {
+      slug,
+      ticketId: `T-${slug}`,
+      ...(remote ? { workspaceProvider: 'remote-test', workspaceRef: `sandbox-${slug}` } : {}),
+    })
+  }
+  async function parkedBuild(
+    h: Harness,
+    slug: string,
+    number: number,
+    remote = false,
+  ): Promise<string> {
+    await ticketed(h, slug, remote)
+    await seedLoopsApproved(h, slug)
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'unit', attempt: 1 },
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'unit', attempt: 1, pass: true },
+    })
+    const pr = { number, url: `https://fake.forge/pr/${number}`, headSha: 'head-1' }
+    await h.store.append(slug, { actor: KERNEL, type: 'finalize.completed', payload: { pr } })
+    h.forge.setPrState(number, { state: 'open', mergeable: true })
+    return slug
+  }
+  /** An unfinished build whose runner holds a live lease. */
+  async function busyBuild(h: Harness, slug: string): Promise<string> {
+    await ticketed(h, slug)
+    await h.store.claimLease(slug, `runner-${slug}`, 600_000)
+    return slug
+  }
+  async function finish(h: Harness, slug: string): Promise<void> {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    await h.store.releaseLease(slug, `runner-${slug}`)
+  }
+  const types = async (h: Harness, slug: string) =>
+    (await h.store.getEvents(slug)).map((event) => event.type)
+  const settlements = async (h: Harness, slug: string) =>
+    (await types(h, slug)).filter((type) => type === 'pipeline.settled').length
+  const failures = async (h: Harness, slug: string) =>
+    (await types(h, slug)).filter((type) =>
+      [
+        'dispatch.failed',
+        'escalation.raised',
+        'build.janitor-attempt-failed',
+        'runner.infrastructure-failed',
+        'workspace.released',
+      ].includes(type),
+    )
+  const claimOnLaunch = (slug: string, store: BuildStore) =>
+    store.claimLease(slug, `runner-${slug}`, 600_000).then(() => undefined)
+  const slotWait = async (h: Harness, slug: string) =>
+    (
+      await listOperatorBuilds({ store: h.store, repo: REPO, scope: 'active', now: h.clock() })
+    ).find((summary) => summary.slug === slug)?.slotWait
+
+  for (const variant of ['consent', 'held', 'consented'] as const)
+    test(`a parked build (${variant}) holds no slot once settled and a ready ticket takes it`, async () => {
+      const h = harness({ toml: VERIFY_TOML })
+      const slug = await parkedBuild(h, 'parked', 2)
+      if (variant === 'held')
+        await h.store.append(slug, {
+          actor: humanActor('operator'),
+          type: 'build.hold-requested',
+          payload: {},
+        })
+      if (variant === 'consented') {
+        const state = (await readBuildFacts(h.store, slug)).value.state
+        await h.store.append(slug, {
+          actor: humanActor('operator'),
+          type: 'build.land-requested',
+          payload: { decisionSeq: state.landing?.decision?.seq ?? state.lastSeq },
+        })
+        // The forge has not applied the merge yet.
+        h.forge.setPrState(2, { state: 'open', mergeable: null })
+      }
+      // Before the first sweep nothing records settlement, so the slot stays occupied.
+      expect(epilogueLeaf((await readBuildFacts(h.store, slug)).value.state)).toBe(false)
+      h.tickets.add(readyTicket('T-next'))
+      const report = await h.dispatcher.tick()
+      expect(await settlements(h, slug)).toBe(1)
+      expect(report.dispatched).toBe(1)
+      expect((await h.store.listBuilds()).map((record) => record.slug)).toHaveLength(2)
+      expect(h.launches).not.toContain(slug)
+      for (let tick = 0; tick < 3; tick++) {
+        h.clock.advance(60_000)
+        await h.dispatcher.tick()
+      }
+      expect(await settlements(h, slug)).toBe(1)
+      expect(await failures(h, slug)).toEqual([])
+    })
+
+  test('a conflicted parked build waits for a slot ahead of new claims, then goes first', async () => {
+    const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+    const parked = await parkedBuild(h, 'a-parked', 2)
+    const busy = await busyBuild(h, 'b-busy')
+    await h.dispatcher.tick()
+    expect(await settlements(h, parked)).toBe(1)
+
+    h.forge.setPrState(2, { state: 'open', mergeable: false })
+    h.tickets.add(readyTicket('T-next'))
+    for (let tick = 0; tick < 3; tick++) {
+      h.clock.advance(60_000)
+      const report = await h.dispatcher.tick()
+      expect(report.dispatched).toBe(0)
+      expect(report.dispatchFailed).toBe(0)
+      expect(report.janitorFailed).toBe(0)
+    }
+    expect((await types(h, parked)).filter((type) => type === 'pr.conflicted')).toHaveLength(1)
+    expect(h.launches).toEqual([])
+    expect(await failures(h, parked)).toEqual([])
+    expect(await slotWait(h, parked)).toBe('reconcile')
+    expect(await h.store.listBuilds()).toHaveLength(2)
+
+    await finish(h, busy)
+    h.clock.advance(60_000)
+    const freed = await h.dispatcher.tick()
+    expect(h.launches).toEqual([parked])
+    expect(freed.dispatched).toBe(0)
+    expect(await h.store.listBuilds()).toHaveLength(2)
+    expect(await slotWait(h, parked)).toBeUndefined()
+  })
+
+  test('two waiting parked builds and one free slot admit exactly one', async () => {
+    const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+    const first = await parkedBuild(h, 'a-first', 2)
+    const second = await parkedBuild(h, 'b-second', 3)
+    await h.dispatcher.tick()
+    h.forge.setPrState(2, { state: 'open', mergeable: false })
+    h.forge.setPrState(3, { state: 'open', mergeable: false })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.launches).toHaveLength(1)
+    expect([first, second]).toContain(h.launches[0]!)
+    const waiting = h.launches[0] === first ? second : first
+    expect(await slotWait(h, waiting)).toBe('reconcile')
+    expect(await failures(h, waiting)).toEqual([])
+  })
+
+  test('a parked build whose target moved waits to re-verify ahead of new claims', async () => {
+    const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+    const parked = await parkedBuild(h, 'a-parked', 2)
+    const busy = await busyBuild(h, 'b-busy')
+    await h.dispatcher.tick()
+    expect(await settlements(h, parked)).toBe(1)
+    const moved = 'c'.repeat(40)
+    h.forge.seedBranch('main', moved)
+    await h.store.append(parked, {
+      actor: DISPATCHER,
+      type: 'target.moved',
+      payload: { branch: 'main', sha: moved },
+    })
+    h.tickets.add(readyTicket('T-next'))
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(0)
+    expect(h.launches).toEqual([])
+    expect(await slotWait(h, parked)).toBe('verification')
+    expect(await failures(h, parked)).toEqual([])
+
+    await finish(h, busy)
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(0)
+    expect(h.launches).toEqual([parked])
+  })
+
+  for (const variant of ['reconcile', 'paused-then-resumed'] as const)
+    test(`a reconciled parked build (${variant}) waits to re-verify and settles again once verified`, async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const parked = await parkedBuild(h, 'a-parked', 2)
+      const busy = await busyBuild(h, 'b-busy')
+      await h.dispatcher.tick()
+      expect(await settlements(h, parked)).toBe(1)
+      await h.store.append(parked, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: 'base-old' },
+      })
+      await h.store.append(parked, {
+        actor: KERNEL,
+        type: 'reconcile.started',
+        payload: { attempt: 1, baseSha: 'base-old' },
+      })
+      await h.store.append(parked, {
+        actor: agentActor('reconcile', 's_reconcile'),
+        type: 'reconcile.completed',
+        payload: { mergeCommit: 'merge-1', artifact: { kind: 'reconcile-notes', rev: 0 } },
+      })
+      if (variant === 'paused-then-resumed') {
+        await h.store.append(parked, { actor: KERNEL, type: 'build.paused', payload: {} })
+        h.clock.advance(60_000)
+        await h.dispatcher.tick()
+        // A paused build writes no settlement and requests nothing.
+        expect(await settlements(h, parked)).toBe(1)
+        expect(await slotWait(h, parked)).toBeUndefined()
+        await h.store.append(parked, { actor: KERNEL, type: 'build.resumed', payload: {} })
+      }
+      h.tickets.add(readyTicket('T-next'))
+      for (let tick = 0; tick < 2; tick++) {
+        h.clock.advance(60_000)
+        expect((await h.dispatcher.tick()).dispatched).toBe(0)
+      }
+      expect(h.launches).toEqual([])
+      expect(await settlements(h, parked)).toBe(1)
+      expect(await slotWait(h, parked)).toBe('verification')
+      expect(await failures(h, parked)).toEqual([])
+
+      await finish(h, busy)
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).dispatched).toBe(0)
+      expect(h.launches).toEqual([parked])
+      // The runner re-verifies and exits at awaiting-pr.
+      await h.store.append(parked, {
+        actor: KERNEL,
+        type: 'verify.started',
+        payload: { step: 'unit', attempt: 2 },
+      })
+      await h.store.append(parked, {
+        actor: KERNEL,
+        type: 'verify.completed',
+        payload: { step: 'unit', attempt: 2, pass: true },
+      })
+      await h.store.releaseLease(parked, `runner-${parked}`)
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).dispatched).toBe(1)
+      expect(await settlements(h, parked)).toBe(2)
+      expect(await slotWait(h, parked)).toBeUndefined()
+    })
+
+  test('a pending abort on a parked build launches its runner at full capacity', async () => {
+    const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+    const parked = await parkedBuild(h, 'a-parked', 2)
+    await busyBuild(h, 'b-busy')
+    await h.dispatcher.tick()
+    expect(await settlements(h, parked)).toBe(1)
+    await h.store.append(parked, {
+      actor: humanActor('operator'),
+      type: 'build.abort-requested',
+      payload: {},
+    })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.launches).toEqual([parked])
+  })
+
+  test('a build between finalize.completed and its post-steps keeps its slot when paused, blocked or interrupted', async () => {
+    const toml = `${VERIFY_TOML}\n[finalize]\nsteps = ["notes"]\n[finalize.notes]\nkind = "check"\ncommand = "run"\n`
+    for (const variant of ['paused', 'blocked', 'interrupted'] as const) {
+      const h = harness({ toml, onLaunch: claimOnLaunch })
+      const slug = await parkedBuild(h, 'a-finalizing', 2)
+      if (variant === 'paused')
+        await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+      if (variant === 'blocked')
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'escalation.raised',
+          payload: { id: 'e_1', phase: 'finalize', source: 'stall', question: 'why?' },
+        })
+      h.tickets.add(readyTicket('T-next'))
+      expect((await h.dispatcher.tick()).dispatched).toBe(0)
+      expect(await settlements(h, slug)).toBe(0)
+      expect(await slotWait(h, slug)).toBeUndefined()
+      expect(await h.store.listBuilds()).toHaveLength(1)
+      // An interrupted unfinished build is relaunched without admission.
+      if (variant === 'interrupted') expect(h.launches).toEqual([slug])
+      else expect(h.launches).toEqual([])
+      if (variant !== 'paused') continue
+      await h.store.append(slug, { actor: KERNEL, type: 'build.resumed', payload: {} })
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([slug])
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.step-completed',
+        payload: { step: 'notes', ok: true },
+      })
+      await h.store.releaseLease(slug, `runner-${slug}`)
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).dispatched).toBe(1)
+      expect(await settlements(h, slug)).toBe(1)
+    }
+  })
+
+  test('a settled build that is then paused frees its slot', async () => {
+    const h = harness({ toml: VERIFY_TOML })
+    const slug = await parkedBuild(h, 'a-parked', 2)
+    await h.dispatcher.tick()
+    expect(await settlements(h, slug)).toBe(1)
+    await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
+    h.tickets.add(readyTicket('T-next'))
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+  })
+
+  /** A recovery-capable provider whose reaps and releases are counted. */
+  function remoteHarness(effects: string[], execution?: WorkspaceProvider['buildExecution']) {
+    const provider = {
+      ...continuationProvider(effects),
+      ...(execution ? { buildExecution: execution } : {}),
+    }
+    const recovery = provider.recovery!
+    const reap = recovery.reap.bind(recovery)
+    recovery.reap = async (...args) => {
+      effects.push('reap')
+      return reap(...args)
+    }
+    provider.release = async () => {
+      effects.push('release')
+    }
+    return harness({
+      toml: VERIFY_TOML,
+      workspaceProvider: provider,
+      onLaunch: claimOnLaunch,
+      opts: { leaseTtlMs: 0 },
+    })
+  }
+  async function lostExecution(h: Harness, slug: string): Promise<void> {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        instance: `lost-${slug}`,
+        provider: 'remote-test',
+        workspaceRef: `sandbox-${slug}`,
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: `lost-${slug}`, workspaceRef: `sandbox-${slug}`, outcome: 'lost' },
+    })
+  }
+  const released = async (h: Harness, slug: string) =>
+    (await types(h, slug)).filter((type) => type === 'workspace.released').length
+
+  test('a finished parked build keeps its lost remote workspace until it is admitted or merges', async () => {
+    const effects: string[] = []
+    const h = remoteHarness(effects)
+    const consent = await parkedBuild(h, 'a-consent', 2, true)
+    const held = await parkedBuild(h, 'b-held', 3, true)
+    await h.store.append(held, {
+      actor: humanActor('operator'),
+      type: 'build.hold-requested',
+      payload: {},
+    })
+    for (const slug of [consent, held]) await lostExecution(h, slug)
+    // Includes the tick that first writes settlement.
+    for (let tick = 0; tick < 3; tick++) {
+      await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+      h.clock.advance(60_000)
+    }
+    expect(await settlements(h, consent)).toBe(1)
+    expect(await settlements(h, held)).toBe(1)
+    expect(effects).toEqual([])
+    expect(h.launches).toEqual([])
+    expect(await released(h, consent)).toBe(0)
+    expect(await released(h, held)).toBe(0)
+
+    // Admitted recovery work fences and replaces the stale environment first.
+    h.forge.setPrState(2, { state: 'open', mergeable: false })
+    await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
+    expect(effects).toEqual(['reap', 'provision'])
+    expect(await released(h, consent)).toBe(1)
+    expect(h.launches).toEqual([consent])
+    expect(await failures(h, held)).toEqual([])
+
+    // The held build's workspace is released on merge, as before.
+    h.forge.setPrState(3, { state: 'merged', sha: 'squash-1' })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(await released(h, held)).toBe(1)
+    expect(await types(h, held)).toContain('build.completed')
+  })
+
+  test('a re-verifying parked build keeps its slot past lease expiry while its execution runs', async () => {
+    const effects: string[] = []
+    let observes = 0
+    const h = remoteHarness(effects, {
+      async start() {
+        throw new Error('must not launch')
+      },
+      async observe() {
+        observes++
+        return { state: 'running' }
+      },
+    })
+    const running = await parkedBuild(h, 'a-running', 2, true)
+    const waiting = await parkedBuild(h, 'b-waiting', 3, true)
+    await h.dispatcher.tick()
+    expect(await settlements(h, running)).toBe(1)
+    expect(await settlements(h, waiting)).toBe(1)
+
+    // A reconciled, now re-verifying on a provider-confirmed execution whose lease expires.
+    await h.store.append(running, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'base-old' },
+    })
+    await h.store.append(running, {
+      actor: agentActor('reconcile', 's_reconcile'),
+      type: 'reconcile.completed',
+      payload: { mergeCommit: 'merge-1', artifact: { kind: 'reconcile-notes', rev: 0 } },
+    })
+    await h.store.append(running, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        instance: 'remote-1',
+        provider: 'remote-test',
+        workspaceRef: `sandbox-${running}`,
+        commandId: 'cmd-1',
+      },
+    })
+    await h.store.claimLease(running, 'runner-remote', 100)
+    h.clock.advance(60_000)
+    h.forge.setPrState(3, { state: 'open', mergeable: false })
+    h.tickets.add(readyTicket('T-next'))
+    for (let tick = 0; tick < 2; tick++) {
+      const report = await h.dispatcher.tick()
+      await h.dispatcher.drainProvisioning()
+      expect(report.dispatched).toBe(0)
+      h.clock.advance(60_000)
+    }
+    expect(observes).toBeGreaterThan(0)
+    expect(h.launches).toEqual([])
+    expect(effects).toEqual([])
+    expect(await slotWait(h, waiting)).toBe('reconcile')
+    expect(await failures(h, waiting)).toEqual([])
+
+    // The runner re-verifies; provider-proved completion ends the execution and frees the slot.
+    await h.store.append(running, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'unit', attempt: 2 },
+    })
+    await h.store.append(running, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'unit', attempt: 2, pass: true },
+    })
+    await h.store.append(running, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: {
+        instance: 'remote-1',
+        workspaceRef: `sandbox-${running}`,
+        outcome: 'completed',
+        exitCode: 0,
+      },
+    })
+    await h.dispatcher.tick()
+    await h.dispatcher.drainProvisioning()
+    expect(await settlements(h, running)).toBe(2)
+    expect(h.launches).toEqual([waiting])
+  })
+
+  test('a settled build that is then paused keeps its workspace; an unfinished paused build is still reaped', async () => {
+    const effects: string[] = []
+    const h = remoteHarness(effects)
+    const finished = await parkedBuild(h, 'a-finished', 2, true)
+    await lostExecution(h, finished)
+    await h.dispatcher.tick()
+    expect(await settlements(h, finished)).toBe(1)
+    await h.store.append(finished, { actor: KERNEL, type: 'build.paused', payload: {} })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(effects).toEqual([])
+    expect(await released(h, finished)).toBe(0)
+
+    await ticketed(h, 'b-unfinished', true)
+    await lostExecution(h, 'b-unfinished')
+    await h.store.append('b-unfinished', { actor: KERNEL, type: 'build.paused', payload: {} })
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(effects).toEqual(['reap'])
+    expect(await released(h, 'b-unfinished')).toBe(1)
+    expect(await released(h, finished)).toBe(0)
+  })
+
+  test('orphan recovery on a finished build waits for a slot before reaping or provisioning', async () => {
+    const effects: string[] = []
+    const h = remoteHarness(effects)
+    const first = await parkedBuild(h, 'a-orphan', 2, true)
+    const second = await parkedBuild(h, 'b-orphan', 3, true)
+    const busy = await busyBuild(h, 'c-busy')
+    await h.dispatcher.tick()
+    expect(await settlements(h, first)).toBe(1)
+    expect(await settlements(h, second)).toBe(1)
+    for (const slug of [first, second]) {
+      await lostExecution(h, slug)
+      // An open, unsuspended session with no live execution is an orphan.
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: `orphan-${slug}`,
+          role: 'verify',
+          runner: 'scripted',
+          phase: 'verify:e2e',
+          round: 1,
+        },
+      })
+    }
+    h.tickets.add(readyTicket('T-next'))
+    for (let tick = 0; tick < 3; tick++) {
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).dispatched).toBe(0)
+      await h.dispatcher.drainProvisioning()
+    }
+    expect(effects).toEqual([])
+    expect(h.launches).toEqual([])
+    for (const slug of [first, second]) {
+      expect(await types(h, slug)).not.toContain('workspace.provision-started')
+      expect(await failures(h, slug)).toEqual([])
+    }
+
+    await finish(h, busy)
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(0)
+    await h.dispatcher.drainProvisioning()
+    // Exactly one waiting build is admitted: its stale environment is reaped
+    // and the continuation's tail starts its runner.
+    expect(effects).toEqual(['reap', 'provision'])
+    expect(h.launches).toHaveLength(1)
+    const waiting = h.launches[0] === first ? second : first
+    expect(await types(h, waiting)).not.toContain('workspace.provision-started')
+  })
 })
