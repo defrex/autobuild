@@ -449,7 +449,7 @@ files, including development configs, remain exactly as installed.
 - **dispatcher** — watches the TicketSource for tickets passing the configured
   ready gate, claims, establishes the final conforming spec, chooses a short
   immutable build slug, provisions a workspace, and launches build-runners up
-  to capacity. On process startup it attempts every current build for its
+  to capacity, which counts builds running work (§12). On process startup it attempts every current build for its
   repo, so re-running `ab dispatch` resumes durable work rather than only
   looking for new tickets. Every ordinary tick also completes queued dispatch
   records whose pre-run sequence was interrupted: it reconstructs a missing
@@ -2370,6 +2370,20 @@ creation holds, capacity, intake off and repository pause — so a blocked urgen
 ticket never holds back normal work. Priority never preempts: an urgent ticket
 does not stop, pause or displace a running build.
 
+**What holds a slot.** `capacity` counts builds running work. A work build that
+has finished its pipeline (every verify step and every finalize post-step for
+the current spec) holds no slot while it waits for a merge decision, for merge
+gates or the forge, or on hold, and the slot goes to the next ready ticket. The
+dispatcher records the finish as an advisory `pipeline.settled` fact when the
+engine first decides `wait awaiting-pr`. A build that has not finished keeps its
+slot, even while paused, blocked or interrupted between `finalize.completed`
+and its post-steps. When a finished build must restack, re-verify or reconcile,
+it is admitted before new ticket claims, as a node is: intake reserves a slot
+for it, and its wait records nothing, consumes no attempt and raises no
+attention. Abort and pause acknowledgements are not gated. A finished build
+keeps its workspace until it merges or closes, so retained workspaces can
+exceed `capacity`; running work cannot.
+
 Additional scheduled ingesters such as `ingest:sentry` remain an open design
 thread and have no shipped config surface. Observation harvest is
 pressure-driven: on the existing one-pass scan of repository build streams, the
@@ -2767,7 +2781,8 @@ node occupancy before the runner starts. This exception never raises the budget
 for new claims. Status and both dashboards report actual occupancy, configured
 capacity, effective display capacity and the nodes using descendant-held slots.
 Status, `ab builds` and both dashboards report each node waiting for a slot
-ahead of new ticket claims. Idle collecting nodes remain free.
+ahead of new ticket claims, and report a finished work build waiting to run
+again the same way. Idle collecting nodes remain free.
 
 An empty node has no PR and reports `integration`, `target`, and `empty`.
 Once it holds commits its current parent lacks, the dispatcher opens or adopts
@@ -3777,6 +3792,11 @@ and `verify.config-superseded` (§16.1). These facts do not change reconcile
 identity or its policy snapshot; replay gates still refer to the code/reconcile
 boundary. Superseded receipts remain historical evidence.
 
+`pipeline.settled { cycle }` is advisory capacity evidence. The dispatcher
+appends it once per settlement key (the later of the current verify cycle start
+and the latest `finalize.completed`) when the engine decides `wait awaiting-pr`;
+no pipeline decision reads it (§12).
+
 ### 15.7 Post-PR lifecycle [D1 — confirmed]
 
 Walking the happy path exposed a gap in the grammar: `finalize` creates the
@@ -4160,7 +4180,7 @@ and default-attribution fields remain replay-compatible but are not new controls
 
 ```toml
 baseBranch = "main"
-capacity = 3                    # concurrent builds for this repo
+capacity = 3                    # builds running work at once; builds parked for a merge decision hold no slot
 ticketScanIntervalSeconds = 60  # positive integer; ready scans, with tick spacing as floor
 forge = "github"                # builtin: github | local-git; or a plugin name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]

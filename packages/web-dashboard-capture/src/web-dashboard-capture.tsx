@@ -5,6 +5,7 @@ import { verifyStagesCapture } from '../../../tools/verify-stages-capture'
 import { ACCESS_SCENARIOS, accessFixture } from './access-fixtures'
 import { rollbackCapture, ROLLBACK_AT } from '../../../tools/rollback-capture'
 import { handoffCapture } from '../../../tools/handoff-capture'
+import { parkedSlotWaitCapture } from '../../../tools/parked-slot-wait-capture'
 import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
 import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
 import ConnectionPage from '../../hosted-store-service/app/connect/page'
@@ -214,6 +215,15 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     width: size === 'narrow' ? 390 : 1440,
     height: 2200,
     requires: ['handoff 1.0.0', '1.1.0', 'mode drain;', 'drain deadline', '(draining)', 'RUNNING'],
+  })),
+  ...['wide', 'narrow'].map((size) => ({
+    id: `builds-parked-slot-wait-${size}`,
+    width: size === 'narrow' ? 390 : 1440,
+    height: 2200,
+    requires: [
+      'parked build waiting for a slot ahead of new ticket claims',
+      'reconcile waiting for a slot ahead of new ticket claims',
+    ],
   })),
   {
     id: 'capacity-wide',
@@ -974,6 +984,10 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
   }
   if (spec.id.startsWith('builds-handoff-')) {
     const model = handoffCapture(models.happy)
+    return shell(builds(model), { model })
+  }
+  if (spec.id.startsWith('builds-parked-slot-wait-')) {
+    const model = parkedSlotWaitCapture(models.happy)
     return shell(builds(model), { model })
   }
   switch (spec.id) {

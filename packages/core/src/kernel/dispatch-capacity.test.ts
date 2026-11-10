@@ -3,11 +3,16 @@ import { reduceBuild } from './reducer'
 import {
   capacityExplanation,
   dispatchCapacity,
+  epilogueLeaf,
+  epilogueUnsettled,
   intakeCapacity,
   nodeCapacity,
   occupiesCapacity,
+  settlementDue,
+  settlementKey,
   slotRequest,
   slotWaitText,
+  waitingExplanation,
   type CapacityBuild,
   type DispatchCapacity,
 } from './dispatch-capacity'
@@ -287,4 +292,170 @@ test('capacity wording covers waiting, borrowing, both and a legacy projection',
     'verification waiting for a slot ahead of new ticket claims',
   )
   expect(intakeCapacity(base)).toBe(0)
+})
+
+/** A leaf past `finalize.completed` at seq 10, settled at `settled` when given. */
+function finished(
+  slug: string,
+  opts: {
+    settled?: number
+    status?: CapacityBuild['state']['status']
+    lease?: boolean
+    provisioning?: boolean
+  } = {},
+): CapacityBuild {
+  const leaf = build(slug, 'work', opts.status ?? 'running')
+  leaf.workspace = true
+  leaf.state.finalizeCompletedSeq = 10
+  leaf.state.prState = 'open'
+  leaf.state.verify = { ...leaf.state.verify, cycleSince: 4 }
+  if (opts.settled !== undefined) leaf.state.pipelineSettled = opts.settled
+  if (opts.lease)
+    leaf.record.lease = {
+      holder: 'runner',
+      expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+    } as never
+  if (opts.provisioning) leaf.provisioning = true
+  return leaf
+}
+
+test('a leaf past finalize.completed keeps its slot until settlement, paused or blocked too', () => {
+  for (const status of ['running', 'paused', 'blocked'] as const) {
+    const leaf = finished('a', { status })
+    expect(epilogueLeaf(leaf.state)).toBe(false)
+    expect(occupiesCapacity(leaf, now)).toBe(true)
+    expect(slotRequest(leaf, now)).toBeUndefined()
+    expect(settlementDue(leaf.state)).toBe(true)
+  }
+})
+
+test('a settled leaf with no runner is parked and free; a runner makes it occupy', () => {
+  const parked = finished('a', { settled: 10 })
+  expect(settlementKey(parked.state)).toBe(10)
+  expect(epilogueLeaf(parked.state)).toBe(true)
+  expect(settlementDue(parked.state)).toBe(false)
+  expect(occupiesCapacity(parked, now)).toBe(false)
+  expect(slotRequest(parked, now)).toBeUndefined()
+  expect(occupiesCapacity(finished('a', { settled: 10, lease: true }), now)).toBe(true)
+  expect(occupiesCapacity(finished('a', { settled: 10, provisioning: true }), now)).toBe(true)
+  const expired = finished('a', { settled: 10 })
+  expired.record.lease = { holder: 'r', expiresAt: '2026-10-20T14:00:00Z' } as never
+  expect(occupiesCapacity(expired, now)).toBe(false)
+  for (const status of ['paused', 'blocked'] as const) {
+    const leaf = finished('a', { settled: 10, status })
+    expect(occupiesCapacity(leaf, now)).toBe(false)
+    leaf.state.prState = 'conflicted'
+    expect(slotRequest(leaf, now)).toBeUndefined()
+  }
+})
+
+test('held, consented and auto-landing settled leaves are all free', () => {
+  for (const landing of [
+    { hold: { seq: 11 } },
+    { command: { kind: 'land', seq: 11 } },
+    { decision: { seq: 11 } },
+  ]) {
+    const leaf = finished('a', { settled: 10 })
+    leaf.state.landing = landing as never
+    expect(occupiesCapacity(leaf, now)).toBe(false)
+  }
+})
+
+test('a spec revision after settlement makes the leaf unfinished again', () => {
+  const leaf = finished('a', { settled: 10 })
+  leaf.state.restartSince = 10
+  expect(epilogueLeaf(leaf.state)).toBe(false)
+  expect(occupiesCapacity(leaf, now)).toBe(true)
+  expect(settlementDue(leaf.state)).toBe(false)
+  leaf.state.restartSince = 12
+  expect(occupiesCapacity(leaf, now)).toBe(true)
+})
+
+test('a parked leaf requests reconcile, a due restack, or verification for an unsettled cycle', () => {
+  const conflicted = finished('a', { settled: 10 })
+  conflicted.state.prState = 'conflicted'
+  expect(slotRequest(conflicted, now)).toBe('reconcile')
+  const moved = finished('b', { settled: 10 })
+  moved.restackDue = true
+  expect(slotRequest(moved, now)).toBe('verification')
+  // A reconcile completion or config supersession opens a new verify cycle.
+  const reverify = finished('c', { settled: 10 })
+  reverify.state.verify = { ...reverify.state.verify, cycleSince: 20 }
+  expect(epilogueUnsettled(reverify.state)).toBe(true)
+  expect(settlementDue(reverify.state)).toBe(true)
+  expect(slotRequest(reverify, now)).toBe('verification')
+  // Pause, resume and runner exits write no settlement: still unsettled.
+  reverify.state.status = 'paused'
+  expect(slotRequest(reverify, now)).toBeUndefined()
+  reverify.state.status = 'running'
+  expect(slotRequest(reverify, now)).toBe('verification')
+  // Settlement at the new key clears it.
+  reverify.state.pipelineSettled = 20
+  expect(slotRequest(reverify, now)).toBeUndefined()
+  expect(settlementDue(reverify.state)).toBe(false)
+  // A running reconcile holds a lease: occupied, not waiting.
+  const running = finished('d', { settled: 10, lease: true })
+  running.state.prState = 'conflicted'
+  expect(slotRequest(running, now)).toBeUndefined()
+  expect(occupiesCapacity(running, now)).toBe(true)
+})
+
+test('a deferred or target-rewritten parked leaf makes no request', () => {
+  const deferred = finished('a', { settled: 10 })
+  deferred.state.prState = 'conflicted'
+  deferred.state.compatibility = { ...deferred.state.compatibility, decisiveFacts: 1 }
+  expect(slotRequest(deferred, now)).toBeUndefined()
+  const rewritten = finished('b', { settled: 10 })
+  rewritten.restackDue = true
+  rewritten.state.targetRewrite = { type: 'target.rewritten' } as never
+  expect(slotRequest(rewritten, now)).toBeUndefined()
+})
+
+test('parked leaves free capacity and reserve intake while they wait', () => {
+  const conflicted = finished('wait-r', { settled: 10 })
+  conflicted.state.prState = 'conflicted'
+  const moved = finished('wait-v', { settled: 10 })
+  moved.restackDue = true
+  const builds = [
+    build('running'),
+    finished('parked', { settled: 10 }),
+    conflicted,
+    moved,
+    finished('unsettled'),
+  ]
+  const capacity = dispatchCapacity(builds, 4, now)
+  expect(capacity).toEqual({
+    configured: 4,
+    occupied: 2,
+    effective: 4,
+    borrowingNodes: [],
+    waitingBuilds: [
+      { slug: 'wait-r', request: 'reconcile' },
+      { slug: 'wait-v', request: 'verification' },
+    ],
+  })
+  expect(intakeCapacity(capacity)).toBe(0)
+  expect(intakeCapacity(capacity, { settled: new Set(['wait-v']) })).toBe(1)
+  expect(intakeCapacity(capacity, { denied: new Set(['wait-r', 'other']) })).toBe(-1)
+  expect(
+    intakeCapacity(capacity, { settled: new Set(['wait-r']), denied: new Set(['wait-r']) }),
+  ).toBe(0)
+  expect(waitingExplanation(capacity, { requests: true })).toBe(
+    '2 parked builds waiting for a slot ahead of new ticket claims: wait-r (reconcile), wait-v (verification)',
+  )
+})
+
+test('capacity wording joins node and parked-build waits', () => {
+  expect(
+    capacityExplanation({
+      configured: 2,
+      occupied: 2,
+      effective: 2,
+      borrowingNodes: [],
+      waitingNodes: [{ slug: 'n', request: 'verification' }],
+      waitingBuilds: [{ slug: 'p', request: 'reconcile' }],
+    }),
+  ).toBe(
+    ' (2 configured; 1 node waiting for a slot ahead of new ticket claims: n; 1 parked build waiting for a slot ahead of new ticket claims: p)',
+  )
 })

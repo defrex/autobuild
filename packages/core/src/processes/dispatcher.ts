@@ -60,8 +60,11 @@ import {
 } from '../ports/forge-request-context'
 import {
   dispatchCapacity,
+  epilogueLeaf,
   intakeCapacity,
   nodeCapacity,
+  settlementDue,
+  settlementKey,
   slotRequest,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
@@ -168,7 +171,7 @@ import type { EventPayload, PinnedAsset } from '../events/payloads'
 import type { IdSource } from '../ids'
 import { recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import type { AutoMergeDefaultFact } from '../kernel/auto-merge-default'
-import { decideNextFromFacts } from '../kernel/engine'
+import { decideNextFromFacts, landingRestackDue } from '../kernel/engine'
 import { composeBuildConfig } from '../config/live'
 import { BUILD_EFFECTIVE_CONFIG_ARTIFACT, parseEffectiveBuildConfig } from './build-execution-state'
 import {
@@ -1037,6 +1040,14 @@ export class Dispatcher {
   /** Process-local background provisioning, keyed by slug. A tick that sees a
    * slug here defers to the continuation; it never blocks on it. */
   private readonly continuations = new Map<string, ProvisionContinuation>()
+  /** Per tick, rebuilt from durable state: builds launched so far, which
+   * occupy a slot before their runner claims a lease. */
+  private tickLaunched: ReadonlySet<string> = new Set()
+  /** Per tick: finished leaves the admission gate turned away. Intake reserves their slots. */
+  private readonly slotWaiters = new Set<string>()
+  /** Per tick: parked leaves whose sweep decision was `wait awaiting-pr`. A
+   * projected wait for one of these is one tick stale and reserves nothing. */
+  private readonly parkedSettled = new Set<string>()
 
   // Batched confirmed landing evidence is shared across nodes for this tick.
   // Only durable availability facts authorize the shortcut after restart. The
@@ -1175,6 +1186,8 @@ export class Dispatcher {
     this.integrationInputs = undefined
     this.integrationPublicationInputs = undefined
     this.nodePollingTickReads.clear()
+    this.slotWaiters.clear()
+    this.parkedSettled.clear()
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
@@ -1185,6 +1198,7 @@ export class Dispatcher {
     /** Builds already launched this tick — a janitor/startup re-attach must
      * not be doubled by the sweep, nor a fresh dispatch by anything. */
     const launched = new Set<string>()
+    this.tickLaunched = launched
     // One journal read for both repository-wide controls: a pause that lands
     // mid-tick takes effect on the next tick, matching intake (which the CLI
     // likewise samples before calling `tick`); the auto-merge default fact is
@@ -1655,6 +1669,7 @@ export class Dispatcher {
     )
       return 'already-active'
     if (launched.has(slug)) return 'already-active'
+    if (launchState.kind !== 'node' && !(await this.leafAdmission(slug))) return 'already-active'
     launched.add(slug)
     const facts = (await readBuildFacts(this.store, slug)).value
     // Callers reap and reprovision a flagged workspace; an agent never starts
@@ -2012,7 +2027,7 @@ export class Dispatcher {
       autoMergeDefaultSeq?: number
       assets?: PinnedAsset[]
     },
-  ): Promise<'kicked' | 'in-flight' | 'foreign-live'> {
+  ): Promise<'kicked' | 'in-flight' | 'foreign-live' | 'slot-wait'> {
     const slug = record.slug
     if (!this.accountsAvailable()) return 'in-flight'
     if (this.continuations.has(slug)) return 'in-flight'
@@ -2033,6 +2048,9 @@ export class Dispatcher {
       }
       // Expired lease, failed attempt, or an old lease-less marker: adopt.
     }
+    // A finished leaf waits for a slot before its continuation reserves one.
+    // Nothing is written: the wait costs no attempt and raises no attention.
+    if (tail === 'launch' && !(await this.leafAdmission(slug))) return 'slot-wait'
     const branch = record.branch ?? `ab/${slug}`
     const generation = events.workspaceGenerations
     await this.store.append(slug, {
@@ -2173,6 +2191,8 @@ export class Dispatcher {
       const queued = (await readBuildFacts(store, slug)).value.state.status === 'queued'
       boundary = input.tail === 'dispatch' || queued ? 'dispatch' : 'launch'
       if (boundary === 'dispatch') await this.completeDispatchBoundaries(record, input.seed)
+      // Deliberately ungated: admission was decided when this continuation
+      // was kicked, and its lease and map entry have held the slot since.
       else if (this.accountsAvailable()) await this.startRunner(slug, emptyTickReport())
     } catch (error) {
       // Dispatch boundaries own their failure facts and exhaustion repair.
@@ -3042,8 +3062,10 @@ export class Dispatcher {
     return open?.localPath ?? open?.path ?? open?.ref ?? this.deps.checkout ?? this.deps.repo
   }
 
-  /** Deferral withholds decisions, but cannot free an existing capacity reservation. */
-  private async capacityBuilds(): Promise<CapacityBuild[]> {
+  /** Deferral withholds decisions, but cannot free an existing capacity reservation.
+   * A leaf's runner reservation is this process's continuation or a launch
+   * this tick; another process's continuation holds a heartbeat lease. */
+  private async capacityBuilds(launched?: ReadonlySet<string>): Promise<CapacityBuild[]> {
     const builds: CapacityBuild[] = []
     for (const { record, digest } of await this.repoBuildDigests(true)) {
       if (digest.terminal) continue
@@ -3053,11 +3075,39 @@ export class Dispatcher {
         state: facts.state,
         workspace: facts.workspace !== null,
         provisioning:
-          digest.kind === 'node' &&
-          (await readBuildFacts(this.store, record.slug)).value.provisionMarker !== undefined,
+          digest.kind === 'node'
+            ? (await readBuildFacts(this.store, record.slug)).value.provisionMarker !== undefined
+            : this.continuations.has(record.slug) || !!launched?.has(record.slug),
+        restackDue: landingRestackDue(facts.state, facts.log),
       })
     }
     return builds
+  }
+
+  /** Whether a leaf may reserve a runner now. A leaf that has not finished its
+   * pipeline already holds its slot, and abort and pause acknowledgements park
+   * at once, so only a finished leaf that must run again is gated: it needs
+   * a free slot among every other build. A denial is recorded only in memory,
+   * for this tick's intake reservation. */
+  private async leafAdmission(slug: string): Promise<boolean> {
+    const { state } = await this.store.buildFacts(slug)
+    if (
+      !epilogueLeaf(state) ||
+      state.pendingCommands.some(
+        (command) => command.command === 'abort' || command.command === 'pause',
+      )
+    )
+      return true
+    const others = (await this.capacityBuilds(this.tickLaunched)).filter(
+      (build) => build.record.slug !== slug,
+    )
+    const capacity = this.deps.config.capacity
+    if (dispatchCapacity(others, capacity, this.deps.clock()).occupied < capacity) {
+      this.slotWaiters.delete(slug)
+      return true
+    }
+    this.slotWaiters.add(slug)
+    return false
   }
 
   /** Admit every node awaiting verification that has a slot, in slug order,
@@ -3661,6 +3711,19 @@ export class Dispatcher {
         // never blocks on guest bootstrap.
         const kicked = await this.ensureProvisionContinuation(record, events, 'launch')
         if (kicked === 'kicked') report.provisioning += 1
+        report.conflicted += 1
+        return
+      }
+      // A finished build keeps its workspace while parked, even after its
+      // environment was lost; the lease sweep reaps and replaces it once the
+      // build is admitted, never a runner started in the lost environment.
+      const retained = openWorkspace(events)
+      if (
+        retained !== null &&
+        this.workspaceOwner(retained)?.recovery !== undefined &&
+        (events.lastExecution === 'lost' || events.lastExecution === 'stopped') &&
+        epilogueLeaf(events.state)
+      ) {
         report.conflicted += 1
         return
       }
@@ -5093,6 +5156,18 @@ export class Dispatcher {
     const decision = await this.decideBuild(record.slug, state, facts.log, report, true)
     if (decision === undefined) return
     if (state.status === 'done' || state.status === 'aborted') return
+    if (decision.kind === 'wait' && decision.reason === 'awaiting-pr' && state.kind !== 'node') {
+      this.parkedSettled.add(record.slug)
+      // The engine reached the end of the pipeline: record it once per
+      // settlement key so capacity stops counting the parked build. A lost
+      // race is decided again next tick.
+      if (settlementDue(state))
+        await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+          actor: DISPATCHER,
+          type: 'pipeline.settled',
+          payload: { cycle: settlementKey(state) },
+        })
+    }
     const orphanEligible = (state: BuildState) =>
       !paused &&
       state.status === 'running' &&
@@ -5186,6 +5261,18 @@ export class Dispatcher {
     // is reaped and replaced by the next generation.
     if (endedInPlace && open !== null && cleanupRequiredWorkspace(await history()))
       endedInPlace = false
+    const runs = decision.kind !== 'wait' || publicationRecoveryDue || orphanRecoveryDue
+    // A finished leaf with work to run waits for a slot before anything is
+    // reaped, provisioned or launched for it.
+    if (runs && state.kind !== 'node' && !(await this.leafAdmission(record.slug))) return
+    // A finished parked leaf keeps its workspace until merge or close; a
+    // stale environment is reaped only for an admitted replacement.
+    if (
+      !runs &&
+      state.kind !== 'node' &&
+      ((decision.kind === 'wait' && decision.reason === 'awaiting-pr') || epilogueLeaf(state))
+    )
+      return
     // A provider- or log-proved END in the same generation re-attaches in
     // place: the guest finished its work, the workspace is still the
     // build's, and replacing the environment would discard a healthy
@@ -5424,17 +5511,22 @@ export class Dispatcher {
     report.ticketDiagnostics = []
     report.dependencyDiagnostics = []
     report.creationDiagnostics = []
-    // Blocked and paused builds still occupy a slot: their workspaces and
-    // pending work are live, only waiting on a human. Capacity is per repo
-    // (§16.1) — another repo's builds never consume this repo's slots.
-    const capacityBuilds = await this.capacityBuilds()
-    // A node awaiting verification reserves its slot ahead of new claims until
-    // `admitWaitingNodes` gives it one; this only ever lowers the claim budget.
+    // Capacity counts builds running work. An unfinished build holds its slot
+    // even while blocked or paused; a finished build parked for its merge
+    // decision holds none. Capacity is per repo (§16.1) — another repo's
+    // builds never consume this repo's slots.
+    const capacityBuilds = await this.capacityBuilds(launched)
+    // A node awaiting verification, or a parked build that must run again,
+    // reserves its slot ahead of new claims until it is admitted; this only
+    // ever lowers the claim budget.
     const projection = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock())
     const activeRefs: TicketRef[] = capacityBuilds
       .filter(({ state }) => state.status !== 'done' && state.status !== 'aborted')
       .flatMap(({ record }) => (record.ticket ? [record.ticket] : []))
-    let capacity = intakeCapacity(projection)
+    let capacity = intakeCapacity(projection, {
+      settled: this.parkedSettled,
+      denied: this.slotWaiters,
+    })
 
     // The ready scan runs even at full capacity: `queued` is the operator's
     // standing queue-depth report and must stay honest exactly when the

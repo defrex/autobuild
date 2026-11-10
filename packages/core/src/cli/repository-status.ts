@@ -9,6 +9,7 @@ import {
   type UpgradeRun,
 } from '../kernel/dispatch-upgrade'
 import { formatRuntimeIdentity } from '../events/runtime'
+import { landingRestackDue } from '../kernel/engine'
 import {
   dispatchCapacity,
   waitingExplanation,
@@ -432,7 +433,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `repository: ${status.repo}`,
     ...(status.capacity
       ? [
-          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}${status.capacity.waitingNodes?.length ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
+          `capacity: ${status.capacity.occupied}/${status.capacity.effective} effective; ${status.capacity.configured} configured; ${status.capacity.borrowingNodes.length} node${status.capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots${status.capacity.borrowingNodes.length ? `: ${status.capacity.borrowingNodes.join(', ')}` : ''}${status.capacity.waitingNodes?.length || status.capacity.waitingBuilds?.length ? `; ${waitingExplanation(status.capacity, { requests: true })}` : ''}`,
         ]
       : []),
     ...(status.warningLines ?? []),
@@ -499,6 +500,7 @@ export async function readRepositoryCapacity(
           state: build.state,
           workspace: build.workspace !== null,
           provisioning: build.provisionMarker !== undefined,
+          restackDue: landingRestackDue(build.state, build.log),
         })
       }
       return dispatchCapacity(

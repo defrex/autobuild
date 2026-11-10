@@ -3,15 +3,23 @@ import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
 
-/** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists. */
+/** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
+ *
+ * `capacity` counts builds running work. A leaf that has finished its pipeline
+ * (settled, see `epilogueLeaf`) and holds no runner is parked: it waits for a
+ * merge decision, merge gates or the forge and holds no slot, though it keeps
+ * its workspace. Every other unfinished leaf holds a slot, paused or blocked
+ * included. Nodes hold a slot only while they need a runner. */
 export interface CapacityBuild {
   record: BuildRecord
   state: BuildState
   workspace: boolean
   provisioning?: boolean
+  /** The engine's awaiting-landing restack is due (`landingRestackDue`); omitted means false. */
+  restackDue?: boolean
 }
 
-/** The runner a node has durably requested and does not yet hold. */
+/** The runner a node or parked leaf has durably requested and does not yet hold. */
 export type SlotRequest = 'verification' | 'reconcile'
 
 export interface DispatchCapacity {
@@ -21,33 +29,95 @@ export interface DispatchCapacity {
   borrowingNodes: string[]
   /** Nodes admitted ahead of new ticket claims; omitted when none wait, and by an older server. */
   waitingNodes?: { slug: string; request: SlotRequest }[]
+  /** Parked leaves admitted ahead of new ticket claims; omitted when none wait, and by an older server. */
+  waitingBuilds?: { slug: string; request: SlotRequest }[]
 }
 
-/** A workspace, a provisioning marker or a live lease holds runner capacity. */
-function allocated(build: CapacityBuild, now: Date): boolean {
+/** A provisioning marker or continuation, or a live lease: a runner is working. */
+function runnerAllocated(build: CapacityBuild, now: Date): boolean {
   return (
-    build.workspace ||
     !!build.provisioning ||
     (build.record.lease !== undefined && Date.parse(build.record.lease.expiresAt) > now.getTime())
   )
 }
 
-export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
-  const { state } = build
-  if (state.status === 'done' || state.status === 'aborted') return false
+/** A workspace, a provisioning marker or a live lease holds runner capacity. */
+function allocated(build: CapacityBuild, now: Date): boolean {
+  return build.workspace || runnerAllocated(build, now)
+}
+
+/** The position the dispatcher records as settled: the later of the current
+ * verify cycle's start and the latest finalize completion. A reconcile,
+ * restack or config supersession opens a new cycle and so a new key. */
+export function settlementKey(state: BuildState): number {
+  return Math.max(state.verify.cycleSince, state.finalizeCompletedSeq)
+}
+
+function terminal(state: BuildState): boolean {
+  return state.status === 'done' || state.status === 'aborted'
+}
+
+/** A nonterminal leaf that finished its pipeline (every verify step and
+ * finalize post-step) for the current spec at least once, as recorded by
+ * `pipeline.settled`. A spec revision after settlement makes it unfinished. */
+export function epilogueLeaf(state: BuildState): boolean {
   return (
-    state.kind !== 'node' ||
-    !!state.nodeRestack?.conflict ||
-    (integrationNeedsRunner(state) && allocated(build, now))
+    state.kind !== 'node' && !terminal(state) && (state.pipelineSettled ?? 0) > state.restartSince
   )
 }
 
-/** A node's durable request for a runner it does not hold yet. Admission
- * outranks new ticket claims, so this never depends on when a tick saw it. */
-export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
+/** A finished leaf with no runner working. It holds no slot; its workspace does not count. */
+export function parkedLeaf(build: CapacityBuild, now: Date): boolean {
+  return epilogueLeaf(build.state) && !runnerAllocated(build, now)
+}
+
+/** A finished leaf whose latest verify cycle or finalize has not been settled
+ * since: it must re-verify before it waits for its merge decision again. */
+export function epilogueUnsettled(state: BuildState): boolean {
+  return epilogueLeaf(state) && (state.pipelineSettled ?? 0) < settlementKey(state)
+}
+
+/** The dispatcher should record a `pipeline.settled` fact when the engine's
+ * decision for this leaf is `wait awaiting-pr`. */
+export function settlementDue(state: BuildState): boolean {
+  return (
+    state.kind !== 'node' &&
+    !terminal(state) &&
+    state.finalizeCompletedSeq > state.restartSince &&
+    (state.pipelineSettled ?? 0) < settlementKey(state)
+  )
+}
+
+export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
+  const { state } = build
+  if (terminal(state)) return false
+  if (state.kind !== 'node') return !parkedLeaf(build, now)
+  return !!state.nodeRestack?.conflict || (integrationNeedsRunner(state) && allocated(build, now))
+}
+
+/** A parked leaf's durable request for a runner, or undefined. */
+function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
   const { state } = build
   if (
-    state.kind !== 'node' ||
+    !parkedLeaf(build, now) ||
+    state.status === 'paused' ||
+    state.status === 'blocked' ||
+    (state.compatibility?.decisiveFacts ?? 0) > 0 ||
+    state.targetRewrite !== undefined
+  )
+    return undefined
+  if (state.prState === 'conflicted') return 'reconcile'
+  if (build.restackDue || epilogueUnsettled(state)) return 'verification'
+  return undefined
+}
+
+/** A node's or parked leaf's durable request for a runner it does not hold
+ * yet. Admission outranks new ticket claims, so this never depends on when a
+ * tick saw it. */
+export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
+  const { state } = build
+  if (state.kind !== 'node') return leafSlotRequest(build, now)
+  if (
     state.status === 'done' ||
     state.status === 'aborted' ||
     state.status === 'paused' ||
@@ -138,44 +208,70 @@ export function dispatchCapacity(
     })
     .map((build) => build.record.slug)
     .sort()
-  const waitingNodes = unique
-    .flatMap((build) => {
-      const request = slotRequest(build, now)
-      return request ? [{ slug: build.record.slug, request }] : []
-    })
-    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+  const waiting = (kind: 'node' | 'leaf') =>
+    unique
+      .flatMap((build) => {
+        if ((build.state.kind === 'node') !== (kind === 'node')) return []
+        const request = slotRequest(build, now)
+        return request ? [{ slug: build.record.slug, request }] : []
+      })
+      .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+  const waitingNodes = waiting('node')
+  const waitingBuilds = waiting('leaf')
   return {
     configured,
     occupied,
     effective: borrowingNodes.length ? Math.max(configured, occupied) : configured,
     borrowingNodes,
     ...(waitingNodes.length ? { waitingNodes } : {}),
+    ...(waitingBuilds.length ? { waitingBuilds } : {}),
   }
 }
 
-/** Slots left for new ticket claims. A verification request reserves one slot
- * until the node holds it; a reconcile request already occupies one. Never
- * more than the configured budget minus occupied builds. */
-export function intakeCapacity(capacity: DispatchCapacity): number {
-  const reserved = (capacity.waitingNodes ?? []).filter(
+/** Slots left for new ticket claims. A node verification request reserves one
+ * slot until the node holds it; a node reconcile request already occupies one.
+ * A parked build's request occupies nothing, so every one reserves a slot.
+ * Never more than the configured budget minus occupied builds.
+ *
+ * The dispatcher refines the projection with its own decisions this tick:
+ * `settled` drops waiters it found waiting for their PR, `denied` adds
+ * builds its admission gate turned away. Status surfaces omit `adjust`. */
+export function intakeCapacity(
+  capacity: DispatchCapacity,
+  adjust: { settled?: ReadonlySet<string>; denied?: ReadonlySet<string> } = {},
+): number {
+  const nodes = (capacity.waitingNodes ?? []).filter(
     (node) => node.request === 'verification',
   ).length
-  return capacity.configured - capacity.occupied - reserved
+  const builds = new Set(
+    (capacity.waitingBuilds ?? [])
+      .map((build) => build.slug)
+      .filter((slug) => !adjust.settled?.has(slug)),
+  )
+  for (const slug of adjust.denied ?? []) builds.add(slug)
+  return capacity.configured - capacity.occupied - nodes - builds.size
 }
 
-/** Shared wording for one node waiting on a runner slot. */
+/** Shared wording for one node or parked build waiting on a runner slot. */
 export function slotWaitText(request: SlotRequest): string {
   return `${request} waiting for a slot ahead of new ticket claims`
 }
 
-/** Shared wording for every node waiting on a runner slot, or `''`. */
+/** Shared wording for every node and parked build waiting on a runner slot, or `''`. */
 export function waitingExplanation(
   capacity?: DispatchCapacity,
   opts: { requests?: boolean } = {},
 ): string {
-  const waiting = capacity?.waitingNodes ?? []
-  if (!waiting.length) return ''
-  return `${waiting.length} node${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of new ticket claims: ${waiting.map((node) => (opts.requests ? `${node.slug} (${node.request})` : node.slug)).join(', ')}`
+  const clause = (noun: string, waiting: { slug: string; request: SlotRequest }[]) =>
+    waiting.length
+      ? [
+          `${waiting.length} ${noun}${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of new ticket claims: ${waiting.map((entry) => (opts.requests ? `${entry.slug} (${entry.request})` : entry.slug)).join(', ')}`,
+        ]
+      : []
+  return [
+    ...clause('node', capacity?.waitingNodes ?? []),
+    ...clause('parked build', capacity?.waitingBuilds ?? []),
+  ].join('; ')
 }
 
 /** Shared wording for the terminal and browser control lines. */

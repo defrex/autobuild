@@ -408,6 +408,27 @@ describe('summarize', () => {
     ).toContain('reconcile a2')
   })
 
+  test('a parked build waiting for a slot says so in its phase cell', () => {
+    const row = renderSummaries(
+      [
+        {
+          slug: 'parked',
+          kind: 'work',
+          status: 'running',
+          phase: 'reconcile',
+          attempt: 2,
+          updatedAt: NOW.toISOString(),
+          lease: { health: 'none' },
+          progress: {},
+          slotWait: 'reconcile',
+        } as never,
+      ],
+      NOW,
+      'none',
+    ).join('\n')
+    expect(row).toContain('reconcile a2, reconcile waiting for a slot ahead of new ticket claims')
+  })
+
   test('a completed loop phase keeps reporting its own round', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })

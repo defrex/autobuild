@@ -73,7 +73,7 @@ import {
   currentDeferralObservationReducer,
   type DeferralLedger,
 } from '../../kernel/auto-merge'
-import { decideNextFromFacts } from '../../kernel/engine'
+import { decideNextFromFacts, landingRestackDue } from '../../kernel/engine'
 import { verifyPhase } from '../../ontology'
 import { indexLog, type LogIndex } from '../../kernel/log-index'
 import {
@@ -185,6 +185,8 @@ export interface DashboardHarvest {
 
 export interface DashboardBuild {
   draining?: boolean
+  /** A work row's standing alert, such as a parked build waiting for a slot. */
+  alert?: { tone: 'yellow' | 'red'; text: string }
   integrationRow?: IntegrationRow
   integrationDetail?: IntegrationDetail
   collectionIdentity?: {
@@ -1344,15 +1346,22 @@ export interface DashboardHeader extends DashboardFrameHeader {
  * projection here means build rows (including their phase intervals) may be
  * cached without caching dispatcher settings or Harvest state.
  */
-/** A node waiting for a runner slot says so on its row unless a more urgent
- * alert already stands. Returns copies; cached projected rows stay intact. */
+/** A node or parked build waiting for a runner slot says so on its row
+ * unless a more urgent alert already stands. Returns copies; cached projected
+ * rows stay intact. */
 export function decorateSlotWaits(
   rows: readonly DashboardBuild[],
   capacity: DispatchCapacity | undefined,
 ): DashboardBuild[] {
   const waiting = new Map((capacity?.waitingNodes ?? []).map((node) => [node.slug, node.request]))
-  if (!waiting.size) return [...rows]
+  const parked = new Map(
+    (capacity?.waitingBuilds ?? []).map((build) => [build.slug, build.request]),
+  )
+  if (!waiting.size && !parked.size) return [...rows]
   return rows.map((row) => {
+    const leaf = parked.get(row.slug)
+    if (leaf && !row.integrationRow && !row.alert)
+      return { ...row, alert: { tone: 'yellow', text: slotWaitText(leaf) } }
     const request = waiting.get(row.slug)
     if (!request || !row.integrationRow || row.integrationRow.alert) return row
     return {
@@ -1437,6 +1446,7 @@ export function buildDashboard(
       state,
       workspace: openBuildWorkspace(events) !== null,
       provisioning: provisionMarkerReducer.reduce(events) !== undefined,
+      restackDue: landingRestackDue(state, indexLog(events)),
     })),
     config.capacity,
     new Date(),

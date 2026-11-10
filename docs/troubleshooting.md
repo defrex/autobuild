@@ -57,7 +57,7 @@ bun ab harvest status
 - **Ready state:** ticket in the exact ready state with every required label.
 - **Blockers and destination:** blockers done, target node open, required changes in the destination. A target node built by another dispatcher's store never opens here; see [several dispatchers](build-store.md#several-dispatchers-on-one-repository). `ab repository status` lists the queue diagnostics.
 - **Claims:** claimed tickets aren't reclaimed.
-- **Capacity:** paused or blocked work keeps its slot; idle collecting nodes take none. Node verification and reconciliation account specially for descendants' slots.
+- **Capacity:** paused or blocked unfinished work keeps its slot; builds waiting for a merge decision and idle collecting nodes take none. A finished build that must re-verify or reconcile reserves a slot ahead of new claims. Node verification and reconciliation account specially for descendants' slots.
 - **Harvest:** check the acknowledged harvest gate and unclaimed observations. Harvest triggers at `policy.harvestThreshold` observations, or `policy.harvestMaxDrift` other merged builds since the oldest observation (zero disables drift), and uses no build slot.
 
 ## Authentication failures

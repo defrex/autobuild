@@ -284,6 +284,8 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'landing.decided',
     'landing.native-enable-started',
     'landing.native-applied',
+    // The sweep records the finished pipeline, freeing its capacity slot.
+    'pipeline.settled',
     'pr.merged',
     'workspace.fenced',
     'workspace.commits-preserved',
