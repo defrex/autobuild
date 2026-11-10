@@ -1464,6 +1464,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     generation?: number
     restoration?: import('../types').WorkspacePreservationHead[]
     restorationReplaced?: string[]
+    /** Ignored: a sandbox clone never holds archive refs, so restoration here
+     * always fetches each exact ref from origin, whatever the forge. */
+    restorationArchives?: 'local' | 'remote'
   }): Promise<WorkspaceProvisionResult> {
     const scopedToken = await (this.options.delegateCredential ?? delegateCredential)(
       this.options.storeRef,
