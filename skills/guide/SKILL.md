@@ -1227,6 +1227,7 @@ nonnegative integer so zero can disable that trigger.
 | `maxReviewRounds` | `6` | positive integer | Default `maxRounds` for the `plan ⇄ plan-review` and `implement ⇄ code-review` convergence loops. When that cap parks a build, `ab answer <slug> --review-round-ceiling <n>` may replace it for only the escalation's loop and current spec revision. |
 | `harvestThreshold` | `5` | positive integer | Newly unclaimed `observation.recorded` occurrences required to start one repository harvest run. |
 | `janitorFailureAttentionSeconds` | `600` | positive integer | Consecutive janitor failure duration before build attention. |
+| `janitorFailureEscalationSeconds` | `3600` | positive integer | Consecutive janitor failure duration before the build raises one escalation; the janitor keeps retrying. |
 | `nodeIdleAfterSeconds` | `600` | positive integer | Quiet period before opened integration nodes enter idle polling. |
 | `nodeIdlePollSeconds` | `120` | positive integer | Interval between idle node checks; durable activity wakes the next tick. |
 | `janitorBackoffMaxSeconds` | `300` | positive integer | Cap on exponential janitor retry delay, starting at 30 seconds. |
@@ -2644,10 +2645,11 @@ The default watch reports actionable conditions only:
 - `integration.verification-failed`: failed node verification, once per prepared cycle, with failed steps, verified head and parent, and guidance to file a repair child targeting the node. Recovery reports only the latest prepared cycle while its head and parent remain current; superseded failures are not backfilled.
 
 - `build.janitor-failing`: a build has failed janitor attempts for the configured attention threshold. A successful attempt clears it.
+- `build.janitor-escalated`: a build's janitor failure episode outlasted the escalation threshold and raised one escalation. The janitor keeps retrying; a successful attempt closes it unanswered, and a bare retry answer attempts on the next tick.
 - `dispatcher.forge-persistent`: forge degradation remains after a post-reset retry tick; recovery clears the episode.
 
-- Build `escalation.raised` or `phase.deferral-escalated`: an operator answer
-  is required. A read deferral asks for CLI/store repair before retry or guidance.
+- Build `escalation.raised`, `phase.deferral-escalated` or
+  `build.janitor-escalated`: an operator answer is required. A read deferral asks for CLI/store repair before retry or guidance.
 - Build `build.merge-decision`: a finalized open PR
   with a recorded consent decision awaiting consent, an explicit hold, or a
   current actionable merge-gate deferral. Policy decisions not yet recorded and
@@ -3095,11 +3097,22 @@ errors retain their existing behavior.
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
 A classified forge rate limit is repository cooldown, not a janitor failure:
-neither the first limited response nor the cooldown that follows starts or ages
-an episode. Skipped polls preserve the episode across restart. After
-`policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
-notifies default watchers and appears on the build row. A successful attempt
-clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+neither the first limited response nor the cooldown that follows starts an
+episode or records an attempt, so a build that only waits out cooldown never
+escalates. Skipped polls preserve the episode across restart. Both thresholds
+below are wall-clock from the episode's first failed attempt and are checked
+when an attempt fails, so cooldown inside an episode that already started still
+counts. After `policy.janitorFailureAttentionSeconds` (600 by default),
+`build.janitor-failing` notifies default watchers and appears on the build row.
+After `policy.janitorFailureEscalationSeconds` (3600 by default), the build
+raises one escalation through `build.janitor-escalated`, naming the failing
+operation, the last error, the failed attempt count and when the episode
+started. The build is then blocked and shows wherever open escalations show.
+The janitor keeps retrying on its backoff underneath; a successful attempt
+clears the attention, closes the escalation unanswered and the build continues.
+Answering it with a bare retry makes the janitor attempt on its next tick. An
+episode raises at most one escalation; a new episode after recovery can raise
+another. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
 A dispatcher that cannot execute Git for kernel node work (a missing or
 unloadable `git` for the bare clone) records no janitor failures. It records
 one durable `dispatcher.kernel-git-unavailable` repository condition, node work

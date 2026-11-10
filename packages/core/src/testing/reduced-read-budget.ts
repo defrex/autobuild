@@ -2967,7 +2967,7 @@ export function memoryStoreRequestCounter(store: BuildStore) {
   const wrapped = new Map<string, { own: boolean; original: (...args: unknown[]) => unknown }>()
   for (const name of names) {
     const original = Reflect.get(store, name) as (...args: unknown[]) => unknown
-    wrapped.set(name, { own: Object.prototype.hasOwnProperty.call(store, name), original })
+    wrapped.set(name, { own: Object.hasOwn(store, name), original })
     Reflect.set(store, name, (...args: unknown[]) => {
       if (inside.getStore()) return original.apply(store, args)
       counts.set(name, (counts.get(name) ?? 0) + 1)
