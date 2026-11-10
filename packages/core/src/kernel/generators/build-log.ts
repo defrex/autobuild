@@ -48,6 +48,15 @@ function randomWrite(rand: () => number): EventWrite {
         nextAttemptAt: '2026-01-01T00:01:00.000Z',
       }),
     () => w('build.janitor-failing', { message: 'forge unavailable' }),
+    () =>
+      w('build.janitor-escalated', {
+        id: 'janitor:2026-01-01T00:00:00.000Z',
+        operation: 'PR check',
+        message: 'forge unavailable',
+        attempt,
+        firstFailureAt: '2026-01-01T00:00:00.000Z',
+        question: 'Janitor PR check has failed.',
+      }),
     () => w('build.janitor-recovered', {}),
     () =>
       w('landing.application-failed', {

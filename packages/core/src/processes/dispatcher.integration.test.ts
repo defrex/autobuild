@@ -15960,7 +15960,7 @@ test('a failing janitor costs fresh dispatchers the pinned requests at 100 and 1
   // Pinned from the implementation before janitor escalation existed, which
   // never escalated: each class is the failing tick at the same point in the
   // scenario. The threshold tick adds exactly the one escalation append.
-  const failing = {
+  const failingTick = {
     append: 1,
     getLatestArtifactMeta: 1,
     getReducerValue: 15,
@@ -15969,12 +15969,12 @@ test('a failing janitor costs fresh dispatchers the pinned requests at 100 and 1
     listBuilds: 2,
   }
   expect(result.vectors).toEqual({
-    start: failing,
-    preAttention: failing,
-    attention: { ...failing, append: 2 },
-    preLimit: failing,
-    threshold: { ...failing, append: 2 },
-    escalated: failing,
+    start: failingTick,
+    preAttention: failingTick,
+    attention: { ...failingTick, append: 2 },
+    preLimit: failingTick,
+    threshold: { ...failingTick, append: 2 },
+    escalated: failingTick,
     recovery: {
       append: 1,
       getArtifact: 2,

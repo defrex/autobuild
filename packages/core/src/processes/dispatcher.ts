@@ -50,7 +50,16 @@ import {
   MixedVersionDeferral,
 } from '../kernel/mixed-version'
 import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
-import { janitorDeferral, recordJanitorFailure } from '../kernel/janitor-failure'
+import {
+  escalationsBeyondJanitor,
+  janitorBlocked,
+  janitorDeferral,
+  janitorDue,
+  janitorStatus,
+  recordJanitorFailure,
+  withoutJanitorEscalation,
+  type JanitorOperation,
+} from '../kernel/janitor-failure'
 import { KernelGitUnavailable, kernelGitUnavailableDetail } from '../kernel/kernel-git'
 import { isForgeFailure } from '../ports/forge-failure'
 import {
@@ -2308,6 +2317,8 @@ export class Dispatcher {
       if (this.outOfBudget(opts)) break
       await withForgeRequestContext({ build: record.slug }, async () => {
         let previous: BuildState['janitor']
+        // The stage in progress, named if this attempt's failure escalates.
+        let operation: JanitorOperation = 'build state read'
         let attempted = false
         let failed = false
         try {
@@ -2323,12 +2334,7 @@ export class Dispatcher {
             (state.pr &&
               state.landing?.command &&
               state.landing.command.seq !== state.landing.acknowledgedSeq)
-          if (
-            !controlDue &&
-            previous &&
-            Date.parse(previous.nextAttemptAt) > this.deps.clock().getTime()
-          )
-            return
+          if (!controlDue && !janitorDue(previous, this.deps.clock())) return
           if (mixedVersionDeferred(state)) {
             await deferMixedVersion(this.store, record.slug)
             return
@@ -2429,6 +2435,7 @@ export class Dispatcher {
             state.pr &&
             state.landing?.native?.operation
           ) {
+            operation = 'native auto-merge cancellation'
             const path = this.forgeWorkspacePathOf(workspace)
             const observed = await this.deps.forge.getPrState(path, state.pr.number)
             observedPr = observed
@@ -2466,6 +2473,7 @@ export class Dispatcher {
             state.integration?.landing?.operation &&
             !state.integration.audit
           ) {
+            operation = 'integration landing audit'
             await this.withKernelRepository((path) =>
               auditIntegrationLanding({
                 store: this.store,
@@ -2479,6 +2487,7 @@ export class Dispatcher {
           }
           if (state.status === 'done') {
             if (digest.reclaimPending === true) {
+              operation = 'PR attachment reclaim'
               await this.reclaimPrAttachments(record.slug, await history())
             }
             return
@@ -2488,6 +2497,7 @@ export class Dispatcher {
               state.pendingCommands.find((c) => c.command === 'abort') ??
               state.pendingCommands.at(0)
             if (command !== undefined && !executionLeaseLive) {
+              operation = 'control command'
               await this.store.append(record.slug, {
                 actor: DISPATCHER,
                 type:
@@ -2498,16 +2508,19 @@ export class Dispatcher {
                       : 'build.resumed',
                 payload: {},
               })
-              if (command.command === 'abort')
+              if (command.command === 'abort') {
+                operation = 'abort cleanup'
                 await this.cleanupAborted(record, await history(), report)
+              }
               return
             }
             if (state.nodeOpened) {
+              operation = 'target observation'
               let primed = false
               if (
                 record.branch &&
                 state.baseBranch &&
-                !((state.status === 'paused' || state.status === 'blocked') && !state.pr)
+                !((state.status === 'paused' || janitorBlocked(state)) && !state.pr)
               ) {
                 primed = await this.primeNodeReads(record, state, report)
               }
@@ -2521,6 +2534,7 @@ export class Dispatcher {
                   )
                 ).state !== 'open'
               ) {
+                operation = 'PR check'
                 await this.checkPr(
                   record,
                   {
@@ -2546,8 +2560,9 @@ export class Dispatcher {
                 await this.primeNodeReads(record, state, report)
               }
             }
-            if ((state.status === 'paused' || state.status === 'blocked') && !state.pr) return
+            if ((state.status === 'paused' || janitorBlocked(state)) && !state.pr) return
             if (state.nodeOpened && state.baseBranch) {
+              operation = 'target observation'
               if (
                 await this.observeTarget(
                   record.slug,
@@ -2563,11 +2578,12 @@ export class Dispatcher {
             if (
               state.nodeOpened &&
               state.status !== 'paused' &&
-              (state.status !== 'blocked' || integrationFailed(state)) &&
+              (!janitorBlocked(state) || integrationFailed(state)) &&
               state.prState !== 'merged' &&
               state.prState !== 'closed' &&
               !executionLeaseLive
             ) {
+              operation = 'node cascade'
               await this.prepareIntegration(record, state, report, launched, { refreshOnly: true })
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
               await this.cascadeNode(record, state, report, launched, opts)
@@ -2575,11 +2591,13 @@ export class Dispatcher {
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
             }
             if (state.nodeOpened && !executionLeaseLive) {
+              operation = 'node integration'
               await this.prepareIntegration(record, state, report, launched)
               loaded = undefined
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
             }
             if (state.nodeOpened !== undefined && state.pr === undefined) {
+              operation = 'empty node poll'
               await this.pollEmptyNode(record, state)
               await completeNodePoll()
               return
@@ -2589,7 +2607,7 @@ export class Dispatcher {
           // discard when both requests raced into the same stream.
           if (
             !executionLeaseLive &&
-            state.status === 'queued' &&
+            janitorStatus(state) === 'queued' &&
             state.pendingCommands.some((command) => command.command === 'abort')
           ) {
             const acknowledged = await this.store.append(record.slug, {
@@ -2600,6 +2618,7 @@ export class Dispatcher {
             void acknowledged
             // The view folded the acknowledgement it just appended.
             loaded = undefined
+            operation = 'abort cleanup'
             await this.cleanupAborted(record, await history(), report)
             return
           }
@@ -2608,19 +2627,26 @@ export class Dispatcher {
           // runner's workspace down or return its ticket for a duplicate build.
           if (
             !executionLeaseLive &&
-            state.status === 'queued' &&
+            janitorStatus(state) === 'queued' &&
             state.discardRequest !== undefined
           ) {
+            operation = 'discard cleanup'
             await this.cleanupDiscarded(record, await history(), report)
             return
           }
           if (!executionLeaseLive && state.status === 'aborted') {
+            operation = 'abort cleanup'
             await this.cleanupAborted(record, await history(), report)
             return
           }
+          operation = 'target observation'
           if (state.kind !== 'node' && state.status !== 'aborted')
             await this.observeTicketTarget(record, state, report)
-          if (state.kind !== 'node' && state.status !== 'aborted' && state.status !== 'queued') {
+          if (
+            state.kind !== 'node' &&
+            state.status !== 'aborted' &&
+            janitorStatus(state) !== 'queued'
+          ) {
             const branch = await readBuildSelector(this.store, record.slug, 'baseBranch')
             if (branch !== undefined) {
               if (await this.observeTarget(record.slug, branch, log.restack.target?.sha, report)) {
@@ -2631,7 +2657,7 @@ export class Dispatcher {
           }
           if (
             state.kind !== 'node' &&
-            state.status !== 'queued' &&
+            janitorStatus(state) !== 'queued' &&
             state.status !== 'aborted' &&
             state.prState !== 'merged' &&
             state.prState !== 'closed'
@@ -2687,6 +2713,7 @@ export class Dispatcher {
             }
           }
           if (state.pr) {
+            operation = 'PR check'
             await this.checkPr(
               record,
               {
@@ -2726,6 +2753,7 @@ export class Dispatcher {
             message,
             this.deps.clock(),
             this.deps.config.policy,
+            operation,
           )
           report.janitorFailed += 1
           report.janitorDiagnostics.push(`build ${record.slug}: janitor failed — ${message}`)
@@ -3084,7 +3112,7 @@ export class Dispatcher {
         launched.has(record.slug) ||
         this.hasLiveExecutionLease(record) ||
         !state.nodeOpened ||
-        (state.janitor && Date.parse(state.janitor.nextAttemptAt) > now.getTime())
+        !janitorDue(state.janitor, now)
       )
         continue
       await withForgeRequestContext({ build: record.slug }, async () => {
@@ -3506,7 +3534,7 @@ export class Dispatcher {
         candidate.status === 'paused' ||
         candidate.status === 'done' ||
         candidate.status === 'aborted' ||
-        candidate.openEscalations.length ||
+        escalationsBeyondJanitor(candidate).length ||
         candidate.pendingCommands.length
       )
         return false
@@ -3521,7 +3549,12 @@ export class Dispatcher {
         )
       }
       const facts = await store.buildFacts(record.slug)
-      const decision = await this.decideBuild(record.slug, facts.state, facts.log, report)
+      const decision = await this.decideBuild(
+        record.slug,
+        withoutJanitorEscalation(facts.state),
+        facts.log,
+        report,
+      )
       return decision?.kind === 'wait' && decision.reason === 'awaiting-pr'
     }
     const candidateOf = async (current: BuildState) =>
@@ -3692,7 +3725,7 @@ export class Dispatcher {
           candidate.status === 'paused' ||
           candidate.status === 'done' ||
           candidate.status === 'aborted' ||
-          candidate.openEscalations.length ||
+          escalationsBeyondJanitor(candidate).length ||
           candidate.pendingCommands.length ||
           !integrationVerified(
             candidate,
@@ -3711,14 +3744,19 @@ export class Dispatcher {
           current.status !== 'paused' &&
           current.status !== 'aborted' &&
           current.status !== 'done' &&
-          !current.openEscalations.length &&
+          !escalationsBeyondJanitor(current).length &&
           !current.pendingCommands.length &&
           integrationVerified(current, config) &&
           cycle?.head === exact.headSha &&
           cycle.parent === exact.parentSha
         )
       }
-      const decision = await this.decideBuild(record.slug, latest.state, latest.log, report)
+      const decision = await this.decideBuild(
+        record.slug,
+        withoutJanitorEscalation(latest.state),
+        latest.log,
+        report,
+      )
       return (
         latest.state.pr?.number === pr.number &&
         latest.state.prState === 'open' &&
@@ -6266,7 +6304,7 @@ export class Dispatcher {
               current.status !== 'done' &&
               current.status !== 'aborted' &&
               current.status !== 'paused' &&
-              (current.status !== 'blocked' || integrationFailed(current)) &&
+              (!janitorBlocked(current) || integrationFailed(current)) &&
               current.prState !== 'merged' &&
               current.prState !== 'closed' &&
               current.pendingCommands.length === 0 &&
@@ -6362,7 +6400,7 @@ export class Dispatcher {
       ) {
         await this.store.refreshBuild(record.slug)
         const current = (await this.store.buildFacts(record.slug)).state
-        if (!current.openEscalations.length)
+        if (!escalationsBeyondJanitor(current).length)
           await this.store.append(record.slug, {
             actor: KERNEL,
             type: 'escalation.raised',
@@ -6431,7 +6469,7 @@ export class Dispatcher {
       state.nodeRestack?.active ||
       state.integration?.intent ||
       state.nodeRestack?.contributionBase !== comparison.parentSha ||
-      state.openEscalations.length ||
+      escalationsBeyondJanitor(state).length ||
       state.status === 'paused' ||
       state.status === 'done' ||
       state.status === 'aborted' ||
