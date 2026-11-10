@@ -14919,13 +14919,20 @@ test('concurrent credential races serialize against the durable account conditio
   ).toHaveLength(1)
 })
 
-test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
-  'workspace replacement retries safely after %s failure',
-  async (failure) => {
+test.each([
+  ['unknown-fence', 'fake'],
+  ['preservation', 'fake'],
+  ['receipt', 'fake'],
+  ['reap', 'fake'],
+  ['reap', 'local-git'],
+] as const)(
+  'workspace replacement retries safely after %s failure (%s forge)',
+  async (failure, forgeName) => {
     let failing = true
     let reaped = 0
     let fences = 0
     let restored: import('../ports/types').WorkspacePreservationHead[] | undefined
+    let archives: 'local' | 'remote' | undefined
     const sha = 'f'.repeat(40)
     const heads = [
       {
@@ -14959,6 +14966,7 @@ test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
       },
       provision: async (input) => {
         restored = input.restoration
+        archives = input.restorationArchives
         return {
           provider: 'checkpoint-fixture',
           ref: 'replacement',
@@ -14970,6 +14978,9 @@ test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
       release: async () => {},
     }
     const h = harness({ workspaceProvider: provider })
+    // Restoration reads archives where preservation wrote them: only
+    // local-git keeps archive refs in the local repository.
+    Object.defineProperty(h.forge, 'name', { value: forgeName })
     const slug = await seedBuild(h, { workspaceProvider: provider.name, workspaceRef: 'source' })
     const append = h.store.appendIfCurrent.bind(h.store)
     h.store.appendIfCurrent = async (...args) => {
@@ -14997,6 +15008,7 @@ test.each(['unknown-fence', 'preservation', 'receipt', 'reap'] as const)(
     expect(reaped).toBe(1)
     expect(fences).toBe(2)
     expect(restored).toEqual(heads)
+    expect(archives).toBe(forgeName === 'local-git' ? 'local' : 'remote')
     expect(
       (await h.store.getEvents(slug)).filter(
         (event) => event.type === 'workspace.commits-preserved',

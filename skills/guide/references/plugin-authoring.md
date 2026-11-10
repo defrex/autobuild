@@ -120,6 +120,10 @@ confirmed, absent, or unknown without deleting an environment or its snapshots.
 Only dispatcher-authorized reap follows the durable fence and preservation/loss
 receipt. `provision` accepts exact `restoration` heads; branch ancestry must be
 verified, and detached producer objects must never overwrite the named branch.
+`provision` also receives `restorationArchives`: `local` for the local-git
+forge, whose repository already holds the archive refs and must not be fetched
+from, and `remote` otherwise, in which case a provider sharing the repository
+must fetch each exact archive ref from origin before verifying it.
 `preserve` receives `replaced`, and `provision` receives `restorationReplaced`:
 the build's bounded record of the latest 64 shas recorded rewrites replaced.
 A branch head equal to or contained in one of them is superseded. Preserve
