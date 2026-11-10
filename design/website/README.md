@@ -532,3 +532,12 @@ Maintainer decisions (2026-11-10):
 local/remote desktop/phone reference PNGs were refreshed from `bun run
 capture:website`. Section gaps stay 288px on desktop and 192px on phones, and
 both 390px overflow probes pass.
+
+
+## Pipeline figure starts at a ticket (2026-11-10)
+
+Maintainer decision (2026-11-10): the landing page says "ticket", not "spec".
+The pipeline figure's first node and its description now read "ticket" at both
+widths, and `reference.html` matches. The `/ab-spec` command keeps its name
+because it is the real skill. All four landing reference PNGs were refreshed
+from `bun run capture:website`; the node label is the only difference.

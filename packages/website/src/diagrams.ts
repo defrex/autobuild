@@ -25,7 +25,7 @@ function c(
 }
 
 const PIPELINE_DESCRIPTION =
-  'Inside one build-runner: spec feeds plan, which loops with plan-review, then implement, which loops with code-review, then verify:*, finalize, and merged. If verify:* fails, the flow returns to implement.'
+  'Inside one build-runner: a ticket feeds plan, which loops with plan-review, then implement, which loops with code-review, then verify:*, finalize, and merged. If verify:* fails, the flow returns to implement.'
 
 const DISPATCHER_DESCRIPTION =
   'The dispatcher takes ready tickets and starts one build-runner per ticket. Each runner shows its progress cells, writes through the ab CLI to the build store, and sends phase events to the build store.'
@@ -53,7 +53,7 @@ export function pipelineDiagram(): string {
     c('fail', 432, 48, 8, 46, 'M 4 0 L 4 46', true),
   ]
   const nodes = [
-    plainNode(0, 180, 136, 56, 'spec'),
+    plainNode(0, 180, 136, 56, 'ticket'),
     plainNode(184, 96, 136, 56, 'plan'),
     plainNode(184, 264, 136, 56, 'plan-review'),
     plainNode(368, 96, 136, 56, 'implement'),
@@ -99,7 +99,7 @@ function pipelinePhone(): string {
     c('fail', 4, 200, 20, 152, 'M 20 148 L 4 148 L 4 4 L 18 4', true),
   ]
   const nodes = [
-    plainNode(24, 0, 140, 56, 'spec'),
+    plainNode(24, 0, 140, 56, 'ticket'),
     plainNode(24, 88, 140, 56, 'plan'),
     plainNode(218, 88, 140, 56, 'plan-review'),
     plainNode(24, 176, 140, 56, 'implement'),
