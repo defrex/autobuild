@@ -3648,7 +3648,9 @@ non-destructive execution fence for the exact workspace and execution generation
 It preserves unpublished branch commits and distinct detached producer candidates
 under immutable `refs/autobuild/archive/<build>/<sha>` refs, verifies their exact
 readback, and records `workspace.commits-preserved` before cleanup. Replacement
-provisioning restores those exact refs before starting an agent. A preserved
+provisioning restores those exact refs before starting an agent, reading them
+from the local repository with the local-git forge and fetching each exact ref
+from the remote otherwise. A preserved
 branch head that the build's latest 64 replaced heads cover, as the replaced
 head itself or one of its ancestors, is kept only as archived objects: it is
 never preserved or restored as the branch, and provisioning records the skip as
