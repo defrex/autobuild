@@ -83,8 +83,11 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   gate — urgent tickets first, then normal ones, each in the source's order —
   chooses a short immutable slug from the final conforming spec, and
   starts builds up to the top-level `capacity` bound, after slots reserved for
-  integration nodes awaiting verification or reconcile. Priority never preempts
-  a running build.
+  integration nodes awaiting verification or reconcile and for finished builds
+  waiting to re-verify or reconcile. `capacity` counts builds running work: a
+  build that finished its pipeline holds no slot while it waits for a merge
+  decision, though it keeps its workspace until it merges or closes. Priority
+  never preempts a running build.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
   after exact build-ownership readback. Unresolved attempts stay withheld and
@@ -488,7 +491,7 @@ under the preceding table.
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` replays the build change onto. |
 | `ticketScanIntervalSeconds` | `60` | positive integer seconds | Hot-reloaded ready scan cadence; tick spacing is the floor, and same-repository merge/completion/abort forces an early scan. |
-| `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
+| `capacity` | `1` | positive integer | Maximum builds running work at once for this repository; builds parked for a merge decision hold no slot. |
 | `forge` | `"github"` | nonblank string | Selects shipped `github` or `local-git`, or a plugin-registered Forge adapter. `github` authenticates with `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |
 
@@ -2103,6 +2106,8 @@ restack state and conflicting files remain in detail, along with every child's
 ticket id, title and live phase (or queued/merged), open-first counts, verification
 steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
+A work build that finished its pipeline and must re-verify or reconcile shows
+the same slot-wait alert on its row, and `ab builds` appends it to the phase.
 
 
 On a TTY, execution-mode `ab dispatch` renders one fixed interactive frame that fills the
@@ -2129,8 +2134,8 @@ the configured source's bounded state count itself, at most once per 60 s
 while it runs. It keeps its last good value through failed reads and through
 headless ticks that publish no count, and shows `–` until its first read
 succeeds or when the source has no state counts (Linear). `queue` is the
-ready-ticket queue depth, and `active` is the current nonterminal-build count
-against root `capacity`. Observation pressure is not a header counter: the
+ready-ticket queue depth, and `active` is occupied capacity (every unfinished
+build, plus finished builds running work again) against root `capacity`. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports
 Harvest state.
 The execution-mode frontend checkpoints dashboard facts, the latest run start and the sampled

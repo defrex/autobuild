@@ -1216,6 +1216,11 @@ export const eventPayloadSchemas = {
       count: z.number().int().nonnegative().nullable(),
     })
     .refine((sample) => sample.count === null || sample.head !== null),
+  /** The dispatcher observed the engine's leaf `wait awaiting-pr` decision:
+   * every verify step and finalize post-step is done for this settlement key
+   * (max of the verify cycle start and finalize completion seqs). Capacity
+   * evidence only; no pipeline decision reads it. */
+  'pipeline.settled': z.strictObject({ cycle: z.number().int().positive() }),
   'target.rewritten': z.strictObject({
     branch: z.string().min(1),
     previousSha: gitOid,

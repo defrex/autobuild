@@ -529,7 +529,15 @@ for (const freed of ['same-tick', 'earlier-tick'] as const)
       const leaf = (await bySlug('LEAF'))!
       await run(child.slug)
       // The leaf awaits its human merge and a second leaf holds the other slot.
+      // A leaf parked for its merge decision holds no slot once the sweep
+      // settles it, so an open escalation keeps this one unsettled: it holds
+      // its slot until its PR closes.
       await run(leaf.slug)
+      await h.store.append(leaf.slug, {
+        actor: { kind: 'kernel' },
+        type: 'escalation.raised',
+        payload: { id: 'e_hold_slot', phase: 'finalize', source: 'stall', question: 'hold' },
+      })
       await h.store.createBuild({
         slug: 'slot-holder',
         repo: h.origin,

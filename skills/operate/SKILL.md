@@ -565,6 +565,9 @@ candidates. Entries include the target, branch preview, candidate head/parent,
 verification receipts and node children/completeness. Unknown completeness is
 not zero children. A changed head or parent must regain current verification;
 unfinished or automatically authorized candidates do not ask for attention.
+Queued and held candidates hold no capacity slot; one that must re-verify or
+reconcile waits for a slot ahead of new ticket claims, so a full repository
+delays it without failing it.
 
 Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`

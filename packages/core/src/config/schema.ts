@@ -1191,7 +1191,7 @@ documentFields(configRootSchema, {
   upgrade: 'Automatic dispatcher runtime target checks and adoption.',
   baseBranch: 'Branch used to cut builds, target PRs, and merge during reconciliation.',
   capacity:
-    'Concurrent occupied slots for this repository. Paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).',
+    'Builds running work at once for this repository. A build that finished its pipeline holds no slot while it waits for a merge decision; it is admitted ahead of new claims when it must run again. Unfinished paused and blocked work retains slots. Node reconcile and verification exclude their own blocked/paused descendants at admission; new claims use total occupancy. See [integration capacity](integration-tree.md).',
   ticketScanIntervalSeconds:
     'Ticket-source ready scan cadence; tick spacing is the effective minimum.',
   forge:

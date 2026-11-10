@@ -9,6 +9,8 @@ import { composeBuildConfig } from '../../config/live'
 import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { AbEvent } from '../../events/catalog'
 import { buildReducer, type BuildAcc, type BuildState } from '../../kernel/reducer'
+import { landingRestackDue } from '../../kernel/engine'
+import { leafRestackReducer, type LeafRestackState } from '../../kernel/leaf-restack-state'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   parseBuildConfigMetadata,
@@ -65,6 +67,8 @@ interface LiveEntry {
    * folded into a copy of it instead of re-reducing the whole log. */
   acc: BuildAcc
   state: BuildState
+  /** Advanced with every delta, for `landingRestackDue`. */
+  restack: LeafRestackState
   build: DashboardBuild | null
 }
 
@@ -81,6 +85,7 @@ interface ReducedEntry {
   state: BuildState
   workspace: boolean
   provisioning: boolean
+  restackDue: boolean
   build: DashboardBuild | null
 }
 
@@ -267,6 +272,7 @@ export class DashboardBuildPollCache {
             state: value.state,
             workspace: value.workspace !== null,
             provisioning: value.provisionMarker !== undefined,
+            restackDue: landingRestackDue(value.state, value.log),
             build:
               current?.kind === 'reduced' &&
               current.cursor === cursor &&
@@ -322,6 +328,10 @@ export class DashboardBuildPollCache {
         events,
         acc,
         state,
+        restack: leafRestackReducer.advance(
+          current?.restack ?? leafRestackReducer.initial(),
+          delta,
+        ),
         build: await this.projectRow(record, state, events, config),
       })
     }
@@ -347,6 +357,10 @@ export class DashboardBuildPollCache {
         workspace: entry.kind === 'reduced' ? entry.workspace : entry.workspace.open !== null,
         provisioning:
           entry.kind === 'reduced' ? entry.provisioning : entry.provisionMarker.marker !== null,
+        restackDue:
+          entry.kind === 'reduced'
+            ? entry.restackDue
+            : landingRestackDue(entry.state, { restack: entry.restack }),
       })
       states.set(slug, entry.state)
       if (entry.build !== null) builds.push(entry.build)

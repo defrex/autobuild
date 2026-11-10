@@ -2501,3 +2501,23 @@ test('a legacy capacity projection without waiting nodes decorates nothing', () 
   expect(decorateSlotWaits(rows, legacy)).toEqual(rows)
   expect(decorateSlotWaits(rows, undefined)).toEqual(rows)
 })
+
+test('a parked work row waiting for a slot carries a yellow alert; cached rows stay intact', () => {
+  const rows = [
+    { slug: 'parked', steps: [] } as unknown as DashboardBuild,
+    { slug: 'other', steps: [] } as unknown as DashboardBuild,
+  ]
+  const before = structuredClone(rows)
+  const decorated = decorateSlotWaits(rows, {
+    ...capacity,
+    waitingNodes: undefined,
+    waitingBuilds: [{ slug: 'parked', request: 'reconcile' }],
+  })
+  expect(decorated[0]!.alert).toEqual({
+    tone: 'yellow',
+    text: 'reconcile waiting for a slot ahead of new ticket claims',
+  })
+  expect(decorated[0]!.integrationRow).toBeUndefined()
+  expect(decorated[1]).toBe(rows[1]!)
+  expect(rows).toEqual(before)
+})

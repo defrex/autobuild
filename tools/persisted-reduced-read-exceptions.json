@@ -566,6 +566,10 @@
     "kind": "reduction",
     "reason": "Pure convenience projection over caller-supplied event fixtures; production live dashboards use reduced facts or incremental cursor folds."
   },
+  "packages/core/src/cli/dashboard/model.ts::buildDashboard::indexLog": {
+    "kind": "reduction",
+    "reason": "Pure convenience projection over caller-supplied event fixtures; production live dashboards use reduced facts or incremental cursor folds."
+  },
   "packages/core/src/cli/dashboard/model.ts::buildDashboard::reduce": {
     "kind": "reduction",
     "reason": "Pure convenience projection over caller-supplied event fixtures; production live dashboards use reduced facts or incremental cursor folds."

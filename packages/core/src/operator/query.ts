@@ -3,6 +3,7 @@ import { migrationIdentity } from '../kernel/ticket-migrations'
 import { enrichDrainingRow, projectHandoffs } from '../cli/dashboard/handoff'
 import { enrichIntegrationRows } from '../cli/dashboard/integration-row'
 import { dispatchCapacity, slotRequest, type CapacityBuild } from '../kernel/dispatch-capacity'
+import { landingRestackDue } from '../kernel/engine'
 import { forgeReadinessWarnings } from '../kernel/dispatch-status'
 import { readBuildDigests } from '../store/reduced-reads'
 import {
@@ -117,18 +118,19 @@ async function listFromView(
       record,
       facts.state,
       opts.now,
-      facts.state.kind === 'node'
-        ? slotRequest(
-            {
-              record,
-              state: facts.state,
-              workspace: facts.workspace !== null,
-              provisioning:
-                (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
-            },
-            opts.now,
-          )
-        : undefined,
+      slotRequest(
+        {
+          record,
+          state: facts.state,
+          workspace: facts.workspace !== null,
+          // Leaves rely on the continuation's lease; only nodes read the marker.
+          provisioning:
+            facts.state.kind === 'node' &&
+            (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
+          restackDue: landingRestackDue(facts.state, facts.log),
+        },
+        opts.now,
+      ),
     )
     if (statuses.has(projected.status)) output.push(projected)
   }
@@ -439,6 +441,7 @@ async function dashboardFromView(
       provisioning:
         facts.state.kind === 'node' &&
         (await readBuildFacts(view, record.slug)).value.provisionMarker !== undefined,
+      restackDue: landingRestackDue(facts.state, facts.log),
     })
     if (projectsNoDashboardRow(facts.state)) continue
     const pinned = await readPinnedConfig(view, record.slug, config, facts.state.verify.configPin)

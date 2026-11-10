@@ -1488,6 +1488,18 @@ describe('reduceBuild: finalize projections', () => {
     expect(state.finalizeCompletedSeq).toBe(6)
   })
 
+  test('pipelineSettled folds pipeline.settled by maximum and is absent without one', () => {
+    expect(reduceBuild(toLog([...prelude(), ...finalize()])).pipelineSettled).toBeUndefined()
+    const log = toLog([
+      ...prelude(),
+      ...finalize(),
+      ev('pipeline.settled', { cycle: 6 }),
+      ev('pipeline.settled', { cycle: 3 }),
+    ])
+    expect(reduceBuild(log).pipelineSettled).toBe(6)
+    expect(reduceBuild(log.slice(0, 7)).pipelineSettled).toBe(6)
+  })
+
   test('prState is UNCHANGED by the addition — it stays the full-log PR fact', () => {
     // f_03d0f6d4's constraint: the janitor (dispatcher.ts:342,:367,:396) and
     // the restart-orthogonal epilogue (engine.ts:402) read prState, so the fix

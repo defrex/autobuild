@@ -50,7 +50,7 @@ A ticket is claimed when it passes every gate:
 
 Others stay queued. Urgent tickets are claimed before normal ones, each in the source's order; priority never preempts a running build. See [Tickets and specs](tickets.md) for grooming and [Intake and harvest](intake.md) for proposed work.
 
-Each build gets its own workspace (local git worktree or remote sandbox) and a build-runner that owns its pipeline. Capacity caps concurrency: a work build holds a slot while it runs; an integration node holds one only while it verifies, not while collecting children. See [the integration tree](integration-overview.md).
+Each build gets its own workspace (local git worktree or remote sandbox) and a build-runner that owns its pipeline. Capacity caps the builds running work: a work build holds a slot until it finishes its pipeline (verification and finalize), even while paused or blocked. Once it waits for a merge decision it holds none; if its target moves or its PR conflicts, it waits for a slot ahead of new claims to restack, re-verify or reconcile. It keeps its workspace until it merges or closes, so retained workspaces can exceed `capacity` while running work cannot. An integration node holds a slot only while it verifies, not while collecting children. See [the integration tree](integration-overview.md).
 
 
 ## The log is the source of truth

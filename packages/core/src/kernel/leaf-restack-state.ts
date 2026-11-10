@@ -21,7 +21,9 @@ export interface LeafRestackState {
 }
 export function advanceLeafRestack(state: LeafRestackState, events: readonly AbEvent[]) {
   for (const event of events) {
-    if (event.type !== 'target.distance') state.activityAt = event.ts
+    // Advisory dispatcher bookkeeping is not lifecycle activity.
+    if (event.type !== 'target.distance' && event.type !== 'pipeline.settled')
+      state.activityAt = event.ts
     switch (event.type) {
       case 'workspace.provisioned':
         state.initialBase ??= event.payload.base.sha
@@ -113,7 +115,7 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
   }
 }
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 8,
+  version: 9,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),
