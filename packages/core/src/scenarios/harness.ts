@@ -24,6 +24,7 @@ import { gitRewrite } from '../ports/forge/git-rewrite'
  * agents never touch the remote, so a journal IS the remote) and
  * FakeTicketSource (§13 — projections flow outward only).
  */
+import type { afterEach as BunAfterEach, test as BunTest } from 'bun:test'
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -56,7 +57,7 @@ import type {
   TicketSource,
   WorkspaceProvider,
 } from '../ports/types'
-import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
+import { GitWorktreeProvider, spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import {
@@ -151,8 +152,11 @@ export const GIT_ID = [
   'commit.gpgsign=false',
 ]
 
-export async function git(args: string[], cwd: string): Promise<string> {
-  const result = await spawnExec(['git', ...args], { cwd })
+export async function git(args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
+  const result = await spawnExec(['git', ...args], {
+    cwd,
+    ...(signal === undefined ? {} : { signal }),
+  })
   if (result.exitCode !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`)
   }
@@ -176,25 +180,30 @@ export async function writeFileIn(dir: string, rel: string, content: string): Pr
   return path
 }
 
-async function initOrigin(dir: string, configToml: string, noRemote = false): Promise<string> {
+async function initOrigin(
+  dir: string,
+  configToml: string,
+  noRemote = false,
+  signal?: AbortSignal,
+): Promise<string> {
   // Reconcile fetches the current base from the conventional `origin` remote
   // at phase startup. Keep that seam real in every integration scenario: the
   // dispatcher works from `dir`, while a separate bare repo is its remote.
   const remote = join(dirname(dir), 'remote.git')
   if (!noRemote) {
     await mkdir(remote, { recursive: true })
-    await git(['init', '--bare', '-q', '-b', 'main'], remote)
+    await git(['init', '--bare', '-q', '-b', 'main'], remote, signal)
   }
 
   await mkdir(dir, { recursive: true })
-  await git(['init', '-q', '-b', 'main'], dir)
-  if (!noRemote) await git(['remote', 'add', 'origin', remote], dir)
+  await git(['init', '-q', '-b', 'main'], dir, signal)
+  if (!noRemote) await git(['remote', 'add', 'origin', remote], dir, signal)
   // No `.ab/` ignore here — see commitAll: the product establishes it.
   await writeFile(join(dir, 'autobuild.toml'), configToml)
   await writeFile(join(dir, 'README.md'), 'e2e origin\n')
-  await git(['add', '-A'], dir)
-  await git([...GIT_ID, 'commit', '-q', '-m', 'initial'], dir)
-  if (!noRemote) await git(['push', '-q', '-u', 'origin', 'main'], dir)
+  await git(['add', '-A'], dir, signal)
+  await git([...GIT_ID, 'commit', '-q', '-m', 'initial'], dir, signal)
+  if (!noRemote) await git(['push', '-q', '-u', 'origin', 'main'], dir, signal)
   return remote
 }
 
@@ -294,6 +303,8 @@ export interface E2eHarness {
   /** Run the most recently launched BuildRunner to its park point (§11). */
   runLatest(): Promise<BuildState>
   events(slug: string): Promise<AbEvent[]>
+  /** Idempotent: every call after the first returns the first call's promise,
+   * so a scenario's own `finally` and scenarioScope can both invoke it. */
   cleanup(): Promise<void>
 }
 
@@ -446,17 +457,30 @@ export async function makeHarness(opts: {
   /** Execute scripted phase commands through the private `ab` launcher on
    * PATH, forcing production ambient-env parsing and Store reopening. */
   processCli?: boolean
+  /** Owned by scenarioScope: aborting kills harness-routed subprocesses and
+   * stops harness entry points. */
+  signal?: AbortSignal
 }): Promise<E2eHarness> {
+  const signal = opts.signal
+  const exec: Exec =
+    signal === undefined
+      ? spawnExec
+      : (cmd, o) =>
+          spawnExec(cmd, {
+            ...o,
+            signal: o.signal === undefined ? signal : AbortSignal.any([o.signal, signal]),
+          })
   const tmp = await mkdtemp(join(tmpdir(), 'ab-e2e-'))
   try {
+    signal?.throwIfAborted()
     const originPath = join(tmp, 'origin')
     const configToml = opts.configToml ?? CONFIG_TOML
-    const remote = await initOrigin(originPath, configToml, opts.localGitForge === true)
+    const remote = await initOrigin(originPath, configToml, opts.localGitForge === true, signal)
     // Git canonicalizes temporary paths on macOS (`/var` → `/private/var`).
     // Records and every dispatch caller must use that same repository identity.
     const origin = await realpath(originPath)
     const remoteUpdater = join(tmp, 'remote-updater')
-    if (opts.localGitForge !== true) await git(['clone', '-q', remote, remoteUpdater], tmp)
+    if (opts.localGitForge !== true) await git(['clone', '-q', remote, remoteUpdater], tmp, signal)
 
     const clock = steppingClock()
     const ids = sequentialIds()
@@ -472,9 +496,9 @@ export async function makeHarness(opts: {
     // Ad-hoc scenario configs predating mandatory runtime defaults stay explicit
     // at the harness boundary rather than relying on production wiring.
     config.roles.default ??= { runtime: 'scripted' }
-    await git(['config', 'user.name', 'ab-e2e'], origin)
-    await git(['config', 'user.email', 'ab-e2e@example.invalid'], origin)
-    await git(['config', 'commit.gpgsign', 'false'], origin)
+    await git(['config', 'user.name', 'ab-e2e'], origin, signal)
+    await git(['config', 'user.email', 'ab-e2e@example.invalid'], origin, signal)
+    await git(['config', 'commit.gpgsign', 'false'], origin, signal)
     const forge = new FakeForge({
       gatePresence: opts.gatePresence ?? 'present',
       ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
@@ -482,7 +506,10 @@ export async function makeHarness(opts: {
     })
     // This fixture's served bare repository is the authoritative forge, even
     // when FakeForge supplies the scripted PR surface.
-    const served = new LocalGitForge({ repoRoot: opts.localGitForge === true ? origin : remote })
+    const served = new LocalGitForge({
+      repoRoot: opts.localGitForge === true ? origin : remote,
+      exec,
+    })
     const scriptedBranch = forge.remoteBranchSha.bind(forge)
     forge.remoteBranchSha = async (branch) =>
       forge.remoteBranches.has(branch) ? scriptedBranch(branch) : served.remoteBranchSha(branch)
@@ -490,11 +517,11 @@ export async function makeHarness(opts: {
     const recordPush = forge.pushBranch.bind(forge)
     forge.pushBranch = async (cwd, branch, sha) => {
       await recordPush(cwd, branch, sha)
-      await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd)
+      await git(['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], cwd, signal)
     }
-    forge.rewrite = gitRewrite(spawnExec, false)
+    forge.rewrite = gitRewrite(exec, false)
     let selectedForge: Forge =
-      opts.localGitForge === true ? new LocalGitForge({ repoRoot: origin }) : forge
+      opts.localGitForge === true ? new LocalGitForge({ repoRoot: origin, exec }) : forge
     let plugins: PluginRegistry | undefined
     if (opts.pluginForge !== undefined) {
       plugins = createPluginRegistry()
@@ -515,7 +542,7 @@ export async function makeHarness(opts: {
     const worktreeRoot = join(tmp, 'worktrees')
     const workspaces =
       opts.createWorkspaceProvider === undefined
-        ? new GitWorktreeProvider({ root: worktreeRoot })
+        ? new GitWorktreeProvider({ root: worktreeRoot, exec })
         : await opts.createWorkspaceProvider({ config, repoRoot: origin, worktreeRoot })
 
     const launched: Array<{ slug: string; runner: BuildRunner; instance: string }> = []
@@ -571,7 +598,7 @@ export async function makeHarness(opts: {
             env,
             workspacePath: ws,
             forge: selectedForge,
-            exec: spawnExec,
+            exec,
             ids,
             clock,
             stdout: (line) => out.push(line),
@@ -637,7 +664,7 @@ export async function makeHarness(opts: {
           store: activeStore.scopeBuild(slug),
           config,
           ...(opts.verifyCycleConfig
-            ? { readVerifyPipeline: () => readVerifyPipeline(workspacePath, spawnExec) }
+            ? { readVerifyPipeline: () => readVerifyPipeline(workspacePath, exec) }
             : {}),
           ...(opts.pinnedConfig
             ? {
@@ -662,7 +689,7 @@ export async function makeHarness(opts: {
           workspacePath,
           branch: record.branch ?? `ab/${slug}`,
           slug,
-          exec: spawnExec,
+          exec,
           forge: selectedForge,
           ids,
           clock,
@@ -700,12 +727,19 @@ export async function makeHarness(opts: {
       forge: selectedForge,
       config: opts.dispatcherConfig?.(structuredClone(config)) ?? config,
       repo: origin,
-      exec: spawnExec,
+      exec,
       launchRunner,
       ...(opts.getConfig ? { getConfig: opts.getConfig } : {}),
       ids,
       clock,
     })
+    if (signal !== undefined) {
+      const tick = dispatcher.tick.bind(dispatcher)
+      dispatcher.tick = (...args) => {
+        signal.throwIfAborted()
+        return tick(...args)
+      }
+    }
     const wiring: DispatchWiring = {
       store: activeStore,
       tickets: ticketSource,
@@ -744,6 +778,7 @@ export async function makeHarness(opts: {
       ...(plugins !== undefined ? { plugins } : {}),
     }
 
+    let cleaned: Promise<void> | undefined
     return {
       tmp,
       origin,
@@ -765,14 +800,16 @@ export async function makeHarness(opts: {
         if (opts.localGitForge === true) {
           throw new Error('advanceRemote is unavailable for a no-remote local-git harness')
         }
+        signal?.throwIfAborted()
         for (const [path, content] of Object.entries(changes)) {
           await writeFileIn(remoteUpdater, path, content)
         }
         const sha = await commitAll(remoteUpdater, message)
-        await git(['push', '-q', 'origin', 'main'], remoteUpdater)
+        await git(['push', '-q', 'origin', 'main'], remoteUpdater, signal)
         return sha
       },
       async runLatest(): Promise<BuildState> {
+        signal?.throwIfAborted()
         const entry = launched.at(-1)
         if (entry === undefined) throw new Error('runLatest: nothing launched')
         try {
@@ -784,21 +821,94 @@ export async function makeHarness(opts: {
         }
       },
       events: (slug) => store.getEvents(slug),
-      cleanup: async () => {
-        try {
-          if (!snapshotsOff) await assertSnapshotEquivalence(store, origin)
-          await activeStore.close()
-          if (activeStore !== store) await store.close()
-          await adapted?.cleanup?.()
-        } finally {
-          await rm(tmp, { recursive: true, force: true })
-        }
-      },
+      cleanup: () =>
+        (cleaned ??= (async () => {
+          try {
+            if (!snapshotsOff) await assertSnapshotEquivalence(store, origin)
+            await activeStore.close()
+            if (activeStore !== store) await store.close()
+            await adapted?.cleanup?.()
+          } finally {
+            await rm(tmp, { recursive: true, force: true })
+          }
+        })()),
     }
   } catch (error) {
     await rm(tmp, { recursive: true, force: true })
     throw error
   }
+}
+
+// ── Scenario lifetime scope ──────────────────────────────────────────────────
+
+/** A harness maker bound to one scenario's lifetime. */
+export type Make = (opts: Parameters<typeof makeHarness>[0]) => Promise<E2eHarness>
+
+/**
+ * Own every harness a scenario creates from the moment creation starts. Bun
+ * runs `afterEach` after a timed-out test but never the abandoned body's
+ * `finally`, so the scope's hook aborts the case's signal (killing
+ * harness-routed subprocesses and stopping the next harness entry point),
+ * drains the body, and disposes every harness before the next case starts.
+ * A timed-out case's late rejection and cleanup errors are swallowed; it is
+ * already reported as timed out. A case that settled keeps its own outcome,
+ * and its cleanup errors fail the hook.
+ *
+ * Bun's `test` and `afterEach` are passed in so the harness itself never
+ * imports `bun:test`.
+ */
+export function scenarioScope(bun: { test: typeof BunTest; afterEach: typeof BunAfterEach }) {
+  interface Case {
+    controller: AbortController
+    abandoned: boolean
+    settled: boolean
+    run: Promise<void>
+    created: Promise<E2eHarness>[]
+  }
+  let current: Case | undefined
+  bun.afterEach(async () => {
+    const c = current
+    current = undefined
+    if (c === undefined) return
+    const timedOut = !c.settled
+    // Set before any await: a late rejection from the drained body is swallowed.
+    c.abandoned = true
+    c.controller.abort(new Error('scenario ended'))
+    await c.run.catch(() => {})
+    const errors: unknown[] = []
+    for (const created of c.created) {
+      // A failed creation already removed its own temporary directory.
+      const h = await created.catch(() => undefined)
+      await h?.cleanup().catch((error: unknown) => errors.push(error))
+    }
+    if (errors.length > 0 && !timedOut) throw errors[0]
+  }, 30_000)
+  return (name: string, body: (makeHarness: Make) => Promise<void>, timeout?: number): void =>
+    bun.test(
+      name,
+      () => {
+        const c: Case = {
+          controller: new AbortController(),
+          abandoned: false,
+          settled: false,
+          run: Promise.resolve(),
+          created: [],
+        }
+        const make: Make = (opts) => {
+          const created = makeHarness({ ...opts, signal: c.controller.signal })
+          c.created.push(created)
+          return created
+        }
+        current = c
+        c.run = body(make).finally(() => {
+          c.settled = true
+        })
+        return c.run.catch((error: unknown) => {
+          if (!c.abandoned) throw error
+        })
+      },
+      timeout,
+    )
 }
 
 // ── Default (§15.6 happy-path) handlers over the REAL CLI ────────────────────
