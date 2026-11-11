@@ -1548,3 +1548,57 @@ test('pre-serialized ticket asset requests retain general and specialized 413 er
     }
   }
 })
+
+describe('build creation identity capability', () => {
+  function probing(health: () => Response) {
+    const paths: string[] = []
+    const store = new RemoteBuildStore({
+      url: 'http://store.test',
+      fetchFn: (async (input: string | URL | Request) => {
+        const path = new URL(String(input)).pathname
+        paths.push(path)
+        if (path === '/health') return health()
+        return Response.json({ status: 'unknown', reason: 'unsupported-capability' })
+      }) as typeof fetch,
+    })
+    return { store, paths }
+  }
+
+  test('an advertised creation key is keyed; its absence or a missing route is allocated', async () => {
+    for (const [health, expected] of [
+      [() => Response.json({ capabilities: ['build-creation-key-v1'] }), 'keyed'],
+      [() => Response.json({ capabilities: ['dispatch-placement-v1'] }), 'allocated'],
+      [() => Response.json({ ok: true }), 'allocated'],
+      [() => new Response('missing', { status: 404 }), 'allocated'],
+    ] as const) {
+      const { store, paths } = probing(health)
+      expect(await store.buildCreationIdentity()).toBe(expected)
+      expect(await store.buildCreationIdentity()).toBe(expected)
+      await store.getDispatchPlacement('/r')
+      // One probe per instance, shared with the placement capability.
+      expect(paths.filter((path) => path === '/health')).toHaveLength(1)
+    }
+  })
+
+  test('a failed probe throws and is retried rather than cached', async () => {
+    let failing = true
+    const { store, paths } = probing(() =>
+      failing
+        ? Response.json({ error: 'unavailable', kind: 'error' }, { status: 503 })
+        : Response.json({ capabilities: ['build-creation-key-v1'] }),
+    )
+    await expect(store.buildCreationIdentity()).rejects.toThrow()
+    failing = false
+    expect(await store.buildCreationIdentity()).toBe('keyed')
+    expect(paths).toEqual(['/health', '/health'])
+  })
+
+  test('createBuild sends the creation key on the wire', async () => {
+    const { fetchFn, calls } = fakeFetch([
+      { body: { slug: 's', repo: '/r', createdAt: 'x', updatedAt: 'x' }, status: 201 },
+    ])
+    const store = new RemoteBuildStore({ url: 'http://store.test', fetchFn })
+    await store.createBuild({ slug: 's', repo: '/r', creationKey: 'prep_1' })
+    expect(calls[0]?.body).toMatchObject({ creationKey: 'prep_1' })
+  })
+})
