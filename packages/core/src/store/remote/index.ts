@@ -34,6 +34,8 @@ export type { ReducerSnapshot, SnapshotScope } from '../snapshots'
 
 export * from './compatibility'
 
+export { creationBuildSlug, projectBuildSlugBase } from '../../kernel/build-creation'
+
 export { delegateCredential } from './credentials'
 
 export { reduceBuild } from '../../kernel/reducer'

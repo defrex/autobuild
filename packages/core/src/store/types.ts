@@ -79,6 +79,11 @@ export interface NewBuildInput {
   repoOrigin?: string
   ticket?: TicketRef
   branch?: string
+  /** The creating preparation attempt, sent only when `buildCreationIdentity`
+   * answers `'keyed'`. A store that allocates the canonical slug derives it
+   * from (repo, slug, creationKey) with `creationBuildSlug` and creates at
+   * most one build per key; exact-slug adapters ignore it. */
+  creationKey?: string
   /** The build's `build.created` fact, appended as seq 1 in the same atomic
    * step as the record: both exist or neither does, so the claim-time facts it
    * freezes (ticket assets, SPEC §6.3) can never be lost to a crash between
@@ -296,6 +301,12 @@ export interface BuildStore extends BoundedEventReads {
    * The handle retains this shape so foreign/admin calls fail loudly. */
   scopeBuild(slug: string): BuildScopedStore
 
+  /** How `createBuild` chooses the canonical slug. Absent: exactly
+   * `input.slug`. `'keyed'`: `input.slug`, or `creationBuildSlug(repo, slug,
+   * creationKey)` when a key is sent. `'allocated'`: possibly a slug the
+   * caller never learns if the response is lost, so absence at a known slug
+   * proves nothing. */
+  buildCreationIdentity?(): Promise<'keyed' | 'allocated'>
   createBuild(input: NewBuildInput): Promise<BuildRecord>
   getBuild(slug: string): Promise<BuildRecord | null>
   listBuilds(): Promise<BuildRecord[]>

@@ -9,6 +9,7 @@ import { hardReadinessKeys } from '../ports/forge/readiness'
  * builds or new phases in the fixed build grammar.
  */
 import { z } from 'zod'
+import { CREATION_KEY } from '../kernel/build-creation'
 import {
   artifactRefSchema,
   findingSchema,
@@ -823,6 +824,9 @@ export const ticketPreparationEventPayloadSchemas = {
   'ticket-preparation.creation-selected': z.strictObject({
     ...preparationIdentity,
     slug: z.string().min(1),
+    // Additive: present only when the store attested keyed creation, so
+    // recovery can point-read the canonical slug this key derives.
+    creationKey: z.string().regex(CREATION_KEY).optional(),
   }),
   'ticket-preparation.failed': z.strictObject({
     ...preparationIdentity,
