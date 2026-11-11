@@ -243,6 +243,7 @@ export const repositoryEventPolicy = {
   'dispatcher.ticket-source-dependency-limited': 'decisive',
   'dispatcher.forge-degraded': 'decisive',
   'dispatcher.forge-recovered': 'decisive',
+  'forge.credential-limited': 'advisory',
   'dispatcher.kernel-git-unavailable': 'advisory',
   'dispatcher.kernel-git-recovered': 'advisory',
   'dispatcher.ticket-source-degraded': 'decisive',

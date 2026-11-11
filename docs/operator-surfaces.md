@@ -80,14 +80,17 @@ There's no operator-surface plugin map. Build a client of the versioned, authent
 ### Forge cooldown admission and explicit recovery
 
 Hosted repository event appends and atomic artifact deposits validate
-`dispatcher.forge-degraded` before any durable mutation. The payload must match
-its event schema, with a finite ISO `resetAt` at most 24 hours after server time
+`dispatcher.forge-degraded` and `forge.credential-limited` before any durable
+mutation. The payload must match its event schema, with a finite ISO `resetAt` at most 24 hours after server time
 (inclusive). Already-expired deadlines are accepted. Invalid or out-of-horizon
 writes return `400 validation` (the remote adapter exposes `EventValidationError`);
 the server never clamps or invents a provider reset. Historical decoding has no clock-relative restriction.
 
 Build-runner and build-phase grants may POST only the kernel-authored
-`dispatcher.forge-degraded` repository fact through the events route. The
+`forge.credential-limited` and `dispatcher.forge-degraded` repository facts
+through the events route. Current runners and phase sessions record only
+`forge.credential-limited` attention; the `dispatcher.forge-degraded` exception
+remains for runners pinned to older releases. The
 preceding `requireProject` check binds this exception to the exact repository
 in the delegated claim. A hosted project identifies one repository. Delegates
 cannot write recovery, deposits or other repository facts, regardless of the

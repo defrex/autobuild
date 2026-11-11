@@ -280,6 +280,20 @@ export async function reducedReadBudget(opts: {
     const factsBytes = Buffer.byteLength(JSON.stringify(stableFacts))
     if (repositoryBytes !== undefined) expect(factsBytes).toBeLessThan(repositoryBytes + 512)
     repositoryBytes = factsBytes
+    // A credential limit seen outside the dispatcher joins the saved
+    // repository value; it adds no read to the guarded-call health check.
+    await store.appendRepo(repo, {
+      actor: KERNEL,
+      type: 'forge.credential-limited',
+      payload: {
+        forge: 'github',
+        process: 'build-runner budget',
+        credential: 'unauthenticated',
+        missingCredential: 'GITHUB_TOKEN and GH_TOKEN are unset',
+        message: 'API rate limit exceeded',
+        resetAt: new Date(Date.parse('2026-01-01T00:00:00.000Z') + length * 1000).toISOString(),
+      },
+    })
     // Warm persisted values independently of any consumer instance.
     await readBuildStreamSeed(store, slug)
     await readBuildFacts(store, slug)
@@ -344,10 +358,21 @@ export async function reducedReadBudget(opts: {
             actor: KERNEL,
           }),
         ).toBe('unchanged')
-        await readRepositoryFacts(cold, repo)
+        // Latest per (forge, process): repeated limits replace, never accumulate.
+        expect((await readRepositoryFacts(cold, repo)).value.forgeCredentialLimits).toHaveLength(1)
       }
       expect(costs.events).toBe(0)
       expect(costs.metadata).toBeLessThan(operations * 20)
+    }
+    // The guarded-call health check stays clear and flat per call beside
+    // a saved credential limit.
+    for (const operations of [1, 8]) {
+      reset()
+      for (let n = 0; n < operations; n++) {
+        expect(await readForgeHealth(cold, repo)).toBeUndefined()
+      }
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(operations * 10)
     }
     // Account holds survive fresh consumers and reconcile without idle journal reads or writes.
     const missing = missingAccountCredentials(

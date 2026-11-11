@@ -4,7 +4,7 @@
   "title": "Writing a plugin",
   "group": "guides",
   "description": "Build, contract-test, package, and publish an Autobuild infrastructure adapter.",
-  "textHash": "1103ed587c64f8bfd22dd3e4e6c0d698e765bafde58bdf1add68e1ecbfcc5585",
+  "textHash": "87173658f6c43e7bfae69023224804cbbffa64fbe57399b03b0eedf13e4723d0",
   "headings": [
     "1. Choose the port and preserve its semantics",
     "2. Create a repository-local module",
@@ -19,7 +19,7 @@
     "Optional ticket paging capability"
   ],
   "code": [
-    "// Rate limit, with a valid ISO reset timestamp:\nthrow new ForgeFailure(message, { kind: 'rate-limited', resetAt })\n// Retryable transport error:\nthrow new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })",
+    "// Rate limit, with a valid ISO reset timestamp:\nthrow new ForgeFailure(message, { kind: 'rate-limited', resetAt })\n// The limited request carried no credential: say why, so the limit stays local\n// to the caller instead of pausing the repository:\nthrow new ForgeFailure(message, { kind: 'rate-limited', resetAt, unauthenticated: reason })\n// Retryable transport error:\nthrow new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })",
     "observeRequests(observer: ForgeRequestObserver) {\n  this.observers.add(observer)\n  return () => { this.observers.delete(observer) }\n}\n// Capture context before awaiting the transport. After response/failure:\nfor (const observer of this.observers) {\n  observer({ build: context.build, ...(outcome ? { outcome } : {}) })\n}",
     "my-repository/\n├── autobuild.toml\n└── autobuild-plugin.ts",
     "import type {\n  AutobuildPluginManifest,\n  ForgePluginFactory,\n} from '@defrex/autobuild/plugin-sdk'\nimport { AcmeForge } from '@acme/forge-client'\n\nconst createForge: ForgePluginFactory = ({ config, env, repoRoot }) => {\n  const token = env.ACME_FORGE_TOKEN\n  if (!token) throw new Error('ACME_FORGE_TOKEN is required')\n  return new AcmeForge({ token, config, repoRoot })\n}\n\nexport default {\n  name: 'acme-forge',\n  apiVersion: '^1.2.0',\n  forges: { acme: createForge },\n} satisfies AutobuildPluginManifest",
