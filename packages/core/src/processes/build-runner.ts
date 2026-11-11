@@ -1154,7 +1154,8 @@ export class BuildRunner {
     }
     const currentFailure = state.setupFailure
     const openSetupEscalation = state.openEscalations.some(
-      (escalation) => escalation.phase === 'setup' && escalation.source === 'policy',
+      (escalation) =>
+        escalation.phase === 'setup' && escalation.source === 'policy' && !escalation.janitor,
     )
     const streak = await readBuildSelector(store, slug, 'setupStreak')
 

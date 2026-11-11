@@ -116,7 +116,7 @@ Credential/process changes remain subject to the Boundaries below.
 ### Watch for attention events
 
 `ab watch --operator --json` is the standing monitor. Keep its default filter: every
-record calls for action. It reports failed node verification, build escalations, persistent janitor failures and merge decisions,
+record calls for action. It reports failed node verification, build escalations, persistent janitor failures and their escalations, merge decisions,
 harvest escalations/recovery exhaustion, automatic upgrade failures and runtime rollbacks, rejected configuration, reloads needing
 restart, abnormal dispatcher stops/loss, ticket-source and forge degradation past reset (15 minutes
 for ticket sources without reset), and five minutes of continuous tick failures. Advertised resets
@@ -439,6 +439,8 @@ Treat every default-watch record as a call to act:
 - `integration.verification-failed`: inspect the failed steps, verified head and parent, then recheck current status. If the node still needs that repair, file a repair child targeting it. Each current failed cycle reports once; recovery does not backfill superseded failures. The node may have advanced after notification.
 - `escalation.raised`: inspect the question and evidence, then resolve it using
   the shared rules.
+- `build.janitor-escalated`: a janitor failure outlasted its escalation limit;
+  handle it as described under janitor escalation attention.
 - `build.consent-ready`: inspect the one consent queue, then merge or hold the
   selected candidate under the human's policy. Unready or stale candidates
   do not produce this observation.
@@ -589,7 +591,7 @@ entry position: resuming suppresses the same episode, while a new candidate or
 exit/re-entry can notify again. Explicit `--event` globs remain event-only.
 Use `ab wait --for consent --for node-merged --for restack-conflicted --json`
 for one wake; state waits return immediately when already satisfied. `--for
-attention` also includes current failed node verification, consent readiness, janitor failure attention and merge/conflict attention.
+attention` also includes current failed node verification, consent readiness, janitor failure attention, an open janitor escalation and merge/conflict attention.
 Resume event backlogs with `--since <cursor>`; keep handling emitted records
 before interpreting terminal completion.
 
@@ -601,6 +603,16 @@ The answer authorizes a fresh session and clears no genuine phase failures.
 Repeated classified read failures park immediately again; they do not consume
 the phase failure allowance. Default watch and attention waits deliver the new
 raise with its own event type.
+
+### Janitor escalation attention
+
+`build.janitor-escalated` is ordinary blocked attention for a janitor failure
+episode that outlasted `policy.janitorFailureEscalationSeconds`. Its question
+names the failing operation, the last error, the failed attempt count and when
+the episode started. Diagnose and fix the cause within the Boundaries, then
+answer with a bare retry so the janitor attempts on its next tick. The janitor
+keeps retrying underneath, so the escalation may also close on its own when an
+attempt succeeds; reconcile current status before acting on it.
 
 ## Forge failure recovery
 
@@ -645,11 +657,22 @@ build. An implement round with no commits over its base escalates at
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
 A classified forge rate limit is repository cooldown, not a janitor failure:
-neither the first limited response nor the cooldown that follows starts or ages
-an episode. Skipped polls preserve the episode across restart. After
-`policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
-notifies default watchers and appears on the build row. A successful attempt
-clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+neither the first limited response nor the cooldown that follows starts an
+episode or records an attempt, so a build that only waits out cooldown never
+escalates. Skipped polls preserve the episode across restart. Both thresholds
+below are wall-clock from the episode's first failed attempt and are checked
+when an attempt fails, so cooldown inside an episode that already started still
+counts. After `policy.janitorFailureAttentionSeconds` (600 by default),
+`build.janitor-failing` notifies default watchers and appears on the build row.
+After `policy.janitorFailureEscalationSeconds` (3600 by default), the build
+raises one escalation through `build.janitor-escalated`, naming the failing
+operation, the last error, the failed attempt count and when the episode
+started. The build is then blocked and shows wherever open escalations show.
+The janitor keeps retrying on its backoff underneath; a successful attempt
+clears the attention, closes the escalation unanswered and the build continues.
+Answering it with a bare retry makes the janitor attempt on its next tick. An
+episode raises at most one escalation; a new episode after recovery can raise
+another. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
 A dispatcher that cannot execute Git for kernel node work (a missing or
 unloadable `git` for the bare clone) records no janitor failures. It records
 one durable `dispatcher.kernel-git-unavailable` repository condition, node work

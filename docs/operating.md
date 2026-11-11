@@ -99,7 +99,7 @@ Existing attention returns immediately, even with a cursor, so looping `wait` do
 bun ab answer my-build "Keep the public API compatible"
 ```
 
-An escalation parks work until answered; guidance feeds the next round. `answer` also accepts a bare retry and spec-revision resolutions for when the contract must change; see `bun ab help answer`.
+A phase or policy escalation parks work until answered; guidance feeds the next round. A janitor escalation keeps retrying across dispatcher restarts and closes unanswered when an attempt succeeds; a bare retry only brings the next attempt forward. `answer` also accepts a bare retry and spec-revision resolutions for when the contract must change; see `bun ab help answer`.
 
 ```
 bun ab pause my-build

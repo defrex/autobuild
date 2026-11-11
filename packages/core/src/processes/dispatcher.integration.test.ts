@@ -5737,6 +5737,231 @@ describe('durable forge failure scheduling', () => {
     expect(after.attempt).toBe(1)
     expect(after.firstFailureAt).toBe(episode.firstFailureAt)
   })
+
+  /** Fail every due attempt until one escalates; returns the escalating tick's time. */
+  async function failUntilEscalated(h: ReturnType<typeof harness>, slug: string) {
+    for (let n = 0; n < 40; n++) {
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+      if ((await ofType(h, slug, 'build.janitor-escalated')).length) return
+      h.clock.set(reduceBuild(await h.store.getEvents(slug)).janitor!.nextAttemptAt)
+    }
+    throw new Error('janitor never escalated')
+  }
+
+  test('an episode past the escalation limit raises one escalation, keeps retrying and closes on recovery', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const poll = h.forge.getPrState.bind(h.forge)
+    h.forge.setPrState(1, { state: 'open', mergeable: null })
+    let failing = true
+    let calls = 0
+    h.forge.getPrState = async (...args) => {
+      calls++
+      if (failing) throw new Error(`provider unavailable\nattempt ${calls}`)
+      return poll(...args)
+    }
+    const start = h.clock().getTime()
+    await failUntilEscalated(h, slug)
+    expect(h.clock().getTime() - start).toBe(3_750_000)
+    const [raised] = await ofType(h, slug, 'build.janitor-escalated')
+    const firstFailureAt = new Date(start).toISOString()
+    expect(raised!.payload).toMatchObject({
+      id: `janitor:${firstFailureAt}`,
+      operation: 'PR check',
+      attempt: 16,
+      firstFailureAt,
+    })
+    expect((raised!.payload as { question: string }).question).toContain(
+      'Last error: provider unavailable attempt',
+    )
+    let state = reduceBuild(await h.store.getEvents(slug))
+    expect(state.status).toBe('blocked')
+    expect(state.openEscalations.map((e) => e.id)).toEqual([`janitor:${firstFailureAt}`])
+
+    // Retries continue at the cap underneath the open escalation.
+    for (let n = 0; n < 3; n++) {
+      h.clock.set(state.janitor!.nextAttemptAt)
+      const count = calls
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+      expect(calls).toBeGreaterThan(count)
+      state = reduceBuild(await h.store.getEvents(slug))
+      expect(Date.parse(state.janitor!.nextAttemptAt) - h.clock().getTime()).toBe(300_000)
+    }
+    expect(await ofType(h, slug, 'build.janitor-escalated')).toHaveLength(1)
+    expect(await ofType(h, slug, 'build.janitor-failing')).toHaveLength(1)
+
+    failing = false
+    h.clock.set(state.janitor!.nextAttemptAt)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+    state = reduceBuild(await h.store.getEvents(slug))
+    expect(state.janitor).toBeUndefined()
+    expect(state.openEscalations).toEqual([])
+    expect(state.status).not.toBe('blocked')
+    expect(await ofType(h, slug, 'escalation.answered')).toEqual([])
+  })
+
+  test('a bare retry answer attempts on the next tick without waiting out backoff', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    let calls = 0
+    h.forge.getPrState = async () => {
+      calls++
+      throw new Error('provider unavailable')
+    }
+    await failUntilEscalated(h, slug)
+    const pending = reduceBuild(await h.store.getEvents(slug)).janitor!
+    h.clock.advance(1000)
+    const count = calls
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(count)
+
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug,
+      user: 'operator',
+      action: { kind: 'answer' },
+    })
+    const answered = reduceBuild(await h.store.getEvents(slug))
+    expect(answered.answeredEscalations.at(-1)).toMatchObject({
+      janitor: true,
+      resolution: 'retry',
+    })
+    expect(answered.janitor?.retryRequested).toBe(true)
+    expect(h.clock().getTime()).toBeLessThan(Date.parse(pending.nextAttemptAt))
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+    expect(calls).toBe(count + 1)
+    const after = reduceBuild(await h.store.getEvents(slug))
+    expect(after.janitor).toMatchObject({
+      attempt: pending.attempt + 1,
+      escalation: pending.escalation,
+    })
+    expect(after.janitor?.retryRequested).toBeUndefined()
+    // Answered within the episode: no second escalation, and backoff resumes.
+    expect(await ofType(h, slug, 'build.janitor-escalated')).toHaveLength(1)
+    const count2 = calls
+    h.clock.advance(1000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(calls).toBe(count2)
+  })
+
+  test('a queued discard whose cleanup keeps failing still runs it while escalated', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    const slug = 'discard-failing'
+    await seedInterrupted(h, slug)
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.discard-requested',
+      payload: {},
+    })
+    const transition = h.tickets.transition.bind(h.tickets)
+    let failing = true
+    let calls = 0
+    h.tickets.transition = async (...args) => {
+      calls++
+      if (failing) throw new Error('ticket source unavailable')
+      return transition(...args)
+    }
+    await failUntilEscalated(h, slug)
+    const escalated = reduceBuild(await h.store.getEvents(slug))
+    expect(escalated.status).toBe('blocked')
+    expect(escalated.statusWithoutJanitorEscalation).toBe('queued')
+    expect((await ofType(h, slug, 'build.janitor-escalated'))[0]!.payload).toMatchObject({
+      operation: 'discard cleanup',
+    })
+    // The janitor's own escalation does not skip the failing cleanup.
+    h.clock.set(escalated.janitor!.nextAttemptAt)
+    const count = calls
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+    expect(calls).toBeGreaterThan(count)
+    expect(await ofType(h, slug, 'build.janitor-recovered')).toEqual([])
+    failing = false
+    h.clock.set(reduceBuild(await h.store.getEvents(slug)).janitor!.nextAttemptAt)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const done = reduceBuild(await h.store.getEvents(slug))
+    expect(done.openEscalations).toEqual([])
+    expect(done.outcome).toBe('discarded')
+  })
+
+  test('a node without a PR blocked only by its janitor escalation still runs its failing cascade', async () => {
+    const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
+    const slug = 'empty-node'
+    const ticket = { source: 'fake', id: 'N' }
+    await h.store.createBuild({
+      slug,
+      repo: REPO,
+      branch: `ab-node/${slug}`,
+      ticket,
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket, repo: REPO, baseBranch: 'main', kind: 'node' },
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'node.opened',
+      payload: { sha: BASE_SHA },
+    })
+    let compares = 0
+    h.forge.compareBranches = async () => {
+      compares++
+      throw new Error('comparison unavailable')
+    }
+    await failUntilEscalated(h, slug)
+    expect((await ofType(h, slug, 'build.janitor-escalated'))[0]!.payload).toMatchObject({
+      operation: 'node cascade',
+    })
+    let state = reduceBuild(await h.store.getEvents(slug))
+    expect(state.status).toBe('blocked')
+    expect(state.statusWithoutJanitorEscalation).toBe('collecting')
+    h.clock.set(state.janitor!.nextAttemptAt)
+    let count = compares
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+    expect(compares).toBeGreaterThan(count)
+    expect(await ofType(h, slug, 'build.janitor-recovered')).toEqual([])
+
+    // An ordinary escalation still gates the node exactly as before.
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: {
+        id: 'esc-human',
+        phase: 'setup',
+        source: 'policy',
+        policyCause: 'setup-failure-limit',
+        question: 'decide',
+      },
+    })
+    state = reduceBuild(await h.store.getEvents(slug))
+    expect(state.statusWithoutJanitorEscalation).toBe('blocked')
+    h.clock.set(state.janitor!.nextAttemptAt)
+    count = compares
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(compares).toBe(count)
+  })
+
+  test('a build that only waits out forge cooldowns past the limit never escalates', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    let calls = 0
+    h.forge.getPrState = async () => {
+      calls++
+      throw rateLimit(new Date(h.clock().getTime() + 15 * 60_000).toISOString())
+    }
+    for (let elapsed = 0; elapsed <= 2 * 3600; elapsed += 300) {
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(0)
+      h.clock.advance(300_000)
+    }
+    expect(calls).toBeGreaterThan(1)
+    for (const type of [
+      'build.janitor-attempt-failed',
+      'build.janitor-failing',
+      'build.janitor-escalated',
+    ])
+      expect(await ofType(h, slug, type)).toEqual([])
+    expect(reduceBuild(await h.store.getEvents(slug)).openEscalations).toEqual([])
+  })
 })
 
 describe('Dispatcher startup resume', () => {
@@ -15943,6 +16168,67 @@ test('a kernel Git outage has bounded reads on fresh dispatchers at 100 and 1000
     (await h.store.getEvents(node.slug)).filter((event) => event.type.startsWith('build.janitor')),
   ).toEqual([])
 }, 60_000)
+
+test('a failing janitor costs fresh dispatchers the pinned requests at 100 and 100000 events', async () => {
+  const h = harness()
+  const slug = await seedAwaitingPr(h)
+  const poll = h.forge.getPrState.bind(h.forge)
+  h.forge.setPrState(1, { state: 'open', mergeable: null })
+  let failing = false
+  h.forge.getPrState = async (...args) => {
+    if (failing) throw new Error('provider unavailable')
+    return poll(...args)
+  }
+  const { janitorEscalationRequestBudget } = await import('../testing/reduced-read-budget')
+  const result = await janitorEscalationRequestBudget({
+    store: h.store as MemoryBuildStore,
+    repo: REPO,
+    slug,
+    now: () => h.clock(),
+    advance: (ms) => h.clock.advance(ms),
+    failing: (value) => {
+      failing = value
+    },
+    limitSeconds: 3600,
+    attentionSeconds: 600,
+    tick: () =>
+      harness({
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        forge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+  // Pinned from the implementation before janitor escalation existed, which
+  // never escalated: each class is the failing tick at the same point in the
+  // scenario. The threshold tick adds exactly the one escalation append.
+  const failingTick = {
+    append: 1,
+    getLatestArtifactMeta: 1,
+    getReducerValue: 15,
+    getRepo: 4,
+    getRepoBuildDigests: 1,
+    listBuilds: 2,
+  }
+  expect(result.vectors).toEqual({
+    start: failingTick,
+    preAttention: failingTick,
+    attention: { ...failingTick, append: 2 },
+    preLimit: failingTick,
+    threshold: { ...failingTick, append: 2 },
+    escalated: failingTick,
+    recovery: {
+      append: 1,
+      getArtifact: 2,
+      getLatestArtifactMeta: 1,
+      getReducerValue: 22,
+      getRepo: 5,
+      getRepoBuildDigests: 1,
+      listBuilds: 2,
+    },
+  })
+  expect(result.escalations).toEqual([1, 1])
+}, 240_000)
 
 describe('native identity (AUT-812/AUT-821)', () => {
   const trailers = (body: string) =>

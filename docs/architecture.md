@@ -17,9 +17,12 @@ disagree, the code is authoritative.
    validation and fail-safe fallback.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
    actionable current build; each phase resumes as a function of durable state.
-   Open escalations remain parked until an external answer, from the operator
-   agent or you, is recorded; a build-phase agent never answers its own
-   escalation. Pending operator commands remain actionable.
+   Startup is not an answer or a retry. Open phase and policy escalations
+   remain parked until an external answer, from the operator agent or you, is
+   recorded; a build-phase agent never answers its own escalation. Ordinary
+   janitor retries continue across startup, and a successful attempt closes a
+   janitor escalation unanswered; a bare retry only brings the next attempt
+   forward. Pending operator commands remain actionable.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
    Triage without a human grooming it to Ready, unless the repository waives
    that gate explicitly with `[tickets].proposalState`.
@@ -1963,11 +1966,22 @@ one more PR create; an abort answer stops retrying so release can proceed.
 Janitor failures are durable per-build episodes. Eligible failures retry after
 30, 60, 120, 240 seconds, then at the configured cap (300 seconds by default).
 A classified forge rate limit is repository cooldown, not a janitor failure:
-neither the first limited response nor the cooldown that follows starts or ages
-an episode. Skipped polls preserve the episode across restart. After
-`policy.janitorFailureAttentionSeconds` (600 by default), `build.janitor-failing`
-notifies default watchers and appears on the build row. A successful attempt
-clears it. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
+neither the first limited response nor the cooldown that follows starts an
+episode or records an attempt, so a build that only waits out cooldown never
+escalates. Skipped polls preserve the episode across restart. Both thresholds
+below are wall-clock from the episode's first failed attempt and are checked
+when an attempt fails, so cooldown inside an episode that already started still
+counts. After `policy.janitorFailureAttentionSeconds` (600 by default),
+`build.janitor-failing` notifies default watchers and appears on the build row.
+After `policy.janitorFailureEscalationSeconds` (3600 by default), the build
+raises one escalation through `build.janitor-escalated`, naming the failing
+operation, the last error, the failed attempt count and when the episode
+started. The build is then blocked and shows wherever open escalations show.
+The janitor keeps retrying on its backoff underneath; a successful attempt
+clears the attention, closes the escalation unanswered and the build continues.
+Answering it with a bare retry makes the janitor attempt on its next tick. An
+episode raises at most one escalation; a new episode after recovery can raise
+another. `policy.janitorBackoffMaxSeconds` sets the positive integer cap.
 A dispatcher that cannot execute Git for kernel node work (a missing or
 unloadable `git` for the bare clone) records no janitor failures. It records
 one durable `dispatcher.kernel-git-unavailable` repository condition, node work

@@ -70,7 +70,7 @@ Agents report through the typed `ab` CLI (`ab done`, `ab verdict`), not their ou
 
 A restart loses nothing. The dispatcher continues each build from its recorded phase, completed boundaries, artifacts and feedback, even in a replacement sandbox. Authority boundaries hold:
 
-- Unanswered escalations stay parked until your operator agent answers.
+- Unanswered phase and policy escalations stay parked until your operator agent answers. A janitor escalation keeps retrying and closes unanswered when an attempt succeeds.
 - Pending operator commands and actionable work proceed.
 - A restart never grants permission or resets an exhausted retry budget.
 

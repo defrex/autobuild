@@ -14,6 +14,7 @@ export const buildEventPolicy = {
   'build.janitor-attempt-failed': 'decisive',
   'build.janitor-recovered': 'decisive',
   'build.janitor-failing': 'advisory',
+  'build.janitor-escalated': 'decisive',
   'landing.application-failed': 'decisive',
   'landing.decided': 'decisive',
   'build.hold-requested': 'decisive',

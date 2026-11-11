@@ -41,7 +41,7 @@ A deterministic check or evidence-judging agent that tests a build against its c
 
 ## Escalation
 
-A durable question or failure that parks work until answered with guidance or a retry through the [answer interface](operating.md#answer-and-pause).
+A durable question or failure that parks work until answered with guidance or a retry through the [answer interface](operating.md#answer-and-pause); a janitor escalation instead keeps retrying and closes unanswered when an attempt succeeds.
 
 ## Merge
 
