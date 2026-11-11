@@ -325,7 +325,8 @@ export class PostgresTicketSource implements TicketSource {
           AND labels @> ${q.array(labels, 'text')}`
       const total = Number(counts[0]!.total)
       if (page.limit === 0) return { tickets: [], diagnostics: [], total }
-      // `oldest` is dispatch order, matching `listReady`; `newest` stays newest filed first.
+      // `oldest` is dispatch order, matching `listReady`; `newest` is newest filed
+      // first, independent of urgency, tie-broken by id.
       const rows: Row[] =
         page.order === 'newest'
           ? await q`SELECT ab_tickets.*, revision::text AS revision,
