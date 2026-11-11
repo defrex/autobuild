@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { FONT_FILES } from './fonts'
 const css = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
 function relativeLuminance(hex: string): number {
   if (!/^#[\da-f]{6}$/i.test(hex)) throw new Error(`invalid sRGB color: ${hex}`)
@@ -112,4 +113,44 @@ test('disabled landing controls retain ground while only escalations use red was
     /\.signoff:not\(\.landing\) \.btn:disabled\s*\{[^}]*background:\s*var\(--red-wash\)/,
   )
   expect(css).not.toMatch(/\.signoff \.btn:disabled\s*\{/)
+})
+
+/** Reads a TrueType font's Unicode cmap (format 4 or 12) for one code point. */
+function fontCovers(file: string, codePoint: number): boolean {
+  const font = readFileSync(new URL(`./fonts/${file}`, import.meta.url))
+  const view = new DataView(font.buffer, font.byteOffset, font.byteLength)
+  const tables = view.getUint16(4)
+  let cmap = -1
+  for (let i = 0; i < tables; i++)
+    if (font.toString('latin1', 12 + i * 16, 16 + i * 16) === 'cmap')
+      cmap = view.getUint32(12 + i * 16 + 8)
+  if (cmap < 0) throw new Error(`${file} has no cmap table`)
+  for (let i = 0; i < view.getUint16(cmap + 2); i++) {
+    const sub = cmap + view.getUint32(cmap + 4 + i * 8 + 4)
+    const format = view.getUint16(sub)
+    if (format === 12) {
+      for (let g = 0; g < view.getUint32(sub + 12); g++) {
+        const group = sub + 16 + g * 12
+        if (codePoint >= view.getUint32(group) && codePoint <= view.getUint32(group + 4))
+          return true
+      }
+    } else if (format === 4 && codePoint <= 0xffff) {
+      const segments = view.getUint16(sub + 6) / 2
+      for (let s = 0; s < segments; s++) {
+        const end = view.getUint16(sub + 14 + s * 2)
+        const start = view.getUint16(sub + 16 + segments * 2 + s * 2)
+        if (codePoint >= start && codePoint <= end && start !== 0xffff) return true
+      }
+    }
+  }
+  return false
+}
+
+test('menu disclosure glyph draws in a packaged face that carries it', () => {
+  expect(css).toMatch(/\.menu-glyph\s*\{[^}]*font-family:\s*var\(--mono\)/)
+  for (const trigger of ['./dashboard/Menu.tsx', './dashboard/Shell.tsx']) {
+    const source = readFileSync(new URL(trigger, import.meta.url), 'utf8')
+    expect(source, trigger).toMatch(/className="menu-glyph" aria-hidden>\s*▾\s*</)
+  }
+  expect(fontCovers(FONT_FILES.mono, 0x25be)).toBe(true)
 })
