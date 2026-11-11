@@ -624,7 +624,7 @@ describe('reducer registry', () => {
         "currentPrAttachments": 1,
         "dashboardFacts": 3,
         "dispatchFailureBudget": 1,
-        "dispatchFrontend": 4,
+        "dispatchFrontend": 5,
         "dispatchPlacement": 1,
         "dispatchSettings": 1,
         "dispatchStatus": 5,
