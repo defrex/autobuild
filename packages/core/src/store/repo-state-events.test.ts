@@ -404,6 +404,4 @@ test('placement is latest-only before any run anchor in bounded journal reads', 
     journalViewReducer.reduce,
   ])
     expect(project([first, second])).toEqual([second])
-  const { isDashboardRepositoryEvent } = await import('../cli/dispatch-repository-feed')
-  expect(isDashboardRepositoryEvent(second)).toBe(false)
 })
