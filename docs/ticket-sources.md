@@ -195,8 +195,11 @@ Native paging is an optional API 1.9 ticket-source capability:
 The SDK exports these types; the result is `TicketListing & { total: number }`.
 Criteria retain state, labels (AND), and assignee semantics. The page has a
 nonnegative integer `limit`, optional nonnegative integer `offset` (default 0),
-and optional `order: 'oldest' | 'newest'` (default oldest). Newest reverses the
-entire source order before offset and limit. Total counts all matches, even
+and optional `order: 'oldest' | 'newest'` (default oldest). Oldest is the
+source's dispatch order: with `priority`, urgent tickets first, then normal
+ones, each in listing order. Newest is newest filed first: creation time
+descending, regardless of urgency, with a stable tie-break. It is not the
+reverse of dispatch order. Offset and limit apply after ordering. Total counts all matches, even
 with limit zero or an offset past the end. Records, diagnostics and errors
 match the exhaustive listing. The shared `describeTicketSourceContract` suite
 automatically compares declared native paging with full-read windows.
@@ -204,7 +207,12 @@ automatically compares declared native paging with full-read windows.
 Only paged operator listings select this capability. Sources without it retain
 the full-read fallback, which orders the listing before offset and limit: by
 default a stable urgent-first partition (urgent, then normal, each in source
-order), or for newest the reversed source order. Native errors propagate. Unpaged operator
+order), or for newest the reversed listing, which is newest filed first for
+sources that list in filing order (file, GitHub, Linear). The remote
+`HostedTicketSource` is the exception: the hosted list-ready protocol returns
+urgent tickets first and carries no filing time, so the client cannot see
+filing order, and its newest pages are reversed dispatch order whenever urgent
+tickets exist. Native errors propagate. Unpaged operator
 listings, CLI ticket lists and dispatcher ready scans remain exhaustive through
 `listReady`/`listAll`. The hosted PostgreSQL source counts matches without
 bodies and reads only the SQL-bounded window. File, Linear, GitHub and the remote
