@@ -1,14 +1,22 @@
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test as bunTest } from 'bun:test'
 import { join } from 'node:path'
-import { makeHarness, happyHandlers, readyTicket, git, commitAll } from './harness'
+import { happyHandlers, readyTicket, git, commitAll, scenarioScope, type Make } from './harness'
 import { controlBuild } from '../cli/build-control'
 import { reduceBuild } from '../kernel/reducer'
 import { integrationHeadVerified } from '../kernel/integration-state'
 
+// Every case carries an explicit 30 s budget measured at 4ce34c87 (Bun 1.4.4,
+// 4 vCPU): the shared remoteNode setup alone drives a real verify and landing,
+// cases take 0.8–1.9 s focused and 1.7–4.1 s under sustained integration load,
+// and slower hosts reported ~3 s focused and 4.8 s for parent movement, at the
+// edge of Bun's 5 s default. `test` is scenarioScope's wrapper, which disposes
+// a timed-out case's harness before the next case starts.
+const test = scenarioScope({ test: bunTest, afterEach })
+
 /** Real remote Git refs with the non-local PR API seam. Deliberately omit
  * snapshotBase, as GitHubForge does, so dispatcher publication must fetch. */
-async function remoteNode() {
+async function remoteNode(makeHarness: Make) {
   const h = await makeHarness({
     gatePresence: 'absent',
     handlers: happyHandlers(),
@@ -92,30 +100,36 @@ async function remoteNode() {
     if (loseResponse) throw new Error('merge response lost after server publication')
     return landed
   }
-  await h.dispatcher.tick()
-  const node = (await h.store.listBuilds())[0]!
-  await git(['fetch', 'origin', node.branch!], h.origin)
-  const cwd = join(h.tmp, 'source-stack')
-  await git(['worktree', 'add', '--detach', cwd, 'FETCH_HEAD'], h.origin)
-  for (const id of ['first-child', 'second-child']) {
-    await Bun.write(join(cwd, id), id)
-    await Bun.write(join(cwd, 'ok.marker'), 'ok')
-    await commitAll(cwd, `Change ${id}\n\nAutobuild-Build: ${id}`)
+  let node: Awaited<ReturnType<typeof h.store.listBuilds>>[number]
+  try {
+    await h.dispatcher.tick()
+    node = (await h.store.listBuilds())[0]!
+    await git(['fetch', 'origin', node.branch!], h.origin)
+    const cwd = join(h.tmp, 'source-stack')
+    await git(['worktree', 'add', '--detach', cwd, 'FETCH_HEAD'], h.origin)
+    for (const id of ['first-child', 'second-child']) {
+      await Bun.write(join(cwd, id), id)
+      await Bun.write(join(cwd, 'ok.marker'), 'ok')
+      await commitAll(cwd, `Change ${id}\n\nAutobuild-Build: ${id}`)
+    }
+    await git(['push', 'origin', `HEAD:refs/heads/${node.branch}`], cwd)
+    await git(['worktree', 'remove', cwd], h.origin)
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    await h.runLatest()
+    await h.dispatcher.tick()
+    const verified = reduceBuild(await h.events(node.slug))
+    expect(integrationHeadVerified(verified, verified.integration!.cycle!.head)).toBe(true)
+    await controlBuild({
+      store: h.store,
+      repo: h.origin,
+      slug: node.slug,
+      action: { kind: 'land' },
+      ticketSource: async () => h.tickets,
+    })
+  } catch (error) {
+    await h.cleanup()
+    throw error
   }
-  await git(['push', 'origin', `HEAD:refs/heads/${node.branch}`], cwd)
-  await git(['worktree', 'remove', cwd], h.origin)
-  for (let i = 0; i < 3; i++) await h.dispatcher.tick()
-  await h.runLatest()
-  await h.dispatcher.tick()
-  const verified = reduceBuild(await h.events(node.slug))
-  expect(integrationHeadVerified(verified, verified.integration!.cycle!.head)).toBe(true)
-  await controlBuild({
-    store: h.store,
-    repo: h.origin,
-    slug: node.slug,
-    action: { kind: 'land' },
-    ticketSource: async () => h.tickets,
-  })
   return {
     h,
     node,
@@ -129,8 +143,8 @@ async function remoteNode() {
   }
 }
 
-test('dispatcher lands non-local roots without snapshotBase and audits the immutable result', async () => {
-  const { h, node, forge } = await remoteNode()
+test('dispatcher lands non-local roots without snapshotBase and audits the immutable result', async (makeHarness) => {
+  const { h, node, forge } = await remoteNode(makeHarness)
   try {
     expect(h.forgeAdapter.snapshotBase).toBeUndefined()
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
@@ -148,10 +162,10 @@ test('dispatcher lands non-local roots without snapshotBase and audits the immut
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
-test('parent movement before the merge request abandons intent and restacks and verifies again', async () => {
-  const { h, node, forge } = await remoteNode()
+test('parent movement before the merge request abandons intent and restacks and verifies again', async (makeHarness) => {
+  const { h, node, forge } = await remoteNode(makeHarness)
   try {
     let moved = false
     forge.inspectMergeFreshness = async () => {
@@ -179,8 +193,8 @@ test('parent movement before the merge request abandons intent and restacks and 
   }
 }, 30_000)
 
-test('ambiguous non-local merge response recovers kernel provenance after consent revocation', async () => {
-  const { h, node, forge, loseResponse } = await remoteNode()
+test('ambiguous non-local merge response recovers kernel provenance after consent revocation', async (makeHarness) => {
+  const { h, node, forge, loseResponse } = await remoteNode(makeHarness)
   try {
     loseResponse()
     expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
@@ -199,10 +213,10 @@ test('ambiguous non-local merge response recovers kernel provenance after consen
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
-test('an unfenced parent-window race raises audit attention after non-local landing', async () => {
-  const { h, node, setRace } = await remoteNode()
+test('an unfenced parent-window race raises audit attention after non-local landing', async (makeHarness) => {
+  const { h, node, setRace } = await remoteNode(makeHarness)
   try {
     setRace()
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
@@ -217,10 +231,10 @@ test('an unfenced parent-window race raises audit attention after non-local land
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
-test('waiting landing retries are throttled and recheck reopened children before publication', async () => {
-  const { h, node, forge } = await remoteNode()
+test('waiting landing retries are throttled and recheck reopened children before publication', async (makeHarness) => {
+  const { h, node, forge } = await remoteNode(makeHarness)
   try {
     let scans = 0
     let attempts = 0
@@ -258,4 +272,4 @@ test('waiting landing retries are throttled and recheck reopened children before
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)

@@ -2,13 +2,21 @@ import { requestNodeRestack } from '../operator/restack'
 import { projectBuild } from '../cli/dashboard/model'
 import { buildActionAvailability } from '../cli/dashboard/actions'
 import { summarize } from '../cli/status'
-import { expect, test } from 'bun:test'
-import { makeHarness, happyHandlers, readyTicket, CONFIG_TOML, ofType } from './harness'
+import { afterEach, expect, test as bunTest } from 'bun:test'
+import { happyHandlers, readyTicket, CONFIG_TOML, ofType, scenarioScope } from './harness'
 import { reduceBuild } from '../kernel/reducer'
 import { controlBuild } from '../cli/build-control'
 import { KERNEL } from '../events/envelope'
 
-test('real git node claims, child landing, lazy PR and human node landing', async () => {
+// Every case carries an explicit 30 s budget. Measured at 4ce34c87 (Bun 1.4.4,
+// 4 vCPU), the cases that had used Bun's 5 s default took 0.9–2.3 s focused and
+// 1.3–4.2 s under sustained integration load; slower hosts reported ~3 s focused.
+// Their cost is real git worktrees, subprocesses and kernel ticks.
+// `test` is scenarioScope's wrapper, which disposes a timed-out case's harness
+// before the next case starts.
+const test = scenarioScope({ test: bunTest, afterEach })
+
+test('real git node claims, child landing, lazy PR and human node landing', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
     handlers: happyHandlers(),
@@ -62,9 +70,9 @@ test('real git node claims, child landing, lazy PR and human node landing', asyn
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
-test('nodes open at full work capacity and abort immediately closes admission', async () => {
+test('nodes open at full work capacity and abort immediately closes admission', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
     configToml: CONFIG_TOML.replace('capacity = 2', 'capacity = 1'),
@@ -101,9 +109,9 @@ test('nodes open at full work capacity and abort immediately closes admission', 
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
-test('operator demand advances nested nodes through kernel restacks', async () => {
+test('operator demand advances nested nodes through kernel restacks', async (makeHarness) => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   const h = await makeHarness({
@@ -171,7 +179,7 @@ test('operator demand advances nested nodes through kernel restacks', async () =
   }
 }, 30_000)
 
-test('node conflict runner resolves the source build with its own spec and plan', async () => {
+test('node conflict runner resolves the source build with its own spec and plan', async (makeHarness) => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   let sourceSlug = ''
@@ -289,7 +297,7 @@ test('node conflict runner resolves the source build with its own spec and plan'
 }, 30_000)
 
 for (const waiting of ['blocked', 'paused'] as const)
-  test(`capacity five launches an answered existing node conflict with three ${waiting} descendants`, async () => {
+  test(`capacity five launches an answered existing node conflict with three ${waiting} descendants`, async (makeHarness) => {
     const { git, commitAll } = await import('./harness')
     const { join } = await import('node:path')
     let sourceSlug = ''
@@ -478,7 +486,7 @@ for (const waiting of ['blocked', 'paused'] as const)
   }, 30_000)
 
 for (const freed of ['same-tick', 'earlier-tick'] as const)
-  test(`a node awaiting verification takes a slot freed ${freed === 'same-tick' ? 'in its request tick' : 'after its request'} ahead of a new ticket`, async () => {
+  test(`a node awaiting verification takes a slot freed ${freed === 'same-tick' ? 'in its request tick' : 'after its request'} ahead of a new ticket`, async (makeHarness) => {
     const { dispatchCapacity, slotWaitText } = await import('../kernel/dispatch-capacity')
     const { readBuildFacts } = await import('../store/reduced-reads')
     const { renderSummaries, summarizeFrom } = await import('../cli/status')
@@ -645,7 +653,7 @@ for (const freed of ['same-tick', 'earlier-tick'] as const)
     }
   }, 30_000)
 
-test('node-target consent lands the canonical leaf without native auto-merge', async () => {
+test('node-target consent lands the canonical leaf without native auto-merge', async (makeHarness) => {
   const { git } = await import('./harness')
   const { humanActor } = await import('../events/envelope')
   const h = await makeHarness({
@@ -685,7 +693,7 @@ test('node-target consent lands the canonical leaf without native auto-merge', a
   }
 }, 30_000)
 
-test('unsafe foreign merge escalates once without moving the node and an authorized retry resamples upstream', async () => {
+test('unsafe foreign merge escalates once without moving the node and an authorized retry resamples upstream', async (makeHarness) => {
   const { git, commitAll } = await import('./harness')
   const { humanActor } = await import('../events/envelope')
   const { join } = await import('node:path')
@@ -768,7 +776,7 @@ test('unsafe foreign merge escalates once without moving the node and an authori
 }, 30_000)
 
 for (const command of ['abort', 'pause'] as const) {
-  test(`a live node conflict runner owns ${command} acknowledgement until its turn ends`, async () => {
+  test(`a live node conflict runner owns ${command} acknowledgement until its turn ends`, async (makeHarness) => {
     const { git, commitAll } = await import('./harness')
     const { join } = await import('node:path')
     const { access } = await import('node:fs/promises')
@@ -868,7 +876,7 @@ for (const command of ['abort', 'pause'] as const) {
 }
 
 for (const checkout of ['scratch', 'absent'] as const) {
-  test(`origin-mode ${checkout} checkout supports node cascades and guarded child landing`, async () => {
+  test(`origin-mode ${checkout} checkout supports node cascades and guarded child landing`, async (makeHarness) => {
     const { git, commitAll } = await import('./harness')
     const { join } = await import('node:path')
     const { mkdir } = await import('node:fs/promises')
@@ -1031,7 +1039,7 @@ for (const checkout of ['scratch', 'absent'] as const) {
 }
 
 for (const conflict of [false, true]) {
-  test(`node-target finalize commits are collapsed before guarded landing (reconciled: ${conflict})`, async () => {
+  test(`node-target finalize commits are collapsed before guarded landing (reconciled: ${conflict})`, async (makeHarness) => {
     const { git, commitAll } = await import('./harness')
     const { join } = await import('node:path')
     const { humanActor } = await import('../events/envelope')
@@ -1112,7 +1120,7 @@ for (const conflict of [false, true]) {
 }
 
 for (const providerState of ['merged', 'closed'] as const) {
-  test(`node landing settles its reservation before completing a ${providerState} leaf inside writer TTL`, async () => {
+  test(`node landing settles its reservation before completing a ${providerState} leaf inside writer TTL`, async (makeHarness) => {
     const { git } = await import('./harness')
     const { humanActor } = await import('../events/envelope')
     const h = await makeHarness({
@@ -1172,7 +1180,7 @@ for (const providerState of ['merged', 'closed'] as const) {
   }, 30_000)
 }
 
-test('complete nodes verify and land a linear stack only after explicit consent', async () => {
+test('complete nodes verify and land a linear stack only after explicit consent', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
     handlers: happyHandlers(),
@@ -1237,9 +1245,9 @@ test('complete nodes verify and land a linear stack only after explicit consent'
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
-test('a node whose integration preparation keeps failing retries it while escalated and recovers', async () => {
+test('a node whose integration preparation keeps failing retries it while escalated and recovers', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
     handlers: happyHandlers(),
@@ -1306,7 +1314,7 @@ test('a node whose integration preparation keeps failing retries it while escala
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 /** A capability-bearing local-git double: issue-closing support with a
  * recording PR body rewrite, and a fast-forward that logs its order. */
@@ -1343,7 +1351,7 @@ function linkCapableForge(forge: import('../ports/types').Forge) {
 }
 
 for (const fail of [false, true])
-  test(`a root node refreshes its children's issue links before landing (refresh fails: ${fail})`, async () => {
+  test(`a root node refreshes its children's issue links before landing (refresh fails: ${fail})`, async (makeHarness) => {
     const h = await makeHarness({
       localGitForge: true,
       handlers: happyHandlers(),
@@ -1441,9 +1449,9 @@ for (const fail of [false, true])
     } finally {
       await h.cleanup()
     }
-  })
+  }, 30_000)
 
-test('an aborted child merged before its links reach the node holds the node until they do', async () => {
+test('an aborted child merged before its links reach the node holds the node until they do', async (makeHarness) => {
   const h = await makeHarness({
     localGitForge: true,
     handlers: happyHandlers(),
@@ -1532,7 +1540,7 @@ test('an aborted child merged before its links reach the node holds the node unt
   }
 }, 30_000)
 
-test('operator revision retries failed node verification on the same head without restarting children', async () => {
+test('operator revision retries failed node verification on the same head without restarting children', async (makeHarness) => {
   let nodeSlug = ''
   let nodeContexts = 0
   const h = await makeHarness({
@@ -1634,7 +1642,7 @@ test('operator revision retries failed node verification on the same head withou
 }, 30_000)
 
 for (const mode of ['success', 'bare', 'cas', 'lease', 'missing', 'check-only'] as const) {
-  test(`dispatcher prepares node inputs with ${mode}`, async () => {
+  test(`dispatcher prepares node inputs with ${mode}`, async (makeHarness) => {
     const { readFile } = await import('node:fs/promises')
     const { join } = await import('node:path')
     const manifests: { build: string; specs: string[] }[] = []
@@ -1746,10 +1754,10 @@ for (const mode of ['success', 'bare', 'cas', 'lease', 'missing', 'check-only'] 
     } finally {
       await h.cleanup()
     }
-  })
+  }, 30_000)
 }
 
-test('paused child crosses two durable kernel rewrites before its next demand', async () => {
+test('paused child crosses two durable kernel rewrites before its next demand', async (makeHarness) => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   const h = await makeHarness({
@@ -1821,7 +1829,7 @@ test('paused child crosses two durable kernel rewrites before its next demand', 
   }
 }, 30_000)
 
-test('leaf verify entry uses recorded kernel lineage after its parent restacks during implement', async () => {
+test('leaf verify entry uses recorded kernel lineage after its parent restacks during implement', async (makeHarness) => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   const happy = happyHandlers()
@@ -1897,7 +1905,7 @@ test('leaf verify entry uses recorded kernel lineage after its parent restacks d
   }
 }, 30_000)
 
-test('a node restack that resumes after repository authority lapsed rewrites nothing; the successor publishes once', async () => {
+test('a node restack that resumes after repository authority lapsed rewrites nothing; the successor publishes once', async (makeHarness) => {
   const { git, commitAll } = await import('./harness')
   const { join } = await import('node:path')
   const { Dispatcher } = await import('../processes/dispatcher')
