@@ -123,6 +123,7 @@ export interface TicketCriteria {
 export interface TicketPage {
   limit: number
   offset?: number
+  /** Dispatch order or newest filed first; see `TicketSource.listPage`. */
   order?: 'oldest' | 'newest'
 }
 
@@ -331,9 +332,13 @@ export interface TicketSource {
    * actionable diagnostics for individual source records excluded as invalid.
    * Fatal source failures and invariants still reject the call. */
   listReady(criteria: TicketCriteria): Promise<TicketListing>
-  /** Optional native window, equivalent to listReady then reverse/slice.
-   * Defaults: offset 0, order oldest. Arguments are nonnegative integers;
-   * zero limit returns no tickets with the full matching total. Diagnostics
+  /** Optional native window over the listReady matches. `oldest` (default)
+   * is dispatch order: with `priority`, urgent first, then normal, each in
+   * listReady order. `newest` is newest filed first: creation time descending,
+   * independent of urgency, with a stable tie-break; it is not the reverse of
+   * dispatch order. Offset and limit apply after ordering. Default offset 0.
+   * Arguments are nonnegative integers; zero limit returns no tickets with the
+   * full matching total. Diagnostics
    * and failures match listReady; a failure must not trigger a full-read fallback.
    * listReady and listAll remain exhaustive. */
   listPage?(criteria: TicketCriteria, page: TicketPage): Promise<TicketPageListing>
