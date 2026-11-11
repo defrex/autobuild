@@ -1,11 +1,8 @@
 import { missingAccountCredentials, reconcileMissingAccounts } from '../accounts/availability'
 import { readRepositoryFacts } from '../store/reduced-reads'
+import { READ_CATALOG_IDENTITY } from '../events/compatibility'
 import { dispatchFrontendReducer } from '../cli/dispatch-repository-feed'
-import {
-  catalogSnapshotName,
-  loadReducerSnapshot,
-  persistReducerSnapshot,
-} from '../store/snapshots'
+import { catalogSnapshotName, loadReducerSnapshot } from '../store/snapshots'
 import { expect } from 'bun:test'
 import { DispatchFrontend } from '../cli/dispatch-frontend'
 import type { DispatchChildResult } from '../cli/dispatch-process'
@@ -194,16 +191,7 @@ export async function dispatchReadBudget(
   await refresh()
   // Startup without a checkpoint seeds from the canonical value, not the journal.
   expect(metrics.state).toBe(0)
-  const initialSize = JSON.stringify(
-    (
-      await loadReducerSnapshot(
-        { getReducerSnapshot: getSnapshot },
-        { kind: 'repo', repo },
-        'dispatchFrontend',
-        { version: dispatchFrontendReducer.version },
-      )
-    )?.state,
-  ).length
+  let checkpointSize: number | undefined
   let recordReads: number | undefined
   // The execution-mode frontend renders the kernel's published triage count;
   // it never reads the ticket source itself, on any refresh.
@@ -278,12 +266,18 @@ export async function dispatchReadBudget(
             },
           })
         }
+        // Dashboard-class traffic is part of the bound: canonical facts present it.
+        await backing.appendRepo(repo, {
+          actor: humanActor('test'),
+          type: 'dispatcher.pause-set',
+          payload: { enabled: false },
+        })
       })
       const before = { ...metrics }
       now += 6000
       await refresh()
       expect(metrics.puts - before.puts).toBe((batch + 1) % 5 === 0 ? 1 : 0)
-      expect(metrics.rows - before.rows).toBe(128)
+      expect(metrics.rows - before.rows).toBe(129)
       expect(metrics.events - before.events).toBe(1)
       expect(metrics.state - before.state).toBe(0)
       expect(metrics.snapshots - before.snapshots).toBe(0)
@@ -306,8 +300,12 @@ export async function dispatchReadBudget(
           )
         )?.state,
       ).length
-      // First advancement adds the child's identity; ticks add nothing.
-      expect(size).toBeLessThan(initialSize + 1000)
+      // The first throttled save folds the child's identity; from then on the
+      // checkpoint is fixed: neither ticks nor dashboard-class facts grow it.
+      if (batch >= 4) {
+        checkpointSize ??= size
+        expect(size).toBe(checkpointSize)
+      }
       const rows = metrics.rows
       await refresh()
       expect(metrics.rows).toBe(rows)
@@ -358,7 +356,8 @@ export async function dispatchReadBudget(
   expect(metrics.rows - before.rows).toBe(1)
   expect(metrics.state - before.state).toBe(0)
 
-  // Fixed relevant events/cursor isolate growth from unrelated legacy identities.
+  // Fixed relevant events/cursor isolate growth from unrelated legacy identities
+  // and from the dashboard-event history a version-4 checkpoint cached.
   // This runs through both the local and existing real HTTP invocations.
   const retentionRepo = '/dashboard-retention-budget'
   await backing.ensureRepo(retentionRepo)
@@ -379,51 +378,66 @@ export async function dispatchReadBudget(
   }
   const holder = history[0]!
   const latest = history.at(-1)!
+  const dashboard: RepositoryEvent[] = []
+  for (let i = 0; i < 10000; i++)
+    dashboard.push(
+      await backing.appendRepo(retentionRepo, {
+        actor: humanActor('test'),
+        type: i % 2 === 0 ? 'dispatcher.pause-set' : 'dispatcher.intake-set',
+        payload: { enabled: i % 4 < 2 },
+      }),
+    )
+  const cursor = dashboard.at(-1)!.seq
   const sizes: number[] = []
   const checkpoint = backing.getReducerSnapshot.bind(backing)
   try {
     for (const length of [100, 10000]) {
-      // Model a validated pre-upgrade version-4 cache without changing ordering.
+      // Model a validated pre-upgrade version-4 cache holding `length` run
+      // starts and `length` dashboard facts; no current row exists yet.
+      let upgraded = false
       backing.getReducerSnapshot = async (...args) => {
-        const snapshot = await checkpoint(...args)
-        if (!snapshot || args[0].kind !== 'repo' || args[0].repo !== retentionRepo) return snapshot
-        const state = snapshot.state as { catalogIdentity: string }
-        return {
-          ...snapshot,
-          state: {
-            ...state,
-            acc: {
-              retained: [...history.slice(0, length - 1), latest],
-              incompleteIdentities: false,
-              holder: 'old-0',
+        if (args[0].kind !== 'repo' || args[0].repo !== retentionRepo) return checkpoint(...args)
+        if (args[2] === 4)
+          return {
+            version: 4,
+            cursor,
+            state: {
+              catalogIdentity: READ_CATALOG_IDENTITY,
+              acc: {
+                retained: [...history.slice(0, length - 1), latest, ...dashboard.slice(0, length)],
+                incompleteIdentities: false,
+                holder: 'old-0',
+              },
             },
-          },
-        }
+          }
+        return upgraded ? checkpoint(...args) : null
       }
-      await persistReducerSnapshot(
-        store,
-        { kind: 'repo', repo: retentionRepo },
-        'dispatchFrontend',
-        {
-          version: 4,
-          cursor: latest.seq,
-          state: { retained: [], incompleteIdentities: true },
-        },
-      )
       const projection = new DispatchRepositoryFeed(store, retentionRepo, () => new Date(now))
       const rows = metrics.rows
       const bytes = metrics.bytes
+      const puts = metrics.puts
       await projection.warm()
+      // The legacy row normalizes without reading event rows, and is replaced once.
+      expect(metrics.rows).toBe(rows)
+      expect(metrics.puts - puts).toBe(1)
       expect(projection.identities).toEqual([holder, latest])
       expect(projection.incompleteIdentities).toBe(true)
       sizes.push(metrics.bytes - bytes)
-      const puts = metrics.puts
+      upgraded = true
       now += 60000
       await projection.refresh()
       await projection.save(true)
-      expect(metrics.puts).toBe(puts)
+      expect(metrics.puts - puts).toBe(1)
+      expect(metrics.rows).toBe(rows)
+      // A restart restores the replacement clean: no write, no rows.
+      const restarted = new DispatchRepositoryFeed(store, retentionRepo, () => new Date(now))
+      await restarted.warm()
+      await restarted.save(true)
+      expect(restarted.identities).toEqual([holder, latest])
+      expect(metrics.puts - puts).toBe(1)
       expect(metrics.rows).toBe(rows)
     }
+    // The replacement's size is fixed by its identities, not the legacy history.
     expect(sizes[0]).toBe(sizes[1])
   } finally {
     backing.getReducerSnapshot = checkpoint
@@ -1229,7 +1243,7 @@ export async function warmRestoreReadBudget(
     seeds: number
     seedRows: number
     canonical: number
-    missing: { rows: number; slices?: number; identities: number; events: number }
+    missing: { rows: number; slices?: number; identities: number; checkpointReads: number }
   }[] = []
   const slices = countJournalSlices(backing)
   try {
@@ -1326,13 +1340,24 @@ export async function warmRestoreReadBudget(
         if (request.reducer === 'repositoryReadFacts') metrics.canonical++
         return value(scope, request)
       }
+      const frontendCheckpoint = (args: Parameters<BuildStore['getReducerSnapshot']>) =>
+        args[0].kind === 'repo' &&
+        args[0].repo === repo &&
+        args[1] === catalogSnapshotName('dispatchFrontend')
+      const checkpointVersions: number[] = []
+      backing.getReducerSnapshot = async (...args) => {
+        if (frontendCheckpoint(args)) checkpointVersions.push(args[2])
+        return checkpoint(...args)
+      }
       try {
         // A checkpoint `gap` events stale: restore within the window, else canonical seed.
         const feed = new DispatchRepositoryFeed(store, repo, () => new Date(60_000))
-        await feed.refresh()
+        const restored = await feed.refresh()
         const head = await backing.getRepoHighWater(repo)
         // Within the window the delta carries the fact; presentation reads canonical facts.
-        if (gap === 1) expect(feed.events.at(-1)?.payload).toEqual({ enabled: true })
+        if (gap === 1) expect(restored.at(-1)?.payload).toEqual({ enabled: true })
+        // A present current checkpoint is the only checkpoint read, even when stale.
+        expect(checkpointVersions).toEqual([dispatchFrontendReducer.version])
         if (verify) {
           expect(metrics.raw).toBe(0)
           expect(metrics.seeds).toBe(0)
@@ -1348,12 +1373,12 @@ export async function warmRestoreReadBudget(
         expect((await readRepositoryFacts(store, repo)).value.settings.paused).toBe(true)
 
         // A missing checkpoint: a fresh process with no presentation state at all.
-        backing.getReducerSnapshot = async (...args) =>
-          args[0].kind === 'repo' &&
-          args[0].repo === repo &&
-          args[1] === catalogSnapshotName('dispatchFrontend')
-            ? null
-            : checkpoint(...args)
+        backing.getReducerSnapshot = async (...args) => {
+          if (!frontendCheckpoint(args)) return checkpoint(...args)
+          checkpointVersions.push(args[2])
+          return null
+        }
+        checkpointVersions.length = 0
         const counted = { ...metrics }
         slices?.reset()
         const fresh = new DispatchRepositoryFeed(store, repo, () => new Date(120_000))
@@ -1362,8 +1387,10 @@ export async function warmRestoreReadBudget(
           rows: metrics.rows - counted.rows,
           ...(slices ? { slices: slices.rows() } : {}),
           identities: fresh.identities.length,
-          events: fresh.events.length,
+          checkpointReads: checkpointVersions.length,
         }
+        // A current-version miss makes one legacy read, then seeds canonically.
+        expect(checkpointVersions).toEqual([dispatchFrontendReducer.version, 4])
         expect(metrics.seeds).toBe(counted.seeds)
         expect(metrics.raw).toBe(counted.raw)
         expect(metrics.canonical - counted.canonical).toBe(1)
@@ -1373,16 +1400,15 @@ export async function warmRestoreReadBudget(
           fresh.identities.map((e) => e.type === 'dispatcher.run-started' && e.payload.run),
         ).toEqual([gap === 2 ? 'racing-anchor' : 'latest'])
         if (gap !== 2) expect(fresh.identities).toEqual([latest])
-        expect(fresh.events).toEqual([])
         // Unchanged: zero event rows. One new fact: exactly one row.
         slices?.reset()
         expect(await fresh.refresh()).toEqual([])
         expect(metrics.rows - counted.rows).toBe(0)
         if (slices) expect(slices.rows()).toBe(0)
         const next = await append(false)
-        expect((await fresh.refresh()).map((e) => e.seq)).toEqual([next.seq])
+        expect(await fresh.refresh()).toEqual([next])
         expect(metrics.rows - counted.rows).toBe(1)
-        expect(fresh.events.at(-1)).toEqual(next)
+        expect(checkpointVersions).toHaveLength(2)
         reports.push({
           gap,
           seeds: metrics.seeds,

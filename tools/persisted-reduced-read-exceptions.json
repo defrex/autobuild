@@ -315,7 +315,7 @@
     "kind": "reduction",
     "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
   },
-  "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend/events::reduceDispatchStatus": {
+  "packages/core/src/cli/dispatch-frontend.ts::DispatchFrontend/advanceRepository::reduceDispatchStatus": {
     "kind": "reduction",
     "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
   },
@@ -334,6 +334,14 @@
   "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/remember::advance": {
     "kind": "reduction",
     "reason": "Spec-excluded interactive dashboard prerequisite projection over its established incremental feed."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/restoreCurrent::advance": {
+    "kind": "reduction",
+    "reason": "Frontend-only re-fold of a persisted version-5 checkpoint's at most two dispatcher.run-started identities with no new events; performs no store reads or journal reconstruction."
+  },
+  "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/restoreLegacy::advance": {
+    "kind": "reduction",
+    "reason": "One-time normalization of a persisted legacy version-4 checkpoint's bounded retained facts to identities; performs no store reads or journal reconstruction."
   },
   "packages/core/src/cli/dispatch-repository-feed.ts::DispatchRepositoryFeed/canonicalSeed::advance": {
     "kind": "reduction",

@@ -8,7 +8,9 @@ import type { BuildStore, Clock } from '../store/types'
 
 const handoffTypes = new Set<string>(DISPATCH_HANDOFF_EVENT_TYPES)
 
-export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
+/** Dashboard-class facts a version-4 checkpoint cached; only legacy restore
+ * validation still recognizes them. */
+function isLegacyDashboardEvent(event: RepositoryEvent): boolean {
   return (
     handoffTypes.has(event.type) ||
     event.type.startsWith('harvest.') ||
@@ -19,37 +21,36 @@ export function isDashboardRepositoryEvent(event: RepositoryEvent): boolean {
   )
 }
 
+/** The version-4 checkpoint shape, normalized once on restore. */
+const LEGACY_VERSION = 4
+
 export const dispatchFrontendReducer = defineReducer({
-  version: 4,
-  initial: (): { retained: RepositoryEvent[]; incompleteIdentities: boolean; holder?: string } => ({
-    retained: [],
-    incompleteIdentities: true,
-  }),
+  version: 5,
+  initial: (): { identities: RepositoryEvent[]; holder?: string } => ({ identities: [] }),
   fold(acc, events: readonly RepositoryEvent[]) {
-    const facts = new Map(acc.retained.map((event) => [event.seq, event]))
+    const starts = new Map(acc.identities.map((event) => [event.seq, event]))
     for (const event of events) {
-      if (isDashboardRepositoryEvent(event) || event.type === 'dispatcher.run-started')
-        facts.set(event.seq, event)
+      if (event.type === 'dispatcher.run-started') starts.set(event.seq, event)
     }
-    const sorted = [...facts.values()].sort((a, b) => a.seq - b.seq)
-    const latest = sorted.findLast((event) => event.type === 'dispatcher.run-started')
+    const sorted = [...starts.values()].sort((a, b) => a.seq - b.seq)
+    const latest = sorted.at(-1)
     const holder = sorted.findLast(
       (event) => event.type === 'dispatcher.run-started' && event.payload.run === acc.holder,
     )
-    acc.retained = sorted.filter(
-      (event) => event.type !== 'dispatcher.run-started' || event === latest || event === holder,
-    )
-    acc.incompleteIdentities = true
+    acc.identities = sorted.filter((event) => event === latest || event === holder)
   },
-  finish: (acc) => acc.retained,
+  finish: (acc) => acc.identities,
 })
+
+type FrontendState = { identities: RepositoryEvent[]; holder?: string }
 
 /** One serialized, frontend-only repository projection. The consumed cursor is
  * independent of retained facts: quiet ticks must never survive in the cache.
- * Presentation reads canonical repository facts; the dashboard-event cache holds
- * only facts after the feed's restoration point. Without a usable checkpoint,
- * startup and cursor-expiry recovery seed identities from the canonical
- * `repositoryReadFacts` value, never from the journal. */
+ * The checkpoint holds standby identities only (the latest run start and the
+ * selected holder's start); presentation reads canonical repository facts.
+ * Without a usable checkpoint, startup and cursor-expiry recovery seed
+ * identities from the canonical `repositoryReadFacts` value, never from the
+ * journal. */
 export class DispatchRepositoryFeed {
   private cursor = 0
   private ready = false
@@ -71,11 +72,13 @@ export class DispatchRepositoryFeed {
     private readonly clock: Clock,
   ) {}
 
-  get events(): RepositoryEvent[] {
-    return this.retained.filter(isDashboardRepositoryEvent)
-  }
   get identities(): RepositoryEvent[] {
-    return this.retained.filter((e) => e.type === 'dispatcher.run-started')
+    return this.retained
+  }
+
+  /** A consumed nonzero cursor proves the repository journal exists. */
+  get present(): boolean {
+    return this.cursor > 0
   }
 
   private validate(events: RepositoryEvent[], cursor: number, contiguous: boolean): void {
@@ -108,15 +111,103 @@ export class DispatchRepositoryFeed {
     }
   }
 
+  /** Validate a version-5 checkpoint; a re-fold that changes nothing is clean. */
+  private restoreCurrent(state: unknown, cursor: number): FrontendState & { clean: boolean } {
+    const current = state as FrontendState
+    if (!current || !Array.isArray(current.identities) || current.identities.length > 2)
+      throw new Error('invalid projection')
+    this.validate(current.identities, 0, false)
+    if (current.identities.some((e) => e.seq > cursor || e.type !== 'dispatcher.run-started'))
+      throw new Error('invalid identity')
+    if (current.holder !== undefined && typeof current.holder !== 'string')
+      throw new Error('invalid holder')
+    const identities = dispatchFrontendReducer.advance(
+      { identities: current.identities, holder: current.holder },
+      [],
+    ).identities
+    return {
+      identities,
+      holder: current.holder,
+      clean: identities.length === current.identities.length,
+    }
+  }
+
+  /** Normalize a version-4 checkpoint: its dashboard-event cache is discarded
+   * and only the identities survive. Never clean, so the next save replaces it. */
+  private restoreLegacy(state: unknown, cursor: number): FrontendState {
+    const legacy = state as {
+      retained: RepositoryEvent[]
+      incompleteIdentities: boolean
+      holder?: string
+    }
+    if (
+      !legacy ||
+      !Array.isArray(legacy.retained) ||
+      typeof legacy.incompleteIdentities !== 'boolean'
+    )
+      throw new Error('invalid projection')
+    this.validate(legacy.retained, 0, false)
+    if (
+      legacy.retained.some(
+        (e) =>
+          e.seq > cursor || !(isLegacyDashboardEvent(e) || e.type === 'dispatcher.run-started'),
+      )
+    )
+      throw new Error('invalid retained fact')
+    if (legacy.holder !== undefined && typeof legacy.holder !== 'string')
+      throw new Error('invalid holder')
+    return {
+      identities: dispatchFrontendReducer.advance(
+        { identities: [], holder: legacy.holder },
+        legacy.retained,
+      ).identities,
+      holder: legacy.holder,
+    }
+  }
+
+  /** The current checkpoint, or else one read of a legacy version-4 row. */
+  private async restore(
+    high: number,
+  ): Promise<(FrontendState & { cursor: number; clean: boolean }) | undefined> {
+    const scope = { kind: 'repo', repo: this.repo } as const
+    const usable = (cursor: number) => cursor <= high && high - cursor <= REPOSITORY_TAIL_WINDOW
+    const snapshot = await loadReducerSnapshot(
+      this.store,
+      scope,
+      'dispatchFrontend',
+      dispatchFrontendReducer,
+    )
+    if (snapshot) {
+      if (!usable(snapshot.cursor)) return undefined
+      try {
+        return { ...this.restoreCurrent(snapshot.state, snapshot.cursor), cursor: snapshot.cursor }
+      } catch {
+        return undefined
+      }
+    }
+    const legacy = await loadReducerSnapshot(this.store, scope, 'dispatchFrontend', {
+      version: LEGACY_VERSION,
+    })
+    if (!legacy || !usable(legacy.cursor)) return undefined
+    try {
+      return {
+        ...this.restoreLegacy(legacy.state, legacy.cursor),
+        cursor: legacy.cursor,
+        clean: false,
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   refresh(persist = true): Promise<RepositoryEvent[]> {
     let result: RepositoryEvent[] = []
     const next = this.tail.then(async () => {
       let holder = this.holder
       let cursor = this.cursor
-      let retained = this.retained
-      let incompleteIdentities = this.incompleteIdentities
+      let identities = this.retained
       let restoredKey: string | undefined
-      let restoredRetained: RepositoryEvent[] | undefined
+      let restoredIdentities: RepositoryEvent[] | undefined
       let delta: RepositoryEvent[]
       if (!this.ready) {
         if ((await this.store.getRepo(this.repo)) === null) {
@@ -125,54 +216,19 @@ export class DispatchRepositoryFeed {
           return
         }
         const high = await this.store.getRepoHighWater(this.repo)
-        const snapshot = await loadReducerSnapshot(
-          this.store,
-          { kind: 'repo', repo: this.repo },
-          'dispatchFrontend',
-          dispatchFrontendReducer,
-        )
-        let restored = false
-        if (
-          snapshot &&
-          snapshot.cursor <= high &&
-          high - snapshot.cursor <= REPOSITORY_TAIL_WINDOW
-        ) {
-          try {
-            const state = snapshot.state as {
-              retained: RepositoryEvent[]
-              incompleteIdentities: boolean
-              holder?: string
-            }
-            if (!Array.isArray(state.retained) || typeof state.incompleteIdentities !== 'boolean')
-              throw new Error('invalid projection')
-            this.validate(state.retained, 0, false)
-            if (
-              state.retained.some(
-                (e) =>
-                  e.seq > snapshot.cursor ||
-                  !(isDashboardRepositoryEvent(e) || e.type === 'dispatcher.run-started'),
-              )
-            )
-              throw new Error('invalid retained fact')
-            if (state.holder !== undefined && typeof state.holder !== 'string')
-              throw new Error('invalid holder')
-            holder = state.holder
-            retained = dispatchFrontendReducer.advance({ ...state }, []).retained
-            incompleteIdentities = true
-            if (state.incompleteIdentities && retained.length === state.retained.length) {
-              restoredKey = `${snapshot.cursor}:${this.generation}`
-              restoredRetained = retained
-            }
-            cursor = snapshot.cursor
-            restored = true
-          } catch {
-            /* A malformed cache uses the canonical seed. */
+        // A malformed, stale or missing cache uses the canonical seed.
+        const restored = await this.restore(high)
+        if (restored) {
+          holder = restored.holder
+          identities = restored.identities
+          cursor = restored.cursor
+          if (restored.clean) {
+            restoredKey = `${restored.cursor}:${this.generation}`
+            restoredIdentities = identities
           }
-        }
-        if (!restored) {
+        } else {
           const seed = await this.canonicalSeed(holder)
-          incompleteIdentities = true
-          retained = seed.retained
+          identities = seed.identities
           cursor = seed.cursor
         }
         delta = await this.readStartupTail(cursor)
@@ -192,22 +248,17 @@ export class DispatchRepositoryFeed {
         // A standby correlation may have supplied an older identity while the
         // delta read was pending. Keep those memoized facts in this commit.
         holder = this.holder
-        retained = this.retained
-        incompleteIdentities = this.incompleteIdentities
+        identities = this.retained
       }
       if (delta.length > 0)
-        retained = dispatchFrontendReducer.advance(
-          { retained, incompleteIdentities, holder },
-          delta,
-        ).retained
+        identities = dispatchFrontendReducer.advance({ identities, holder }, delta).identities
       this.holder = holder
       this.cursor = Math.max(cursor, delta.at(-1)?.seq ?? 0)
-      this.incompleteIdentities = true
       if (restoredKey !== undefined) {
         this.settled = restoredKey
-        this.retained = restoredRetained!
+        this.retained = restoredIdentities!
       }
-      this.replaceRetained(retained)
+      this.replaceIdentities(identities)
 
       this.ready = true
       this.recovery = false
@@ -220,14 +271,11 @@ export class DispatchRepositoryFeed {
       const cursor = seed.cursor
       const delta = await this.readStartupTail(cursor)
       this.validate(delta, cursor, true)
-      this.replaceRetained(
-        dispatchFrontendReducer.advance(
-          { retained: seed.retained, incompleteIdentities: true, holder: this.holder },
-          delta,
-        ).retained,
+      this.replaceIdentities(
+        dispatchFrontendReducer.advance({ identities: seed.identities, holder: this.holder }, delta)
+          .identities,
       )
       this.cursor = Math.max(cursor, delta.at(-1)?.seq ?? 0)
-      this.incompleteIdentities = true
       this.ready = true
       this.recovery = false
       this.boundary = undefined
@@ -242,7 +290,7 @@ export class DispatchRepositoryFeed {
    * repository value: cost is independent of journal and current-run length. */
   private async canonicalSeed(
     holder: string | undefined,
-  ): Promise<{ cursor: number; retained: RepositoryEvent[] }> {
+  ): Promise<{ cursor: number; identities: RepositoryEvent[] }> {
     const { cursor, value } = await readRepositoryFacts(this.store, this.repo, true)
     const runs = new Map(value.recentRuns)
     const starts = new Map<number, RepositoryEvent>()
@@ -258,10 +306,7 @@ export class DispatchRepositoryFeed {
       throw new Error('invalid canonical identity')
     return {
       cursor,
-      retained: dispatchFrontendReducer.advance(
-        { retained: [], incompleteIdentities: true, holder },
-        sorted,
-      ).retained,
+      identities: dispatchFrontendReducer.advance({ identities: [], holder }, sorted).identities,
     }
   }
 
@@ -271,7 +316,7 @@ export class DispatchRepositoryFeed {
     return this.store.getRepositoryTail(this.repo, cursor)
   }
 
-  private replaceRetained(events: RepositoryEvent[]): void {
+  private replaceIdentities(events: RepositoryEvent[]): void {
     // Sequence numbers identify immutable journal facts; no deep serialization on polls.
     const changed =
       events !== this.retained &&
@@ -285,15 +330,8 @@ export class DispatchRepositoryFeed {
     if (this.holder === holder) return
     this.generation++
     this.holder = holder
-    this.replaceRetained(
-      dispatchFrontendReducer.advance(
-        {
-          retained: this.retained,
-          incompleteIdentities: true,
-          holder,
-        },
-        [],
-      ).retained,
+    this.replaceIdentities(
+      dispatchFrontendReducer.advance({ identities: this.retained, holder }, []).identities,
     )
   }
 
@@ -304,11 +342,9 @@ export class DispatchRepositoryFeed {
       0,
       false,
     )
-    this.replaceRetained(
-      dispatchFrontendReducer.advance(
-        { retained: this.retained, incompleteIdentities: true, holder: this.holder },
-        eligible,
-      ).retained,
+    this.replaceIdentities(
+      dispatchFrontendReducer.advance({ identities: this.retained, holder: this.holder }, eligible)
+        .identities,
     )
   }
 
@@ -321,7 +357,7 @@ export class DispatchRepositoryFeed {
     const snapshot = {
       version: dispatchFrontendReducer.version,
       cursor: this.cursor,
-      state: { retained: this.retained, incompleteIdentities: true, holder: this.holder },
+      state: { identities: this.retained, holder: this.holder },
     }
     this.nextSaveAt = now + 30_000
     this.saving = persistReducerSnapshotOutcome(

@@ -1092,7 +1092,10 @@ adapter operation, so slug naming, provisioning, runners, and Harvest cannot
 block input.
 
 Startup restores a validated `dispatchFrontend` checkpoint incrementally only
-when its cursor is within the 1,000-event repository tail window. A missing,
+when its cursor is within the 1,000-event repository tail window. When no
+current (reducer version 5) checkpoint exists, startup reads a legacy version-4
+row once: it discards that row's dashboard-event cache, keeps its identities and
+holder, and the next save replaces the row with version 5 at the same cursor. A missing,
 invalid, unreadable or stale checkpoint, and cursor expiry, instead reseed from
 the canonical `repositoryReadFacts` value: its latest run start and the sampled
 holder's start become the retained identities, and its cursor starts one
@@ -1106,13 +1109,17 @@ selection, including concurrent appends; cursor expiry permits one additional
 canonical reseed, never historical gap replay. Steady-state reads and save
 cadence are unchanged.
 
-The frontend's `dispatchFrontend` checkpoint retains dashboard facts plus only
-the latest run-started fact and the sampled lease holder's start (deduplicated).
-Its dashboard facts are a cache of facts after the feed's restoration point,
-not presentation authority: settings, Harvest, handoffs and upgrades, ticket
-migrations and missing accounts all render from canonical repository facts.
-Identity history is always partial, including normalized legacy version-4
-caches; a missing holder is resolved through the bounded per-run reduced read.
+The frontend's `dispatchFrontend` checkpoint (reducer version 5) retains
+identities only: the latest run-started fact and the sampled lease holder's
+start (deduplicated), plus the holder name. It holds no dashboard-event cache,
+so its size is fixed by those identities however much Harvest, settings,
+handoff or migration history accumulates. Settings, Harvest, handoffs and
+upgrades, ticket migrations and missing accounts all render from canonical
+repository facts. Identity history is always partial, including normalized
+legacy version-4 caches; a missing holder is resolved through the bounded
+per-run reduced read. An older client ignores a version-5 row and reseeds
+canonically, and the store refuses its version-4 writes over that row, which
+settles them.
 Successful lease samples select or clear the retained holder; failed metadata
 reads preserve the last selection. Snapshot saves track cursor and effective
 retained-state changes locally: written, refused and unsupported attempts settle
@@ -1123,7 +1130,8 @@ only its captured projection is acknowledged. Teardown forces a dirty save past
 the time gate, while settled state stays quiet. Equal-cursor refusal does not
 make correlation durable: restart reconstructs it through bounded holder lookup,
 and the next advancing-cursor checkpoint carries it without relaxing snapshot
-ordering. A validated, already normalized restored checkpoint starts clean.
+ordering. A validated version-5 checkpoint whose identities are already
+normalized starts clean; a normalized legacy version-4 row starts dirty.
 
 `packages/core/src/cli/dashboard/refresh.ts` owns the shared presentation read
 scheduler for both terminal paths: focused by default, independent of focus for
