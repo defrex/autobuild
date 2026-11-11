@@ -20,6 +20,7 @@ import { CATALOG_IDENTITY_HEADER } from './version'
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { EventValidationError } from '../../events/catalog'
+import { classifyAuthorityReadError } from '../../processes/harvest-execution-state'
 import { agentActor, DISPATCHER, humanActor } from '../../events/envelope'
 import {
   harvestStartedWrite,
@@ -1011,6 +1012,20 @@ describe('error rehydration (D6/D8 client halves)', () => {
     const err = await rejectionOf(store.append('build-a', sampleEventWrite()))
     expect(err).toBeInstanceOf(EventValidationError)
     expect(err.message).toBe('event "plan.completed" payload invalid: round must be a number')
+  })
+
+  test('an old server rejecting an unknown reducer value reads as a permanent error', async () => {
+    const { store } = makeStore([
+      {
+        status: 400,
+        body: wireError('Error: unknown reducer "hostedHarvestAuthority"', 'validation'),
+      },
+    ])
+    const err = await rejectionOf(
+      store.getReducerValue({ kind: 'repo', repo: 'repo' }, { reducer: 'hostedHarvestAuthority' }),
+    )
+    expect(err).toBeInstanceOf(EventValidationError)
+    expect(classifyAuthorityReadError(err)).toBe('permanent')
   })
 
   test('404 on a generic route rehydrates as a plain Error with the server message', async () => {

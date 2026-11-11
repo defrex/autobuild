@@ -53,7 +53,10 @@ import {
   lastExecutionOutcomeReducer,
   openExecutionReducer,
 } from '../processes/execution-settlement'
-import { openHarvestExecutionsReducer } from '../processes/harvest-execution-state'
+import {
+  hostedHarvestAuthorityReducer,
+  openHarvestExecutionsReducer,
+} from '../processes/harvest-execution-state'
 import { infrastructureFailureResetReducer } from '../processes/infrastructure-failure-budget'
 import { publicationStateReducer } from '../processes/publication-state'
 import { sandboxStatesReducer } from '../processes/sandbox-state'
@@ -152,6 +155,7 @@ const REGISTERED: Record<string, Omit<RegisteredReducer, 'valueRead'>> = {
     reducer: openHarvestExecutionsReducer,
     covers: ['openHarvestExecutions'],
   },
+  hostedHarvestAuthority: { reducer: hostedHarvestAuthorityReducer, covers: [] },
   openTick: { reducer: openTickReducer('run-a'), covers: ['hasOpenTick'] },
   dispatchFailureBudget: {
     reducer: dispatchFailureBudgetReducer(false),
@@ -234,6 +238,7 @@ const repositoryValues = new Set([
   'dispatchStatus',
   'sandboxStates',
   'openHarvestExecutions',
+  'hostedHarvestAuthority',
   'openTick',
   'autoMergeDefault',
 ])

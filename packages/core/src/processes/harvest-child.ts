@@ -113,8 +113,10 @@ export async function runHarvestChild(
       clock: systemClock,
       instance: input.instance,
       ...(input.preparedRun ? { preparedRun: input.preparedRun } : {}),
-      // Adopted holder: the guest skips its own claim, heartbeats the owning
-      // dispatch loop's repository lease, and never releases it.
+      // The launching invocation's holder, matched against this execution's
+      // authorization. A prepared guest's authority is that durable fact: it
+      // never claims, renews or releases the repository lease, so `--once`
+      // teardown and a successor's claim do not fence it.
       ...(input.leaseHolder !== undefined ? { leaseHolder: input.leaseHolder } : {}),
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
       sessionEnv: {

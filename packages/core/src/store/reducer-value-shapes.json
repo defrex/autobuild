@@ -164,21 +164,25 @@
       "acc": "617",
       "value": "618"
     },
-    "openTick": {
+    "hostedHarvestAuthority": {
       "acc": "1786",
+      "value": "1789"
+    },
+    "openTick": {
+      "acc": "1790",
       "value": "6"
     },
     "dispatchFailureBudget": {
-      "acc": "1787",
-      "value": "1789"
+      "acc": "1791",
+      "value": "1793"
     },
     "infrastructureFailureReset": {
       "acc": "1664",
       "value": "30"
     },
     "openWorkspace": {
-      "acc": "1791",
-      "value": "1792"
+      "acc": "1795",
+      "value": "1796"
     },
     "publishedBranchHead": {
       "acc": "97",
@@ -193,12 +197,12 @@
       "value": "4"
     },
     "setupStreak": {
-      "acc": "1794",
+      "acc": "1798",
       "value": "30"
     },
     "phaseFailures": {
-      "acc": "1795",
-      "value": "1801"
+      "acc": "1799",
+      "value": "1805"
     },
     "openBuildWorkspace": {
       "acc": "1614",
@@ -229,16 +233,16 @@
       "value": "683"
     },
     "pinnedAssets": {
-      "acc": "1802",
-      "value": "1804"
+      "acc": "1806",
+      "value": "1808"
     },
     "forgeHealthValue": {
       "acc": "676",
-      "value": "1805"
+      "value": "1809"
     },
     "dispatchPlacement": {
-      "acc": "1806",
-      "value": "1808"
+      "acc": "1810",
+      "value": "1812"
     }
   },
   "schemas": {
@@ -26769,17 +26773,60 @@
     "1786": {
       "kind": "object",
       "props": {
+        "current": {
+          "type": "1787",
+          "optional": true
+        }
+      }
+    },
+    "1787": {
+      "kind": "union",
+      "items": ["5", "1788"]
+    },
+    "1788": {
+      "kind": "object",
+      "props": {
+        "execution": {
+          "type": "2",
+          "optional": false
+        },
+        "run": {
+          "type": "2",
+          "optional": false
+        },
+        "leaseHolder": {
+          "type": "2",
+          "optional": false
+        },
+        "released": {
+          "type": "6",
+          "optional": false
+        }
+      }
+    },
+    "1789": {
+      "kind": "object",
+      "props": {
+        "current": {
+          "type": "1787",
+          "optional": true
+        }
+      }
+    },
+    "1790": {
+      "kind": "object",
+      "props": {
         "boundary": {
           "type": "4",
           "optional": true
         }
       }
     },
-    "1787": {
+    "1791": {
       "kind": "object",
       "props": {
         "failures": {
-          "type": "1788",
+          "type": "1792",
           "optional": false
         },
         "open": {
@@ -26792,11 +26839,11 @@
         }
       }
     },
-    "1788": {
+    "1792": {
       "kind": "array",
       "items": "1229"
     },
-    "1789": {
+    "1793": {
       "kind": "object",
       "props": {
         "count": {
@@ -26804,7 +26851,7 @@
           "optional": false
         },
         "latest": {
-          "type": "1790",
+          "type": "1794",
           "optional": false
         },
         "parked": {
@@ -26813,24 +26860,24 @@
         }
       }
     },
-    "1790": {
+    "1794": {
       "kind": "union",
       "items": ["5", "1229"]
     },
-    "1791": {
+    "1795": {
       "kind": "object",
       "props": {
         "open": {
-          "type": "1792",
+          "type": "1796",
           "optional": false
         }
       }
     },
-    "1792": {
+    "1796": {
       "kind": "union",
-      "items": ["29", "1793"]
+      "items": ["29", "1797"]
     },
-    "1793": {
+    "1797": {
       "kind": "object",
       "props": {
         "ref": {
@@ -26847,7 +26894,7 @@
         }
       }
     },
-    "1794": {
+    "1798": {
       "kind": "object",
       "props": {
         "escalations": {
@@ -26864,11 +26911,11 @@
         }
       }
     },
-    "1795": {
+    "1799": {
       "kind": "object",
       "props": {
         "raised": {
-          "type": "1796",
+          "type": "1800",
           "optional": false
         },
         "owners": {
@@ -26876,7 +26923,7 @@
           "optional": false
         },
         "cancelled": {
-          "type": "1798",
+          "type": "1802",
           "optional": false
         },
         "count": {
@@ -26892,17 +26939,17 @@
           "optional": true
         },
         "lastProviderAttempts": {
-          "type": "1799",
+          "type": "1803",
           "optional": true
         }
       }
     },
-    "1796": {
+    "1800": {
       "kind": "object",
       "props": {},
-      "index": "1797"
+      "index": "1801"
     },
-    "1797": {
+    "1801": {
       "kind": "object",
       "props": {
         "phase": {
@@ -26931,20 +26978,20 @@
         }
       }
     },
-    "1798": {
+    "1802": {
       "kind": "object",
       "props": {},
       "index": "6"
     },
-    "1799": {
+    "1803": {
       "kind": "union",
-      "items": ["5", "1800"]
+      "items": ["5", "1804"]
     },
-    "1800": {
+    "1804": {
       "kind": "array",
       "items": "466"
     },
-    "1801": {
+    "1805": {
       "kind": "object",
       "props": {
         "count": {
@@ -26960,34 +27007,34 @@
           "optional": true
         },
         "lastProviderAttempts": {
-          "type": "1799",
+          "type": "1803",
           "optional": true
         }
       }
     },
-    "1802": {
+    "1806": {
       "kind": "object",
       "props": {
         "pins": {
-          "type": "1803",
+          "type": "1807",
           "optional": false
         }
       }
     },
-    "1803": {
+    "1807": {
       "kind": "array",
       "items": "818"
     },
-    "1804": {
+    "1808": {
       "kind": "object",
       "props": {
         "pins": {
-          "type": "1803",
+          "type": "1807",
           "optional": false
         }
       }
     },
-    "1805": {
+    "1809": {
       "kind": "object",
       "props": {
         "value": {
@@ -26996,28 +27043,28 @@
         }
       }
     },
-    "1806": {
+    "1810": {
       "kind": "object",
       "props": {
         "placement": {
-          "type": "1807",
+          "type": "1811",
           "optional": false
         }
       }
     },
-    "1807": {
+    "1811": {
       "kind": "union",
       "items": ["29", "583", "584"]
     },
-    "1808": {
+    "1812": {
       "kind": "union",
-      "items": ["1809", "1811"]
+      "items": ["1813", "1815"]
     },
-    "1809": {
+    "1813": {
       "kind": "object",
       "props": {
         "status": {
-          "type": "1810",
+          "type": "1814",
           "optional": false
         },
         "placement": {
@@ -27026,11 +27073,11 @@
         }
       }
     },
-    "1810": {
+    "1814": {
       "kind": "literal",
       "value": "known"
     },
-    "1811": {
+    "1815": {
       "kind": "object",
       "props": {
         "status": {
@@ -27038,20 +27085,20 @@
           "optional": false
         },
         "reason": {
-          "type": "1812",
+          "type": "1816",
           "optional": false
         }
       }
     },
-    "1812": {
+    "1816": {
       "kind": "union",
-      "items": ["1813", "1814"]
+      "items": ["1817", "1818"]
     },
-    "1813": {
+    "1817": {
       "kind": "literal",
       "value": "unrecorded"
     },
-    "1814": {
+    "1818": {
       "kind": "literal",
       "value": "unsupported-capability"
     }
