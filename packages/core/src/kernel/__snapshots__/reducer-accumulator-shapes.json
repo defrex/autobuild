@@ -880,6 +880,8 @@
     "$.failedAt.\"h_7\": string",
     "$.failedAt.\"h_8\": string",
     "$.failedAt: object",
+    "$.forgeCredentialLimits.limits: object",
+    "$.forgeCredentialLimits: object",
     "$.forgeHealth.active.firstFailureAt: string",
     "$.forgeHealth.active.forge: string",
     "$.forgeHealth.active.message: string",

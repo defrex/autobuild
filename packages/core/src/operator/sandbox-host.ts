@@ -117,6 +117,9 @@ export async function createHostedOperatorSandboxService(
         env: options.env,
         repoRoot: scratch,
         repository: options.repo,
+        // A deployment without a token must fail typed, never spend the
+        // hosting platform's shared anonymous GitHub quota.
+        requireCredential: 'hosted operator sandbox backend',
       }))
     if (forge.remoteBranchSha === undefined) {
       throw new Error(

@@ -20,6 +20,7 @@ import { GitHubTicketSource } from './github'
 import { FileGitHubValidatorStore } from './github-validators'
 import {
   createGitHubFetchTransport,
+  githubCredentialRequirement,
   githubTokenSource,
   resolveGitHubToken,
   type GitHubRequest,
@@ -54,6 +55,9 @@ async function rawTicketSource(
     exec?: Exec
     /** GitHub API seam for the github source; defaults to the fetch transport. */
     transport?: GitHubRequest
+    /** Process label: the github source's default transport refuses requests
+     * without a credential. Absent, `AB_GITHUB_REQUIRE_CREDENTIAL` decides. */
+    requireCredential?: string
   } = {},
 ): Promise<TicketSource> {
   const exec = options.exec ?? spawnExec
@@ -155,7 +159,12 @@ async function rawTicketSource(
         `[tickets].source = "github" needs an origin on github.com; origin is ${origin}`,
       )
     return new GitHubTicketSource({
-      transport: options.transport ?? createGitHubFetchTransport({ token: githubTokenSource(env) }),
+      transport:
+        options.transport ??
+        createGitHubFetchTransport({
+          token: githubTokenSource(env),
+          requireCredential: githubCredentialRequirement(env, options.requireCredential),
+        }),
       repository: coordinates,
       lifecycle: ticketLifecycle(config),
       readyLabels: config.readyLabels ?? ['autobuild'],

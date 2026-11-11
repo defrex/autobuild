@@ -358,7 +358,7 @@ export async function getRepositoryStatus(
   return withOperatorView(store, repo, 'journal', async (view) => {
     const { dispatcher } = await readDispatcherLiveness(store, repo, now)
     const facts = (await readRepositoryFacts(view, repo)).value
-    const status = repositoryStatusFromFacts(repo, facts, dispatcher)
+    const status = repositoryStatusFromFacts(repo, facts, dispatcher, now)
     const capacity = await readRepositoryCapacity(store, repo, facts, dispatcher, now)
     return { ...status, ...(capacity ? { capacity } : {}) }
   })

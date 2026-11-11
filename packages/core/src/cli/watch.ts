@@ -459,6 +459,8 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `Account credentials recovered: ${JSON.stringify(event.payload.name)}`
     case 'dispatcher.forge-recovered':
       return `Forge recovered: ${event.payload.forge}`
+    case 'forge.credential-limited':
+      return `Forge request limited for ${event.payload.process} (${event.payload.credential}${event.payload.missingCredential ? `: ${singleLine(event.payload.missingCredential)}` : ''}); reset ${event.payload.resetAt}; dispatcher forge work continues`
     case 'dispatcher.kernel-git-unavailable':
       return `Kernel Git unavailable (${event.payload.executable}): ${singleLine(event.payload.detail)}`
     case 'dispatcher.kernel-git-recovered':

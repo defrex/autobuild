@@ -52,6 +52,11 @@ describe('repository attention projection', () => {
     ['dispatcher.ticket-source-recovered', {}, false],
     ['dispatcher.kernel-git-unavailable', { executable: 'git', detail: 'missing' }, true],
     ['dispatcher.kernel-git-recovered', { executable: 'git' }, false],
+    [
+      'forge.credential-limited',
+      { process: 'build-runner b', credential: 'unauthenticated' },
+      true,
+    ],
     ['ticket-preparation.resolved', { outcome: 'abandoned' }, true],
     ['ticket-preparation.resolved', { outcome: 'handed-back' }, false],
     ['ticket-preparation.resolved', { outcome: 'bounced' }, false],

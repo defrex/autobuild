@@ -577,7 +577,7 @@ import type { RepositoryEvent } from '../events/repository'
 import { repositoryAttentionReducer } from './repository-attention'
 import { dispatchSettingsReducer } from './dispatch-settings'
 import { harvestReducer } from './harvest'
-import { forgeHealthReducer } from './forge-health'
+import { forgeCredentialLimitsReducer, forgeHealthReducer } from './forge-health'
 import { kernelGitHealthReducer } from './kernel-git'
 import { ticketSourceHealthReducer } from './ticket-source-health'
 import { autoMergeDefaultReducer } from './auto-merge-default'
@@ -630,6 +630,7 @@ export interface RepositoryReadAcc {
   settings: ReturnType<typeof dispatchSettingsReducer.initial>
   harvest: ReturnType<typeof harvestReducer.initial>
   forgeHealth: ReturnType<typeof forgeHealthReducer.initial>
+  forgeCredentialLimits: ReturnType<typeof forgeCredentialLimitsReducer.initial>
   kernelGit: ReturnType<typeof kernelGitHealthReducer.initial>
   ticketMigrations: ReturnType<typeof ticketMigrationsReducer.initial>
   health: ReturnType<typeof ticketSourceHealthReducer.initial>
@@ -655,6 +656,7 @@ export const repositoryReadFactsReducer = defineReducer({
     dispatcherRunFactsReducer('version').version +
     openHarvestExecutionsReducer.version +
     forgeHealthReducer.version +
+    forgeCredentialLimitsReducer.version +
     kernelGitHealthReducer.version +
     repositoryAttentionReducer.version +
     dispatchSettingsReducer.version +
@@ -686,6 +688,7 @@ export const repositoryReadFactsReducer = defineReducer({
     settings: dispatchSettingsReducer.initial(),
     harvest: harvestReducer.initial(),
     forgeHealth: forgeHealthReducer.initial(),
+    forgeCredentialLimits: forgeCredentialLimitsReducer.initial(),
     kernelGit: kernelGitHealthReducer.initial(),
     ticketMigrations: ticketMigrationsReducer.initial(),
     health: ticketSourceHealthReducer.initial(),
@@ -704,6 +707,10 @@ export const repositoryReadFactsReducer = defineReducer({
     acc.settings = dispatchSettingsReducer.advance(acc.settings, events)
     acc.harvest = harvestReducer.advance(acc.harvest, events)
     acc.forgeHealth = forgeHealthReducer.advance(acc.forgeHealth, events)
+    acc.forgeCredentialLimits = forgeCredentialLimitsReducer.advance(
+      acc.forgeCredentialLimits,
+      events,
+    )
     acc.kernelGit = kernelGitHealthReducer.advance(acc.kernelGit, events)
     acc.ticketMigrations = ticketMigrationsReducer.advance(acc.ticketMigrations, events)
     acc.health = ticketSourceHealthReducer.advance(acc.health, events)
@@ -838,6 +845,7 @@ export const repositoryReadFactsReducer = defineReducer({
     settings: dispatchSettingsReducer.finish(acc.settings),
     harvest: harvestReducer.finish(acc.harvest),
     forgeHealth: forgeHealthReducer.finish(acc.forgeHealth),
+    forgeCredentialLimits: forgeCredentialLimitsReducer.finish(acc.forgeCredentialLimits),
     kernelGit: kernelGitHealthReducer.finish(acc.kernelGit),
     ticketMigrations: ticketMigrationsReducer.finish(acc.ticketMigrations),
     health: ticketSourceHealthReducer.finish(acc.health),

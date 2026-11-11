@@ -14,6 +14,7 @@ import { FakeTicketSource } from './fake'
 import { FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
 import { HostedTicketSource } from './remote'
+import { ForgeCredentialMissing } from '../forge-failure'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -123,6 +124,36 @@ describe('createTicketSource — github', () => {
       REPO,
     )
     expect(source.readyAssignee).toBe(true)
+  })
+
+  test('a guest-marked environment refuses anonymous issue reads; an unmarked one keeps sending', async () => {
+    // No gh on PATH and no token: the credential lookup is a miss.
+    const empty = await mkdtemp(join(tmpdir(), 'ab-create-github-nogh-'))
+    const path = process.env.PATH
+    const fetchBefore = globalThis.fetch
+    const requests: string[] = []
+    process.env.PATH = empty
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requests.push(String(url))
+      return Response.json({ message: 'Not Found' }, { status: 404 })
+    }) as unknown as typeof fetch
+    try {
+      const guest = await createTicketSource(
+        config,
+        { AB_REPOSITORY: 'acme/widgets', AB_GITHUB_REQUIRE_CREDENTIAL: '1' },
+        REPO,
+      )
+      const refused = (await guest.get('1').catch((caught: unknown) => caught)) as Error
+      expect(refused.message).toContain('remote guest process: GitHub API request refused')
+      expect(refused.cause).toBeInstanceOf(ForgeCredentialMissing)
+      expect(requests).toEqual([])
+      const operator = await createTicketSource(config, { AB_REPOSITORY: 'acme/widgets' }, REPO)
+      await operator.get('1').catch(() => undefined)
+      expect(requests.length).toBeGreaterThan(0)
+    } finally {
+      process.env.PATH = path
+      globalThis.fetch = fetchBefore
+    }
   })
 
   test('refuses an origin that is not on github.com', async () => {
