@@ -33,6 +33,7 @@ const health = await service.fetch(new Request('http://test/health'))
 assert.equal(health.status, 200)
 assert.deepEqual(await health.json(), {
   ok: true,
+  capabilities: ['build-creation-key-v1'],
   autobuildVersion: AUTOBUILD_VERSION,
   protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
   supportedClientRange: { minVersion: '1.2.0', maxVersionExclusive: '1.5.0' },
