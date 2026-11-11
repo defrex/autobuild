@@ -2141,8 +2141,9 @@ ready-ticket queue depth, and `active` is occupied capacity (every unfinished
 build, plus finished builds running work again) against root `capacity`. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports
 Harvest state.
-The execution-mode frontend checkpoints dashboard facts, the latest run start and the sampled
-lease holder's start; identity history stays partial and missing holders use a
+The execution-mode frontend checkpoints only the latest run start and the sampled
+lease holder's start; dashboard facts render from the canonical reduced
+repository value. Identity history stays partial and missing holders use a
 bounded per-run lookup. Without a usable checkpoint, startup and recovery seed
 from the canonical reduced repository value, never the journal. Unchanged written/refused checkpoints are not uploaded
 again. Dirty saves run at most once per 30 seconds; transient failures retry
