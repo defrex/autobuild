@@ -2476,7 +2476,17 @@ event-level mechanics live in the repository catalog and reducer tests):
   has no release and its provider reports it running (or cannot answer),
   dispatch launches no harvest and never judges its open session. Only after
   settlement records the release does the next launch record an interrupted
-  session, once, and recovery proceeds.
+  session, once, and recovery proceeds. The guest's authority is its durable
+  `harvest.execution.authorized`, not the launching invocation's repository
+  lease: it never claims, renews or releases that lease, so `--once`
+  teardown and a successor's acquisition neither fence it nor are blocked by
+  it. At durable boundaries, at most once per heartbeat interval, it re-reads
+  one constant-size served value of the current authorization and exits
+  `held` once its execution was released or a later execution was
+  authorized. It fails closed: an unreadable or unsupported value stops it,
+  and transient read failures are tolerated for at most one lease TTL.
+  Before exiting it closes any open session bracket with its transcript, so
+  runner loss is judged only for real interruptions.
 - **The harvester only proposes.** It never claims, grooms, or dispatches a
   proposal, and it files every one into the same configured state rather than
   ranking them. Humans own Triage → Ready by default. A repository that points

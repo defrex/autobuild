@@ -1498,7 +1498,12 @@ execution and adopted lease holder; the guest resumes only that prepared run.
 Local completion records `harvest.execution.ended`; hosted completion retains
 its provider release fact. While an observable hosted execution is open, the
 dispatcher withholds harvest launch, so runner loss on its open session is
-judged only after its release fact. Recovery controls remain trusted dispatcher work.
+judged only after its release fact. The guest's authority is that
+authorization, not the launching invocation's lease, which it never claims,
+renews or releases: at durable boundaries it re-reads the constant-size
+`hostedHarvestAuthority` value (`processes/harvest-execution-state.ts`) and
+exits `held`, closing its open session bracket, once its execution was
+released or replaced. Recovery controls remain trusted dispatcher work.
 Execution launch auth is transient and separate from serialized identity. Runners
 request exact phase grants after session-start facts and before runtime calls.
 Workspace plugin factories receive an exchange callback and a scrubbed environment,

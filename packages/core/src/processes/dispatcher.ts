@@ -1780,8 +1780,10 @@ export class Dispatcher {
    * execution is not supervised by this process is observed through the
    * owning provider. `lost`/`ended` reaps the disposable environment and
    * journals the close fact with the snapshot purge outcome; `running`
-   * leaves it — the guest is the live supervisor and holds the adopted
-   * repository lease, and the next pass reaps it after it ends. Until the
+   * leaves it — the guest is the live supervisor and its authority is its
+   * durable `harvest.execution.authorized`, not any invocation's repository
+   * lease, which it leaves to dispatch; the next pass reaps it after it
+   * ends. Until the
    * release is journaled, an open observable execution also suppresses
    * harvest launch (`liveForeignHarvestExecution`). The run itself needs no
    * settlement here: an interrupted run stays open in the journal, and the

@@ -33,8 +33,10 @@ export interface HarvestExecutionStart {
   /** Remote base branch the disposable environment is provisioned from. */
   baseBranch: string
   workspaceRef?: string
-  /** Repository-lease holder the guest adopts from the owning dispatch loop:
-   * it skips its own claim, heartbeats this holder, and never releases. */
+  /** Repository-lease holder of the launching dispatch invocation, as named
+   * by the execution's `harvest.execution.authorized`. The guest matches its
+   * authorization against it and never claims, renews or releases the
+   * lease. */
   leaseHolder?: string
   environment?: HarvestExecutionEnvironment
 }
