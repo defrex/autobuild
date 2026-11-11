@@ -2,7 +2,7 @@ import { compatibleTicketSource } from './tree'
 import { configuredStore } from '../../cli/configured-store'
 import { projectToken } from '../../cli/project-credentials'
 import { resolveRepoOrigin } from '../../cli/repo-state'
-import { spawnExec } from '../workspace/git-worktree'
+import { spawnExec, type Exec } from '../workspace/git-worktree'
 /**
  * TicketSource factory (SPEC §3.2, §13): construct the builtin or plugin source
  * named by [tickets]. Plugin credentials, like LINEAR_API_KEY, come only from
@@ -22,6 +22,7 @@ import {
   createGitHubFetchTransport,
   githubTokenSource,
   resolveGitHubToken,
+  type GitHubRequest,
 } from '../forge/github-transport'
 import { parseRepoCoordinates } from '../forge/github'
 import { normalizeGitRemoteUrl } from '../../kernel/origin'
@@ -37,13 +38,25 @@ function reason(error: unknown): string {
 async function rawTicketSource(
   config: TicketsConfig,
   env: Record<string, string | undefined>,
-  /** A relative [tickets].dir is relative to the repo, not this process's cwd. */
+  /** Filesystem location of the repository: the checkout, or origin-mode
+   * dispatch's scratch root. Never a repository identity URL. A relative
+   * [tickets].dir is relative to it, not this process's cwd. */
   targetRepo: string,
   /** Selected local state root. Remote stores pass the repo-local default. */
   localStateRoot?: string,
   /** Registry loaded from this repository's configured plugins. */
   plugins: PluginRegistry = createPluginRegistry(),
+  options: {
+    /** Already-resolved repository origin for a caller with no checkout
+     * (origin-mode dispatch). Used instead of resolving targetRepo's origin. */
+    repository?: string
+    /** Exec seam for the origin lookup; defaults to spawnExec. */
+    exec?: Exec
+    /** GitHub API seam for the github source; defaults to the fetch transport. */
+    transport?: GitHubRequest
+  } = {},
 ): Promise<TicketSource> {
+  const exec = options.exec ?? spawnExec
   if (config.source === 'hosted') {
     const buildUrl = env.AB_STORE?.trim() || configuredStore(targetRepo)
     const rawUrl = config.url ?? buildUrl
@@ -72,7 +85,7 @@ async function rawTicketSource(
       ? env.AB_TICKET_TOKEN
       : projectToken(
           rawUrl,
-          (await resolveRepoOrigin(targetRepo, spawnExec)) ?? targetRepo,
+          options.repository ?? (await resolveRepoOrigin(targetRepo, exec)) ?? targetRepo,
           config.url &&
             (!buildUrl ||
               !/^https?:/.test(buildUrl) ||
@@ -130,7 +143,8 @@ async function rawTicketSource(
   }
 
   if (config.source === 'github') {
-    const origin = env.AB_REPOSITORY?.trim() || (await resolveRepoOrigin(targetRepo, spawnExec))
+    const origin =
+      env.AB_REPOSITORY?.trim() || options.repository || (await resolveRepoOrigin(targetRepo, exec))
     if (origin === undefined || origin === '')
       throw new Error(
         '[tickets].source = "github" needs the repository\'s origin remote on github.com; set the checkout\'s origin or export AB_REPOSITORY',
@@ -141,7 +155,7 @@ async function rawTicketSource(
         `[tickets].source = "github" needs an origin on github.com; origin is ${origin}`,
       )
     return new GitHubTicketSource({
-      transport: createGitHubFetchTransport({ token: githubTokenSource(env) }),
+      transport: options.transport ?? createGitHubFetchTransport({ token: githubTokenSource(env) }),
       repository: coordinates,
       lifecycle: ticketLifecycle(config),
       readyLabels: config.readyLabels ?? ['autobuild'],
