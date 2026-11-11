@@ -1,5 +1,8 @@
 import {
+  BUILD_CREATION_KEY_CAPABILITY,
+  creationBuildSlug,
   DISPATCH_PLACEMENT_CAPABILITY,
+  projectBuildSlugBase,
   dispatchPlacementSchema,
   type DispatchPlacement,
 } from '@defrex/autobuild/remote-store'
@@ -227,7 +230,7 @@ function projectBuildIdentity(body: z.infer<typeof newBuildBodySchema>): {
       'validation',
       `branch ${JSON.stringify(body.branch)} conflicts with build.created kind "${createdKind === 'ab-node' ? 'node' : 'work'}"`,
     )
-  const base = body.slug.slice(0, 60).replace(/-+$/, '')
+  const base = projectBuildSlugBase(body.slug)
   if (!BUILD_SLUG.test(base))
     throw new RequestError(400, 'validation', `invalid build slug base: ${JSON.stringify(base)}`)
   return { base, prefix: createdKind ?? branchKind ?? 'ab' }
@@ -730,13 +733,35 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (owner?.kind === 'delegated' && req.method !== 'GET')
       throw new MachineAuthError(403, 'delegated credential cannot create builds')
     if (req.method === 'POST') {
-      const body = await readBody(req, newBuildBodySchema)
+      const { creationKey, ...body } = await readBody(req, newBuildBodySchema)
       await opts.requireRegistered?.(body.repo)
       if (owner && owner.kind !== 'admin') {
         requireProject(owner, body.repo)
         // The server allocates slug and branch; the branch keeps the requested
         // build kind's namespace (`ab/` for work, `ab-node/` for a node).
         const { base, prefix } = projectBuildIdentity(body)
+        const duplicate = (error: unknown) =>
+          (error as { code?: string }).code === '23505' ||
+          (error instanceof Error && /^build .*already exists/.test(error.message))
+        if (creationKey !== undefined) {
+          // A keyed create lands once at the slug its key derives, so a client
+          // that lost the response can point-read it. A repeat is a conflict,
+          // never a second identity for the same key.
+          const slug = creationBuildSlug(body.repo, body.slug, creationKey)
+          try {
+            return json(
+              201,
+              await store.createBuild({
+                ...body,
+                slug,
+                branch: `${prefix}/${slug}`,
+              } as NewBuildInput),
+            )
+          } catch (error) {
+            if (!duplicate(error)) throw error
+            return fail(409, 'conflict', `build "${slug}" already exists for this creation key`)
+          }
+        }
         for (let attempt = 0; attempt < 10; attempt++) {
           const slug = `${base}-${randomBytes(12).toString('hex')}`
           try {
@@ -749,12 +774,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
               } as NewBuildInput),
             )
           } catch (error) {
-            const code = (error as { code?: string }).code
-            if (
-              code !== '23505' &&
-              !(error instanceof Error && /^build .*already exists/.test(error.message))
-            )
-              throw error
+            if (!duplicate(error)) throw error
           }
         }
         throw new Error('build identity allocation failed')
@@ -1534,7 +1554,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments.length === 1 && segments[0] === 'health' && req.method === 'GET') {
       return json(200, {
         ok: true,
-        ...(opts.placement ? { capabilities: [DISPATCH_PLACEMENT_CAPABILITY] } : {}),
+        capabilities: [
+          BUILD_CREATION_KEY_CAPABILITY,
+          ...(opts.placement ? [DISPATCH_PLACEMENT_CAPABILITY] : []),
+        ],
         ...healthIdentity(
           req.headers.get(AUTOBUILD_VERSION_HEADER),
           req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER),
