@@ -1271,8 +1271,13 @@ or invoke operator APIs. Harvest writes require the exact run in event payloads
 and artifact metadata; artifacts use the harvest kinds. Every artifact in an
 atomic deposit is checked before writing. Harvest streams have an immutable
 `harvest:<run>:<execution>:` label namespace. Addressed streams resolve their actual owner;
-a guessed ID cannot bypass the boundary. Only the runner can heartbeat or re-acquire its exact
-adopted repository lease holder; another current holder still fences it. Recovery acknowledgements remain dispatcher-side.
+a guessed ID cannot bypass the boundary. A harvest-runner grant may heartbeat or re-acquire
+only its exact adopted repository lease holder, and another current holder fences those lease
+calls. That lease permission is not the prepared guest's execution authority: the guest neither
+heartbeats, reclaims nor releases the invocation lease, so routine `--once` teardown or a
+successor invocation's lease acquisition alone does not fence it. The guest instead reads
+`hostedHarvestAuthority` at durable boundaries and stops when its execution authorization is
+released or replaced, or when that verification fails. Recovery acknowledgements remain dispatcher-side.
 
 Hosted ticket access is gated by grant kind. Build-runner and build-phase grants
 cannot call ticket routes. Harvest-phase grants may call only list-ready,
