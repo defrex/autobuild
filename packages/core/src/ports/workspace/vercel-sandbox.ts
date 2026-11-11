@@ -7,6 +7,7 @@ import { inspectGitCandidate, preserveGitCommits, restoreGitCommits } from './co
 import { accountPolicy, accountGuestEnvironment } from './account-policy'
 import { HOSTED_ACCOUNT_READINESS_ENV } from '../../accounts/hosted-readiness'
 import { gitRewrite, parseRemoteHead } from '../forge/git-rewrite'
+import { GITHUB_REQUIRE_CREDENTIAL_ENV } from '../forge/github-transport'
 import { delegateCredential } from '../../store/remote/credentials'
 import type { ExecutionLaunchAuth } from './build-execution'
 import { createHash } from 'node:crypto'
@@ -1910,6 +1911,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }),
     }
     Object.assign(env, this.guestEnvironment())
+    // Guests hold no forge credential: their GitHub API requests fail typed
+    // instead of going out anonymously. Applied last so no forwarded value
+    // can disable it.
+    env[GITHUB_REQUIRE_CREDENTIAL_ENV] = '1'
     const command = (await sandbox.runCommand({
       cmd: 'sh',
       args: [
@@ -2234,6 +2239,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       [HARVEST_RUNNER_OPTIONS_ENV]: JSON.stringify(envelope),
     }
     Object.assign(env, this.guestEnvironment())
+    // Guests hold no forge credential: their GitHub API requests fail typed
+    // instead of going out anonymously. Applied last so no forwarded value
+    // can disable it.
+    env[GITHUB_REQUIRE_CREDENTIAL_ENV] = '1'
     const command = (await sandbox.runCommand({
       cmd: 'sh',
       args: [

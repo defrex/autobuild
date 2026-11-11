@@ -126,7 +126,7 @@ export AB_GIT_READ_TOKEN='<read-only repository token>'
 
 - Use a repository-scoped read token, separate from the push identity. For a public clone, remove `gitUsernameEnv` and `gitPasswordEnv`.
 - Autobuild passes these as the authenticated Git source for [Vercel private-repository cloning](https://vercel.com/kb/guide/sandbox-private-github-repositories); don't embed credentials in the origin URL.
-- `environmentVariables` forwards legacy runtime API credentials; declared account credentials become placeholders even when listed here. Never forward `AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, Vercel tokens or the clone token; Autobuild supplies scoped Store authority, keeps clone secrets out of guest commands, and publishes from the host.
+- `environmentVariables` forwards legacy runtime API credentials; declared account credentials become placeholders even when listed here. Never forward `AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, Vercel tokens or the clone token; Autobuild supplies scoped Store authority, keeps clone secrets out of guest commands, and publishes from the host. Guest runners always run with `AB_GITHUB_REQUIRE_CREDENTIAL=1`, which a forwarded value cannot override, so a GitHub API request from the guest without a credential fails with a typed error naming `GITHUB_TOKEN or GH_TOKEN` instead of using the sandbox address's shared anonymous quota.
 
 ## Writing your own
 

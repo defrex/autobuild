@@ -1,7 +1,14 @@
 import { z } from 'zod'
 /** Additive plugin API: recognizable across separately loaded SDK copies. */
 export type ForgeFailureDetails =
-  | { kind: 'rate-limited'; resetAt: string }
+  | {
+      kind: 'rate-limited'
+      resetAt: string
+      /** Set when the limited request carried no credential: why it went out
+       * anonymously. Such a limit belongs to the caller's network address, not
+       * to the dispatcher's credential, so it never pauses the repository. */
+      unauthenticated?: string
+    }
   | { kind: 'transient'; retry: 'retryable' }
 
 export class ForgeFailure extends Error {
@@ -28,9 +35,31 @@ export function isForgeFailure(error: unknown): error is ForgeFailure {
   const details = value.details
   return (
     !!details &&
-    ((details.kind === 'rate-limited' && z.iso.datetime().safeParse(details.resetAt).success) ||
+    ((details.kind === 'rate-limited' &&
+      z.iso.datetime().safeParse(details.resetAt).success &&
+      (details.unauthenticated === undefined ||
+        (typeof details.unauthenticated === 'string' && details.unauthenticated.length > 0))) ||
       (details.kind === 'transient' && details.retry === 'retryable'))
   )
+}
+
+/** A GitHub API request refused before sending because the process has no
+ * credential where one is required (a remote guest, or a hosted backend). It
+ * is deliberately not a `ForgeFailure`: it is neither a rate limit nor
+ * transient, and retrying cannot succeed without a credential. */
+export class ForgeCredentialMissing extends Error {
+  readonly credential = 'GITHUB_TOKEN or GH_TOKEN' as const
+  constructor(
+    readonly process: string,
+    readonly reason: string,
+  ) {
+    super(
+      `${process}: GitHub API request refused — no GitHub credential (${reason}). ` +
+        'Provide GITHUB_TOKEN or GH_TOKEN to this process; remote guests receive no forge ' +
+        'credential, so their GitHub API work must run kernel-side.',
+    )
+    this.name = 'ForgeCredentialMissing'
+  }
 }
 
 export interface ForgeRejectionDetails {
