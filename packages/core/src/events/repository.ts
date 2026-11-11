@@ -847,6 +847,8 @@ export const ticketPreparationEventPayloadSchemas = {
     ...preparationIdentity,
     outcome: z.enum(['lost-claim', 'handed-back', 'bounced', 'owned', 'abandoned']),
     reason: z.string().min(1).max(4000).optional(),
+    /** Written only for `abandoned`: the claim certainty known at resolution. */
+    claimed: z.boolean().optional(),
   }),
 }
 

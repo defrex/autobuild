@@ -66,13 +66,17 @@ export const ticketPreparationReducer = defineReducer<
 })
 
 /** The one operator line for a durably abandoned attempt. An unconfirmed
- * claim is never reported as applied: its provider outcome is unknown. */
+ * claim is never reported as applied: its provider outcome is unknown. An
+ * event written before claim certainty was recorded says so. */
 export function abandonedPreparationDiagnostic(
-  attempt: Pick<TicketPreparation, 'attempt' | 'ticket' | 'claimed'>,
-  reason: string,
+  attempt: { attempt: string; ticket: TicketRef; claimed?: boolean },
+  reason?: string,
 ): string {
-  const claim = attempt.claimed
-    ? 'claim confirmed'
-    : 'claim unconfirmed (provider outcome unknown; it may have applied the claim)'
-  return `ticket ${attempt.ticket.id} (${attempt.ticket.source}): preparation ${attempt.attempt} abandoned; ${claim}; ticket unchanged — ${reason}`
+  const claim =
+    attempt.claimed === true
+      ? 'claim confirmed'
+      : attempt.claimed === false
+        ? 'claim unconfirmed (provider outcome unknown; it may have applied the claim)'
+        : 'claim certainty not recorded (provider outcome unknown)'
+  return `ticket ${attempt.ticket.id} (${attempt.ticket.source}): preparation ${attempt.attempt} abandoned; ${claim}; ticket unchanged — ${reason ?? 'no reason recorded'}`
 }

@@ -299,6 +299,13 @@ The default watch reports actionable conditions only:
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`,
   `dispatcher.kernel-git-unavailable`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+- Repository `ticket-preparation.resolved` with outcome `abandoned`: automatic
+  preparation recovery stopped and left the ticket unchanged. The line names the
+  ticket, attempt and recorded reason; the payload's `claimed` says whether the
+  claim was confirmed. An unconfirmed claim's provider outcome is unknown, and
+  events written before `claimed` existed report the certainty as not recorded.
+  Each abandonment reports once as it lands; a fresh watch does not replay
+  historical ones, and nothing clears or acknowledges it.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,
