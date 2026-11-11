@@ -11,19 +11,29 @@
  * execution.
  *
  * Determinism: the harness's `steppingClock` drives all store timestamps and
- * lease TTLs; the loser starts only after the winner's lease claim is
+ * lease TTLs, and the harness's `SCENARIO_DISPATCH_LEASE_SECONDS` budget keeps
+ * ordinary passes inside authority; the loser starts only after the winner's lease claim is
  * observable in the store (condition-gated poll, never a fixed sleep); the
  * forge and ticket source are fakes — no live provider, no real-time-sleep
  * dependence anywhere in the scenario's correctness.
  */
 import { describe, expect, test } from 'bun:test'
 import { abDispatch } from '../cli/dispatch'
+import { parseConfig } from '../config/load'
+import { policySchema } from '../config/schema'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildExecution } from '../ports/workspace/build-execution'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { RepositoryEvent } from '../events/repository'
 import type { BuildRecord, BuildStore } from '../store/types'
-import { CONFIG_TOML, happyHandlers, makeHarness, readyTicket, type E2eHarness } from './harness'
+import {
+  CONFIG_TOML,
+  happyHandlers,
+  makeHarness,
+  readyTicket,
+  SCENARIO_DISPATCH_LEASE_SECONDS,
+  type E2eHarness,
+} from './harness'
 
 // ── Local helpers ────────────────────────────────────────────────────────────
 
@@ -317,8 +327,8 @@ describe('concurrent-pair overlap lease fencing', () => {
       ],
       // The in-process child advances the shared stepping clock while the
       // winner's pass still prepares the second ticket; no renewal runs on
-      // that synthetic clock, so a 60 s lease would lapse mid-pass.
-      configToml: LONG_LEASE_TOML,
+      // that synthetic clock, so the harness lease budget (not the 60 s
+      // product default) is what keeps the winner inside authority.
     })
     const winnerStore = recordingStore(h.store)
     const winnerExec = recordingBuildExecution(h.wiring.buildExecution)
@@ -383,13 +393,13 @@ describe('concurrent-pair overlap lease fencing', () => {
 
 // ── A stalled holder that wakes after its lease expired ──────────────────────
 
-/** An hour-long repository lease: the stepping clock advances on every read,
- * so a pass must not lapse unless a scenario stalls it on purpose. */
-const LONG_LEASE_TOML = CONFIG_TOML.replace(
-  '[policy]\n',
-  '[policy]\ndispatchLeaseTimeoutSeconds = 3600\ndispatchLeaseRenewalSeconds = 20\n',
-)
-const STALL_MS = 3_601_000
+/** The harness's repository lease budget: the stepping clock advances on
+ * every read, so a pass must not lapse unless a scenario stalls it on purpose. */
+const LEASE_MS = parseConfig(CONFIG_TOML).policy.dispatchLeaseTimeoutSeconds * 1000
+/** The product-default lease the harness budget replaces. */
+const PRODUCT_LEASE_MS = policySchema.parse({}).dispatchLeaseTimeoutSeconds * 1000
+/** A deliberate stall that outlives the harness lease budget. */
+const STALL_MS = (SCENARIO_DISPATCH_LEASE_SECONDS + 1) * 1000
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void
@@ -436,11 +446,18 @@ async function runFacts(h: E2eHarness, run: string) {
 }
 
 describe('a stalled holder wakes after its repository lease expired', () => {
+  test('the deliberate stall outlives the harness lease budget, which outlives the product default', () => {
+    // A budget change cannot silently turn the stall scenarios below into
+    // no-expiry scenarios, nor the budget scenario into a default-lease one.
+    expect(LEASE_MS).toBe(SCENARIO_DISPATCH_LEASE_SECONDS * 1000)
+    expect(STALL_MS).toBeGreaterThan(LEASE_MS)
+    expect(LEASE_MS).toBeGreaterThan(PRODUCT_LEASE_MS)
+  })
+
   test('a peer took over: the stalled holder claims nothing, launches nothing and stops superseded', async () => {
     const h = await makeHarness({
       handlers: happyHandlers(),
       tickets: [readyTicket('T-STALL')],
-      configToml: LONG_LEASE_TOML,
     })
     const stalledStore = recordingStore(h.store)
     const stall = stallAtIntended(stalledStore.store)
@@ -480,7 +497,6 @@ describe('a stalled holder wakes after its repository lease expired', () => {
     const h = await makeHarness({
       handlers: happyHandlers(),
       tickets: [readyTicket('T-RECLAIM')],
-      configToml: LONG_LEASE_TOML,
     })
     const recorded = recordingStore(h.store)
     const stall = stallAtIntended(recorded.store)
@@ -523,6 +539,45 @@ describe('a stalled holder wakes after its repository lease expired', () => {
     } finally {
       stall.release()
       stop.abort()
+      await h.cleanup()
+    }
+  }, 60_000)
+})
+
+// ── A pass that outlives the product-default lease ───────────────────────────
+
+describe('scenario dispatch lease budget', () => {
+  test('a pass that outlives the product-default lease completes inside the fixture budget', async () => {
+    const h = await makeHarness({
+      handlers: happyHandlers(),
+      tickets: [readyTicket('T-BUDGET')],
+    })
+    const recorded = recordingStore(h.store)
+    const stall = stallAtIntended(recorded.store)
+    const execution = recordingBuildExecution(h.wiring.buildExecution)
+    try {
+      const once = startOnce(h, { store: recorded.store, execution: execution.execution })
+      await stall.stalled
+      // Deterministically past the former 60 s budget, well inside the fixture's.
+      h.clock.advance(PRODUCT_LEASE_MS + 60_000)
+      stall.release()
+      await once.promise
+
+      const run = recorded.calls[0]!.holder
+      const claims = recorded.calls.filter((call) => call.op === 'claimRepoLease')
+      expect(claims.every((call) => call.result === true && call.holder === run)).toBe(true)
+      // One claim: the pass never lapsed, so it never needed a reclaim.
+      expect(claims).toHaveLength(1)
+      expect(h.tickets.claims).toEqual(['T-BUDGET'])
+      const builds = await h.store.listBuilds()
+      expect(builds).toHaveLength(1)
+      expect(builds[0]!.ticket?.id).toBe('T-BUDGET')
+      expect(execution.launched).toEqual([builds[0]!.slug])
+      expect(await runFacts(h, run)).toMatchObject({ selfYields: 0, stops: ['normal'] })
+      expect(once.stderr.some((line) => line.includes('superseded'))).toBe(false)
+      expect(h.cliErrors).toEqual([])
+    } finally {
+      stall.release()
       await h.cleanup()
     }
   }, 60_000)
