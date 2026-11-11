@@ -8294,6 +8294,10 @@
         "reason": {
           "type": "4",
           "optional": true
+        },
+        "claimed": {
+          "type": "91",
+          "optional": true
         }
       }
     },

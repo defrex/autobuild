@@ -87,4 +87,9 @@ test('abandoned preparation diagnostic names the attempt, reason and claim certa
   expect(unconfirmed).toContain('ticket observed in state Doing')
   expect(unconfirmed).not.toContain('claim confirmed')
   expect(unconfirmed).not.toContain('claim applied')
+  const unrecorded = abandonedPreparationDiagnostic({ attempt: 'prep', ticket })
+  expect(unrecorded).toBe(
+    'ticket T-1 (fake): preparation prep abandoned; claim certainty not recorded (provider outcome unknown); ticket unchanged — no reason recorded',
+  )
+  expect(unrecorded).not.toContain('claim confirmed')
 })

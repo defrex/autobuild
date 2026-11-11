@@ -118,7 +118,7 @@ Credential/process changes remain subject to the Boundaries below.
 `ab watch --operator --json` is the standing monitor. Keep its default filter: every
 record calls for action. It reports failed node verification, build escalations, persistent janitor failures and their escalations, merge decisions,
 harvest escalations/recovery exhaustion, automatic upgrade failures and runtime rollbacks, rejected configuration, reloads needing
-restart, abnormal dispatcher stops/loss, ticket-source and forge degradation past reset (15 minutes
+restart, abnormal dispatcher stops/loss, abandoned ticket preparations, ticket-source and forge degradation past reset (15 minutes
 for ticket sources without reset), and five minutes of continuous tick failures. Advertised resets
 wait for a post-reset tick to finish before requiring action; ordinary recovery
 on that retry stays silent. Source grace and cooldown-driven failures do not
@@ -478,6 +478,14 @@ Treat every default-watch record as a call to act:
   scope, cursor, field path, and running version/commit. Never start or run a dispatcher.
 - Persistent source degradation: inspect the source cause and reset evidence,
   diagnose and report the continuing intake problem.
+- Abandoned ticket preparation (`ticket-preparation.resolved`, outcome
+  `abandoned`): automatic recovery stopped and left the ticket unchanged.
+  Inspect the named ticket and attempt and the recorded reason. A confirmed
+  claim may have left the ticket in its claimed state; an unconfirmed claim's
+  provider outcome is unknown, so check the ticket's actual state rather than
+  assuming it sits in Doing. Decide whether to leave it finished or cancelled,
+  or return it to Ready for another attempt. Each abandonment reports once;
+  history does not replay.
 
 Do not re-derive history the build's events already tell you; read events
 with a cursor and keep it short.
