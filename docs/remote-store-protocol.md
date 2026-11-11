@@ -529,7 +529,7 @@ client version window are unchanged.
 | Scope | Reducers with no arguments |
 | --- | --- |
 | Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `pinnedAssets`, `buildDelegation` |
-| Repository | `dispatchPlacement`, `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
+| Repository | `dispatchPlacement`, `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `hostedHarvestAuthority`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
 
 | Reducer | Scope | Required arguments |
 | --- | --- | --- |
@@ -542,7 +542,12 @@ another's accumulator. `effectiveConfig` returns an object with optional `run`
 and `reference: {kind, rev}`. Absence is distinct from an unreadable referenced
 artifact. Delegation values contain semantic lifecycle facts indexed by prefixed
 identifiers, not authorization decisions; request time and grace expiry are
-always evaluated against those facts on the service.
+always evaluated against those facts on the service. `hostedHarvestAuthority`
+returns `{current?: {execution, run, leaseHolder, released}}`: the latest
+`harvest.execution.authorized` and whether that execution has since ended or
+been released. Its size does not grow with harvest history; a hosted harvest
+guest re-reads it at durable boundaries to decide whether it still holds
+authority, and a server that does not serve it stops the guest.
 
 Each remaining registered reducer is explicitly excluded:
 
@@ -1266,8 +1271,13 @@ or invoke operator APIs. Harvest writes require the exact run in event payloads
 and artifact metadata; artifacts use the harvest kinds. Every artifact in an
 atomic deposit is checked before writing. Harvest streams have an immutable
 `harvest:<run>:<execution>:` label namespace. Addressed streams resolve their actual owner;
-a guessed ID cannot bypass the boundary. Only the runner can heartbeat or re-acquire its exact
-adopted repository lease holder; another current holder still fences it. Recovery acknowledgements remain dispatcher-side.
+a guessed ID cannot bypass the boundary. A harvest-runner grant may heartbeat or re-acquire
+only its exact adopted repository lease holder, and another current holder fences those lease
+calls. That lease permission is not the prepared guest's execution authority: the guest neither
+heartbeats, reclaims nor releases the invocation lease, so routine `--once` teardown or a
+successor invocation's lease acquisition alone does not fence it. The guest instead reads
+`hostedHarvestAuthority` at durable boundaries and stops when its execution authorization is
+released or replaced, or when that verification fails. Recovery acknowledgements remain dispatcher-side.
 
 Hosted ticket access is gated by grant kind. Build-runner and build-phase grants
 cannot call ticket routes. Harvest-phase grants may call only list-ready,

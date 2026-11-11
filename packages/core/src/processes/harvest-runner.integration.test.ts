@@ -25,6 +25,10 @@ import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock, steppingClock } from '../testing/fixed'
 import { HARVEST_PROPOSAL_LABEL, HarvestRunner } from './harvest-runner'
+import { EventValidationError } from '../events/catalog'
+import { AuthError } from '../store/remote/client'
+import { ReducerValueIncompatibilityError } from '../store/remote/compatibility'
+import { hostedHarvestAuthorityReadBudget } from '../testing/reduced-read-budget'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -3863,4 +3867,341 @@ test('a resumed alternate sharing the primary runner is not retained as the prim
       .map((e) => e.payload.args),
   ).toEqual([['alternate'], ['alternate'], ['primary']])
   expect(events.filter((e) => e.type === 'harvest.proposal.filed')).toHaveLength(1)
+})
+
+describe('HarvestRunner hosted execution authority', () => {
+  type Hook = (store: MemoryBuildStore) => Promise<void>
+  type Reads = { fail?: () => unknown }
+
+  /** A prepared hosted guest, seeded the way dispatch prepares one: the
+   * launching invocation `inv-1` holds the lease, prepares the run in-process
+   * and authorizes execution `exec-1`. `duringSynthesize` runs mid-turn,
+   * before the proposals are submitted, with the store's unwrapped methods. */
+  async function guestFixture(t: {
+    leaseHolder?: string
+    duringSynthesize?: Hook
+    reads?: Reads
+    clock?: ReturnType<typeof manualClock>
+    leaseTtlMs?: number
+  }) {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-guest-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const raw = {
+      claimRepoLease: store.claimRepoLease.bind(store),
+      releaseRepoLease: store.releaseRepoLease.bind(store),
+      heartbeatRepo: store.heartbeatRepo.bind(store),
+      getReducerValue: store.getReducerValue.bind(store),
+    }
+    await store.ensureRepo('/repo')
+    expect(await store.claimRepoLease('/repo', 'inv-1', 3_600_000)).toBe(true)
+    await seedObservation(store, 'guest', 'hosted guest defect')
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        const env = resolveHarvestCliEnv(opts.env)
+        const deps = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(deps)
+        if (opts.skill === 'ab-harvest') {
+          await t.duringSynthesize?.(store)
+          const observations = JSON.parse(
+            await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+          ) as Array<{ occurrence: { build: string; seq: number } }>
+          const file = join(workspace, '.ab', 'guest-proposals.json')
+          await writeFile(file, JSON.stringify(proposalSet(observations)))
+          await submitHarvestProposals(deps, file)
+        } else {
+          const notes = join(workspace, '.ab', 'guest-review.md')
+          await writeFile(notes, 'approve')
+          await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+        }
+        return defaultTurnResult('done')
+      },
+    })
+    const base = {
+      store,
+      tickets,
+      config: config(1),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'exec-1',
+      leaseHolder: 'inv-1',
+    }
+    const prepared = await new HarvestRunner({
+      ...base,
+      holdsAuthority: () => true,
+      opts: { heartbeatMs: 100_000 },
+    }).run(true)
+    if (prepared.outcome !== 'prepared') throw new Error(`unprepared: ${prepared.outcome}`)
+    const authorized = await store.appendRepo('/repo', {
+      actor: DISPATCHER,
+      type: 'harvest.execution.authorized',
+      payload: {
+        execution: 'exec-1',
+        run: prepared.run,
+        launch: prepared.launch,
+        leaseHolder: t.leaseHolder ?? 'inv-1',
+      },
+    })
+
+    const lease: string[] = []
+    store.claimRepoLease = async (...args) => {
+      lease.push('claimRepoLease')
+      return raw.claimRepoLease(...args)
+    }
+    store.releaseRepoLease = async (...args) => {
+      lease.push('releaseRepoLease')
+      return raw.releaseRepoLease(...args)
+    }
+    store.heartbeatRepo = async (...args) => {
+      lease.push('heartbeatRepo')
+      return raw.heartbeatRepo(...args)
+    }
+    let probes = 0
+    store.getReducerValue = async (scope, request) => {
+      if (request.reducer === 'hostedHarvestAuthority') {
+        probes += 1
+        const failure = t.reads?.fail?.()
+        if (failure !== undefined) throw failure
+      }
+      return raw.getReducerValue(scope, request)
+    }
+    const diagnostics: string[] = []
+    const result = await new HarvestRunner({
+      ...base,
+      ...(t.clock ? { clock: t.clock } : {}),
+      preparedRun: { run: prepared.run },
+      opts: {
+        heartbeatMs: 0,
+        ...(t.leaseTtlMs !== undefined ? { leaseTtlMs: t.leaseTtlMs } : {}),
+        onDiagnostic: (message) => diagnostics.push(message),
+      },
+    }).run()
+
+    const events = await store.getRepoEvents('/repo')
+    const after = events.filter((event) => event.seq > authorized.seq)
+    const of = <T extends (typeof events)[number]['type']>(type: T) =>
+      after.filter((event) => event.type === type) as Extract<
+        (typeof events)[number],
+        { type: T }
+      >[]
+    const fencedReasons = async () =>
+      Promise.all(
+        of('harvest.session.ended').map(
+          async (event) =>
+            (
+              await store.getRepoArtifact(
+                '/repo',
+                event.payload.transcript.kind,
+                event.payload.transcript.rev,
+              )
+            )?.meta.metadata.fenced,
+        ),
+      )
+    return {
+      store,
+      tickets,
+      result,
+      lease,
+      probes: () => probes,
+      diagnostics,
+      of,
+      fencedReasons,
+      sessions: () => reduceHarvest(events).latest?.sessions ?? [],
+    }
+  }
+
+  test('teardown then a successor invocation: the guest completes and never touches the lease', async () => {
+    const fx = await guestFixture({
+      duringSynthesize: async (store) => {
+        // `--once` teardown releases the launching holder; the next cron
+        // invocation claims under its own run id.
+        await store.releaseRepoLease('/repo', 'inv-1')
+        expect(await store.claimRepoLease('/repo', 'inv-2', 3_600_000)).toBe(true)
+      },
+    })
+    expect(fx.result.outcome).toBe('completed')
+    expect(fx.of('harvest.completed')).toHaveLength(1)
+    expect(fx.of('harvest.failed')).toHaveLength(0)
+    expect(fx.sessions().every((session) => session.status === 'ended')).toBe(true)
+    // The hook's own lease calls are counted too: one release, one claim.
+    expect(fx.lease).toEqual(['releaseRepoLease', 'claimRepoLease'])
+    expect(fx.probes()).toBeGreaterThan(0)
+    expect((await fx.store.getRepo('/repo'))?.lease?.holder).toBe('inv-2')
+    expect(fx.diagnostics).toEqual([])
+  })
+
+  test('a free-lease gap is not resurrected under the dead invocation', async () => {
+    const fx = await guestFixture({
+      duringSynthesize: async (store) => store.releaseRepoLease('/repo', 'inv-1'),
+    })
+    expect(fx.result.outcome).toBe('completed')
+    expect(fx.lease).toEqual(['releaseRepoLease'])
+    expect((await fx.store.getRepo('/repo'))?.lease).toBeUndefined()
+  })
+
+  test('a later authorization replaces the guest: held, bracket closed, nothing filed', async () => {
+    const fx = await guestFixture({
+      duringSynthesize: async (store) => {
+        await store.appendRepo('/repo', {
+          actor: DISPATCHER,
+          type: 'harvest.execution.authorized',
+          payload: { execution: 'exec-2', run: 'h_other', launch: 'started', leaseHolder: 'inv-2' },
+        })
+      },
+    })
+    expect(fx.result).toEqual({ outcome: 'held' })
+    expect(await fx.fencedReasons()).toEqual(['replaced'])
+    expect(fx.sessions().map((session) => session.status)).toEqual(['ended'])
+    expect(fx.of('harvest.session.started')).toHaveLength(1)
+    expect(fx.of('harvest.failed')).toHaveLength(0)
+    expect(fx.of('harvest.step.started').map((event) => event.payload.step)).not.toContain('file')
+    expect((await fx.tickets.listAll()).tickets).toHaveLength(0)
+  })
+
+  test('a released execution fences its stale guest', async () => {
+    const fx = await guestFixture({
+      duringSynthesize: async (store) => {
+        await store.appendRepo('/repo', {
+          actor: DISPATCHER,
+          type: 'harvest.execution.started',
+          payload: { execution: 'exec-1', provider: 'p', environmentId: 'env-1' },
+        })
+        await store.appendRepo('/repo', {
+          actor: DISPATCHER,
+          type: 'harvest.execution.released',
+          payload: {
+            execution: 'exec-1',
+            environmentId: 'env-1',
+            snapshots: { outcome: 'unknown' },
+          },
+        })
+      },
+    })
+    expect(fx.result).toEqual({ outcome: 'held' })
+    expect(await fx.fencedReasons()).toEqual(['released'])
+    expect(fx.sessions().map((session) => session.status)).toEqual(['ended'])
+    expect(fx.of('harvest.failed')).toHaveLength(0)
+  })
+
+  test('an authorization naming another holder fails closed before any session', async () => {
+    const fx = await guestFixture({ leaseHolder: 'inv-other' })
+    expect(fx.result).toEqual({ outcome: 'held' })
+    expect(fx.of('harvest.session.started')).toHaveLength(0)
+    expect(fx.of('harvest.step.started')).toHaveLength(0)
+  })
+
+  test('a transient read failure within the lease TTL does not fence', async () => {
+    let failures = 0
+    const fx = await guestFixture({
+      clock: manualClock(),
+      leaseTtlMs: 1_000,
+      duringSynthesize: async () => {
+        failures = 1
+      },
+      reads: {
+        fail: () => (failures-- > 0 ? new TypeError('fetch failed') : undefined),
+      },
+    })
+    expect(fx.result.outcome).toBe('completed')
+    expect(fx.diagnostics).toHaveLength(1)
+    expect(fx.diagnostics[0]).toContain('(transient)')
+  })
+
+  test('transient read failures outlasting the lease TTL fence as unverified', async () => {
+    const clock = manualClock()
+    let failing = false
+    const fx = await guestFixture({
+      clock,
+      leaseTtlMs: 1_000,
+      duringSynthesize: async () => {
+        failing = true
+        clock.advance(1_000)
+      },
+      reads: { fail: () => (failing ? new TypeError('fetch failed') : undefined) },
+    })
+    expect(fx.result).toEqual({ outcome: 'held' })
+    expect(await fx.fencedReasons()).toEqual(['unverified'])
+    expect(fx.sessions().map((session) => session.status)).toEqual(['ended'])
+  })
+
+  test.each([
+    [
+      'an old server',
+      () => new EventValidationError('Error: unknown reducer "hostedHarvestAuthority"'),
+    ],
+    ['a local adapter', () => new Error('unknown reducer "hostedHarvestAuthority"')],
+    [
+      'an incompatible value',
+      () =>
+        new ReducerValueIncompatibilityError(
+          'hostedHarvestAuthority',
+          { kind: 'repo', repo: '/repo' },
+          1,
+          2,
+          'shape',
+        ),
+    ],
+  ])(
+    'an authorized guest replaced while %s cannot serve its authority fences unsupported',
+    async (_name, error) => {
+      let unsupported = false
+      const fx = await guestFixture({
+        duringSynthesize: async (store) => {
+          await store.appendRepo('/repo', {
+            actor: DISPATCHER,
+            type: 'harvest.execution.authorized',
+            payload: {
+              execution: 'exec-2',
+              run: 'h_other',
+              launch: 'started',
+              leaseHolder: 'inv-2',
+            },
+          })
+          unsupported = true
+        },
+        reads: { fail: () => (unsupported ? error() : undefined) },
+      })
+      expect(fx.result).toEqual({ outcome: 'held' })
+      expect(await fx.fencedReasons()).toEqual(['unsupported'])
+      expect(fx.of('harvest.session.started')).toHaveLength(1)
+      expect(fx.of('harvest.step.started').map((event) => event.payload.step)).not.toContain('file')
+      expect(fx.of('harvest.proposal.id-reserved')).toHaveLength(0)
+      expect(fx.of('harvest.proposal.filed')).toHaveLength(0)
+      expect((await fx.tickets.listAll()).tickets).toHaveLength(0)
+    },
+  )
+
+  test('a server that cannot serve the authority from the start does no work', async () => {
+    const fx = await guestFixture({
+      reads: {
+        fail: () => new EventValidationError('Error: unknown reducer "hostedHarvestAuthority"'),
+      },
+    })
+    expect(fx.result).toEqual({ outcome: 'held' })
+    expect(fx.of('harvest.session.started')).toHaveLength(0)
+    expect(fx.of('harvest.step.started')).toHaveLength(0)
+  })
+
+  test('an auth refusal fences revoked immediately', async () => {
+    let refused = false
+    const fx = await guestFixture({
+      duringSynthesize: async () => {
+        refused = true
+      },
+      reads: { fail: () => (refused ? new AuthError('grant retired') : undefined) },
+    })
+    expect(fx.result).toEqual({ outcome: 'held' })
+    expect(await fx.fencedReasons()).toEqual(['revoked'])
+  })
+
+  test('the authority probe is one constant-size value read, independent of history', async () => {
+    const { small, large } = await hostedHarvestAuthorityReadBudget()
+    expect(large.unchanged).toEqual(small.unchanged)
+  })
 })

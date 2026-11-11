@@ -46,7 +46,12 @@ const until = async (check: () => Promise<boolean>, what: string): Promise<void>
 /** A hosted-style fixture: the harness wiring plus a provider
  * `harvestExecution` whose first start runs a real in-process HarvestRunner
  * guest that keeps working after its launching invocation detaches. */
-async function hostedFixture() {
+async function hostedFixture(
+  guestOpts: { heartbeatMs: number; leaseTtlMs: number } = {
+    heartbeatMs: 3_600_000,
+    leaseTtlMs: 3_600_000,
+  },
+) {
   const h = await makeHarness({
     handlers: {},
     tickets: [],
@@ -110,6 +115,7 @@ async function hostedFixture() {
   const starts: HarvestExecutionStart[] = []
   const reaps: WorkspaceHandle[] = []
   let guest: Promise<unknown> | undefined
+  let onObserve: (() => Promise<void>) | undefined
   const execution: HarvestExecution = {
     start: async (input) => {
       starts.push(input)
@@ -129,7 +135,7 @@ async function hostedFixture() {
           ...(input.leaseHolder !== undefined ? { leaseHolder: input.leaseHolder } : {}),
           ...(input.preparedRun !== undefined ? { preparedRun: input.preparedRun } : {}),
           sessionEnv: { AB_STORE: 'memory' },
-          opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
+          opts: { ...guestOpts, onDiagnostic: () => {} },
         })
           .run()
           .finally(() => completion.resolve({ exitCode: 0 }))
@@ -155,6 +161,9 @@ async function hostedFixture() {
     },
     observe: async (identity) => {
       observed.push(identity.commandId ?? '')
+      const hook = onObserve
+      onObserve = undefined
+      await hook?.()
       return observation
     },
   }
@@ -258,6 +267,11 @@ async function hostedFixture() {
       observation = next
     },
     guest: () => guest,
+    /** Run once inside the next provider observation: during that
+     * invocation's settlement, while it holds the repository lease. */
+    duringObserve: (hook: () => Promise<void>) => {
+      onObserve = hook
+    },
     repoEvents,
     count,
     losses,
@@ -307,8 +321,52 @@ test('a synthesize session spanning several hosted invocations completes with no
   }
 }, 60_000)
 
+test('a guest spanning the launching teardown and a successor invocation completes', async () => {
+  // A 1 ms interval makes every guest boundary re-check its authority. Before
+  // AUT-1152 its heartbeat saw the successor's holder and the guest exited
+  // `held` with its synthesize bracket open.
+  const fx = await hostedFixture({ heartbeatMs: 1, leaseTtlMs: 3_600_000 })
+  try {
+    await fx.seed()
+    await fx.invoke(fx.synthesizeOpen)
+    expect(fx.starts).toHaveLength(1)
+    const launching = fx.starts[0]!.leaseHolder
+    expect(launching).toBeDefined()
+    // `--once` teardown released the launching holder.
+    expect((await fx.h.store.getRepo(fx.h.remote))?.lease?.holder).not.toBe(launching)
+
+    let result: unknown
+    let successor: string | undefined
+    fx.duringObserve(async () => {
+      successor = (await fx.h.store.getRepo(fx.h.remote))?.lease?.holder
+      fx.synthesizeGate.resolve()
+      result = await fx.guest()
+    })
+    await fx.invoke()
+    expect(successor).toBeDefined()
+    expect(successor).not.toBe(launching)
+    expect(result).toMatchObject({ outcome: 'completed' })
+    expect(await fx.count('harvest.completed')).toBe(1)
+    expect(await fx.count('harvest.failed')).toBe(0)
+    const run = reduceHarvest(await fx.repoEvents()).latest
+    expect(run?.sessions.every((session) => session.status === 'ended')).toBe(true)
+
+    fx.observe({ state: 'ended', exitCode: 0 })
+    await fx.invoke()
+    expect(await fx.count('harvest.execution.released')).toBe(1)
+    expect(await fx.losses()).toHaveLength(0)
+    expect(fx.starts).toHaveLength(1)
+    expect(fx.h.cliErrors).toEqual([])
+  } finally {
+    fx.synthesizeGate.resolve()
+    await fx.guest()?.catch(() => {})
+    await fx.h.cleanup()
+  }
+}, 60_000)
+
 test('a killed hosted execution records exactly one runner loss and recovers', async () => {
-  const fx = await hostedFixture()
+  // Every guest boundary re-reads its authority (1 ms interval).
+  const fx = await hostedFixture({ heartbeatMs: 1, leaseTtlMs: 3_600_000 })
   try {
     await fx.seed()
     await fx.invoke(fx.synthesizeOpen)
@@ -331,6 +389,37 @@ test('a killed hosted execution records exactly one runner loss and recovers', a
     expect(fx.starts).toHaveLength(2)
 
     await fx.invoke()
+    expect(await fx.losses()).toHaveLength(1)
+
+    // The original guest is still in its turn. Its next boundary finds its
+    // execution released and replaced: it stops `held`, closing its bracket
+    // with evidence, and runner loss stays judged exactly once.
+    fx.synthesizeGate.resolve()
+    expect(await fx.guest()).toEqual({ outcome: 'held' })
+    const original = fx.starts[0]!.instance
+    const run = reduceHarvest(await fx.repoEvents()).runs.find(
+      (candidate) => candidate.run === fx.starts[0]!.preparedRun?.run,
+    )
+    expect(run?.sessions.every((session) => session.status !== 'open')).toBe(true)
+    const ended = (await fx.repoEvents()).filter((event) => event.type === 'harvest.session.ended')
+    const fenced = await Promise.all(
+      ended.map(async (event) =>
+        event.type === 'harvest.session.ended'
+          ? (
+              await fx.h.store.getRepoArtifact(
+                fx.h.remote,
+                event.payload.transcript.kind,
+                event.payload.transcript.rev,
+              )
+            )?.meta.metadata.fenced
+          : undefined,
+      ),
+    )
+    expect(fenced.filter((reason) => reason !== undefined)).toEqual(['replaced'])
+    const authorized = (await fx.repoEvents()).filter(
+      (event) => event.type === 'harvest.execution.authorized',
+    )
+    expect(authorized.at(-1)?.payload).not.toMatchObject({ execution: original })
     expect(await fx.losses()).toHaveLength(1)
   } finally {
     fx.synthesizeGate.resolve()
