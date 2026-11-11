@@ -35,6 +35,12 @@ service publishes `>=1.2.0 <1.4.0` until later publication facts permit retireme
 The service reads the clock for each decision, so retirement needs no redeploy. Health needs no credentials, version
 headers, or available backend. On the service’s own line, both its runtime protocol and its published ledger protocol are admitted. Health advertises a fully validated same-line request’s admitted protocol. Otherwise it advertises the service line’s published protocol, or its runtime protocol when that line is unpublished. Thus default 1.3 health advertises 6 anonymously and to published clients, and 7 to admitted source clients; explicit 1.4/7 services default to 7. The package version and support range remain truthful. Health performs no store reads.
 
+Every current service advertises `build-creation-key-v1` in health `capabilities`:
+keyed project creation lands at the derived slug described under `POST /builds`.
+Clients send a creation key only after seeing it. A client treats a service without
+it as allocating, so an unkeyed creation whose response was lost there is reported
+as an unknown outcome rather than as absence.
+
 
 ## Hosted dispatch placement
 
@@ -372,7 +378,7 @@ it to exist. An unknown build returns `404 not-found`.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
-| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string, created?: event write}`; `slug`, `repo`, and a supplied `branch` are nonempty. `created`, when present, must be a valid `build.created` write; the server appends it as seq 1 atomically with the record (both exist or neither), and an invalid one is `422` with nothing created | `201` + authoritative `BuildRecord`; project credentials receive a fresh random-suffixed slug and a branch in the build kind's namespace (`ab/<slug>`, or `ab-node/<slug>` for a node); a supplied `branch` must be `ab/<requested slug>` or `ab-node/<requested slug>` agreeing with the `build.created` kind, otherwise `400 validation`. Owner admin/open mode keeps exact-slug semantics with `409 conflict` for duplicates |
+| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string, created?: event write, creationKey?: string}`; `slug`, `repo`, and a supplied `branch` are nonempty; a supplied `creationKey` matches `^[A-Za-z0-9_-]{1,128}$`. `created`, when present, must be a valid `build.created` write; the server appends it as seq 1 atomically with the record (both exist or neither), and an invalid one is `422` with nothing created | `201` + authoritative `BuildRecord`; project credentials receive a fresh random-suffixed slug, or with `creationKey` the slug that key derives (a repeated key is `409 conflict`), and a branch in the build kind's namespace (`ab/<slug>`, or `ab-node/<slug>` for a node); a supplied `branch` must be `ab/<requested slug>` or `ab-node/<requested slug>` agreeing with the `build.created` kind, otherwise `400 validation`. Owner admin/open mode keeps exact-slug semantics with `409 conflict` for duplicates |
 | `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`, filtered by the server to the credential project; owner admin may list all projects. List order is unspecified |
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
@@ -1185,8 +1191,12 @@ Remote clients continue mapping addressed GET 404 responses to null. Nested
 streams must also belong to the addressed parent.
 
 `GET /builds` is filtered by the server to the credential's project. Project
-`POST /builds` always allocates a fresh random-suffixed slug from the requested
-base, even when the base is unused, and a matching branch in the build kind's
+`POST /builds` without `creationKey` allocates a fresh random-suffixed slug from
+the requested base, even when the base is unused. With `creationKey` it creates at
+most once at `<base>-<first 24 hex of sha256("autobuild-build-creation\0" + repo +
+"\0" + requested slug + "\0" + creationKey)>` and answers a repeated key with
+`409 conflict`, never a second identity; `creationBuildSlug` in the client package
+computes it. Either way it creates a matching branch in the build kind's
 namespace: `ab-node/<slug>` when the `build.created` payload has `kind: "node"`,
 otherwise `ab/<slug>`. Without `created`, a supplied `branch` prefix decides the
 kind. A supplied `branch` must be exactly `ab/<requested slug>` or

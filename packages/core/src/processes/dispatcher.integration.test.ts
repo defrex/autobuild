@@ -49,7 +49,8 @@ import type { BuildExecution } from '../ports/workspace/build-execution'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { textContent, type BuildStore } from '../store/types'
+import { textContent, type BuildStore, type NewBuildInput } from '../store/types'
+import { creationBuildSlug, projectBuildSlugBase } from '../kernel/build-creation'
 import { openLocalStore } from '../store/local/store'
 import { manualClock } from '../testing/fixed'
 import { withFailingRepoAppend } from '../testing/store-failures'
@@ -13567,6 +13568,257 @@ describe('Dispatcher failed ticket preparation recovery', () => {
   }
 })
 
+/**
+ * An in-memory store with an allocating store's creation identity. `keyed`
+ * creates a keyed request once at its derived slug; `allocated` creates at a
+ * fresh suffix the caller never learns unless the response arrives.
+ */
+class AllocatingStore extends MemoryBuildStore {
+  private allocations = 0
+  /** Commit, then lose the response, on the next create. */
+  loseResponse = false
+  /** Fail the next create before anything commits. */
+  failBeforeCommit = false
+  /** Replace the committed record's slug and ticket, for ownership fixtures. */
+  commitAs?: (input: NewBuildInput, slug: string) => Promise<void>
+  constructor(
+    readonly mode: 'keyed' | 'allocated',
+    opts: ConstructorParameters<typeof MemoryBuildStore>[0] = {},
+  ) {
+    super(opts)
+  }
+  async buildCreationIdentity() {
+    return this.mode
+  }
+  override async createBuild(input: NewBuildInput) {
+    if (this.failBeforeCommit) {
+      this.failBeforeCommit = false
+      throw new Error('creation request rejected before commit')
+    }
+    const { creationKey, ...body } = input
+    const slug =
+      this.mode === 'keyed' && creationKey !== undefined
+        ? creationBuildSlug(body.repo, body.slug, creationKey)
+        : `${projectBuildSlugBase(body.slug)}-${(++this.allocations).toString(16).padStart(24, '0')}`
+    const prefix = body.branch?.startsWith('ab-node/') ? 'ab-node' : 'ab'
+    if (this.commitAs) await this.commitAs(input, slug)
+    const record = this.commitAs
+      ? await this.getBuild(slug)
+      : await super.createBuild({ ...body, slug, branch: `${prefix}/${slug}` })
+    if (this.loseResponse || this.commitAs) {
+      this.loseResponse = false
+      throw new Error(`response lost after committing ${record?.slug}`)
+    }
+    return record!
+  }
+}
+
+describe('Dispatcher recovery of allocated canonical build creation', () => {
+  async function readPreparation(store: BuildStore) {
+    const { readRepositoryFacts } = await import('../store/reduced-reads')
+    return (await readRepositoryFacts(store, REPO)).value.preparation
+  }
+  async function resolutions(store: BuildStore) {
+    return (await store.getRepoEvents(REPO))
+      .filter((event) => event.type === 'ticket-preparation.resolved')
+      .map((event) => {
+        const { outcome, reason } = event.payload as { outcome: string; reason?: string }
+        return reason === undefined ? { outcome } : { outcome, reason }
+      })
+  }
+  const derived = (attempt: string, slug = 'add-rate-limiting') =>
+    creationBuildSlug(REPO, slug, attempt)
+
+  for (const kind of ['work', 'node'] as const) {
+    test(`a keyed ${kind} creation whose response is lost settles ownership of its canonical build`, async () => {
+      const store = new AllocatingStore('keyed')
+      store.loseResponse = true
+      const h = harness({
+        store,
+        tickets: [readyTicket('T-1', kind === 'node' ? { kind: 'node' } : {})],
+      })
+      await expect(h.dispatcher.tick()).rejects.toThrow('response lost')
+      const canonical = derived('prep_1')
+      expect(canonical).not.toBe('add-rate-limiting')
+      expect(await store.getBuild('add-rate-limiting')).toBeNull()
+      const selected = (await store.getRepoEvents(REPO)).find(
+        (event) => event.type === 'ticket-preparation.creation-selected',
+      )
+      expect(selected?.payload).toMatchObject({ slug: 'add-rate-limiting', creationKey: 'prep_1' })
+      expect(h.tickets.transitions).toEqual([])
+      expect(await resolutions(store)).toEqual([{ outcome: 'owned' }])
+      expect(await readPreparation(store)).toEqual({})
+      for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+      // The janitor completes the owned build's missing dispatch boundaries.
+      const types = (await store.getEvents(canonical)).map((event) => event.type)
+      expect(types).toContain('spec.imported')
+      expect(types).toContain(kind === 'node' ? 'node.opened' : 'workspace.provisioned')
+      expect(new Set(h.launches)).toEqual(new Set(kind === 'node' ? [] : [canonical]))
+      const builds = await store.listBuilds()
+      expect(builds.map((record) => [record.slug, record.branch])).toEqual([
+        [canonical, `${kind === 'node' ? 'ab-node' : 'ab'}/${canonical}`],
+      ])
+      expect(h.tickets.claims).toEqual(['T-1'])
+      expect(h.tickets.transitions).toEqual([])
+    })
+  }
+
+  test('repeated recovery converges on the same canonical build', async () => {
+    const store = new AllocatingStore('keyed')
+    store.loseResponse = true
+    const h = harness({ store, tickets: [readyTicket('T-1')] })
+    const append = store.appendRepo.bind(store)
+    let failures = 2
+    store.appendRepo = async (...args) => {
+      if (args[1].type === 'ticket-preparation.resolved' && failures-- > 0)
+        throw new Error('settlement unavailable')
+      return append(...args)
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('settlement unavailable')
+    h.clock.advance(30_000)
+    await expect(h.dispatcher.tick({ acceptNewWork: false })).resolves.toMatchObject({
+      janitorFailed: 1,
+    })
+    h.clock.advance(30_000)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(await readPreparation(store)).toEqual({})
+    await h.dispatcher.tick()
+    expect((await store.listBuilds()).map((record) => record.slug)).toEqual([derived('prep_1')])
+    expect(h.tickets.transitions).toEqual([])
+  })
+
+  test('confirmed keyed absence hands back and a retry creates exactly one build', async () => {
+    const store = new AllocatingStore('keyed')
+    store.failBeforeCommit = true
+    const h = harness({ store, tickets: [readyTicket('T-1')] })
+    await expect(h.dispatcher.tick()).rejects.toThrow('rejected before commit')
+    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Ready' }])
+    expect(await resolutions(store)).toEqual([{ outcome: 'handed-back' }])
+    await h.dispatcher.tick()
+    await h.dispatcher.tick()
+    expect((await store.listBuilds()).map((record) => record.slug)).toEqual([derived('prep_2')])
+  })
+
+  test('an unavailable canonical readback retries without a ticket transition', async () => {
+    const store = new AllocatingStore('keyed')
+    store.loseResponse = true
+    const h = harness({ store, tickets: [readyTicket('T-1')] })
+    const get = store.getBuild.bind(store)
+    let offline = true
+    store.getBuild = async (slug) => {
+      if (offline && slug === derived('prep_1')) throw new Error('canonical readback offline')
+      return get(slug)
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('canonical readback offline')
+    expect(h.tickets.transitions).toEqual([])
+    expect(Object.values(await readPreparation(store))[0]?.recoveryError).toContain(
+      'canonical readback offline',
+    )
+    offline = false
+    h.clock.advance(30_000)
+    await h.dispatcher.tick()
+    expect(await resolutions(store)).toEqual([{ outcome: 'owned' }])
+    expect(await store.listBuilds()).toHaveLength(1)
+    expect(h.tickets.transitions).toEqual([])
+  })
+
+  test('a foreign build at the canonical slug is never adopted', async () => {
+    const store = new AllocatingStore('keyed')
+    const other = { source: 'fake', id: 'OTHER', title: 'other' }
+    store.commitAs = async (input, slug) => {
+      const created = input.created!
+      await MemoryBuildStore.prototype.createBuild.call(store, {
+        slug,
+        repo: input.repo,
+        ticket: other,
+        branch: `ab/${slug}`,
+        created: { ...created, payload: { ...created.payload, ticket: other } },
+      })
+    }
+    const h = harness({ store, tickets: [readyTicket('T-1')] })
+    await expect(h.dispatcher.tick()).rejects.toThrow('response lost')
+    const [resolution] = await resolutions(store)
+    expect(resolution?.outcome).toBe('abandoned')
+    expect(resolution?.reason).toContain(`Conflicting build ownership at ${derived('prep_1')}`)
+    expect(h.tickets.transitions).toEqual([])
+    expect((await h.tickets.get('T-1'))?.state).toBe('Doing')
+  })
+
+  test('builds at both the proposed and canonical slugs abandon as ambiguous', async () => {
+    const store = new AllocatingStore('keyed')
+    store.commitAs = async (input, slug) => {
+      const { creationKey: _, ...body } = input
+      await MemoryBuildStore.prototype.createBuild.call(store, body)
+      await MemoryBuildStore.prototype.createBuild.call(store, {
+        ...body,
+        slug,
+        branch: `ab/${slug}`,
+      })
+    }
+    const h = harness({ store, tickets: [readyTicket('T-1')] })
+    await expect(h.dispatcher.tick()).rejects.toThrow('response lost')
+    const [resolution] = await resolutions(store)
+    expect(resolution?.outcome).toBe('abandoned')
+    expect(resolution?.reason).toContain(
+      `Ambiguous creation identity: builds at add-rate-limiting and ${derived('prep_1')}`,
+    )
+    expect(h.tickets.transitions).toEqual([])
+  })
+
+  // Without a creation key an allocating store's absence is not evidence:
+  // a create that committed under an unrecorded slug and one rejected before
+  // committing look the same, so both abandon rather than hand back.
+  for (const committed of [true, false]) {
+    test(`an unkeyed allocating creation ${committed ? 'that committed' : 'rejected before commit'} ends with an unknown outcome`, async () => {
+      const store = new AllocatingStore('allocated')
+      if (committed) store.loseResponse = true
+      else store.failBeforeCommit = true
+      const h = harness({ store, tickets: [readyTicket('T-1')] })
+      const first = await h.dispatcher.tick().catch((error: unknown) => error)
+      expect(String(first)).toContain(committed ? 'response lost' : 'rejected before commit')
+      const selected = (await store.getRepoEvents(REPO)).find(
+        (event) => event.type === 'ticket-preparation.creation-selected',
+      )
+      expect(selected?.payload).not.toHaveProperty('creationKey')
+      const [resolution] = await resolutions(store)
+      expect(resolution?.outcome).toBe('abandoned')
+      expect(resolution?.reason).toContain('Creation outcome unknown')
+      expect(resolution?.reason).toContain('ticket T-1')
+      expect(h.tickets.transitions).toEqual([])
+      for (let i = 0; i < 3; i++) {
+        h.clock.advance(30_000)
+        const report = await h.dispatcher.tick()
+        expect(report.janitorDiagnostics).toEqual([])
+      }
+      expect(await store.listBuilds()).toHaveLength(committed ? 1 : 0)
+      expect(h.tickets.claims).toEqual(['T-1'])
+      expect(h.tickets.transitions).toEqual([])
+    })
+  }
+
+  test('a successful keyed creation makes no recovery reads', async () => {
+    const store = new AllocatingStore('keyed')
+    const h = harness({ store, tickets: [readyTicket('T-1')] })
+    const create = store.createBuild.bind(store)
+    const get = store.getBuild.bind(store)
+    let created = false
+    let readsAfterCreate = 0
+    store.createBuild = async (input) => {
+      const record = await create(input)
+      created = true
+      return record
+    }
+    store.getBuild = async (slug) => {
+      if (created && slug !== derived('prep_1')) readsAfterCreate++
+      return get(slug)
+    }
+    await h.dispatcher.tick()
+    expect(readsAfterCreate).toBe(0)
+    expect(await resolutions(store)).toEqual([{ outcome: 'owned' }])
+    expect(h.launches).toEqual([derived('prep_1')])
+  })
+})
+
 test('preparation recovery runs at full capacity, retains unrelated state, and bounds its batch', async () => {
   const h = harness({
     tickets: Array.from({ length: 10 }, (_, i) => readyTicket(`T-${i}`, { state: 'Doing' })),
@@ -13646,11 +13898,16 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
   for (const length of [100, 100_000]) {
     const clock = manualClock()
     const store = new RowCountingStore({ clock })
-    await seedPreparationHistory(store, REPO, length)
+    // A keyed attempt: recovery point-reads its proposed and canonical slugs.
+    await seedPreparationHistory(store, REPO, length, {
+      slug: 'pending-build',
+      creationKey: 'pending',
+    })
     const counter = memoryRepositoryReadCounter(store, REPO)
     const facts = await readRepositoryFacts(store, REPO)
     expect(Object.keys(facts.value.preparation)).toEqual(['pending'])
-    expect(counter.rows).toBe(length + 2)
+    expect(facts.value.preparation.pending?.creationKey).toBe('pending')
+    expect(counter.rows).toBe(length + 3)
     counter.reset()
     const bytes = JSON.stringify(facts.value.preparation).length
     if (previousBytes !== undefined) expect(bytes).toBe(previousBytes)
@@ -13677,6 +13934,21 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
     expect(calls).toEqual(
       Array(2).fill('https://budget.test/repos/%2Frepos%2Forigin/reducer-values'),
     )
+    const buildReads: string[] = []
+    for (const method of [
+      'getBuild',
+      'listBuilds',
+      'listBuildsForRepo',
+      'getRepoBuildDigests',
+    ] as const) {
+      const read = (store[method] as (...args: unknown[]) => Promise<unknown>).bind(store)
+      Object.assign(store, {
+        [method]: async (...args: unknown[]) => {
+          buildReads.push(method === 'getBuild' ? `getBuild:${String(args[0])}` : method)
+          return read(...args)
+        },
+      })
+    }
     const h = harness({ store, clock })
     const get = h.tickets.get.bind(h.tickets)
     let ticketReads = 0
@@ -13687,6 +13959,9 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drainRows()).toBe(0)
     expect(counter.rows).toBe(0)
+    const quietBuildReads = buildReads.splice(0)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(buildReads.splice(0)).toEqual(quietBuildReads.slice(quietBuildReads.length / 2))
     // The parked attempt comes due and is abandoned: one diagnostic, at the
     // same read cost for both history lengths, and never repeated.
     h.tickets.add(readyTicket('pending', { state: 'Doing' }))
@@ -13696,6 +13971,13 @@ test('100 and 100,000 preparation facts leave a bounded reduced answer and zero-
     }
     clock.set('2099-01-01T00:00:01.000Z')
     const abandoning = await h.dispatcher.tick({ acceptNewWork: false })
+    // Exactly the two candidate point reads beyond a quiet tick's reads, at
+    // both history lengths; no listing or digest enumeration.
+    expect(buildReads.splice(0)).toEqual([
+      ...quietBuildReads.slice(quietBuildReads.length / 2),
+      'getBuild:pending-build',
+      `getBuild:${creationBuildSlug(REPO, 'pending-build', 'pending')}`,
+    ])
     expect(abandoning.janitorDiagnostics.filter((line) => line.includes('ticket pending'))).toEqual(
       [expect.stringContaining('preparation pending abandoned; claim unconfirmed')],
     )

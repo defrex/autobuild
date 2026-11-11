@@ -214,6 +214,7 @@ import {
 } from '../kernel/node-issue-links'
 import type { Exec, ExecResult } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
+import { creationBuildSlug } from '../kernel/build-creation'
 import { preparePinnedAssets } from '../store/ticket-assets'
 import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
@@ -5478,29 +5479,58 @@ export class Dispatcher {
     this.tickAbandonments.push(abandonedPreparationDiagnostic(attempt, recorded))
   }
 
+  /** Whether the build at `slug` was created for this attempt's ticket. */
+  private async preparationOwns(attempt: TicketPreparation, record: BuildRecord): Promise<boolean> {
+    const created = (await this.store.buildFacts(record.slug)).created
+    return (
+      record.repo === this.deps.repo &&
+      record.ticket?.source === attempt.ticket.source &&
+      record.ticket?.id === attempt.ticket.id &&
+      created?.payload.repo === this.deps.repo &&
+      created.payload.ticket?.source === attempt.ticket.source &&
+      created.payload.ticket?.id === attempt.ticket.id
+    )
+  }
+
   private async recoverTicketPreparation(attempt: TicketPreparation): Promise<void> {
     try {
       // A rejected create can have committed. Unavailable or conflicting readback
-      // is never absence and must not authorize a ticket transition.
+      // is never absence and must not authorize a ticket transition. A keyed
+      // attempt's build is at its proposed slug (exact-slug store) or the slug
+      // its own key derives (allocating store): at most two point reads, and
+      // never another attempt's build.
       if (attempt.slug) {
-        const record = await this.store.getBuild(attempt.slug)
-        if (record) {
-          const created = (await this.store.buildFacts(attempt.slug)).created
-          if (
-            record.repo !== this.deps.repo ||
-            record.ticket?.source !== attempt.ticket.source ||
-            record.ticket?.id !== attempt.ticket.id ||
-            created?.payload.repo !== this.deps.repo ||
-            created.payload.ticket?.source !== attempt.ticket.source ||
-            created.payload.ticket?.id !== attempt.ticket.id
+        const candidates = attempt.creationKey
+          ? [attempt.slug, creationBuildSlug(this.deps.repo, attempt.slug, attempt.creationKey)]
+          : [attempt.slug]
+        const found: BuildRecord[] = []
+        for (const slug of candidates) {
+          const record = await this.store.getBuild(slug)
+          if (record) found.push(record)
+        }
+        if (found.length > 1)
+          return await this.abandonPreparation(
+            attempt,
+            `Ambiguous creation identity: builds at ${found.map((record) => record.slug).join(' and ')} both answer this attempt; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
           )
+        const [record] = found
+        if (record) {
+          if (!(await this.preparationOwns(attempt, record)))
             return await this.abandonPreparation(
               attempt,
-              `Conflicting build ownership at ${attempt.slug}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
+              `Conflicting build ownership at ${record.slug}; ticket unchanged. Inspect ownership before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
             )
           await this.preparationResolved(attempt, 'owned')
           return
         }
+        // Absence is evidence only where the creation slug is known: an
+        // allocating store may have committed an unkeyed create under a slug
+        // no point read can find, and enumerating builds is never a fallback.
+        if (!attempt.creationKey && (await this.store.buildCreationIdentity?.()) !== undefined)
+          return await this.abandonPreparation(
+            attempt,
+            `Creation outcome unknown: the build store allocates canonical slugs and this attempt recorded no creation key, so a build created under an unrecorded slug cannot be ruled out; ticket unchanged. Inspect the repository's builds for ticket ${attempt.ticket.id} before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
+          )
       }
       const ref = resolveTicketRef(
         this.store.repositoryFacts().ticketMigrations,
@@ -5969,6 +5999,10 @@ export class Dispatcher {
         const slug = await this.uniqueSlug(baseSlug, prefix)
         const branch = `${prefix}/${slug}`
         const repoOrigin = await this.resolveRepoOriginOnce()
+        // Recorded only on the store's attestation, so recovery never treats
+        // an unkeyed creation's absence at the derived slug as evidence.
+        const creationKey =
+          (await store.buildCreationIdentity?.()) === 'keyed' ? attempt.attempt : undefined
         createdSeed = {
           ...(ticket.kind === 'node' ? { kind: ticket.kind } : {}),
           ...(target !== undefined ? { target: target.target, baseBranch: target.branch } : {}),
@@ -5990,10 +6024,16 @@ export class Dispatcher {
         // record exist together or not at all.
         stage = 'creation-identity'
         attempt.slug = slug
+        if (creationKey !== undefined) attempt.creationKey = creationKey
         await store.appendRepo(this.deps.repo, {
           actor: DISPATCHER,
           type: 'ticket-preparation.creation-selected',
-          payload: { attempt: attempt.attempt, ticket: attempt.ticket, slug },
+          payload: {
+            attempt: attempt.attempt,
+            ticket: attempt.ticket,
+            slug,
+            ...(creationKey !== undefined ? { creationKey } : {}),
+          },
         })
         stage = 'create-build'
         record = await store.createBuild({
@@ -6002,6 +6042,7 @@ export class Dispatcher {
           ticket: ticket.ref,
           branch,
           ...(repoOrigin !== undefined ? { repoOrigin } : {}),
+          ...(creationKey !== undefined ? { creationKey } : {}),
           created: {
             actor: DISPATCHER,
             type: 'build.created',
