@@ -309,6 +309,8 @@ textarea {
   overflow-wrap: anywhere;
 }
 .menu-glyph {
+  /* The packaged sans lacks U+25BE; JetBrains Mono carries it, as in the project picker. */
+  font-family: var(--mono);
   color: var(--slack);
 }
 .menu-list {
