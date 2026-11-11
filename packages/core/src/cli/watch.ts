@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { OPERATOR_HEARTBEAT_MS, operatorIdentitySchema } from '../store/operator-presence'
 import { consentReady, consentIdentity, type ConsentReady } from './attention'
 import { formatReadinessFailure } from '../ports/forge/readiness'
+import { abandonedPreparationDiagnostic } from '../kernel/ticket-preparation'
 import { readDispatchUpgrade, readBuildDigests } from '../store/reduced-reads'
 import { readBuildStreamSeed, readRepositoryAttention } from '../store/reduced-reads'
 import { buildStreamSeedReducer, type BuildStreamSeed } from '../kernel/read-facts'
@@ -522,11 +523,19 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `dispatcher config rejected: ${singleLine(event.payload.error)}`
     case 'dispatcher.harvest-runner-failed':
       return `harvest runner failed: ${singleLine(event.payload.error)}`
-    default: {
-      const compact = singleLine(JSON.stringify(event.payload))
-      return compact.length > SUMMARY_MAX ? `${compact.slice(0, SUMMARY_MAX - 1)}…` : compact
-    }
+    case 'ticket-preparation.resolved':
+      if (event.payload.outcome === 'abandoned') {
+        return singleLine(abandonedPreparationDiagnostic(event.payload, event.payload.reason))
+      }
+      return summarizePayload(event.payload)
+    default:
+      return summarizePayload(event.payload)
   }
+}
+
+function summarizePayload(payload: unknown): string {
+  const compact = singleLine(JSON.stringify(payload))
+  return compact.length > SUMMARY_MAX ? `${compact.slice(0, SUMMARY_MAX - 1)}…` : compact
 }
 
 /** The human form: one line, timestamp first, no ANSI anywhere. */

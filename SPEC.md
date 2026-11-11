@@ -484,6 +484,10 @@ files, including development configs, remain exactly as installed.
   ticket and attempt, whether the claim was confirmed or its provider outcome is
   unknown, and the recorded reason. If that tick fails for any reason, its
   failure error carries the diagnostics instead. Later ticks do not repeat it.
+  The `abandoned` resolution event records whether the claim was confirmed, and
+  default `ab watch` repository attention reports the same line once as it
+  lands, whether or not its tick failed; a fresh watch does not replay
+  historical abandonments.
   Recovery failures are
   reported without preventing janitor, lease sweep, or other dispatch recovery.
   This is not general process

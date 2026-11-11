@@ -13632,6 +13632,13 @@ for (const type of [
     expect(await h.store.listBuilds()).toHaveLength(1)
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(h.tickets.transitions).toHaveLength(owned ? 0 : 1)
+    // Only an abandonment records claim certainty.
+    for (const event of await h.store.getRepoEvents(REPO)) {
+      if (event.type === 'ticket-preparation.resolved') {
+        expect(event.payload.outcome).not.toBe('abandoned')
+        expect(event.payload).not.toHaveProperty('claimed')
+      }
+    }
   })
 }
 
@@ -13804,7 +13811,7 @@ test('an intended claim without confirmation cannot release a ticket in Doing', 
   const resolution = (await h.store.getRepoEvents(REPO)).find(
     (e) => e.type === 'ticket-preparation.resolved',
   )
-  expect(resolution?.payload).toMatchObject({ outcome: 'abandoned' })
+  expect(resolution?.payload).toMatchObject({ outcome: 'abandoned', claimed: false })
   expect(h.tickets.transitions).toEqual([])
   expect(h.tickets.claims).toEqual([])
 })
@@ -13880,13 +13887,21 @@ describe('abandoned ticket preparation diagnostics', () => {
     return { h, reads: () => ticketReads }
   }
 
-  async function resolution(h: Harness) {
+  async function resolution(h: Harness, cause: (typeof causes)[number]) {
     const events = (await h.store.getRepoEvents(REPO)).filter(
       (e) => e.type === 'ticket-preparation.resolved',
     )
     expect(events).toHaveLength(1)
-    const payload = events[0]?.payload as { outcome: string; reason: string; attempt: string }
+    const payload = events[0]?.payload as {
+      outcome: string
+      reason: string
+      attempt: string
+      claimed?: boolean
+    }
     expect(payload.outcome).toBe('abandoned')
+    // The durable claim certainty matches the diagnostic's claim clause.
+    const confirmed = expected[cause].includes('claim confirmed')
+    expect(payload.claimed).toBe(confirmed)
     return payload
   }
 
@@ -13906,7 +13921,7 @@ describe('abandoned ticket preparation diagnostics', () => {
             ? 'creation acknowledgement lost'
             : 'author unavailable',
       )
-      const { reason, attempt } = await resolution(h)
+      const { reason, attempt } = await resolution(h, cause)
       expect(message).toContain(`ticket T-1 (fake): preparation ${attempt} abandoned`)
       expect(message).toContain(reason)
       for (const part of expected[cause]) expect(message).toContain(part)
@@ -13926,7 +13941,7 @@ describe('abandoned ticket preparation diagnostics', () => {
       expect(parked.janitorDiagnostics.join('\n')).not.toContain('abandoned')
       h.clock.advance(30_000)
       const report = await h.dispatcher.tick({ acceptNewWork: false })
-      const { reason, attempt } = await resolution(h)
+      const { reason, attempt } = await resolution(h, cause)
       const lines = report.janitorDiagnostics.filter((line) => line.includes(attempt))
       expect(lines).toHaveLength(1)
       expect(lines[0]).toContain(reason)
