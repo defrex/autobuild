@@ -465,6 +465,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           condition === 'consent' ||
           (condition === 'attention' &&
             event.type !== 'phase.deferral-escalated' &&
+            event.type !== 'build.janitor-escalated' &&
             event.type !== 'escalation.raised')
             ? consentReady(seed, now())
             : null
@@ -472,7 +473,8 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           consent ??
           (condition === 'attention' &&
           event.type !== 'escalation.raised' &&
-          event.type !== 'phase.deferral-escalated'
+          event.type !== 'phase.deferral-escalated' &&
+          event.type !== 'build.janitor-escalated'
             ? mergeDecisionFromFacts(state, seed.deferral, now())
             : null)
         if (consent) deliveredAttention.add(consentIdentity(event.build, consent.position))
@@ -512,6 +514,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         if (
           event.type === 'escalation.raised' ||
           event.type === 'phase.deferral-escalated' ||
+          event.type === 'build.janitor-escalated' ||
           event.type === 'integration.landed' ||
           event.type === 'integration.verification-failed' ||
           event.type === 'node.item-conflicted' ||
