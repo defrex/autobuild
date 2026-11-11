@@ -25942,12 +25942,8 @@
     "1731": {
       "kind": "object",
       "props": {
-        "retained": {
+        "identities": {
           "type": "1732",
-          "optional": false
-        },
-        "incompleteIdentities": {
-          "type": "6",
           "optional": false
         },
         "holder": {

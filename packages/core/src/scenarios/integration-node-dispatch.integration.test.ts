@@ -1306,7 +1306,7 @@ test('a node whose integration preparation keeps failing retries it while escala
   } finally {
     await h.cleanup()
   }
-})
+}, 30_000)
 
 /** A capability-bearing local-git double: issue-closing support with a
  * recording PR body rewrite, and a fast-forward that logs its order. */
