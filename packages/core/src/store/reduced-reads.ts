@@ -64,6 +64,16 @@ async function readValue<T>(
   return { cursor: result.cursor, value: result.value as T }
 }
 
+/** One served constant-size value naming the current hosted harvest
+ * authority; no `getRepo` call, no event download. */
+export async function readHostedHarvestAuthority(store: Reader, repo: string) {
+  return readValue<
+    ReturnType<
+      typeof import('../processes/harvest-execution-state').hostedHarvestAuthorityReducer.finish
+    >
+  >(store, { kind: 'repo', repo }, 'hostedHarvestAuthority')
+}
+
 export type RepositoryReadFacts = ReturnType<typeof repositoryReadFactsReducer.finish>
 export async function readRepositoryFacts(
   store: Reader & Pick<BuildStore, 'getRepo'>,

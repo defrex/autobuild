@@ -529,7 +529,7 @@ client version window are unchanged.
 | Scope | Reducers with no arguments |
 | --- | --- |
 | Build | `executionNoProgress`, `summaryRequests`, `build`, `buildDigest`, `currentPrAttachments`, `pendingPrAttachmentReclaims`, `openExecution`, `lastExecutionOutcome`, `infrastructureFailureReset`, `openWorkspace`, `setupStreak`, `openBuildWorkspace`, `currentDeferralObservation`, `dashboardFacts`, `pinnedAssets`, `buildDelegation` |
-| Repository | `dispatchPlacement`, `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
+| Repository | `dispatchPlacement`, `ticketPreparation`, `harvest`, `dispatchSettings`, `sandboxStates`, `openHarvestExecutions`, `hostedHarvestAuthority`, `autoMergeDefault`, `effectiveConfig`, `harvestDelegation` |
 
 | Reducer | Scope | Required arguments |
 | --- | --- | --- |
@@ -542,7 +542,12 @@ another's accumulator. `effectiveConfig` returns an object with optional `run`
 and `reference: {kind, rev}`. Absence is distinct from an unreadable referenced
 artifact. Delegation values contain semantic lifecycle facts indexed by prefixed
 identifiers, not authorization decisions; request time and grace expiry are
-always evaluated against those facts on the service.
+always evaluated against those facts on the service. `hostedHarvestAuthority`
+returns `{current?: {execution, run, leaseHolder, released}}`: the latest
+`harvest.execution.authorized` and whether that execution has since ended or
+been released. Its size does not grow with harvest history; a hosted harvest
+guest re-reads it at durable boundaries to decide whether it still holds
+authority, and a server that does not serve it stops the guest.
 
 Each remaining registered reducer is explicitly excluded:
 
