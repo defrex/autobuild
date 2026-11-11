@@ -1383,7 +1383,9 @@ test('hosted frontend read budget stays flat across thousands of journal events'
       if (init?.method === 'PUT' && typeof init.body === 'string') {
         const body = JSON.parse(init.body)
         if (body.state?.acc?.holder === 'old-0') {
-          expect(body.state.acc.retained).toHaveLength(2)
+          // Identities only: the legacy dashboard-event cache never crosses the wire.
+          expect(body.state.acc.identities).toHaveLength(2)
+          expect(body.state.acc.retained).toBeUndefined()
           expect(body.state.catalogIdentity).toBeString()
           normalizedBodies.push({
             bytes: Buffer.byteLength(init.body),
@@ -1395,10 +1397,17 @@ test('hosted frontend read budget stays flat across thousands of journal events'
       return response
     }) as typeof fetch
     await dispatchReadBudget(new RemoteBuildStore({ url: server.url, fetchFn }), backing)
+    // One version-5 replacement per legacy history length, each the same size;
+    // the second lands on the first's equal cursor and is refused.
     expect(normalizedBodies).toHaveLength(2)
-    expect(normalizedBodies[0]).toEqual(normalizedBodies[1])
-    expect(normalizedBodies[0]?.status).toBe(200)
-    expect(normalizedBodies[0]?.written).toBe(false)
+    expect(normalizedBodies.map((body) => body.bytes)).toEqual([
+      normalizedBodies[0]!.bytes,
+      normalizedBodies[0]!.bytes,
+    ])
+    expect(normalizedBodies.map((body) => [body.status, body.written])).toEqual([
+      [200, true],
+      [200, false],
+    ])
   } finally {
     server.stop()
   }
