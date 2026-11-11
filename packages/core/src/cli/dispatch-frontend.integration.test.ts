@@ -2492,7 +2492,7 @@ test('once mode warms before launch and folds only the final delta', async () =>
 test('the canonical seed renders the same first frame as a full-journal checkpoint (AUT-534 equivalence)', async () => {
   const { dispatchFrontendReducer } = await import('./dispatch-repository-feed')
   const { persistReducerSnapshot } = await import('../store/snapshots')
-  const run = async (opts: { checkpoint: boolean }): Promise<string> => {
+  const run = async (opts: { checkpoint: false | 'current' | 'legacy' }): Promise<string> => {
     const repo = '/equivalence-repo'
     const backing = new MemoryBuildStore({ clock: steppingClock() })
     await seedAgedJournal(backing, repo)
@@ -2505,11 +2505,35 @@ test('the canonical seed renders the same first frame as a full-journal checkpoi
     })
     if (opts.checkpoint) {
       const full = await backing.getRepoEvents(repo)
-      await persistReducerSnapshot(backing, { kind: 'repo', repo }, 'dispatchFrontend', {
-        version: dispatchFrontendReducer.version,
-        cursor: full.at(-1)!.seq,
-        state: { retained: dispatchFrontendReducer.reduce(full), incompleteIdentities: true },
-      })
+      const identities = dispatchFrontendReducer.reduce(full)
+      // A pre-upgrade version-4 cache also retained every dashboard-class fact.
+      const dashboard = full.filter(
+        (e) =>
+          e.type.startsWith('harvest.') ||
+          e.type === 'tickets.migration-recorded' ||
+          e.type === 'dispatcher.intake-set' ||
+          e.type === 'dispatcher.pause-set' ||
+          e.type === 'dispatcher.auto-merge-default-set',
+      )
+      await persistReducerSnapshot(
+        backing,
+        { kind: 'repo', repo },
+        'dispatchFrontend',
+        opts.checkpoint === 'current'
+          ? {
+              version: dispatchFrontendReducer.version,
+              cursor: full.at(-1)!.seq,
+              state: { identities },
+            }
+          : {
+              version: 4,
+              cursor: full.at(-1)!.seq,
+              state: {
+                retained: [...dashboard, ...identities].sort((a, b) => a.seq - b.seq),
+                incompleteIdentities: true,
+              },
+            },
+      )
     }
     const probe = frontendProbe(backing)
     const frames = await runBoundedSeed({ repo, backing, probe })
@@ -2517,11 +2541,12 @@ test('the canonical seed renders the same first frame as a full-journal checkpoi
     return frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!
   }
   // Same journal, same child facts, same clock: the only difference is
-  // whether startup restores a checkpoint folded from the whole journal or
-  // seeds from the canonical repository value with no checkpoint at all.
+  // whether startup restores a checkpoint folded from the whole journal (current
+  // or legacy version 4) or seeds from the canonical repository value with no
+  // checkpoint at all.
   const canonical = await run({ checkpoint: false })
-  const full = await run({ checkpoint: true })
-  expect(canonical).toEqual(full)
+  expect(await run({ checkpoint: 'current' })).toEqual(canonical)
+  expect(await run({ checkpoint: 'legacy' })).toEqual(canonical)
 })
 
 test('frontend standby refreshes ownership independently of yield notices and reuses seed/delta identities', async () => {
@@ -3512,7 +3537,7 @@ test('interactive frontend reads rollback authority beyond its bounded repositor
   await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
     version: dispatchFrontendReducer.version,
     cursor: await store.getRepoHighWater(repo),
-    state: { retained: [], incompleteIdentities: true },
+    state: { identities: [] },
   })
   const snapshots: DashboardModel[] = []
   const startup = deferred<void>()
