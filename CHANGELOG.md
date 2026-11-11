@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v1.6.0 — 2026-11-11
+
+This release focuses on keeping dispatch resilient and capacity available: finished builds waiting for merge no longer hold capacity, stalled dispatchers keep running when their lease remains unclaimed, and prolonged janitor failures now escalate while recovery continues. Local worktrees can be restored from remote archive refs, hosted harvest authority is preserved across dispatch invocations, and checkout-mode dispatch now starts with the GitHub ticket source. Operators also get clearer signals, with abandoned ticket preparations surfaced in default watch attention and the durable effects of merge readiness refusals clarified, alongside more reliable node integration scenarios under load.
+
+- [#927](https://github.com/defrex/autobuild/pull/927) — Keep node integration scenarios reliable under load
+- [#926](https://github.com/defrex/autobuild/pull/926) — Start checkout-mode dispatch with the GitHub ticket source
+- [#925](https://github.com/defrex/autobuild/pull/925) — Preserve hosted harvest authority across dispatch invocations
+- [#924](https://github.com/defrex/autobuild/pull/924) — Surface abandoned ticket preparations in default watch attention
+- [#922](https://github.com/defrex/autobuild/pull/922) — Clarify durable effects of merge readiness refusals
+- [#921](https://github.com/defrex/autobuild/pull/921) — Keep stalled dispatchers running when their lease remains unclaimed
+- [#920](https://github.com/defrex/autobuild/pull/920) — Escalate prolonged janitor failures while continuing recovery
+- [#919](https://github.com/defrex/autobuild/pull/919) — Free capacity while finished builds wait for merge
+- [#917](https://github.com/defrex/autobuild/pull/917) — Restore local worktrees from remote archive refs
+
 ## v1.5.0 — 2026-11-09
 
 This release adds a GitHub Issues ticket source, with support for migrating tickets, importing selected states, and storing node kinds and targets as labels and sub-issues. Tickets now carry a priority, mapped from Linear's Urgent level, so urgent ready tickets are dispatched first and appear first in the web Queue tab. New backlog and rejected lifecycle roles map to each source's native states, and linked forge issues now carry their intent into pull requests and landed commits. The release also adds triage, queue and active counts to both dashboards, ships Git with hosted dispatcher deployments, bounds several recurring store reads, and makes many tests more reliable and faster.
