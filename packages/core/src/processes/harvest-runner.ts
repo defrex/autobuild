@@ -5,7 +5,7 @@ import {
   resumeAgent,
 } from '../ports/runner/native-session'
 import type { NativeSessionHandle, AgentStartOpts } from '../ports/types'
-import { readRepositoryFacts } from '../store/reduced-reads'
+import { readHostedHarvestAuthority, readRepositoryFacts } from '../store/reduced-reads'
 import { issueTicketGrant } from '../ports/tickets/grants'
 import { delegateCredential } from '../store/remote/credentials'
 /**
@@ -69,6 +69,12 @@ import {
   scanUnclaimedObservations,
 } from './harvest'
 import type { BuildStore, Clock } from '../store/types'
+import {
+  classifyAuthorityReadError,
+  decideHostedHarvestAuthority,
+  type HarvestAuthorityFence,
+  type HostedHarvestAuthority,
+} from './harvest-execution-state'
 
 /** Reserved provenance marker for deterministic harvest-created proposals. */
 export const HARVEST_PROPOSAL_LABEL = 'autobuild:proposal'
@@ -101,9 +107,11 @@ export interface HarvestRunnerDeps {
   clock: Clock
   instance: string
   /** Repository-lease holder adopted from the owning DispatchLoop: when
-   * present, the runner skips its own claim, heartbeats with that holder, and
-   * never releases at the end — the owning loop holds the lease for its
-   * lifetime. Absent keeps the standalone self-claiming behavior. */
+   * present, the runner skips its own claim and never releases at the end —
+   * the owning loop holds the lease for its lifetime. Without
+   * `holdsAuthority` it heartbeats with that holder; a prepared hosted guest
+   * instead uses it only to match its durable authorization. Absent keeps the
+   * standalone self-claiming behavior. */
   leaseHolder?: string
   /** The owning DispatchLoop's repository authority: synchronous, no I/O.
    * When present, the loop's lease resolver owns reclaiming the adopted
@@ -114,6 +122,11 @@ export interface HarvestRunnerDeps {
    * executes in (hosted harvest). Stamped into the run's harvest.started
    * payload so the journal records where it ran; absent on local runs. */
   environment?: { provider: string; environmentId: string; sessionId?: string }
+  /** The run a dispatcher prepared and authorized for this execution. Without
+   * `holdsAuthority` this is a hosted guest: its authority is the durable
+   * `harvest.execution.authorized` for `instance`, never the launching
+   * invocation's repository lease, which it neither claims, renews nor
+   * releases. */
   preparedRun?: { run: string }
   sessionEnv?: Record<string, string>
   shutdownSignal?: AbortSignal
@@ -172,13 +185,44 @@ class HarvestParkedSignal extends Error {
   }
 }
 
-/** A heartbeat proved this process no longer owns the repository lease and a
- * replacement claimed it before we could re-acquire. This is not workflow
- * failure: the replacement resumes the same journal at the next boundary. */
+/** This process lost its authority: a heartbeat proved it no longer owns the
+ * repository lease and a replacement claimed it before we could re-acquire,
+ * or — for a prepared hosted guest — its durable execution authority fenced
+ * it (`reason`). This is not workflow failure: the replacement resumes the
+ * same journal at the next boundary. */
 class HarvestLeaseLostError extends Error {
-  constructor(repo: string, instance: string) {
-    super(`harvest lease for ${repo} is held by another runner ` + `(former holder ${instance})`)
+  constructor(
+    repo: string,
+    instance: string,
+    readonly reason?: HarvestAuthorityFence,
+  ) {
+    super(
+      reason === undefined
+        ? `harvest lease for ${repo} is held by another runner (former holder ${instance})`
+        : `harvest execution ${instance} for ${repo} lost its execution authority: ${reason}`,
+    )
     this.name = 'HarvestLeaseLostError'
+  }
+}
+
+/** The session bracket this runner opened and has not yet ended or
+ * suspended, with what a fenced exit needs to close it with evidence. */
+interface OpenSessionBracket {
+  spec: {
+    run: string
+    role: 'harvest' | 'harvest-review'
+    step: 'synthesize' | 'review'
+    round: number
+  }
+  session: string
+  model?: string
+  stream?: SessionBracketStream
+  owner?: AgentRunner
+  handle?: AgentSessionHandle
+  transcript?: {
+    content: string
+    usage: { inputTokens: number; outputTokens: number; turns: number }
+    model?: string
   }
 }
 
@@ -211,6 +255,14 @@ export class HarvestRunner {
    * rejected heartbeat is an outage; later beats retry until one can decide. */
   private leaseLost = false
   private producer: ProducerSession | undefined
+  /** Prepared hosted guest only: when the durable authority was last read
+   * successfully, and what it decided. No verdict never passes. */
+  private authorityCheckedAt: number | undefined
+  private lastAuthoritySuccessAt: number | undefined
+  private authorityVerdict: HostedHarvestAuthority | undefined
+  /** Set once a fence fires; final for this runner. */
+  private authorityFence: HarvestAuthorityFence | undefined
+  private openBracket: OpenSessionBracket | undefined
 
   constructor(private readonly deps: HarvestRunnerDeps) {
     const redactor = accountRedactor(
@@ -241,6 +293,12 @@ export class HarvestRunner {
     )
   }
 
+  /** A prepared hosted guest: authority is its durable execution
+   * authorization, not a repository lease (see `ensureLease`). */
+  private get executionAuthority(): boolean {
+    return this.deps.preparedRun !== undefined && this.deps.holdsAuthority === undefined
+  }
+
   private currentConfig(): Config {
     return this.deps.getConfig?.() ?? this.deps.config
   }
@@ -260,6 +318,7 @@ export class HarvestRunner {
     if (!this.deps.preparedRun) await store.ensureRepo(repo)
     if (
       this.deps.leaseHolder === undefined &&
+      !this.executionAuthority &&
       !(await store.claimRepoLease(repo, instance, this.leaseTtlMs))
     ) {
       return { outcome: 'held' }
@@ -428,7 +487,10 @@ export class HarvestRunner {
           ? { outcome: 'parked' }
           : { outcome: 'parked', run: parkedRun }
       }
-      if (error instanceof HarvestLeaseLostError) return { outcome: 'held' }
+      if (error instanceof HarvestLeaseLostError) {
+        if (this.executionAuthority) await this.closeFencedBracket(error.reason ?? 'unverified')
+        return { outcome: 'held' }
+      }
       throw error
     } finally {
       this.stopHeartbeat()
@@ -440,8 +502,10 @@ export class HarvestRunner {
         }
         this.producer = undefined
       }
-      // An adopted holder is released by the owning DispatchLoop, never here.
-      if (this.deps.leaseHolder === undefined) await store.releaseRepoLease(repo, instance)
+      // An adopted holder is released by the owning DispatchLoop, never here;
+      // a prepared hosted guest never held the lease.
+      if (this.deps.leaseHolder === undefined && !this.executionAuthority)
+        await store.releaseRepoLease(repo, instance)
     }
   }
 
@@ -778,6 +842,12 @@ export class HarvestRunner {
             : {}),
         },
       })
+      this.openBracket = {
+        spec,
+        session,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        ...(streamBracket !== undefined ? { stream: streamBracket } : {}),
+      }
 
       let handle: AgentSessionHandle | undefined
       let result: AgentTurnResult | undefined
@@ -901,6 +971,10 @@ export class HarvestRunner {
       } catch (error) {
         turnError = error
       }
+      if (handle !== undefined && this.openBracket?.session === session) {
+        this.openBracket.handle = handle
+        this.openBracket.owner = live?.runner ?? target.runner
+      }
       if (observationFailure instanceof HarvestLeaseLostError) throw observationFailure
       if (observationFailure !== undefined)
         throw new HarvestPersistenceError('Native identity persistence failed', {
@@ -912,7 +986,16 @@ export class HarvestRunner {
       } catch (error) {
         if (handle !== undefined && live === undefined) {
           try {
-            await target.runner.end(handle)
+            const transcript = await target.runner.end(handle)
+            // A fenced guest closes its own bracket with this evidence.
+            if (this.openBracket?.session === session)
+              this.openBracket.transcript = {
+                content: transcript.content,
+                usage: transcript.metadata.usage,
+                ...(transcript.metadata.model !== undefined
+                  ? { model: transcript.metadata.model }
+                  : {}),
+              }
           } catch {
             // A dead session may have nothing left to close.
           }
@@ -987,6 +1070,7 @@ export class HarvestRunner {
               },
             }),
           )
+          if (this.openBracket?.session === session) this.openBracket = undefined
         } catch (error) {
           throw new HarvestPersistenceError('Harvest suspension persistence failed', {
             cause: error,
@@ -1164,6 +1248,8 @@ export class HarvestRunner {
       // the ordering structural rather than call-site discipline.
       await close.stream.sink.close(close.outcome)
     }
+    if (this.openBracket?.session === session)
+      this.openBracket.transcript = { content, usage, ...(model !== undefined ? { model } : {}) }
     await this.ensureLease()
     await this.deps.store.appendRepoWithArtifacts(
       this.deps.repo,
@@ -1193,6 +1279,73 @@ export class HarvestRunner {
         },
       }),
     )
+    if (this.openBracket?.session === session) this.openBracket = undefined
+  }
+
+  /**
+   * A prepared hosted guest fenced by its execution authority closes the
+   * session bracket it still has open, so a successor finds an ended session
+   * rather than judging runner loss. Best effort and deliberately unfenced: it
+   * is evidence about this guest's own session, not new work, and the store's
+   * delegated-grant check still refuses it once the grant is retired. A
+   * failed close leaves the release-then-judge path to settle the session.
+   */
+  private async closeFencedBracket(reason: HarvestAuthorityFence): Promise<void> {
+    const bracket = this.openBracket
+    this.openBracket = undefined
+    if (bracket === undefined) return
+    const { spec, session } = bracket
+    try {
+      let transcript = bracket.transcript
+      if (transcript === undefined && bracket.handle !== undefined && bracket.owner !== undefined) {
+        try {
+          const ended = await bracket.owner.end(bracket.handle)
+          transcript = {
+            content: ended.content,
+            usage: ended.metadata.usage,
+            ...(ended.metadata.model !== undefined ? { model: ended.metadata.model } : {}),
+          }
+        } catch {
+          // A dead session may have nothing left to close.
+        }
+        if (this.producer?.handle === bracket.handle) this.producer = undefined
+      }
+      await bracket.stream?.sink.close('aborted')
+      const content =
+        transcript !== undefined && transcript.content.trim() !== ''
+          ? transcript.content
+          : JSON.stringify({ session, fenced: reason })
+      const usage = transcript?.usage ?? { inputTokens: 0, outputTokens: 0, turns: 0 }
+      const model = transcript?.model ?? bracket.model
+      await this.deps.store.appendRepoWithArtifacts(
+        this.deps.repo,
+        [
+          {
+            kind: HARVEST_TRANSCRIPT_ARTIFACT,
+            content,
+            metadata: {
+              run: spec.run,
+              step: spec.step,
+              round: spec.round,
+              role: spec.role,
+              session,
+              ...(model !== undefined ? { model } : {}),
+              usage,
+              fenced: reason,
+            },
+          },
+        ],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.session.ended',
+          payload: { run: spec.run, session, transcript: artifactRef(deposited[0]!), usage },
+        }),
+      )
+    } catch (error) {
+      this.onDiagnostic(
+        `harvest session "${session}" fenced (${reason}) could not be closed: ${errorMessage(error)}`,
+      )
+    }
   }
 
   private async file(run: HarvestRunState, approved: ArtifactRef): Promise<void> {
@@ -1801,16 +1954,21 @@ export class HarvestRunner {
     void stream.sink.close(outcome)
   }
 
-  /** Re-acquire a lapsed lease only when no replacement won it. Checked at
-   * every durable boundary; work already in an agent turn cannot be revoked,
-   * but this process performs no subsequent kernel/file action without
-   * ownership. */
+  /** Checked at every durable boundary; work already in an agent turn cannot
+   * be revoked, but this process performs no subsequent kernel/file action
+   * without authority. Three modes:
+   * - in-process (`holdsAuthority`): the owning loop's synchronous fence;
+   * - prepared hosted guest (`preparedRun` without `holdsAuthority`): its
+   *   durable execution authority (`ensureExecutionAuthority`);
+   * - standalone or adopted lease: re-acquire a lapsed lease only when no
+   *   replacement won it. */
   private async ensureLease(): Promise<void> {
     if (this.deps.holdsAuthority !== undefined) {
       this.requireAuthority()
       this.leaseLost = false
       return
     }
+    if (this.executionAuthority) return this.ensureExecutionAuthority()
     if (!this.leaseLost) return
     const { store, repo } = this.deps
     const holder = this.deps.leaseHolder ?? this.deps.instance
@@ -1825,7 +1983,61 @@ export class HarvestRunner {
       throw new HarvestLeaseLostError(this.deps.repo, this.deps.leaseHolder ?? this.deps.instance)
   }
 
+  /**
+   * A prepared hosted guest's authority is the latest
+   * `harvest.execution.authorized`, which only a repository-lease holder can
+   * append — not the launching invocation's lease, so `--once` teardown and a
+   * successor's claim never fence it. Re-read at most once per `heartbeatMs`
+   * as one constant-size served value, and fail closed: no verdict passes
+   * until a read succeeds; a fenced verdict is final; a permanent contract
+   * error fences `unsupported`, an auth refusal `revoked`; transient errors
+   * keep the last successful verdict only until it is `leaseTtlMs` old.
+   */
+  private async ensureExecutionAuthority(): Promise<void> {
+    const { store, repo, instance } = this.deps
+    const fence = (reason: HarvestAuthorityFence): never => {
+      this.authorityFence = reason
+      throw new HarvestLeaseLostError(repo, instance, reason)
+    }
+    if (this.authorityFence !== undefined) fence(this.authorityFence)
+    const verdict = this.authorityVerdict
+    const now = this.deps.clock().getTime()
+    if (
+      verdict !== undefined &&
+      this.authorityCheckedAt !== undefined &&
+      now - this.authorityCheckedAt < this.heartbeatMs
+    )
+      return
+    try {
+      const { value } = await readHostedHarvestAuthority(store, repo)
+      this.authorityCheckedAt = now
+      this.lastAuthoritySuccessAt = now
+      this.authorityVerdict = decideHostedHarvestAuthority(value, {
+        execution: instance,
+        run: this.deps.preparedRun!.run,
+        leaseHolder: this.deps.leaseHolder ?? instance,
+      })
+    } catch (error) {
+      const kind = classifyAuthorityReadError(error)
+      this.onDiagnostic(
+        `harvest execution ${instance} authority read failed (${kind}): ${errorMessage(error)}`,
+      )
+      if (kind === 'permanent') fence('unsupported')
+      if (kind === 'revoked') fence('revoked')
+      if (
+        this.lastAuthoritySuccessAt === undefined ||
+        now - this.lastAuthoritySuccessAt >= this.leaseTtlMs
+      )
+        fence('unverified')
+    }
+    const decided = this.authorityVerdict
+    if (decided === undefined) fence('unverified')
+    else if (decided.kind === 'fenced') fence(decided.reason)
+  }
+
   private async startHeartbeat(): Promise<void> {
+    // A prepared hosted guest never renews the dispatcher's lease.
+    if (this.executionAuthority) return
     const { store, repo } = this.deps
     const holder = this.deps.leaseHolder ?? this.deps.instance
     if (!(await store.heartbeatRepo(repo, holder))) this.leaseLost = true

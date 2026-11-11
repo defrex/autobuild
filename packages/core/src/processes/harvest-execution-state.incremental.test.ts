@@ -5,8 +5,14 @@ import {
   generatedLogs,
   randomRepoItem,
   repoLog,
+  type Rand,
 } from '../kernel/incremental-fixtures'
-import { openHarvestExecutions, openHarvestExecutionsReducer } from './harvest-execution-state'
+import { pick } from '../kernel/incremental-contract'
+import {
+  hostedHarvestAuthorityReducer,
+  openHarvestExecutions,
+  openHarvestExecutionsReducer,
+} from './harvest-execution-state'
 
 // The original Map-based implementation, verbatim, as the oracle.
 function reference(events: readonly RepositoryEvent[]) {
@@ -46,5 +52,53 @@ describe('openHarvestExecutions reducer', () => {
       ['a', 'e2'],
       ['b', 'e'],
     ])
+  })
+})
+
+// A whole-array oracle for the current-authority projection: the latest
+// authorization of a different execution wins; only the current execution's
+// ending or release marks it released.
+function authorityReference(events: readonly RepositoryEvent[]) {
+  let current: Record<string, unknown> | undefined
+  for (const event of events) {
+    if (event.type === 'harvest.execution.authorized') {
+      if (current?.execution !== event.payload.execution)
+        current = {
+          execution: event.payload.execution,
+          run: event.payload.run,
+          leaseHolder: event.payload.leaseHolder,
+          released: false,
+        }
+    } else if (
+      (event.type === 'harvest.execution.released' || event.type === 'harvest.execution.ended') &&
+      current?.execution === event.payload.execution
+    ) {
+      current = { ...current, released: true }
+    }
+  }
+  return current ? { current } : {}
+}
+
+function authorityItem(rand: Rand): readonly [string, Record<string, unknown>] {
+  const execution = pick(rand, ['x1', 'x2', 'x3'])
+  const run = pick(rand, ['h1', 'h2'])
+  return pick(rand, [
+    () =>
+      [
+        'harvest.execution.authorized',
+        { execution, run, launch: 'started', leaseHolder: pick(rand, ['inv-1', 'inv-2']) },
+      ] as const,
+    () => ['harvest.execution.ended', { execution, run }] as const,
+    () => randomRepoItem(rand),
+  ])()
+}
+
+describe('hostedHarvestAuthority reducer', () => {
+  test('folding in chunks equals the whole-array oracle, ordered and shuffled', () => {
+    checkAgainstReference(
+      hostedHarvestAuthorityReducer,
+      generatedLogs(repoLog, authorityItem),
+      authorityReference as never,
+    )
   })
 })

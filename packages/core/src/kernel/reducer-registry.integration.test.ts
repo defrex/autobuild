@@ -355,6 +355,22 @@ function corpora(): unknown[][] {
       },
     ],
     preparationCorpus,
+    [
+      {
+        type: 'harvest.execution.authorized',
+        payload: { execution: 'x1', run: 'h1', launch: 'started', leaseHolder: 'run-a' },
+      },
+      {
+        type: 'harvest.execution.released',
+        payload: { execution: 'x1', environmentId: 'env', snapshots: { outcome: 'confirmed' } },
+      },
+    ].map((event, index) => ({
+      repo: 'repo',
+      actor: { kind: 'dispatcher' },
+      seq: index + 1,
+      ts: '2026-11-11T00:00:00Z',
+      ...event,
+    })),
     verifyStageCorpus,
     rollbackCorpus.slice(0, 1),
     rollbackCorpus,
@@ -636,6 +652,7 @@ describe('reducer registry', () => {
         "frozenPrImageHost": 1,
         "harvest": 4,
         "harvestDelegation": 2,
+        "hostedHarvestAuthority": 1,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,
         "journalView": 9,
