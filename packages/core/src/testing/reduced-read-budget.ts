@@ -2177,21 +2177,39 @@ export async function kernelGitOutageReadBudget(opts: {
   }
 }
 
-/** Expired sampled owners resolve once through exact persisted run values. */
+/** Expired sampled owners resolve once through exact persisted run values;
+ * historical abandoned preparations never replay and a new one reports once. */
 export async function stoppedOwnerWatchReadBudget() {
   const { MemoryBuildStore } = await import('../store/memory')
   const { manualClock } = await import('./fixed')
   let previousBytes: number | undefined
+  const abandon = (store: BuildStore, attempt: string) =>
+    store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: {
+        attempt,
+        ticket: { source: 'fake', id: attempt },
+        outcome: 'abandoned',
+        reason: 'Ticket no longer exists; ticket unchanged.',
+        claimed: false,
+      },
+    })
   for (const length of [100, 100_000]) {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
     await store.ensureRepo(repo)
-    for (let i = 0; i < length; i++)
+    for (let i = 0; i < length; i++) {
+      if (i % 1000 === 50) {
+        await abandon(store, `historical-${i}`)
+        continue
+      }
       await store.appendRepo(repo, {
         actor: humanActor('human'),
         type: 'dispatcher.intake-set',
         payload: { enabled: true },
       })
+    }
     const start = async (run: string) => {
       await store.appendRepo(repo, {
         actor: DISPATCHER,
@@ -2247,6 +2265,7 @@ export async function stoppedOwnerWatchReadBudget() {
           await stop('B')
           await start('C')
         }
+        if (tick === 3) await abandon(store, 'fresh')
         if (tick === 6) {
           counter.reset()
           quietCalls = counter.reducedCalls
@@ -2259,6 +2278,12 @@ export async function stoppedOwnerWatchReadBudget() {
         .filter((r) => r.observation)
         .map((r) => r.observation.run),
     ).toEqual(['C'])
+    expect(
+      output
+        .map((line) => JSON.parse(line))
+        .filter((r) => r.event?.type === 'ticket-preparation.resolved')
+        .map((r) => r.event.payload.attempt),
+    ).toEqual(['fresh'])
     expect(counter.rows).toBe(0)
     expect(counter.reducedCalls - quietCalls).toBeLessThan(20)
     await readDispatcherRunFacts(store, repo, 'missing')

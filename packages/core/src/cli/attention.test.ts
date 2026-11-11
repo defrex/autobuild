@@ -52,6 +52,11 @@ describe('repository attention projection', () => {
     ['dispatcher.ticket-source-recovered', {}, false],
     ['dispatcher.kernel-git-unavailable', { executable: 'git', detail: 'missing' }, true],
     ['dispatcher.kernel-git-recovered', { executable: 'git' }, false],
+    ['ticket-preparation.resolved', { outcome: 'abandoned' }, true],
+    ['ticket-preparation.resolved', { outcome: 'handed-back' }, false],
+    ['ticket-preparation.resolved', { outcome: 'bounced' }, false],
+    ['ticket-preparation.resolved', { outcome: 'owned' }, false],
+    ['ticket-preparation.resolved', { outcome: 'lost-claim' }, false],
   ])('%s %j direct=%s', (type, payload, expected) => {
     expect(repositoryNeedsAttention(repo(type as string, payload, 1))).toBe(expected as boolean)
   })

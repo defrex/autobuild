@@ -67,6 +67,8 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
       return event.payload.restartRequired.length > 0
     case 'dispatcher.run-stopped':
       return event.payload.outcome === 'abnormal'
+    case 'ticket-preparation.resolved':
+      return event.payload.outcome === 'abandoned'
     default:
       return false
   }
