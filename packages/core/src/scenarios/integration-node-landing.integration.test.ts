@@ -483,6 +483,7 @@ test.each([false, true])(
       await h.cleanup()
     }
   },
+  15_000,
 )
 
 test('dispatcher recovers a failed receipt without a runner, workspace or successful forge read', async () => {

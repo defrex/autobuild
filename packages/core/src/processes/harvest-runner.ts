@@ -105,6 +105,11 @@ export interface HarvestRunnerDeps {
    * never releases at the end — the owning loop holds the lease for its
    * lifetime. Absent keeps the standalone self-claiming behavior. */
   leaseHolder?: string
+  /** The owning DispatchLoop's repository authority: synchronous, no I/O.
+   * When present, the loop's lease resolver owns reclaiming the adopted
+   * lease, so the runner never claims it itself; a false answer stops the
+   * run before its next turn starts, as a lost lease. */
+  holdsAuthority?: () => boolean
   /** Provider-native identity of the disposable environment this run
    * executes in (hosted harvest). Stamped into the run's harvest.started
    * payload so the journal records where it ran; absent on local runs. */
@@ -886,6 +891,7 @@ export class HarvestRunner {
                   opts,
                 )
             } else {
+              this.requireAuthority()
               const turn = await target.runner.start(opts)
               handle = turn.session
               result = turn.result
@@ -1800,12 +1806,23 @@ export class HarvestRunner {
    * but this process performs no subsequent kernel/file action without
    * ownership. */
   private async ensureLease(): Promise<void> {
+    if (this.deps.holdsAuthority !== undefined) {
+      this.requireAuthority()
+      this.leaseLost = false
+      return
+    }
     if (!this.leaseLost) return
     const { store, repo } = this.deps
     const holder = this.deps.leaseHolder ?? this.deps.instance
     const reclaimed = await store.claimRepoLease(repo, holder, this.leaseTtlMs)
     if (!reclaimed) throw new HarvestLeaseLostError(repo, holder)
     this.leaseLost = false
+  }
+
+  /** Synchronous authority fence, called immediately before a turn starts. */
+  private requireAuthority(): void {
+    if (this.deps.holdsAuthority?.() === false)
+      throw new HarvestLeaseLostError(this.deps.repo, this.deps.leaseHolder ?? this.deps.instance)
   }
 
   private async startHeartbeat(): Promise<void> {

@@ -154,6 +154,8 @@ describe('parseConfig — complete flattened surface', () => {
       },
       policy: {
         upgradeDrainSeconds: 900,
+        dispatchLeaseTimeoutSeconds: 60,
+        dispatchLeaseRenewalSeconds: 20,
         sessionBudgetSeconds: 1800,
         stallRounds: 3,
         maxVerifyAttempts: 3,
@@ -207,6 +209,8 @@ describe('parseConfig — defaults', () => {
       roles: {},
       policy: {
         upgradeDrainSeconds: 900,
+        dispatchLeaseTimeoutSeconds: 60,
+        dispatchLeaseRenewalSeconds: 20,
         sessionBudgetSeconds: 3600,
         stallRounds: 3,
         maxVerifyAttempts: 3,
@@ -698,6 +702,37 @@ harvestThreshold = 2
     expect(() => parseConfig(`${READY}[policy]\nmaxDispatchAttempt = 3\n`)).toThrow()
   })
 
+  test('dispatch lease timing defaults to 60/20 and refuses renewal at or above the timeout', () => {
+    const defaults = parseConfig(READY).policy
+    expect(defaults.dispatchLeaseTimeoutSeconds).toBe(60)
+    expect(defaults.dispatchLeaseRenewalSeconds).toBe(20)
+    const configured = parseConfig(
+      `${READY}[policy]\ndispatchLeaseTimeoutSeconds = 120\ndispatchLeaseRenewalSeconds = 30\n`,
+    ).policy
+    expect(configured.dispatchLeaseTimeoutSeconds).toBe(120)
+    expect(configured.dispatchLeaseRenewalSeconds).toBe(30)
+    const bothNamed = (message: string) =>
+      message.includes('dispatchLeaseTimeoutSeconds') &&
+      message.includes('dispatchLeaseRenewalSeconds')
+    for (const policy of [
+      'dispatchLeaseTimeoutSeconds = 30\ndispatchLeaseRenewalSeconds = 30',
+      'dispatchLeaseTimeoutSeconds = 30\ndispatchLeaseRenewalSeconds = 45',
+      'dispatchLeaseRenewalSeconds = 60',
+      'dispatchLeaseTimeoutSeconds = 0',
+      'dispatchLeaseTimeoutSeconds = -5',
+      'dispatchLeaseRenewalSeconds = 0',
+      'dispatchLeaseRenewalSeconds = -1',
+    ]) {
+      let message = ''
+      try {
+        parseConfig(`${READY}[policy]\n${policy}\n`)
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(bothNamed(message)).toBe(true)
+    }
+  })
+
   test('root and policy numeric values must be positive integers', () => {
     for (const [field, value] of [
       ['capacity', '0'],
@@ -738,6 +773,8 @@ skill = "ab-verify-e2e"
   test('partial [policy] keeps every other per-key default', () => {
     expect(parseConfig(`${READY}[policy]\nstallRounds = 7\n`).policy).toEqual({
       upgradeDrainSeconds: 900,
+      dispatchLeaseTimeoutSeconds: 60,
+      dispatchLeaseRenewalSeconds: 20,
       sessionBudgetSeconds: 3600,
       stallRounds: 7,
       maxVerifyAttempts: 3,

@@ -1896,3 +1896,99 @@ test('leaf verify entry uses recorded kernel lineage after its parent restacks d
     await h.cleanup()
   }
 }, 30_000)
+
+test('a node restack that resumes after repository authority lapsed rewrites nothing; the successor publishes once', async () => {
+  const { git, commitAll } = await import('./harness')
+  const { join } = await import('node:path')
+  const { Dispatcher } = await import('../processes/dispatcher')
+  const { fenceForge, isRepositoryAuthorityLapse, RepositoryAuthorityLapsed } = await import(
+    '../cli/repo-lease'
+  )
+  const { spawnExec } = await import('../ports/workspace/git-worktree')
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [{ ...readyTicket('A', { title: 'Node alpha' }), kind: 'node' }],
+  })
+  try {
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((r) => r.ticket?.id === 'A')!
+    expect(node.branch).toStartWith('ab-node/')
+    // Every rewrite transport call that reaches the forge, at any depth.
+    const replaced: string[] = []
+    const recording = new Proxy(h.forgeAdapter, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target)
+        if ((key === 'rewrite' || key === 'kernelRewrite') && value && typeof value === 'object')
+          return new Proxy(value, {
+            get(rewrite, method) {
+              const inner = Reflect.get(rewrite, method, rewrite)
+              if (typeof inner !== 'function') return inner
+              return (...args: unknown[]) => {
+                if (method === 'replace') replaced.push(String(key))
+                return inner.apply(rewrite, args)
+              }
+            },
+          })
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    let held = true
+    const holdsRepoAuthority = () => held
+    const dispatcherFor = (guarded: () => boolean) =>
+      new Dispatcher({
+        store: h.store,
+        tickets: h.tickets,
+        workspaces: h.workspaces,
+        forge: fenceForge(recording, () => {
+          if (!guarded()) throw new RepositoryAuthorityLapsed()
+        }),
+        config: h.config,
+        repo: h.origin,
+        exec: spawnExec,
+        ids: h.ids,
+        clock: h.clock,
+        holdsRepoAuthority: guarded,
+        launchRunner: async () => {
+          throw new Error('node restack launched an agent')
+        },
+      })
+    const stalled = dispatcherFor(holdsRepoAuthority)
+    // Authority lapses (a stall past expiry, then a peer takeover) right after
+    // the restack recorded its publication intent.
+    const appendIfCurrent = h.store.appendIfCurrent.bind(h.store)
+    h.store.appendIfCurrent = async (slug, revision, event) => {
+      const appended = await appendIfCurrent(slug, revision, event)
+      if (event.type === 'node.publish-intended') held = false
+      return appended
+    }
+    await Bun.write(join(h.origin, 'upstream'), 'upstream')
+    const root = await commitAll(h.origin, 'Root movement')
+    const before = await git(['rev-parse', node.branch!], h.origin)
+    await requestNodeRestack({ store: h.store, repo: h.origin, slug: node.slug, user: 'operator' })
+    let lapse: unknown
+    for (let i = 0; i < 3 && lapse === undefined; i++)
+      await stalled.tick({ acceptNewWork: false }).catch((error: unknown) => {
+        lapse = error
+      })
+    expect(isRepositoryAuthorityLapse(lapse)).toBe(true)
+    expect(ofType(await h.events(node.slug), 'node.publish-intended')).toHaveLength(1)
+    expect(replaced).toEqual([])
+    expect(await git(['rev-parse', node.branch!], h.origin)).toBe(before)
+    const facts = (await h.events(node.slug)).map((event) => event.type)
+    expect(facts).not.toContain('node.rewritten')
+    expect(facts).not.toContain('node.writer-settled')
+    expect(facts.filter((type) => type.includes('janitor') || type.includes('failed'))).toEqual([])
+
+    // The successor resumes from the durable intent once the writer lease expires.
+    h.store.appendIfCurrent = appendIfCurrent
+    h.clock.advance(120_000)
+    const successor = dispatcherFor(() => true)
+    for (let i = 0; i < 4; i++) await successor.tick({ acceptNewWork: false })
+    expect(ofType(await h.events(node.slug), 'node.rewritten')).toHaveLength(1)
+    expect(replaced).toHaveLength(1)
+    expect(await git(['merge-base', '--is-ancestor', root, node.branch!], h.origin)).toBe('')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
