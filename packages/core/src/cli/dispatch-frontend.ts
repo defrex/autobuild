@@ -23,7 +23,6 @@ import { DispatchRepositoryFeed } from './dispatch-repository-feed'
 import { StandbyIdentityResolver } from './dispatcher-liveness'
 import { configSchema, type Config } from '../config/schema'
 import { humanActor } from '../events/envelope'
-import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import type { BuildState } from '../kernel/reducer'
 import {
@@ -210,9 +209,9 @@ export class DispatchFrontend {
 
   /** Advance the repository cursor exactly once even when polling overlaps an
    * operator action. High-frequency dispatcher status is folded from deltas;
-   * only the low-volume settings/Harvest facts needed by the dashboard model
-   * are retained for their existing replay reducers. */
-  private async events(sampledPosition?: string): Promise<RepositoryEvent[]> {
+   * the feed retains standby identities only, and dashboard facts come from
+   * the canonical repository facts. */
+  private async advanceRepository(sampledPosition?: string): Promise<void> {
     if (this.opts.viewer) {
       const position = sampledPosition ?? (await this.reader.getRepoChangePosition(this.opts.repo))
       if (
@@ -224,7 +223,7 @@ export class DispatchFrontend {
         this.viewerReadAt = this.clock().getTime()
       }
       this.dispatchStatus = this.viewerFacts!.status ?? reduceDispatchStatus([], this.runId)
-      return []
+      return
     }
     const refresh = this.eventRefreshTail.then(async () => {
       const delta = await this.repositoryFeed.refresh(false)
@@ -234,7 +233,6 @@ export class DispatchFrontend {
     })
     this.eventRefreshTail = refresh.catch(() => {})
     await refresh
-    return this.repositoryFeed.events
   }
 
   private async report(message: string, level: 'info' | 'warning' = 'info'): Promise<void> {
@@ -367,7 +365,6 @@ export class DispatchFrontend {
   }
 
   private readonly repositoryPoll = new RepositoryPollCache<{
-    repositoryEvents: RepositoryEvent[]
     upgrades: DispatchUpgradeState
     repositoryFacts: RepositoryReadFacts
     status: DispatchStatus
@@ -424,7 +421,7 @@ export class DispatchFrontend {
       admitted: () => this.refresh === undefined || this.refresh.admitted,
       nextPollMs: this.refresh?.intervalMs ?? 0,
       read: async ({ fullEnrichment }) => {
-        const repositoryEvents = await this.events(sampledPosition)
+        await this.advanceRepository(sampledPosition)
         // Authority and rollback holds need the full durable reduction, not the
         // low-volume replay feed (which deliberately discards per-tick facts).
         const repositoryFacts =
@@ -433,7 +430,7 @@ export class DispatchFrontend {
             await readRepositoryFacts(
               this.reader,
               this.opts.repo,
-              repositoryEvents.length || this.repositoryFeed.identities.length ? true : undefined,
+              this.repositoryFeed.present ? true : undefined,
             )
           ).value
         const upgrades = repositoryFacts.upgrades
@@ -465,7 +462,6 @@ export class DispatchFrontend {
         if (!this.opts.viewer) await this.repositoryFeed.save()
         if (!this.cache.isCurrent(snapshot)) return undefined
         return {
-          repositoryEvents,
           repositoryFacts,
           upgrades,
           status,
@@ -475,7 +471,7 @@ export class DispatchFrontend {
       },
     })
     if (frame === undefined) return
-    let { repositoryEvents, repositoryFacts, upgrades, status } = frame
+    let { repositoryFacts, upgrades, status } = frame
     const { config, snapshot } = frame
     this.pollViewerTriage(config)
     const standby =
@@ -495,12 +491,12 @@ export class DispatchFrontend {
       const slug = this.abortConfirmation.slug
       if (!validAbortConfirmation(snapshot.states.get(slug))) {
         await this.dismissStaleAbortConfirmation(slug)
-        repositoryEvents = await this.events()
+        await this.advanceRepository()
         repositoryFacts = (
           await readRepositoryFacts(
             this.reader,
             this.opts.repo,
-            repositoryEvents.length || this.repositoryFeed.identities.length ? true : undefined,
+            this.repositoryFeed.present ? true : undefined,
           )
         ).value
         upgrades = repositoryFacts.upgrades
@@ -809,7 +805,7 @@ export class DispatchFrontend {
   }
 
   private async confirmAbort(slug: string): Promise<void> {
-    await this.events()
+    await this.advanceRepository()
     const ref = this.dispatchStatus.effectiveConfig
     if (ref === undefined) throw new Error('effective config is not available')
     const config = await this.loadConfig(ref.kind, ref.rev)
