@@ -4,6 +4,7 @@ import {
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+  creationBuildSlug,
   mintToken,
 } from '@defrex/autobuild/remote-store'
 import { MemoryBuildStore, type NewBuildInput } from '@defrex/autobuild/plugin-sdk'
@@ -138,4 +139,66 @@ test('owner-admin exact-slug creation stores the client branch verbatim', async 
   )
   expect(response.status).toBe(201)
   expect(await response.json()).toMatchObject({ slug: 'n', branch: 'ab-node/n' })
+})
+
+test('keyed project creation lands once at the derived slug in the requested namespace', async () => {
+  const { backing, server, token, create } = await harness()
+  const leaf = await create({ slug: 'fix-login', created: created(), creationKey: 'prep_1' })
+  expect(leaf).toMatchObject({
+    slug: creationBuildSlug(A, 'fix-login', 'prep_1'),
+    branch: `ab/${creationBuildSlug(A, 'fix-login', 'prep_1')}`,
+  })
+  expect(leaf).not.toHaveProperty('creationKey')
+  const node = await create({
+    slug: 'integration',
+    branch: 'ab-node/integration',
+    created: created('node'),
+    creationKey: 'prep_2',
+  })
+  expect(node.branch).toBe(`ab-node/${creationBuildSlug(A, 'integration', 'prep_2')}`)
+
+  const repeat = await server.fetch(
+    request('/builds', token, {
+      repo: A,
+      slug: 'fix-login',
+      created: created(),
+      creationKey: 'prep_1',
+    }),
+  )
+  expect(repeat.status).toBe(409)
+  expect(((await repeat.json()) as { kind: string }).kind).toBe('conflict')
+  expect(await backing.listBuilds()).toHaveLength(2)
+
+  const other = await create({ slug: 'fix-login', created: created(), creationKey: 'prep_3' })
+  expect(other.slug).toBe(creationBuildSlug(A, 'fix-login', 'prep_3'))
+  expect(await backing.listBuilds()).toHaveLength(3)
+})
+
+test('an invalid creation key is refused before any write', async () => {
+  const { rejected } = await harness()
+  for (const creationKey of ['', 'has space', 'a'.repeat(129)])
+    await rejected({ slug: 'x', creationKey })
+})
+
+test('owner-admin exact-slug creation ignores a creation key', async () => {
+  const { server, backing } = await harness()
+  const ownerAdmin = mintToken('secret', {
+    version: 1,
+    ownerAdmin: { user: 'owner' },
+    exp: Date.now() + 60000,
+  })
+  const response = await server.fetch(
+    request('/builds', ownerAdmin, { slug: 'n', repo: A, creationKey: 'prep_1' }),
+  )
+  expect(response.status).toBe(201)
+  expect(await response.json()).toMatchObject({ slug: 'n' })
+  expect((await backing.listBuilds()).map((record) => record.slug)).toEqual(['n'])
+})
+
+test('health advertises keyed build creation', async () => {
+  const { server, token } = await harness()
+  const response = await server.fetch(request('/health', token))
+  expect(((await response.json()) as { capabilities?: string[] }).capabilities).toContain(
+    'build-creation-key-v1',
+  )
 })
