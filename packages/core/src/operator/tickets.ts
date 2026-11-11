@@ -64,7 +64,7 @@ export interface OperatorTicketQueue {
 }
 
 /** A window over a listing. `oldest` (default) is dispatch order: urgent first,
- * then the source's order; `newest` reverses the source's filing order. */
+ * then the source's order; `newest` is newest filed first, regardless of urgency. */
 export type OperatorTicketPage = TicketPage
 
 export interface OperatorTicketBuild {
@@ -150,7 +150,10 @@ export async function listOperatorTickets(opts: {
     nativePage ? source.listPage!(criteria, opts.page!) : source.listReady(criteria),
     opts.backend.statesFor(context, source),
   ])
-  // Native pages arrive ordered; the fallback mirrors the dispatcher's claim order.
+  // Native pages arrive ordered; the fallback mirrors the dispatcher's claim
+  // order. listReady is in the source's filing order, so reversing it is newest
+  // filed first. The remote hosted client is the exception: its listing arrives
+  // urgent-first with no filing time, so there newest is reversed dispatch order.
   const ordered = nativePage
     ? listing.tickets
     : opts.page?.order === 'newest'

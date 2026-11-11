@@ -1,6 +1,6 @@
 import { createTicket, updateTicket, moveTicket, changeBlockers } from './operations'
 import { normalizeIssueLinks, TicketIssueLinksUnsupported } from './issue-links'
-import { TicketPriorityUnsupported } from './priority'
+import { TicketPriorityUnsupported, urgentFirst } from './priority'
 import { compatibleTicketSource } from './tree'
 import { TicketRevisionConflict } from './revision'
 import { describe, expect, test } from 'bun:test'
@@ -16,15 +16,24 @@ import type {
   TicketPage,
 } from '../types'
 
-/** Shared assertion also used by negative controls for declared capabilities. */
+/** Shared assertion also used by negative controls for declared capabilities.
+ * `filed` holds the matching tickets' ids, oldest filed first. `oldest` windows
+ * the source's dispatch order; `newest` windows newest filed first. */
 export async function assertTicketPage(
   source: TicketSource,
   criteria: TicketCriteria,
   page: TicketPage,
   full: Awaited<ReturnType<TicketSource['listReady']>>,
+  filed: readonly string[],
 ): Promise<void> {
+  expect([...filed].sort()).toEqual(full.tickets.map((ticket) => ticket.ref.id).sort())
   const actual = await source.listPage!(criteria, page)
-  const ordered = page.order === 'newest' ? [...full.tickets].reverse() : full.tickets
+  const ordered =
+    page.order === 'newest'
+      ? [...filed].reverse().map((id) => full.tickets.find((ticket) => ticket.ref.id === id)!)
+      : source.priority
+        ? urgentFirst(full.tickets)
+        : full.tickets
   const offset = page.offset ?? 0
   expect(actual).toEqual({
     tickets: ordered.slice(offset, offset + page.limit),
@@ -72,6 +81,9 @@ export interface TicketSourceContractHarness {
    * explicitly configured scratch project. */
   afterCreate?: (ticket: Ticket, idempotencyKey: string) => Promise<void> | void
   cleanup?: () => Promise<void>
+  /** Minimum spacing between creates for this source to record distinct
+   * filing times; defaults to 5 ms. */
+  filingIntervalMs?: number
   /** Links a source reports on every ticket without being asked, such as a
    * GitHub issue's own `closes` link. They are expected beside the written
    * links and stay when the written links are cleared. */
@@ -211,6 +223,9 @@ export function describeTicketSourceContract(
           { state: harness.states.ready, labels: [] },
         ]) {
           const full = await source.listReady(criteria)
+          // No fixture ticket is urgent, so the listing is filing order with
+          // the source's own tie-break; the urgent test below owns ordering.
+          const filed = full.tickets.map((ticket) => ticket.ref.id)
           for (const order of [undefined, 'oldest', 'newest'] as const)
             for (const window of [
               { limit: 2 },
@@ -219,8 +234,77 @@ export function describeTicketSourceContract(
               { limit: 0 },
             ]) {
               const page = { ...window, ...(order ? { order } : {}) }
-              await assertTicketPage(source, criteria, page, full)
+              await assertTicketPage(source, criteria, page, full, filed)
             }
+        }
+      })
+    })
+
+    test('native pages order urgent dispatch first and newest filed first when declared', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        if (!source.listPage || !source.priority) return
+        const label = await freshLabel(harness, 'page-urgent')
+        // n1, u2, n3, u4, n5 in filing order; u2 and u4 are urgent.
+        const filed: string[] = []
+        for (let i = 1; i <= 5; i++) {
+          if (i > 1) await Bun.sleep(harness.filingIntervalMs ?? 5)
+          const urgent = i % 2 === 0
+          const ticket = await createTracked(
+            harness,
+            {
+              title: contractTicketTitle('page-urgent'),
+              body: CONTRACT_TICKET_BODY,
+              labels: [label],
+              ...(urgent ? { priority: 'urgent' as const } : {}),
+            },
+            { state: harness.states.ready },
+          )
+          filed.push(ticket.ref.id)
+        }
+        const [n1, u2, n3, u4, n5] = filed as [string, string, string, string, string]
+        const dispatch = [u2, u4, n1, n3, n5]
+        const newest = [n5, u4, n3, u2, n1]
+        // The fixture separates newest filed first from reversed dispatch order.
+        expect(newest).not.toEqual([...dispatch].reverse())
+        for (const criteria of [
+          { labels: [label] },
+          { state: harness.states.ready, labels: [label] },
+        ]) {
+          const full = await source.listReady(criteria)
+          for (const order of [undefined, 'oldest', 'newest'] as const) {
+            const expected = order === 'newest' ? newest : dispatch
+            for (const limit of [1, 2, 3]) {
+              const seen: string[] = []
+              for (let offset = 0; offset < expected.length; offset += limit) {
+                const page = await source.listPage(criteria, {
+                  limit,
+                  offset,
+                  ...(order ? { order } : {}),
+                })
+                expect(page.total).toBe(expected.length)
+                expect(page.diagnostics).toEqual(full.diagnostics)
+                expect(page.tickets).toHaveLength(Math.min(limit, expected.length - offset))
+                seen.push(...page.tickets.map((ticket) => ticket.ref.id))
+              }
+              expect(seen).toEqual(expected)
+              expect(new Set(seen).size).toBe(expected.length)
+              const past = await source.listPage(criteria, {
+                limit,
+                offset: expected.length,
+                ...(order ? { order } : {}),
+              })
+              expect(past.tickets).toEqual([])
+              expect(past.total).toBe(expected.length)
+            }
+            await assertTicketPage(
+              source,
+              criteria,
+              { limit: expected.length, ...(order ? { order } : {}) },
+              full,
+              filed,
+            )
+          }
         }
       })
     })
