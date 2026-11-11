@@ -36,10 +36,13 @@ normal action. The selected build's full detail names the CLI-only dismissal
 and revision commands; it does not provide a spec editor.
 
 Restarting `ab dispatch` or running `ab dispatch --once` is not an answer or a
-retry action. Every open escalation, including every policy and setup cause,
-survives dispatcher startup until your operator agent, within your instructions
-and authority, or you answer through one of the paths above. Startup
-still recovers unblocked work and acknowledges pending operator commands.
+retry action. Every open phase and policy escalation, including every setup
+cause, survives dispatcher startup until your operator agent, within your
+instructions and authority, or you answer through one of the paths above. A
+janitor escalation is the exception: its ordinary retries continue across
+startup, a successful attempt closes it unanswered, and a bare retry only brings
+the next attempt forward. Startup still recovers unblocked work and acknowledges
+pending operator commands.
 
 ## Widening an exhausted review loop
 

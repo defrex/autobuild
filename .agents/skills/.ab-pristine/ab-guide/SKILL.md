@@ -2485,10 +2485,12 @@ is inside the walk.
 These commands request normal kernel work; they do not wake a runner, operate
 the forge, or bypass the lease sweep. Resume is therefore an attempt, not a
 guarantee: if the condition still fails, a phase may raise a new escalation and
-block again. Every open escalation, including all policy and setup causes,
+block again. Every open phase and policy escalation, including all setup causes,
 survives `ab dispatch` and `ab dispatch --once` startup until your operator agent or you
-answer it. Startup still recovers actionable builds and delivers pending operator
-commands, but it never records an answer or re-arms a budget.
+answer it. A janitor escalation is the exception: ordinary janitor retries continue
+across startup, a successful attempt closes it unanswered, and a bare retry only
+brings the next attempt forward. Startup still recovers actionable builds and
+delivers pending operator commands, but it never records an answer or re-arms a budget.
 
 Durable repository intake has launch-flag setters and a global-row toggle.
 Merge policy is configured through ordered rules, with per-merge hold/merge

@@ -2308,10 +2308,13 @@ loops to the configured default. The value is attached only to the matching
 review-limit answer, so unrelated blockers answered in the same command do not
 acquire it and build-phase agents cannot widen their own build's loop.
 
-Every open escalation remains an external judgment gate until an operator answers
-it. The answer may come from the operator agent or a human; build-phase agents
-cannot answer their own escalations. This includes all policy and setup causes;
-human authorization requirements still apply. Starting either `ab dispatch` or
+Every open phase and policy escalation remains an external judgment gate until an
+operator answers it. The answer may come from the operator agent or a human;
+build-phase agents cannot answer their own escalations. This includes all policy
+and setup causes; human authorization requirements still apply. A janitor
+escalation (Forge failure recovery) is the exception: ordinary janitor retries
+continue across startup, a successful attempt closes it without an answer, and a
+bare retry only brings the next attempt forward. Starting either `ab dispatch` or
 `ab dispatch --once` never appends `escalation.answered` and never re-arms a
 budget. Startup still recovers every actionable current build and delivers
 pending operator commands, whose decisions take precedence over a blocked wait;

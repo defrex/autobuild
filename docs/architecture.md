@@ -17,9 +17,12 @@ disagree, the code is authoritative.
    validation and fail-safe fallback.
 2. **Resumability is not a feature.** Re-running `ab dispatch` attempts every
    actionable current build; each phase resumes as a function of durable state.
-   Open escalations remain parked until an external answer, from the operator
-   agent or you, is recorded; a build-phase agent never answers its own
-   escalation. Pending operator commands remain actionable.
+   Startup is not an answer or a retry. Open phase and policy escalations
+   remain parked until an external answer, from the operator agent or you, is
+   recorded; a build-phase agent never answers its own escalation. Ordinary
+   janitor retries continue across startup, and a successful attempt closes a
+   janitor escalation unanswered; a bare retry only brings the next attempt
+   forward. Pending operator commands remain actionable.
 3. **Ingesters propose, humans dispatch.** Nothing auto-generated passes
    Triage without a human grooming it to Ready, unless the repository waives
    that gate explicitly with `[tickets].proposalState`.
