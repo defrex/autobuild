@@ -1,5 +1,6 @@
 import { StoreWriteTooLargeError } from './errors'
 import {
+  BUILD_CREATION_KEY_CAPABILITY,
   DISPATCH_PLACEMENT_CAPABILITY,
   placementCapabilitiesSchema,
   dispatchPlacementSchema,
@@ -232,20 +233,32 @@ export class RemoteBuildStore implements BuildStore {
     }
   }
 
-  private placementCapability: Promise<boolean> | undefined
+  /** One `/health` probe per instance; `null` when the service predates it. */
+  private healthCapabilities: Promise<string[] | null> | undefined
 
-  async getDispatchPlacement(repo: string): Promise<DispatchPlacement> {
-    this.placementCapability ??= (async () => {
+  private capabilities(): Promise<string[] | null> {
+    this.healthCapabilities ??= (async () => {
       const response = await this.raw('GET', '/health')
-      if (response.status === 404 || response.status === 405) return false
+      if (response.status === 404 || response.status === 405) return null
       if (!response.ok) throw await this.toError(response)
-      const health = placementCapabilitiesSchema.parse(await response.json())
-      return health.capabilities?.includes(DISPATCH_PLACEMENT_CAPABILITY) ?? false
+      return placementCapabilitiesSchema.parse(await response.json()).capabilities ?? []
     })().catch((error) => {
-      this.placementCapability = undefined
+      this.healthCapabilities = undefined
       throw error
     })
-    if (!(await this.placementCapability))
+    return this.healthCapabilities
+  }
+
+  /** A project credential's server allocates slugs; one without the creation
+   * key capability may allocate one the client never learns. */
+  async buildCreationIdentity(): Promise<'keyed' | 'allocated'> {
+    return (await this.capabilities())?.includes(BUILD_CREATION_KEY_CAPABILITY)
+      ? 'keyed'
+      : 'allocated'
+  }
+
+  async getDispatchPlacement(repo: string): Promise<DispatchPlacement> {
+    if (!(await this.capabilities())?.includes(DISPATCH_PLACEMENT_CAPABILITY))
       return { status: 'unknown', reason: 'unsupported-capability' }
     return this.requestJson('GET', `${this.repoPath(repo)}/placement`, dispatchPlacementSchema)
   }

@@ -127,6 +127,7 @@ export class RepoViewStore implements BuildStore {
     opts: RepoViewOptions,
   ) {
     this.getBuildEventPage = backing.getBuildEventPage?.bind(backing)
+    this.buildCreationIdentity = backing.buildCreationIdentity?.bind(backing)
     this.getRepositoryTail = backing.getRepositoryTail?.bind(backing)
     this.getStreamSeed = backing.getStreamSeed?.bind(backing)
     this.getHarvestHistoryPage = backing.getHarvestHistoryPage?.bind(backing)
@@ -295,6 +296,7 @@ export class RepoViewStore implements BuildStore {
     return this.backing.getRepoStateEvents(repo)
   }
   getBuildEventPage: BuildStore['getBuildEventPage']
+  buildCreationIdentity: BuildStore['buildCreationIdentity']
   getRepositoryTail: BuildStore['getRepositoryTail']
   getStreamSeed: BuildStore['getStreamSeed']
   getHarvestHistoryPage: BuildStore['getHarvestHistoryPage']

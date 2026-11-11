@@ -66,6 +66,27 @@ test('intent is not evidence of a claim; incremental recovery retains both failu
   ])
   expect(acc).toEqual({})
   expect(ticketPreparationReducer.advance(acc, [events[4]!])).toEqual({})
+  expect(ticketPreparationReducer.reduce(events).prep?.creationKey).toBeUndefined()
+})
+
+test('a keyed creation selection retains its creation key for recovery', () => {
+  const writes: RepositoryEventWrite[] = [
+    {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.intended',
+      payload: { attempt: 'prep', ticket, readyState: 'Ready', claimedState: 'Doing' },
+    },
+    {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.creation-selected',
+      payload: { attempt: 'prep', ticket, slug: 'build', creationKey: 'prep' },
+    },
+  ]
+  const events = writes.map((write, index) => event(write, index + 1))
+  expect(ticketPreparationReducer.reduce(events).prep).toMatchObject({
+    slug: 'build',
+    creationKey: 'prep',
+  })
 })
 
 test('abandoned preparation diagnostic names the attempt, reason and claim certainty', () => {

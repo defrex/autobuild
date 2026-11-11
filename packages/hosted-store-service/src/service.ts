@@ -1,4 +1,7 @@
-import { DISPATCH_PLACEMENT_CAPABILITY } from '@defrex/autobuild/remote-store'
+import {
+  BUILD_CREATION_KEY_CAPABILITY,
+  DISPATCH_PLACEMENT_CAPABILITY,
+} from '@defrex/autobuild/remote-store'
 import {
   dispatcherSelection,
   dispatcherEnabled,
@@ -929,9 +932,12 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           if (req.method === 'GET' && url.pathname === '/health') {
             return Response.json({
               ok: true,
-              ...(options.syncPlacement || !options.openStore
-                ? { capabilities: [DISPATCH_PLACEMENT_CAPABILITY] }
-                : {}),
+              capabilities: [
+                BUILD_CREATION_KEY_CAPABILITY,
+                ...(options.syncPlacement || !options.openStore
+                  ? [DISPATCH_PLACEMENT_CAPABILITY]
+                  : []),
+              ],
               ...healthIdentity(
                 req.headers.get(AUTOBUILD_VERSION_HEADER),
                 req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER),

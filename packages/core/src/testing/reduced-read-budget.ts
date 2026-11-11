@@ -1782,7 +1782,13 @@ export async function provisionContinuationGuardReadBudget(opts: {
 }
 
 /** In-memory history seeding for preparation budgets; never used as a recurring read. */
-export async function seedPreparationHistory(store: BuildStore, repo: string, facts: number) {
+export async function seedPreparationHistory(
+  store: BuildStore,
+  repo: string,
+  facts: number,
+  /** Record the pending attempt's creation identity, keyed when `creationKey` is set. */
+  creation?: { slug: string; creationKey?: string },
+) {
   await store.ensureRepo(repo)
   for (let i = 0; i < facts / 2; i++) {
     const ticket = { source: 'fake', id: `old-${i}` }
@@ -1808,6 +1814,12 @@ export async function seedPreparationHistory(store: BuildStore, repo: string, fa
       claimedState: 'Doing',
     },
   })
+  if (creation)
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.creation-selected',
+      payload: { attempt: 'pending', ticket: { source: 'fake', id: 'pending' }, ...creation },
+    })
   await store.appendRepo(repo, {
     actor: DISPATCHER,
     type: 'ticket-preparation.recovery-failed',
