@@ -16,7 +16,13 @@ import {
   type DispatchCapacity,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
-import { forgeHealthReducer, type ForgeDegradation } from '../kernel/forge-health'
+import {
+  activeForgeCredentialLimits,
+  forgeCredentialLimitsReducer,
+  forgeHealthReducer,
+  type ForgeCredentialLimit,
+  type ForgeDegradation,
+} from '../kernel/forge-health'
 import { forgeHotspot, type ForgeRequestCounts } from '../ports/forge-telemetry'
 import { configSchema } from '../config/schema'
 import type { BuildStore } from '../store/types'
@@ -176,6 +182,10 @@ export interface RepositoryStatus extends DispatchSettings {
   forgeRequests?: ForgeRequestCounts
   forgeRequestHotspot?: string
   forgeDegradation?: ForgeDegradation
+  /** Active rate limits outside the dispatcher's credential (unauthenticated
+   * requests, build runners, phase sessions). They never pause dispatcher
+   * forge work; each names the limited process. */
+  forgeCredentialLimits?: ForgeCredentialLimit[]
   ticketSourceDegradation?: TicketSourceDegradation
   /** Live operator sandboxes (AUT-340); released environments are omitted. */
   sandboxes: Array<{
@@ -216,7 +226,12 @@ export function projectRepositoryStatus(
   repo: string,
   events: RepositoryEvent[],
   dispatcher = projectDispatcherLiveness(null, [], new Date()),
+  now: Date = new Date(),
 ): RepositoryStatus {
+  const credentialLimits = activeForgeCredentialLimits(
+    forgeCredentialLimitsReducer.reduce(events),
+    now,
+  )
   const publications: RepositoryStatus['publications'] = []
   for (const event of events) {
     if (event.type !== 'orchestrator.sandbox.published') continue
@@ -256,6 +271,7 @@ export function projectRepositoryStatus(
     ...(forgeHealthReducer.reduce(events)
       ? { forgeDegradation: forgeHealthReducer.reduce(events) }
       : {}),
+    ...(credentialLimits.length ? { forgeCredentialLimits: credentialLimits } : {}),
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     ...(Object.keys(repositoryReadFactsReducer.reduce(events).missingAccounts).length
       ? { missingAccounts: repositoryReadFactsReducer.reduce(events).missingAccounts }
@@ -294,7 +310,9 @@ export function repositoryStatusFromFacts(
   repo: string,
   facts: RepositoryReadFacts,
   dispatcher: DispatcherLiveness,
+  now: Date = new Date(),
 ): RepositoryStatus {
+  const credentialLimits = activeForgeCredentialLimits(facts.forgeCredentialLimits, now)
   const warningLines = facts.status
     ? [...facts.status.roleWarnings, ...forgeReadinessWarnings(facts.status)]
     : []
@@ -321,6 +339,7 @@ export function repositoryStatusFromFacts(
     })(),
     ...facts.settings,
     ...(facts.forgeHealth ? { forgeDegradation: facts.forgeHealth } : {}),
+    ...(credentialLimits.length ? { forgeCredentialLimits: credentialLimits } : {}),
     ...(facts.health === undefined ? {} : { ticketSourceDegradation: facts.health }),
     sandboxes: facts.sandboxes
       .filter((state) => state.state !== 'released')
@@ -425,6 +444,10 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
           `forge ${status.forgeDegradation.forge}: degraded — ${status.forgeDegradation.message}; reset ${status.forgeDegradation.resetAt}`,
         ]
       : []),
+    ...(status.forgeCredentialLimits ?? []).map(
+      (limit) =>
+        `forge ${limit.forge}: ${limit.process} rate-limited (${limit.credential}${limit.missingCredential ? `: ${limit.missingCredential}` : ''}) until ${limit.resetAt}; dispatcher forge work is not paused`,
+    ),
     ...(active === undefined
       ? []
       : [
@@ -525,7 +548,7 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
     const observedAt = opts.now?.() ?? new Date()
     const { dispatcher } = await readDispatcherLiveness(store, repo, observedAt)
     const facts = (await readRepositoryFacts(store, repo)).value
-    const status = repositoryStatusFromFacts(repo, facts, dispatcher)
+    const status = repositoryStatusFromFacts(repo, facts, dispatcher, observedAt)
     status.operator = {
       presence: 'loaded',
       registrations: (await store.listOperatorPresence(repo))

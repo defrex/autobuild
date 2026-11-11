@@ -775,6 +775,17 @@ export const forgeHealthEventPayloadSchemas = {
     forge: z.string().min(1),
     reason: z.string().trim().min(1).optional(),
   }),
+  /** A rate limit that does not belong to the dispatcher's credential: an
+   * unauthenticated request, or a limit seen by a build runner or phase
+   * session. Advisory attention; it never pauses repository forge work. */
+  'forge.credential-limited': z.strictObject({
+    forge: z.string().min(1),
+    process: z.string().min(1).max(200),
+    credential: z.enum(['unauthenticated', 'process']),
+    missingCredential: z.string().min(1).max(1000).optional(),
+    message: z.string().min(1).max(2000),
+    resetAt: z.iso.datetime(),
+  }),
 } as const
 
 /** The dispatcher could not execute Git for kernel-side node work. One event
@@ -908,6 +919,7 @@ export const REPOSITORY_ATTENTION_EVENTS = [
   'harvest.failed',
   'dispatcher.forge-degraded',
   'dispatcher.forge-recovered',
+  'forge.credential-limited',
   'dispatcher.kernel-git-unavailable',
   'dispatcher.kernel-git-recovered',
   'dispatcher.ticket-source-degraded',
@@ -1034,6 +1046,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.ticket-source-dependency-limited': ['dispatcher'],
   'dispatcher.forge-degraded': ['dispatcher', 'kernel'],
   'dispatcher.forge-recovered': ['dispatcher', 'kernel', 'human'],
+  'forge.credential-limited': ['dispatcher', 'kernel'],
   'dispatcher.kernel-git-unavailable': ['dispatcher'],
   'dispatcher.kernel-git-recovered': ['dispatcher'],
   'dispatcher.ticket-source-degraded': ['dispatcher'],

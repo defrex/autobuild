@@ -12,21 +12,33 @@ import { KERNEL } from '../events/envelope'
 /** Scheduling signal, never a failed attempt. */
 export class ForgeCooldown extends ForgeRequestDeferred {}
 
+/** Whose rate limits a guard may record. `'repository'` is the dispatcher's
+ * own forge: its classified limits pause forge work repository-wide. A
+ * process scope (build runner, phase session) only obeys that cooldown; its
+ * own limits, like any unauthenticated limit, stay local to the guard and are
+ * reported as attention, because they say nothing about the dispatcher's
+ * credential. */
+export type ForgeGuardScope = 'repository' | { process: string }
+
 /** Receiver bindings and optional plugin capabilities survive the wrapper.
  * Only trusted kernel composition receives the repository Store authority. */
-type GuardDeps = { store: BuildStore; repo: string; name: string; now?: () => Date; wait?: boolean }
+type GuardDeps = {
+  store: BuildStore
+  repo: string
+  name: string
+  now?: () => Date
+  wait?: boolean
+  scope?: ForgeGuardScope
+  /** Test seam for cooldown waits. */
+  sleep?: (ms: number) => Promise<void>
+}
 const guarded = new WeakMap<Forge, { raw: Forge; deps: GuardDeps }>()
 
-export function guardForge(
-  forge: Forge,
-  deps: {
-    store: BuildStore
-    repo: string
-    name: string
-    now?: () => Date
-    wait?: boolean
-  },
-): Forge {
+function scopeKey(scope: ForgeGuardScope | undefined): string {
+  return scope === undefined || scope === 'repository' ? 'repository' : `process:${scope.process}`
+}
+
+export function guardForge(forge: Forge, deps: GuardDeps): Forge {
   const previous = guarded.get(forge)
   if (previous) {
     if (
@@ -34,29 +46,75 @@ export function guardForge(
       previous.deps.repo === deps.repo &&
       previous.deps.name === deps.name &&
       previous.deps.wait === deps.wait &&
-      previous.deps.now === deps.now
+      previous.deps.now === deps.now &&
+      previous.deps.sleep === deps.sleep &&
+      scopeKey(previous.deps.scope) === scopeKey(deps.scope)
     )
       return forge
     return guardForge(previous.raw, deps)
   }
   if (deps.name === 'local-git') return forge
   const now = deps.now ?? (() => new Date())
+  const sleep =
+    deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const scope = deps.scope ?? 'repository'
   const health = () => readForgeHealth(deps.store, deps.repo)
+  const pause = (resetAt: string) =>
+    sleep(Math.max(1000, Math.min(30_000, Date.parse(resetAt) - now().getTime())))
+  /** This guard's own cooldown from a limit that is not repository-wide, and
+   * the latest reset it has already reported (one fact per episode). */
+  let local: { resetAt: string } | undefined
+  let reported: string | undefined
   const before = async () => {
+    while (local) {
+      if (Date.parse(local.resetAt) <= now().getTime()) {
+        local = undefined
+        break
+      }
+      if (!deps.wait) throw new ForgeCooldown(`Forge cooldown until ${local.resetAt}`)
+      await pause(local.resetAt)
+    }
     let active = await health()
     while (active && (deps.wait || Date.parse(active.resetAt) > now().getTime())) {
       if (!deps.wait) throw new ForgeCooldown(`Forge cooldown until ${active.resetAt}`)
-      await new Promise((resolve) =>
-        setTimeout(
-          resolve,
-          Math.max(1000, Math.min(30_000, Date.parse(active!.resetAt) - now().getTime())),
-        ),
-      )
+      await pause(active.resetAt)
       active = await health()
     }
   }
   const failed = async (error: unknown) => {
     if (!isForgeFailure(error) || error.details.kind !== 'rate-limited') return
+    const details = error.details
+    if (scope !== 'repository' || details.unauthenticated) {
+      // At least one second, so a stale reset cannot spin a waiting retry.
+      const until = Math.max(
+        Date.parse(details.resetAt),
+        local ? Date.parse(local.resetAt) : 0,
+        now().getTime() + 1000,
+      )
+      local = { resetAt: new Date(until).toISOString() }
+      if (reported !== undefined && Date.parse(reported) >= Date.parse(details.resetAt)) return
+      reported = details.resetAt
+      try {
+        await deps.store.appendRepo(deps.repo, {
+          actor: KERNEL,
+          type: 'forge.credential-limited',
+          payload: {
+            forge: deps.name,
+            process: scope === 'repository' ? 'dispatcher' : scope.process,
+            credential: details.unauthenticated ? 'unauthenticated' : 'process',
+            ...(details.unauthenticated
+              ? { missingCredential: details.unauthenticated.slice(0, 1000) }
+              : {}),
+            message: error.message.slice(0, 2000),
+            resetAt: details.resetAt,
+          },
+        })
+      } catch {
+        // Attention only: an older server or a missing repository must not
+        // turn the limited request into a different failure.
+      }
+      return
+    }
     const active = await health()
     if (active?.resetAt === error.details.resetAt && active.message === error.message) return
     // Runner/phase credentials cannot administer repositories; their repo

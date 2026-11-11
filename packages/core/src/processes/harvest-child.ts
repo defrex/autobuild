@@ -20,6 +20,7 @@ import { openProductionStore, type StoreOpener } from '../cli/store-opening'
 import { resolveRepoStatePaths } from '../cli/repo-state'
 import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS } from '../kernel/harvest'
 import { HarvestRunner } from './harvest-runner'
+import { GITHUB_REQUIRE_CREDENTIAL_ENV } from '../ports/forge/github-transport'
 
 export type { HarvestExecutionEnvironment }
 
@@ -124,6 +125,9 @@ export async function runHarvestChild(
         ...(env.AB_TICKET_TOKEN ? { AB_TICKET_TOKEN: env.AB_TICKET_TOKEN } : {}),
         AB_STORE: input.storeRef,
         ...(env.AB_TOKEN !== undefined && env.AB_TOKEN !== '' ? { AB_TOKEN: env.AB_TOKEN } : {}),
+        ...(env[GITHUB_REQUIRE_CREDENTIAL_ENV] === '1'
+          ? { [GITHUB_REQUIRE_CREDENTIAL_ENV]: '1' }
+          : {}),
       },
       opts: {
         maxRecoveryAttempts: DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,

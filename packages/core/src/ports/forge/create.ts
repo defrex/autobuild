@@ -41,6 +41,9 @@ export async function createForge(opts: {
   /** Subprocess seam for the builtin GitHub forge's Git commands, including
    * `kernelExec`. Absent, the adapter spawns from the host `PATH`. */
   exec?: Exec
+  /** Process label for the builtin GitHub forge: refuse requests that would
+   * go out without a credential. Plugins and `local-git` ignore it. */
+  requireCredential?: string
 }): Promise<Forge> {
   const registration = resolveForgeRegistration(opts.name, opts.registry)
   if (registration.owner.kind === 'builtin') {
@@ -50,6 +53,9 @@ export async function createForge(opts: {
         repoRoot: opts.repoRoot,
         ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
         ...(opts.exec !== undefined ? { exec: opts.exec } : {}),
+        ...(opts.requireCredential !== undefined
+          ? { requireCredential: opts.requireCredential }
+          : {}),
       })
     }
     if (opts.name === 'local-git') return new LocalGitForge({ repoRoot: opts.repoRoot })

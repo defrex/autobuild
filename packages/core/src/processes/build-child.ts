@@ -5,6 +5,8 @@ import { isRemoteWorkspace } from '../events/workspace-remote'
 import { readBuildFacts } from '../store/reduced-reads'
 import { hostname } from 'node:os'
 import { createForge } from '../ports/forge/create'
+import { GITHUB_REQUIRE_CREDENTIAL_ENV } from '../ports/forge/github-transport'
+import { withWorkspaceAncestry } from '../ports/forge/workspace-ancestry'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { loadPlugins } from '../plugins/load'
@@ -67,14 +69,30 @@ export async function runBuildChild(
       repoRoot: workspace.path ?? workspace.ref,
       env,
     })
+    const workspaceRemote = opts.guest === true || isRemoteWorkspace(workspace)
+    const created = await createForge({
+      name: currentConfig.forge,
+      registry: plugins,
+      env,
+      repoRoot: workspace.path ?? workspace.ref,
+    })
+    // A remote guest holds no forge credential: ancestry proofs run through the
+    // workspace's own Git read channel instead of an anonymous API request.
+    // The runner's limits are its own; only the dispatcher pauses the repository.
     const forge = guardForge(
-      await createForge({
+      workspaceRemote
+        ? withWorkspaceAncestry(created, {
+            exec: spawnExec,
+            workspacePath: workspace.path ?? workspace.ref,
+          })
+        : created,
+      {
+        store: fullStore,
+        repo: record.repo,
         name: currentConfig.forge,
-        registry: plugins,
-        env,
-        repoRoot: workspace.path ?? workspace.ref,
-      }),
-      { store: fullStore, repo: record.repo, name: currentConfig.forge, wait: true },
+        wait: true,
+        scope: { process: `build-runner ${input.slug}` },
+      },
     )
     const getConfig = async () => {
       const latest = await store.getArtifact(input.slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
@@ -99,7 +117,7 @@ export async function runBuildChild(
       runtimes,
       workspacePath: workspace.path ?? workspace.ref,
       workspaceProvider: workspace.provider,
-      workspaceRemote: opts.guest === true || isRemoteWorkspace(workspace),
+      workspaceRemote,
       shutdownSignal: opts.shutdownSignal,
       branch: workspace.branch,
       slug: input.slug,
@@ -112,6 +130,9 @@ export async function runBuildChild(
       sessionEnv: {
         AB_STORE: input.storeRef,
         ...(env.AB_TOKEN !== undefined && env.AB_TOKEN !== '' ? { AB_TOKEN: env.AB_TOKEN } : {}),
+        ...(env[GITHUB_REQUIRE_CREDENTIAL_ENV] === '1'
+          ? { [GITHUB_REQUIRE_CREDENTIAL_ENV]: '1' }
+          : {}),
       },
     })
     await runner.run()

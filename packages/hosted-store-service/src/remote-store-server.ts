@@ -12,7 +12,7 @@ import {
   CheckpointIntegrityError,
   RetiredSeedGenerationError,
 } from '@defrex/autobuild/remote-store'
-import { validateForgeDegradation } from '@defrex/autobuild/remote-store'
+import { FORGE_RESET_EVENT_TYPES, validateForgeResetHorizon } from '@defrex/autobuild/remote-store'
 import { nodeRewriteWireSchema } from '@defrex/autobuild/remote-store'
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { operatorPresenceBodySchema } from '@defrex/autobuild/remote-store'
@@ -573,13 +573,16 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         new URL(req.url).pathname.split('/').slice(3).join('/') === 'events'
       ) {
         // The preceding requireProject binds this exception to the exact grant repository.
-        // Kernel forge guards report newly observed limits through the journal.
+        // Kernel forge guards report newly observed limits through the journal:
+        // current runners record `forge.credential-limited` attention, and runners
+        // pinned to older releases still record `dispatcher.forge-degraded`.
         // Delegates cannot recover the forge, change leases, or append other facts.
         const body = eventWriteWireSchema.safeParse(await req.clone().json())
         if (
           !body.success ||
           !z.object({ kind: z.literal('kernel') }).safeParse(body.data.actor).success ||
-          body.data.type !== 'dispatcher.forge-degraded'
+          (body.data.type !== 'dispatcher.forge-degraded' &&
+            body.data.type !== 'forge.credential-limited')
         )
           throw new MachineAuthError(403, 'write outside delegated resource')
       } else if (kind === 'repo' && grant.kind.startsWith('harvest')) {
@@ -812,9 +815,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   function validateRepoAdmission(event: { type: string; payload: unknown }): void {
     if (event.type === 'dispatcher.placement-set')
       throw new RequestError(403, 'auth', 'placement is published only by the service')
-    if (event.type !== 'dispatcher.forge-degraded') return
+    const type = FORGE_RESET_EVENT_TYPES.find((candidate) => candidate === event.type)
+    if (type === undefined) return
     try {
-      validateForgeDegradation(event.payload, clock())
+      validateForgeResetHorizon(type, event.payload, clock())
     } catch (error) {
       throw new RequestError(400, 'validation', (error as Error).message)
     }
