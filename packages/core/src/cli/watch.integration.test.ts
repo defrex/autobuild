@@ -2979,6 +2979,44 @@ test('runtime rollback is default repository attention and cursor replay deliver
   expect(third.out.slice(0, -1)).toEqual([])
 })
 
+test('abandoned ticket preparation is default repository attention, once per resolution', async () => {
+  const store = makeStore()
+  await store.ensureRepo(REPO)
+  const resolved = (attempt: string, outcome: string, extra: Record<string, unknown> = {}) =>
+    store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'ticket-preparation.resolved',
+      payload: { attempt, ticket: { source: 'fake', id: `T-${attempt}` }, outcome, ...extra },
+    } as never)
+  await resolved('old', 'abandoned', { reason: 'Ticket no longer exists', claimed: true })
+  const first = harness(store)
+  await abWatch({ ...first.base, timeout: '1' })
+  expect(first.out.slice(0, -1)).toEqual([])
+  const cursor = JSON.parse(first.out.at(-1)!).cursor
+  await resolved('a1', 'abandoned', {
+    reason: 'Claim outcome uncertain: ticket state unavailable',
+    claimed: false,
+  })
+  await resolved('a2', 'abandoned', { reason: 'Conflicting slug ownership' })
+  await resolved('a3', 'handed-back')
+  const second = harness(store)
+  await abWatch({ ...second.base, since: cursor, timeout: '1' })
+  const records = second.out.slice(0, -1).map((line) => JSON.parse(line))
+  expect(records.map((record) => record.event.payload.attempt)).toEqual(['a1', 'a2'])
+  expect(records[0].event.payload.claimed).toBe(false)
+  const unconfirmed = renderWatchLine(records[0].event, null)
+  expect(unconfirmed).toContain('ticket T-a1 (fake): preparation a1 abandoned')
+  expect(unconfirmed).toContain('claim unconfirmed (provider outcome unknown')
+  expect(unconfirmed).toContain('ticket state unavailable')
+  const unrecorded = renderWatchLine(records[1].event, null)
+  expect(unrecorded).toContain('ticket T-a2 (fake): preparation a2 abandoned')
+  expect(unrecorded).toContain('claim certainty not recorded')
+  expect(unrecorded).toContain('Conflicting slug ownership')
+  const third = harness(store)
+  await abWatch({ ...third.base, since: JSON.parse(second.out.at(-1)!).cursor, timeout: '1' })
+  expect(third.out.slice(0, -1)).toEqual([])
+})
+
 describe('advisory operator watches', () => {
   test('rejects named and ambient operator watches before opening the store', async () => {
     for (const overrides of [

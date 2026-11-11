@@ -170,7 +170,7 @@ test('cold presence reads consume canonical probed values with zero idle event r
 
 // The bound is the row count; 100,000 events take seconds to seed in a loaded
 // sandbox, like the node-polling budget, so the default 5 s deadline is not the claim.
-test('expired prior watch owners have bounded exact-run reads at 100 and 100000 events', async () => {
+test('expired prior watch owners and abandoned preparations have bounded reads at 100 and 100000 events', async () => {
   const { stoppedOwnerWatchReadBudget } = await import('../testing/reduced-read-budget')
   await stoppedOwnerWatchReadBudget()
   // Seeding 100,000 validated events can exceed Bun's default timeout on shared runners.
