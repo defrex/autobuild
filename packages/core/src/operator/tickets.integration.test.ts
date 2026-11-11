@@ -424,7 +424,7 @@ test('native pages forward criteria and window without a full read or double sli
   expect((await listOperatorTickets({ store, repo, backend: backend(native) })).total).toBe(1)
 })
 
-test('fallback pages list urgent first in dispatch order and newest reverses the source', async () => {
+test('fallback pages list urgent first in dispatch order and newest filed first', async () => {
   const store = await configuredStore()
   const queued = (id: string, priority?: 'urgent') => ({
     ...seed,
@@ -445,8 +445,14 @@ test('fallback pages list urgent first in dispatch order and newest reverses the
   expect(await ids()).toEqual({ ids: ['AUT-2', 'AUT-1', 'AUT-3'], total: 3 })
   expect(await ids({ limit: 2 })).toEqual({ ids: ['AUT-2', 'AUT-1'], total: 3 })
   expect(await ids({ limit: 2, offset: 2 })).toEqual({ ids: ['AUT-3'], total: 3 })
+  // Newest filed first, not reversed dispatch order (AUT-3, AUT-1, AUT-2).
   expect(await ids({ limit: 3, order: 'newest' })).toEqual({
     ids: ['AUT-3', 'AUT-2', 'AUT-1'],
+    total: 3,
+  })
+  expect(await ids({ limit: 1, offset: 1, order: 'newest' })).toEqual({ ids: ['AUT-2'], total: 3 })
+  expect(await ids({ limit: 2, offset: 1, order: 'newest' })).toEqual({
+    ids: ['AUT-2', 'AUT-1'],
     total: 3,
   })
   const native = Object.assign(source, {
