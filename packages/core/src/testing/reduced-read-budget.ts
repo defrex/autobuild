@@ -360,10 +360,19 @@ export async function reducedReadBudget(opts: {
         ).toBe('unchanged')
         // Latest per (forge, process): repeated limits replace, never accumulate.
         expect((await readRepositoryFacts(cold, repo)).value.forgeCredentialLimits).toHaveLength(1)
-        expect(await readForgeHealth(cold, repo)).toBeUndefined()
       }
       expect(costs.events).toBe(0)
       expect(costs.metadata).toBeLessThan(operations * 20)
+    }
+    // The guarded-call health check stays clear and flat per call beside
+    // a saved credential limit.
+    for (const operations of [1, 8]) {
+      reset()
+      for (let n = 0; n < operations; n++) {
+        expect(await readForgeHealth(cold, repo)).toBeUndefined()
+      }
+      expect(costs.events).toBe(0)
+      expect(costs.metadata).toBeLessThan(operations * 10)
     }
     // Account holds survive fresh consumers and reconcile without idle journal reads or writes.
     const missing = missingAccountCredentials(
