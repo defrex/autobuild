@@ -1239,6 +1239,75 @@ test('complete nodes verify and land a linear stack only after explicit consent'
   }
 })
 
+test('a node whose integration preparation keeps failing retries it while escalated and recovers', async () => {
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets: [
+      { ...readyTicket('NODE', { title: 'Release node' }), kind: 'node' },
+      { ...readyTicket('CHILD', { title: 'Release child' }), target: 'NODE' },
+    ],
+  })
+  try {
+    await h.dispatcher.tick()
+    const node = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'NODE')!
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    await h.runLatest()
+    const child = (await h.store.listBuilds()).find((record) => record.ticket?.id === 'CHILD')!
+    const childState = reduceBuild(await h.events(child.slug))
+    // Only the verification-head snapshot fails: comparison and PR polling succeed.
+    let failing = true
+    let snapshots = 0
+    const rewrite = h.forgeAdapter.rewrite!
+    Object.defineProperty(h.forgeAdapter, 'rewrite', {
+      configurable: true,
+      value: {
+        ...rewrite,
+        snapshot: async (...args: Parameters<typeof rewrite.snapshot>) => {
+          if (!args[0].destinationRef.endsWith('/verify-head')) return rewrite.snapshot(...args)
+          snapshots++
+          if (failing) throw new Error('snapshot unavailable')
+          return rewrite.snapshot(...args)
+        },
+      },
+    })
+    await h.forgeAdapter.squashMerge(h.origin, childState.pr!.number, childState.pr!.headSha, {
+      buildSlug: child.slug,
+    })
+    for (let n = 0; n < 40; n++) {
+      await h.dispatcher.tick()
+      if (ofType(await h.events(node.slug), 'build.janitor-escalated').length) break
+      const janitor = reduceBuild(await h.events(node.slug)).janitor
+      h.clock.advance(janitor ? Date.parse(janitor.nextAttemptAt) - h.clock().getTime() : 60_000)
+    }
+    const [raised] = ofType(await h.events(node.slug), 'build.janitor-escalated')
+    expect(raised?.payload).toMatchObject({ operation: 'node integration' })
+    let state = reduceBuild(await h.events(node.slug))
+    expect(state.status).toBe('blocked')
+
+    // The janitor's own escalation does not skip the failing preparation.
+    h.clock.advance(Date.parse(state.janitor!.nextAttemptAt) - h.clock().getTime())
+    const count = snapshots
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
+    expect(snapshots).toBeGreaterThan(count)
+    expect(ofType(await h.events(node.slug), 'build.janitor-recovered')).toEqual([])
+    expect(reduceBuild(await h.events(node.slug)).openEscalations).toHaveLength(1)
+
+    failing = false
+    state = reduceBuild(await h.events(node.slug))
+    h.clock.advance(Date.parse(state.janitor!.nextAttemptAt) - h.clock().getTime())
+    await h.dispatcher.tick()
+    state = reduceBuild(await h.events(node.slug))
+    expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(1)
+    expect(ofType(await h.events(node.slug), 'build.janitor-recovered')).toHaveLength(1)
+    expect(state.openEscalations).toEqual([])
+    expect(state.janitor).toBeUndefined()
+  } finally {
+    await h.cleanup()
+  }
+})
+
 /** A capability-bearing local-git double: issue-closing support with a
  * recording PR body rewrite, and a fast-forward that logs its order. */
 function linkCapableForge(forge: import('../ports/types').Forge) {
