@@ -5466,6 +5466,7 @@ export class Dispatcher {
         ticket: attempt.ticket,
         outcome,
         ...(reason ? { reason: reason.slice(0, 4000) } : {}),
+        ...(outcome === 'abandoned' ? { claimed: attempt.claimed } : {}),
       },
     })
   }
