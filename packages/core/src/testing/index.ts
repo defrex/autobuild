@@ -51,6 +51,8 @@ export {
   happyHandlers,
   makeHarness,
   readyTicket,
+  SCENARIO_DISPATCH_LEASE_RENEWAL_SECONDS,
+  SCENARIO_DISPATCH_LEASE_SECONDS,
   typesOf,
   writeFileIn,
   type Cli,
