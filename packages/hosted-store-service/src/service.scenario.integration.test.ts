@@ -10,7 +10,7 @@ import { abDispatch } from '@defrex/autobuild/testing'
 import { agentActor, KERNEL } from '@defrex/autobuild/testing'
 import { createTicketSource } from '@defrex/autobuild/testing'
 import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
-import type { TicketSource } from '@defrex/autobuild/plugin-sdk'
+import type { Ticket, TicketSource } from '@defrex/autobuild/plugin-sdk'
 import { spawnExec } from '@defrex/autobuild/testing'
 import { OperatorApiClient } from './operator-api'
 import { RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
@@ -586,4 +586,186 @@ test('a project-credential node keeps its ab-node/ branch through creation, open
   ).toMatchObject({ baseBranch: node.branch })
   // Publication and recovery read the record; a fresh read returns the same identity.
   expect((await h.store.getBuild(node.slug))?.branch).toBe(node.branch)
+})
+
+/** A project-credential dispatch whose next `POST /builds` commits on the
+ * server and then loses its response. `legacy` emulates a service that
+ * predates keyed creation: it strips the key and the capability. */
+async function lostCreationHarness(tickets: Ticket[], opts: { legacy?: boolean } = {}) {
+  const projects = testProjects([])
+  const { store: credentials, auth } = testCredentials(projects)
+  let projectToken = ''
+  const loss = { next: false }
+  const h = await makeHarness({
+    localGitForge: true,
+    handlers: happyHandlers(),
+    tickets,
+    storeAdapter: async (backing) => {
+      const server = createStoreServer({ store: backing, auth })
+      const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+        const path = new URL(String(input)).pathname
+        let body = init?.body
+        if (opts.legacy && path === '/builds' && init?.method === 'POST') {
+          const { creationKey: _, ...rest } = JSON.parse(String(body))
+          body = JSON.stringify(rest)
+        }
+        const response = await server.fetch(
+          new Request(input, {
+            ...init,
+            ...(body === undefined ? {} : { body }),
+            headers: {
+              ...(init?.headers as Record<string, string>),
+              authorization: `Bearer ${projectToken}`,
+            },
+          }),
+        )
+        if (opts.legacy && path === '/health') {
+          const { capabilities: _, ...health } = (await response.json()) as Record<string, unknown>
+          return Response.json(health)
+        }
+        if (loss.next && path === '/builds' && init?.method === 'POST' && response.ok) {
+          loss.next = false
+          throw new Error('create response lost')
+        }
+        return response
+      }) as typeof fetch
+      return {
+        store: new RemoteBuildStore({ url: 'http://store', fetchFn }),
+        storeRef: 'http://store',
+      }
+    },
+  })
+  harnesses.push(h)
+  await projects.add(h.origin, 'fixture')
+  projectToken = (await credentials.issue(h.origin, 'fixture')).token
+  const repoEvents = async (type: string) =>
+    (await h.store.getRepoEvents(h.origin)).filter((event) => event.type === type)
+  return { h, loss, repoEvents }
+}
+
+for (const kind of ['work', 'node'] as const) {
+  test(`a lost project-credential ${kind} creation response recovers its one canonical build`, async () => {
+    const ticket = { ...readyTicket('T-1'), ...(kind === 'node' ? { kind } : {}) } as Ticket
+    const { h, loss, repoEvents } = await lostCreationHarness([ticket])
+    loss.next = true
+    await expect(h.dispatcher.tick()).rejects.toThrow('create response lost')
+    const [selected] = await repoEvents('ticket-preparation.creation-selected')
+    const { slug: proposed, creationKey } = selected!.payload as {
+      slug: string
+      creationKey?: string
+    }
+    expect(creationKey).toBeDefined()
+    const [build] = await h.store.listBuilds()
+    // The originating defect: the server allocated a slug other than the
+    // proposed one, which alone reads as absent. Before keyed creation that
+    // absence handed the claimed ticket back to Ready for a second build.
+    expect(build!.slug).not.toBe(proposed)
+    expect(await h.wiring.store.getBuild(proposed)).toBeNull()
+    expect(build!.branch).toBe(`${kind === 'node' ? 'ab-node' : 'ab'}/${build!.slug}`)
+    expect(
+      (await repoEvents('ticket-preparation.resolved')).map((event) => event.payload),
+    ).toMatchObject([{ outcome: 'owned' }])
+    expect(h.tickets.transitions).toEqual([])
+
+    for (let i = 0; i < 3; i++) {
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+    }
+    expect((await h.store.listBuilds()).map((record) => record.slug)).toEqual([build!.slug])
+    expect(typesOf(await h.events(build!.slug))).toContain(
+      kind === 'node' ? 'node.opened' : 'spec.imported',
+    )
+    expect(h.tickets.claims).toEqual(['T-1'])
+    expect(h.tickets.transitions).toEqual([])
+  })
+}
+
+test('a pre-upgrade unkeyed attempt on an allocating service ends with an unknown outcome', async () => {
+  const { h, repoEvents } = await lostCreationHarness([readyTicket('T-1')])
+  const ticket = { source: 'fake', id: 'T-1', title: 'Add rate limiting' }
+  // Created before keyed creation: a random server slug the attempt never recorded.
+  const created = await h.wiring.store.createBuild({
+    slug: 'add-rate-limiting',
+    repo: h.origin,
+    ticket,
+    branch: 'ab/add-rate-limiting',
+  })
+  expect(created.slug).not.toBe('add-rate-limiting')
+  await h.store.ensureRepo(h.origin)
+  await h.tickets.claim('T-1')
+  for (const [type, extra] of [
+    ['ticket-preparation.intended', { readyState: 'Ready', claimedState: 'Doing' }],
+    ['ticket-preparation.claimed', {}],
+    ['ticket-preparation.creation-selected', { slug: 'add-rate-limiting' }],
+  ] as const)
+    await h.store.appendRepo(h.origin, {
+      actor: { kind: 'dispatcher' },
+      type,
+      payload: { attempt: 'prep_legacy', ticket, ...extra },
+    } as Parameters<typeof h.store.appendRepo>[1])
+  const report = await h.dispatcher.tick({ acceptNewWork: false })
+  expect(report.janitorDiagnostics).toEqual([expect.stringContaining('Creation outcome unknown')])
+  for (let i = 0; i < 2; i++) {
+    h.clock.advance(60_000)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorDiagnostics).toEqual([])
+  }
+  expect((await h.tickets.get('T-1'))?.state).toBe('Doing')
+  expect(h.tickets.transitions).toEqual([])
+  expect(await h.store.listBuilds()).toHaveLength(1)
+  expect(await repoEvents('ticket-preparation.resolved')).toHaveLength(1)
+})
+
+test('a service that strips the creation key leaves a lost creation explicitly unknown', async () => {
+  const { h, loss, repoEvents } = await lostCreationHarness([readyTicket('T-1')], {
+    legacy: true,
+  })
+  loss.next = true
+  await expect(h.dispatcher.tick()).rejects.toThrow('create response lost')
+  const [selected] = await repoEvents('ticket-preparation.creation-selected')
+  expect(selected?.payload).not.toHaveProperty('creationKey')
+  const [resolution] = await repoEvents('ticket-preparation.resolved')
+  expect(resolution?.payload).toMatchObject({
+    outcome: 'abandoned',
+    reason: expect.stringContaining('Creation outcome unknown'),
+  })
+  for (let i = 0; i < 3; i++) {
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+  }
+  expect(await h.store.listBuilds()).toHaveLength(1)
+  expect(h.tickets.claims).toEqual(['T-1'])
+  expect(h.tickets.transitions).toEqual([])
+})
+
+test("a concurrent keyed attempt for the same ticket never adopts another attempt's build", async () => {
+  const { h, loss, repoEvents } = await lostCreationHarness([readyTicket('T-1')])
+  loss.next = true
+  await expect(h.dispatcher.tick()).rejects.toThrow('create response lost')
+  const [build] = await h.store.listBuilds()
+  const [selected] = await repoEvents('ticket-preparation.creation-selected')
+  const ticket = { source: 'fake', id: 'T-1', title: 'Add rate limiting' }
+  for (const [type, extra] of [
+    ['ticket-preparation.intended', { readyState: 'Ready', claimedState: 'Doing' }],
+    [
+      'ticket-preparation.creation-selected',
+      { slug: (selected!.payload as { slug: string }).slug, creationKey: 'prep_other' },
+    ],
+  ] as const)
+    await h.store.appendRepo(h.origin, {
+      actor: { kind: 'dispatcher' },
+      type,
+      payload: { attempt: 'prep_other', ticket, ...extra },
+    } as Parameters<typeof h.store.appendRepo>[1])
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const other = (await repoEvents('ticket-preparation.resolved')).find(
+    (event) => (event.payload as { attempt: string }).attempt === 'prep_other',
+  )
+  // Confirmed absence at its own identities: no adoption, and its unconfirmed
+  // claim leaves the first attempt's claimed ticket alone.
+  expect(other?.payload).toMatchObject({
+    outcome: 'abandoned',
+    reason: expect.stringContaining('Claim outcome uncertain'),
+  })
+  expect((await h.store.listBuilds()).map((record) => record.slug)).toEqual([build!.slug])
+  expect(h.tickets.transitions).toEqual([])
 })

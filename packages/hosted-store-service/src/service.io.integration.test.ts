@@ -76,6 +76,7 @@ describe('hosted store service', () => {
     expect(health.status).toBe(200)
     expect(await health.json()).toEqual({
       ok: true,
+      capabilities: ['build-creation-key-v1'],
       autobuildVersion: AUTOBUILD_VERSION,
       protocolVersion:
         RELEASE_LINE_PROTOCOLS[AUTOBUILD_VERSION.split('.').slice(0, 2).join('.')] ??
