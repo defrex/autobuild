@@ -755,7 +755,7 @@ export const policySchema = z.strictObject({
   maxDispatchAttempts: z.number().int().positive().default(3),
   /** Consecutive workspace setup failures before human intervention is required. */
   maxSetupAttempts: z.number().int().positive().default(3),
-  /** Consecutive provider lifecycle failures before recovery requires a human retry. */
+  /** Consecutive provider lifecycle failures before a setup-targeted escalation; a `retry` answer from any operator, agent or human, re-arms the budget. */
   maxInfrastructureAttempts: z.number().int().positive().default(3),
   maxReconcileAttempts: z.number().int().positive().default(3),
   /** converge's `maxRounds` for the review loops (SPEC §10). */

@@ -311,8 +311,10 @@ Read events with a cursor or a small `--events` count; logs are long.
   build status before acting. Work the consent queue by checking completeness
   and current verification, then issuing merge for the chosen merge. A merge
   acknowledgement accepts consent; it never promises that gates passed. A
-  `merge-not-ready` or `node-incomplete` refusal records nothing; re-read
-  status and act on the stated reason.
+  `merge-not-ready` or `node-incomplete` refusal records no consent and no
+  landing, though a node's completeness check may save an
+  `integration.observed` diagnostic; re-read status and act on the stated
+  reason.
 - Configure ordered `[[merge]]` rules for project policy through ab-guide.
   Repository auto-merge defaults and per-build auto-merge toggles are retired.
 

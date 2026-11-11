@@ -2472,8 +2472,9 @@ Every command requires an applicable target in this repository. Pause and
 resume require an active build; abort and hold also accept queued builds.
 Merge requires a ready candidate and cannot bypass verification or merge gates;
 a merge that is not ready is refused with code `merge-not-ready` (or
-`node-incomplete` for an incomplete node) and a reason, and records nothing;
-`ab answer` requires an open escalation except for eligible node spec revisions. A stale, missing, done,
+`node-incomplete` for an incomplete node) and a reason. A refusal records no
+merge consent and no landing; a node's live completeness check may still save
+an `integration.observed` diagnostic before it refuses. `ab answer` requires an open escalation except for eligible node spec revisions. A stale, missing, done,
 aborted, or otherwise inapplicable target is an error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
 same stable fallback on both surfaces. These commands run sessionless and
 accept `--store <ref>` with the usual explicit flag > `AB_STORE` > `[store] url` > repository
