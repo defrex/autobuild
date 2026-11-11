@@ -749,6 +749,7 @@ export const policySchema = z.strictObject({
   harvestThreshold: z.number().int().positive().default(5),
   /** Merged builds after the oldest observation that start harvest; zero disables drift. */
   janitorFailureAttentionSeconds: z.number().int().positive().default(600),
+  janitorFailureEscalationSeconds: z.number().int().positive().default(3600),
   nodeIdleAfterSeconds: z.number().int().positive().default(600),
   nodeIdlePollSeconds: z.number().int().positive().default(120),
   janitorBackoffMaxSeconds: z.number().int().positive().default(300),
@@ -774,6 +775,8 @@ documentFields(policySchema, {
     'Default bound for each plan/review and implement/review convergence loop. Your agent may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected.',
   harvestThreshold: 'New unclaimed observation occurrences needed to start one harvest run.',
   janitorFailureAttentionSeconds: 'Consecutive janitor failure duration before build attention.',
+  janitorFailureEscalationSeconds:
+    'Consecutive janitor failure duration before the build raises one escalation; the janitor keeps retrying.',
   nodeIdleAfterSeconds: 'Quiet period before opened integration nodes enter idle polling.',
   nodeIdlePollSeconds: 'Interval between idle node checks; durable activity wakes the next tick.',
   janitorBackoffMaxSeconds: 'Cap on exponential janitor retry delay, starting at 30 seconds.',
