@@ -33,6 +33,7 @@ import { compatibilityMetadataSchema } from '../../events/policy'
 import { repoTickCompletionSchema, repoTickObservationSchema } from '../repo-tick'
 import { reducerSnapshotWireSchema } from '../snapshots'
 import { z } from 'zod'
+import { CREATION_KEY } from '../../kernel/build-creation'
 import { actorSchema } from '../../events/envelope'
 import { eventPayloadSchemas } from '../../events/payloads'
 import { ticketRefSchema } from '../../ontology'
@@ -95,6 +96,10 @@ export const newBuildBodySchema = z.object({
   // Additive optional initial `build.created` event, appended atomically with
   // the record. Loose like every event wire schema: the backing store validates.
   created: eventWriteWireSchema.optional(),
+  // Additive optional creation key (`build-creation-key-v1`): a project
+  // credential's create lands at the slug this key derives, at most once.
+  // Old servers strip it; old clients never send it. No protocol-version bump.
+  creationKey: z.string().regex(CREATION_KEY).optional(),
 })
 
 export const buildRecordWireSchema = z.object({
@@ -552,6 +557,8 @@ export const nodeRewriteWireSchema = eventPayloadSchemas['node.rewritten'].nulla
 
 /** Optional and independently negotiated; no change to released value contracts. */
 export const DISPATCH_PLACEMENT_CAPABILITY = 'dispatch-placement-v1'
+/** `/health` capability: keyed project creation lands at `creationBuildSlug`. */
+export const BUILD_CREATION_KEY_CAPABILITY = 'build-creation-key-v1'
 export const placementCapabilitiesSchema = z.object({
   capabilities: z.array(z.string()).optional(),
 })
