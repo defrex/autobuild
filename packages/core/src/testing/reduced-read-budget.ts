@@ -44,7 +44,9 @@ import {
   readBuildDigests,
   readDispatcherRunFacts,
   readOpenTick,
+  readHostedHarvestAuthority,
 } from '../store/reduced-reads'
+import { decideHostedHarvestAuthority } from '../processes/harvest-execution-state'
 import { RepoViewStore } from '../processes/repo-view'
 import { settlePendingPublication } from '../cli/publication-settlement'
 import {
@@ -3141,4 +3143,119 @@ export async function janitorEscalationRequestBudget(opts: {
   }
   expect(results[1]!.vectors).toEqual(results[0]!.vectors)
   return { vectors: results[0]!.vectors, escalations: results.map((r) => r.escalations) }
+}
+
+/** AUT-1152: a prepared hosted guest re-reads its execution authority at its
+ * durable boundaries. Proves the probe is one constant-size served value:
+ * after the one-time reduction per key, an unchanged re-read issues the same
+ * single request and reads zero event rows, and its response is the same size
+ * whether the repository has had one harvest execution or a thousand; one new
+ * fact costs exactly one row. */
+export async function hostedHarvestAuthorityReadBudget() {
+  const { MemoryBuildStore } = await import('../store/memory')
+  const repo = '/repo'
+  const guest = { execution: 'guest', run: 'h_guest', leaseHolder: 'inv-1' }
+  const sizes = [
+    { cycles: 1, filler: 100 },
+    { cycles: 1_000, filler: 10_000 },
+  ]
+  const results: Array<{
+    warmRows: number
+    unchanged: { vector: Record<string, number>; rows: number; size: number }
+    appended: { rows: number; size: number }
+    replaced: { rows: number; decision: ReturnType<typeof decideHostedHarvestAuthority> }
+  }> = []
+  for (const { cycles, filler } of sizes) {
+    const store = new MemoryBuildStore()
+    await seedPreparationHistory(store, repo, filler)
+    for (let i = 0; i < cycles; i++) {
+      const run = `h_old_${i}`
+      const execution = `old-${i}`
+      await store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run,
+          observations: [{ build: `b-${i}`, seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: i },
+        },
+      })
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.authorized',
+        payload: { execution, run, launch: 'started', leaseHolder: `inv-old-${i}` },
+      })
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.started',
+        payload: { execution, provider: 'p', environmentId: `env-${i}` },
+      })
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.released',
+        payload: { execution, environmentId: `env-${i}`, snapshots: { outcome: 'confirmed' } },
+      })
+    }
+    await store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'harvest.execution.authorized',
+      payload: { ...guest, launch: 'started' },
+    })
+    const rows = memoryRepositoryReadCounter(store, repo)
+    const requests = memoryStoreRequestCounter(store)
+    try {
+      const probe = async () => {
+        rows.reset()
+        requests.reset()
+        const { value } = await readHostedHarvestAuthority(store, repo)
+        return {
+          vector: requests.vector(),
+          rows: rows.rows,
+          size: JSON.stringify(value).length,
+          decision: decideHostedHarvestAuthority(value, guest),
+        }
+      }
+      // The one-time reduction of this (repo, reducer) key.
+      const warm = await probe()
+      const unchanged = await probe()
+      expect(unchanged.decision).toEqual({ kind: 'authorized' })
+      await store.appendRepo(repo, {
+        actor: humanActor('budget'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+      const appended = await probe()
+      expect(appended.decision).toEqual({ kind: 'authorized' })
+      await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.authorized',
+        payload: {
+          execution: 'successor',
+          run: guest.run,
+          launch: 'resumed',
+          leaseHolder: 'inv-2',
+        },
+      })
+      const replaced = await probe()
+      results.push({
+        warmRows: warm.rows,
+        unchanged: { vector: unchanged.vector, rows: unchanged.rows, size: unchanged.size },
+        appended: { rows: appended.rows, size: appended.size },
+        replaced: { rows: replaced.rows, decision: replaced.decision },
+      })
+    } finally {
+      requests.restore()
+    }
+  }
+  const [small, large] = results as [(typeof results)[0], (typeof results)[0]]
+  for (const result of results) {
+    expect(result.unchanged.vector).toEqual({ getReducerValue: 1 })
+    expect(result.unchanged.rows).toBe(0)
+    expect(result.appended.rows).toBe(1)
+    expect(result.replaced.rows).toBe(1)
+    expect(result.replaced.decision).toEqual({ kind: 'fenced', reason: 'replaced' })
+  }
+  expect(large.unchanged.size).toBe(small.unchanged.size)
+  expect(large.appended.size).toBe(small.appended.size)
+  return { small, large }
 }

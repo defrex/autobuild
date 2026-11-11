@@ -2982,6 +2982,8 @@ class DispatchLoop {
       if (detached.value) {
         // Teardown detached the local wait; the guest keeps running and the
         // execution stays open for durable settlement by a later invocation.
+        // Releasing this invocation's lease does not fence the guest: its
+        // authority is the execution's durable authorization.
         return
       }
       // The guest exit code carries no pipeline outcome: classify from the
