@@ -298,7 +298,11 @@ The default watch reports actionable conditions only:
 - Repository `harvest.escalated`, `harvest.recovery-exhausted`,
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, `dispatcher.upgrade-failed`, `dispatcher.runtime-rolled-back`,
-  `dispatcher.kernel-git-unavailable`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+  `dispatcher.kernel-git-unavailable`, `forge.credential-limited`, abnormal
+  `dispatcher.run-stopped`, and `dispatcher.lost`. A `forge.credential-limited`
+  line names the process whose GitHub request was rate-limited outside the
+  dispatcher's credential (unauthenticated, with why, or on that process's own
+  credential) and its reset; dispatcher forge work continues.
 - Repository `ticket-preparation.resolved` with outcome `abandoned`: automatic
   preparation recovery stopped and left the ticket unchanged. The line names the
   ticket, attempt and recorded reason; the payload's `claimed` says whether the
@@ -395,6 +399,10 @@ Active janitor attention and an open janitor escalation clear on a successful
 attempt. Repository status
 includes forge degradation/reset and available request counts; `dispatcher.forge-persistent` requires a completed retry opportunity past
 the original reset, which later rate limits cannot postpone indefinitely.
+Only the dispatcher's own classified limits record that degradation. Status
+also lists active `forgeCredentialLimits`: limits on unauthenticated requests or
+seen by build runners and phase sessions, each naming the process, which never
+pause repository forge work.
 
 ### Node restack request
 
@@ -586,14 +594,17 @@ Paged ticket listings use the source's optional native `listPage(criteria, page)
 ### Forge cooldown admission and explicit recovery
 
 Hosted repository event appends and atomic artifact deposits validate
-`dispatcher.forge-degraded` before any durable mutation. The payload must match
-its event schema, with a finite ISO `resetAt` at most 24 hours after server time
+`dispatcher.forge-degraded` and `forge.credential-limited` before any durable
+mutation. The payload must match its event schema, with a finite ISO `resetAt` at most 24 hours after server time
 (inclusive). Already-expired deadlines are accepted. Invalid or out-of-horizon
 writes return `400 validation` (the remote adapter exposes `EventValidationError`);
 the server never clamps or invents a provider reset. Historical decoding has no clock-relative restriction.
 
 Build-runner and build-phase grants may POST only the kernel-authored
-`dispatcher.forge-degraded` repository fact through the events route. The
+`forge.credential-limited` and `dispatcher.forge-degraded` repository facts
+through the events route. Current runners and phase sessions record only
+`forge.credential-limited` attention; the `dispatcher.forge-degraded` exception
+remains for runners pinned to older releases. The
 preceding `requireProject` check binds this exception to the exact repository
 in the delegated claim. A hosted project identifies one repository. Delegates
 cannot write recovery, deposits or other repository facts, regardless of the

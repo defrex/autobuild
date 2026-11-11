@@ -5,6 +5,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
 import { describeStoreOpeningContract } from './store-opening.contract'
+import { projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
 import {
   abRepositoryStatus,
   OPERATOR_PRESENCE_UNAVAILABLE,
@@ -815,6 +816,54 @@ test('account conditions survive run start, update descriptors, and recover on r
   expect(renderRepositoryStatus(projectRepositoryStatus('repo', events)).join('\n')).not.toContain(
     'Missing credentials:',
   )
+})
+
+test('credential limits surface as attention and active status lines without pausing the dispatcher', async () => {
+  const { repositoryReadFactsReducer } = await import('../kernel/read-facts')
+  const { summarizeEvent } = await import('./watch')
+  const { repositoryNeedsAttention } = await import('./attention')
+  const event = (seq: number, process: string, resetAt: string) =>
+    ({
+      repo: 'repo',
+      seq,
+      ts: '2026-11-11T21:35:54.921Z',
+      actor: { kind: 'kernel' },
+      type: 'forge.credential-limited',
+      payload: {
+        forge: 'github',
+        process,
+        credential: 'unauthenticated',
+        missingCredential: 'GITHUB_TOKEN and GH_TOKEN are unset',
+        message: 'API rate limit exceeded for 3.86.63.34.',
+        resetAt,
+      },
+    }) as import('../events/repository').RepositoryEvent
+  const events = [
+    event(1, 'build-runner active', '2026-11-11T22:12:24.000Z'),
+    event(2, 'build-runner expired', '2026-11-11T21:40:00.000Z'),
+  ]
+  expect(repositoryNeedsAttention(events[0]!)).toBe(true)
+  expect(summarizeEvent(events[0]!, null)).toBe(
+    'Forge request limited for build-runner active (unauthenticated: GITHUB_TOKEN and GH_TOKEN are unset); reset 2026-11-11T22:12:24.000Z; dispatcher forge work continues',
+  )
+  const now = new Date('2026-11-11T22:00:00.000Z')
+  const dispatcher = projectDispatcherLiveness(null, [], now)
+  for (const status of [
+    projectRepositoryStatus('repo', events, dispatcher, now),
+    repositoryStatusFromFacts('repo', repositoryReadFactsReducer.reduce(events), dispatcher, now),
+  ]) {
+    expect(status.forgeDegradation).toBeUndefined()
+    expect(status.forgeCredentialLimits?.map((limit) => limit.process)).toEqual([
+      'build-runner active',
+    ])
+    expect(renderRepositoryStatus(status)).toContain(
+      'forge github: build-runner active rate-limited (unauthenticated: GITHUB_TOKEN and GH_TOKEN are unset) until 2026-11-11T22:12:24.000Z; dispatcher forge work is not paused',
+    )
+  }
+  const later = new Date('2026-11-11T22:13:00.000Z')
+  expect(
+    projectRepositoryStatus('repo', events, dispatcher, later).forgeCredentialLimits,
+  ).toBeUndefined()
 })
 
 test('startup warnings and the latest scan queue diagnostics reach both status projections', async () => {

@@ -43,6 +43,7 @@ export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
   ...DISPATCH_HANDOFF_EVENT_TYPES,
   'dispatcher.forge-degraded',
   'dispatcher.forge-recovered',
+  'forge.credential-limited',
   'dispatcher.kernel-git-unavailable',
   'dispatcher.kernel-git-recovered',
   ...Object.keys(changePresenceEventPayloadSchemas),

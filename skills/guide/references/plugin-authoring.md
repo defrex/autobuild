@@ -158,6 +158,9 @@ API 1.8 adds optional forge failure classification. Import `ForgeFailure` and `i
 ```ts
 // Rate limit, with a valid ISO reset timestamp:
 throw new ForgeFailure(message, { kind: 'rate-limited', resetAt })
+// The limited request carried no credential: say why, so the limit stays local
+// to the caller instead of pausing the repository:
+throw new ForgeFailure(message, { kind: 'rate-limited', resetAt, unauthenticated: reason })
 // Retryable transport error:
 throw new ForgeFailure(message, { kind: 'transient', retry: 'retryable' })
 ```
@@ -582,4 +585,6 @@ bodies and reads only the SQL-bounded window. File, Linear, GitHub and the remot
 Hosted cooldown recording rejects observed reset deadlines beyond the 24-hour
 admission horizon explicitly; adapters must not shorten or invent a provider
 reset to evade this validation. Operator forge-clear is an audited override,
-not a successful provider observation.
+not a successful provider observation. Only limits the dispatcher's own forge
+classifies, without `unauthenticated`, record repository cooldown; others are
+local to the process and reported as `forge.credential-limited` attention.

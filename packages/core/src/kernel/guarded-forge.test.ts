@@ -56,40 +56,191 @@ test('failure discriminants validate fields without requiring shared class ident
   expect(isForgeFailure(new Error('API rate limit exceeded'))).toBe(false)
 })
 
-test('runner composition retries a new limit only after durable dispatcher recovery', async () => {
+test('a runner guard obeys a dispatcher-recorded cooldown and proceeds after dispatcher recovery', async () => {
   const now = manualClock()
   const store = new MemoryBuildStore({ clock: now })
   await store.ensureRepo('r')
-  const append = store.appendRepo.bind(store)
-  store.appendRepo = (async (repo, event) => {
-    const result = await append(repo, event)
-    if (event.type === 'dispatcher.forge-degraded') {
-      now.advance(60_000)
-      await append(repo, {
-        actor: { kind: 'dispatcher' },
-        type: 'dispatcher.forge-recovered',
-        payload: { forge: 'plugin' },
-      })
-    }
-    return result
-  }) as typeof store.appendRepo
+  await store.appendRepo('r', {
+    actor: { kind: 'dispatcher' },
+    type: 'dispatcher.forge-degraded',
+    payload: {
+      forge: 'plugin',
+      message: 'limit',
+      resetAt: new Date(now().getTime() + 60_000).toISOString(),
+      firstFailureAt: now().toISOString(),
+    },
+  })
+  const sleeps: number[] = []
+  const sleep = async (ms: number) => {
+    sleeps.push(ms)
+    now.advance(60_000)
+    await store.appendRepo('r', {
+      actor: { kind: 'dispatcher' },
+      type: 'dispatcher.forge-recovered',
+      payload: { forge: 'plugin' },
+    })
+  }
   let calls = 0
   const raw = new FakeForge()
   raw.getPrState = async () => {
-    if (++calls === 1)
-      throw new ForgeFailure('limit', {
-        kind: 'rate-limited',
-        resetAt: new Date(now().getTime() + 60_000).toISOString(),
-      })
+    calls++
     return { state: 'open', mergeable: true }
   }
-  const forge = guardForge(raw, { store, repo: 'r', name: 'plugin', now, wait: true })
+  const forge = guardForge(raw, {
+    store,
+    repo: 'r',
+    name: 'plugin',
+    now,
+    wait: true,
+    sleep,
+    scope: { process: 'build-runner b' },
+  })
   expect(await forge.getPrState('/r', 1)).toEqual({ state: 'open', mergeable: true })
-  expect(calls).toBe(2)
+  expect(sleeps).toEqual([30_000])
+  expect(calls).toBe(1)
   expect((await store.getRepoEvents('r')).map((e) => e.type)).toEqual([
     'dispatcher.forge-degraded',
     'dispatcher.forge-recovered',
   ])
+})
+
+const anonymousLimit = (resetAt: string) =>
+  new ForgeFailure('API rate limit exceeded for 3.86.63.34. (request was unauthenticated: unset)', {
+    kind: 'rate-limited',
+    resetAt,
+    unauthenticated: 'GITHUB_TOKEN and GH_TOKEN are unset',
+  })
+
+test('an unauthenticated guest limit never defers the dispatcher and is reported once as attention', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  await store.ensureRepo('r')
+  const resetAt = new Date(now().getTime() + 60_000).toISOString()
+  const guestRaw = new FakeForge()
+  let guestCalls = 0
+  guestRaw.getPrState = async () => {
+    if (++guestCalls <= 2) throw anonymousLimit(resetAt)
+    return { state: 'open', mergeable: true }
+  }
+  const sleeps: number[] = []
+  let dispatcherDuringWait: unknown
+  const dispatcherRaw = new FakeForge()
+  dispatcherRaw.setPrState(1, { state: 'open', mergeable: null })
+  const dispatcher = guardForge(dispatcherRaw, { store, repo: 'r', name: 'github', now })
+  const guest = guardForge(guestRaw, {
+    store,
+    repo: 'r',
+    name: 'github',
+    now,
+    wait: true,
+    scope: { process: 'build-runner b' },
+    sleep: async (ms) => {
+      sleeps.push(ms)
+      // The incident: a concurrent dispatcher request while the guest waits.
+      if (dispatcherDuringWait === undefined)
+        dispatcherDuringWait = await dispatcher.getPrState('/r', 1)
+      now.advance(ms)
+    },
+  })
+  expect(await guest.getPrState('/r', 1)).toEqual({ state: 'open', mergeable: true })
+  expect(dispatcherDuringWait).toMatchObject({ state: 'open' })
+  expect(await readForgeHealth(store, 'r')).toBeUndefined()
+  // The second failure carries the same reset: no second fact.
+  expect(guestCalls).toBe(3)
+  expect(sleeps.length).toBeGreaterThan(0)
+  const events = await store.getRepoEvents('r')
+  expect(events.map((e) => e.type)).toEqual(['forge.credential-limited'])
+  expect(events[0]!.payload).toEqual({
+    forge: 'github',
+    process: 'build-runner b',
+    credential: 'unauthenticated',
+    missingCredential: 'GITHUB_TOKEN and GH_TOKEN are unset',
+    message: anonymousLimit(resetAt).message,
+    resetAt,
+  })
+})
+
+test('a process-scoped authenticated limit stays local to the process', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  await store.ensureRepo('r')
+  const resetAt = new Date(now().getTime() + 60_000).toISOString()
+  const raw = new FakeForge()
+  raw.getPrState = async () => {
+    throw new ForgeFailure('limit', { kind: 'rate-limited', resetAt })
+  }
+  const forge = guardForge(raw, {
+    store,
+    repo: 'r',
+    name: 'github',
+    now,
+    scope: { process: 'phase session s (build b)' },
+  })
+  await expect(forge.getPrState('/r', 1)).rejects.toThrow('limit')
+  await expect(forge.getPrState('/r', 1)).rejects.toBeInstanceOf(ForgeCooldown)
+  expect(await readForgeHealth(store, 'r')).toBeUndefined()
+  const events = await store.getRepoEvents('r')
+  expect(events.map((e) => e.type)).toEqual(['forge.credential-limited'])
+  expect(events[0]!.payload).toMatchObject({
+    process: 'phase session s (build b)',
+    credential: 'process',
+  })
+  expect(events[0]!.payload).not.toHaveProperty('missingCredential')
+})
+
+test('a dispatcher unauthenticated limit cools down locally, then succeeds', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  await store.ensureRepo('r')
+  const resetAt = new Date(now().getTime() + 60_000).toISOString()
+  const raw = new FakeForge()
+  raw.getPrState = async () => {
+    throw anonymousLimit(resetAt)
+  }
+  const forge = guardForge(raw, { store, repo: 'r', name: 'github', now })
+  await expect(forge.getPrState('/r', 1)).rejects.toThrow('API rate limit')
+  await expect(forge.getPrState('/r', 1)).rejects.toBeInstanceOf(ForgeCooldown)
+  expect(await readForgeHealth(store, 'r')).toBeUndefined()
+  const events = await store.getRepoEvents('r')
+  expect(events.map((e) => e.type)).toEqual(['forge.credential-limited'])
+  expect(events[0]!.payload).toMatchObject({ process: 'dispatcher', credential: 'unauthenticated' })
+  now.advance(60_000)
+  raw.setPrState(1, { state: 'open', mergeable: null })
+  raw.getPrState = FakeForge.prototype.getPrState.bind(raw)
+  expect(await forge.getPrState('/r', 1)).toMatchObject({ state: 'open' })
+})
+
+test('a rejected attention append never changes the limited outcome', async () => {
+  const now = manualClock()
+  const store = new MemoryBuildStore({ clock: now })
+  await store.ensureRepo('r')
+  store.appendRepo = (async () => {
+    throw new Error('unknown event type')
+  }) as typeof store.appendRepo
+  const resetAt = new Date(now().getTime() + 60_000).toISOString()
+  const raw = new FakeForge()
+  let calls = 0
+  raw.getPrState = async () => {
+    if (++calls === 1) throw anonymousLimit(resetAt)
+    return { state: 'open', mergeable: true }
+  }
+  const failingRaw = new FakeForge()
+  failingRaw.getPrState = async () => {
+    throw anonymousLimit(resetAt)
+  }
+  const failing = guardForge(failingRaw, { store, repo: 'r', name: 'github', now })
+  await expect(failing.getPrState('/r', 1)).rejects.toThrow('API rate limit')
+  const waiting = guardForge(raw, {
+    store,
+    repo: 'r',
+    name: 'github',
+    now,
+    wait: true,
+    scope: { process: 'build-runner b' },
+    sleep: async (ms) => now.advance(ms),
+  })
+  expect(await waiting.getPrState('/r', 1)).toEqual({ state: 'open', mergeable: true })
+  expect(calls).toBe(2)
 })
 
 test('scope callbacks and observation cache hits cannot prove forge recovery', async () => {

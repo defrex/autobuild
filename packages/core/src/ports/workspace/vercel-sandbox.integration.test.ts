@@ -295,6 +295,8 @@ function harness(
   options: {
     accounts?: () => import('../../config/accounts').Accounts
     accountEnv?: Record<string, string | undefined>
+    /** Extra forwarded `environmentVariables` names. */
+    forwarded?: string[]
     publishedSha?: string | null | (() => string | null)
     existingSha?: string | null
     provisionRuntimes?: boolean
@@ -401,7 +403,7 @@ function harness(
           ? {}
           : { snapshotExpirationSeconds: options.snapshotExpirationSeconds }),
         failoverRegions: [],
-        environmentVariables: ['ANTHROPIC_API_KEY', 'AB_TOKEN'],
+        environmentVariables: ['ANTHROPIC_API_KEY', 'AB_TOKEN', ...(options.forwarded ?? [])],
         provisioning: options.provisioning ?? [],
         ...(options.provisionRuntimes
           ? {
@@ -1675,8 +1677,11 @@ describe('VercelSandboxProvider', () => {
     for (const file of h.sandbox.writes)
       expect(Buffer.from(file.content).toString()).not.toContain('scoped-store-token')
     expect(env.GITHUB_TOKEN).toBeUndefined()
+    expect(env.GH_TOKEN).toBeUndefined()
     expect(env.VERCEL_TOKEN).toBeUndefined()
     expect(env.UNDECLARED_SECRET).toBeUndefined()
+    // Credential-free guests refuse anonymous GitHub API requests.
+    expect(env.AB_GITHUB_REQUIRE_CREDENTIAL).toBe('1')
     expect(JSON.parse(env.AB_BUILD_RUNNER_OPTIONS!).supervision).toEqual({ kind: 'environment' })
     expect(h.sandbox.policySignals).toHaveLength(1)
     expect(h.sandbox.policySignals[0]).toBeInstanceOf(AbortSignal)
@@ -1700,6 +1705,32 @@ describe('VercelSandboxProvider', () => {
     })
     await h.provider.release(workspace)
     expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('a forwarded variable cannot disable the guest credential requirement', async () => {
+    const h = harness({
+      forwarded: ['AB_GITHUB_REQUIRE_CREDENTIAL'],
+      accountEnv: {
+        ANTHROPIC_API_KEY: 'runtime-secret',
+        AB_TOKEN: 'scoped-store-token',
+        AB_GITHUB_REQUIRE_CREDENTIAL: '0',
+      },
+    })
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const handle = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-1',
+      workspaceRef: workspace.ref,
+    })
+    const launch = h.sandbox.commands.find((command) => command.detached === true)!
+    expect((launch.env as Record<string, string>).AB_GITHUB_REQUIRE_CREDENTIAL).toBe('1')
+    expect(await handle.completion).toEqual({ exitCode: 0 })
+    await h.provider.release(workspace)
   })
 
   test('bounds the command kill acknowledgement during graceful stop', async () => {
@@ -2987,6 +3018,7 @@ describe('VercelSandboxProvider harvestExecution', () => {
     expect(env.ANTHROPIC_API_KEY).toBe('runtime-secret')
     expect(JSON.stringify(env)).not.toContain('forge-secret')
     expect(JSON.stringify(env)).not.toContain('never-copy')
+    expect(env.AB_GITHUB_REQUIRE_CREDENTIAL).toBe('1')
     expect(env[HARVEST_RUNNER_OPTIONS_ENV]).toBeDefined()
     expect(JSON.parse(env[HARVEST_RUNNER_OPTIONS_ENV]!)).toEqual({
       storeRef: 'https://store.example.test',

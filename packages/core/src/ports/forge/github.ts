@@ -55,6 +55,7 @@ import {
   GitHubApiError,
   classifyGitHubFailure,
   createGitHubFetchTransport,
+  githubCredentialRequirement,
   githubTokenSource,
   restPlanLimitation,
   type GitHubRequest,
@@ -765,6 +766,10 @@ export class GitHubForge implements Forge {
        * Defaults to `MERGEABILITY_RETRY_DELAYS_MS` (7 re-queries, ~30 s);
        * tests inject `[0, 0]` or all-zero schedules so no test sleeps. */
       mergeabilityRetryDelaysMs?: number[]
+      /** Process label: the default transport refuses to send a request
+       * without a credential. Absent, the environment's
+       * `AB_GITHUB_REQUIRE_CREDENTIAL` marker decides. */
+      requireCredential?: string
     } = {},
   ) {
     this.now = opts.now ?? Date.now
@@ -775,7 +780,13 @@ export class GitHubForge implements Forge {
     // stored login, probed lazily through this adapter's exec seam on the
     // first request. A request that still goes out anonymously carries the
     // miss reason in its error, so nothing is probed at construction time.
-    const transport = opts.transport ?? createGitHubFetchTransport({ token: this.token })
+    const requireCredential = githubCredentialRequirement(this.env, opts.requireCredential)
+    const transport =
+      opts.transport ??
+      createGitHubFetchTransport({
+        token: this.token,
+        ...(requireCredential !== undefined ? { requireCredential } : {}),
+      })
     this.transport = async (...args) =>
       guardedForgeRequest(async () => {
         const context = forgeRequestContext()
