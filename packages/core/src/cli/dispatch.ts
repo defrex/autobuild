@@ -168,6 +168,7 @@ import { GitHubForge } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
+import { dispatcherTicketSource } from './dispatch-tickets'
 import type {
   Forge,
   TicketSource,
@@ -594,10 +595,10 @@ async function defaultWire(
     : {}
   const opened = openStoreForRepoState(state, { env: opts.env })
 
-  const tickets = await createTicketSource(
+  const tickets = await dispatcherTicketSource(
     config.tickets,
-    opts.env,
-    state.repo,
+    opts,
+    state,
     opened.localStateRoot,
     plugins,
   )
@@ -2677,6 +2678,7 @@ class DispatchLoop {
             this.opts.targetRepo,
             undefined,
             this.wiring.plugins,
+            this.opts.repository !== undefined ? { repository: this.repoIdentity } : {},
           )
           const result = await new HarvestRunner({
             ...harvestDeps,
@@ -2747,6 +2749,7 @@ class DispatchLoop {
                   storeRef,
                 }).localStateRoot,
                 this.wiring.plugins,
+                this.opts.repository !== undefined ? { repository: this.repoIdentity } : {},
               )
             : harvestDeps.tickets
         return await new HarvestRunner({
