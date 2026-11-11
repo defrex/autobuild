@@ -274,6 +274,10 @@
           "type": "4",
           "optional": true
         },
+        "creationKey": {
+          "type": "4",
+          "optional": true
+        },
         "handback": {
           "type": "4",
           "optional": true
@@ -8046,6 +8050,10 @@
         "ticket": {
           "type": "3",
           "optional": false
+        },
+        "creationKey": {
+          "type": "4",
+          "optional": true
         }
       }
     },

@@ -9,6 +9,8 @@ export interface TicketPreparation {
   claimedState: string
   claimed: boolean
   slug?: string
+  /** Present when the store attested keyed creation for this attempt. */
+  creationKey?: string
   handback?: string
   stage?: string
   error?: string
@@ -21,7 +23,7 @@ export const ticketPreparationReducer = defineReducer<
   RepositoryEvent,
   Record<string, TicketPreparation>
 >({
-  version: 1,
+  version: 2,
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
@@ -39,6 +41,7 @@ export const ticketPreparationReducer = defineReducer<
           break
         case 'ticket-preparation.creation-selected':
           held.slug = event.payload.slug
+          if (event.payload.creationKey) held.creationKey = event.payload.creationKey
           break
         case 'ticket-preparation.handback-selected':
           held.handback = event.payload.state

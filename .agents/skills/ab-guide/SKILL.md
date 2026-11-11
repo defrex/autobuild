@@ -90,13 +90,15 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   never preempts a running build.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
-  after exact build-ownership readback. Unresolved attempts stay withheld and
-  retry before intake, even at full capacity or with intake disabled. Unsafe
-  ownership or externally changed/missing tickets end automatic recovery with
-  a diagnostic `abandoned` resolution, reported once in that tick's dispatcher
-  diagnostics and once as default `ab watch` repository attention, leaving the
-  ticket unchanged. The resolution records whether the claim was confirmed; an
-  unconfirmed claim's provider outcome is unknown. See
+  after build-ownership readback at the selected slug and, for a keyed attempt,
+  the canonical slug its creation key derives. Unresolved attempts stay withheld
+  and retry before intake, even at full capacity or with intake disabled. Unsafe
+  ownership, an unprovable creation outcome, or externally changed/missing
+  tickets end automatic recovery with a diagnostic `abandoned` resolution,
+  reported once in that tick's dispatcher diagnostics and once as default
+  `ab watch` repository attention, leaving the ticket unchanged. The resolution
+  records whether the claim was confirmed; an unconfirmed claim's provider
+  outcome is unknown. See
   [Ticket preparation recovery](references/restacking.md#ticket-preparation-before-build-creation).
 - **Ticket assets** — files or folders attached to a ticket (see
   [Ticket assets](#ticket-assets)) are frozen into the build at claim and
