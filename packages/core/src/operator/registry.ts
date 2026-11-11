@@ -330,7 +330,7 @@ const ticketsListInput = z.strictObject({
     .enum(['oldest', 'newest'])
     .optional()
     .describe(
-      'Dispatch order, urgent tickets first and then the source order (the default), or newest filed first.',
+      'Dispatch order, urgent tickets first and then the source order (the default), or newest filed first regardless of urgency.',
     ),
 })
 
