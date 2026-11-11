@@ -113,6 +113,7 @@ Classify failures with `ForgeFailure` (API 1.8):
 
 ```ts
 { kind: 'rate-limited', resetAt }            // resetAt: a valid ISO timestamp
+{ kind: 'rate-limited', resetAt, unauthenticated } // the request had no credential; why
 { kind: 'transient', retry: 'retryable' }    // retryable transport failures
 ```
 

@@ -17,7 +17,7 @@ node fast-forwards preserve ordered contributing identities.
 
 Destination heads come only from the authoritative forge branch; dispatcher-host
 refs are never a fallback. Failed remote reads retain the accepted observation;
-classified rate limits use repository forge degradation and cooldown. Changed
+dispatcher-classified rate limits use repository forge degradation and cooldown. Changed
 heads require immutable commit ancestry proof against the accepted target and
 the destination base already used by replay. Missing capability or failed proof
 defers new replay. A non-descendant without kernel lineage records
@@ -221,7 +221,7 @@ not consume `maxPhaseAttempts`. A seventh transient failure records
 error and six retries. Answering that escalation opens a fresh publication episode
 for the same retained intent without resetting agent phase failures. Pending
 publication keeps its workspace through backoff and unresolved exhaustion.
-Classified rate limits retain repository cooldown and consume no publication
+Dispatcher-classified rate limits retain repository cooldown and consume no publication
 retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
 
