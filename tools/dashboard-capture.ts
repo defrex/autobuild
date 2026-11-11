@@ -47,6 +47,7 @@ import {
   happyHandlers,
   makeHarness,
   readyTicket,
+  SCENARIO_DISPATCH_LEASE_SECONDS,
   type E2eHarness,
   type SkillHandlers,
 } from '../packages/core/src/scenarios/harness'
@@ -568,13 +569,22 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
 ]
 
 // One capture pass appends many durable receipts on the stepping clock, so it
-// spans minutes of fixture time. An hour-long repository lease keeps the
-// dispatch loop's authority for the whole pass.
-const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 4').replace(
-  'stallRounds = 3',
-  'stallRounds = 3\ndispatchLeaseTimeoutSeconds = 3600',
+// spans minutes of fixture time. The harness's hour-long repository lease
+// (SCENARIO_DISPATCH_LEASE_SECONDS) keeps the dispatch loop's authority for
+// the whole pass.
+const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 4')
+// The happy capture keeps the product-default repository lease instead of the
+// harness budget: its held-off harvest adoption relies on the dispatch loop's
+// own clock reads lapsing that lease before the adopting HarvestRunner checks
+// authority (see the wire comment in capturePaint).
+const HAPPY_LEASE_LINE = `dispatchLeaseTimeoutSeconds = ${SCENARIO_DISPATCH_LEASE_SECONDS}\n`
+if (!CONFIG_TOML.includes(HAPPY_LEASE_LINE)) {
+  throw new Error('dashboard capture: the harness CONFIG_TOML lease line changed')
+}
+const HAPPY_CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 6').replace(
+  HAPPY_LEASE_LINE,
+  '',
 )
-const HAPPY_CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 6')
 const HAPPY_LEASE_TTL_MS = 24 * 60 * 60 * 1000
 
 /** Read the harness's one-second stepping clock without advancing it. */

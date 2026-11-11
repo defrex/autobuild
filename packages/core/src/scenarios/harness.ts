@@ -84,6 +84,17 @@ import { steppingClock } from '../testing/fixed'
 // The check command is the harness's control knob (§15.6-A): `test -f
 // ok.marker` fails until an implement round commits the marker file.
 
+/** Repository dispatch lease budget for every scenario deriving from
+ * CONFIG_TOML. `steppingClock` advances 1 s per read while the lease heartbeat
+ * renews on real time, so nothing renews inside a fast scenario: under the
+ * 60 s product default a pass (or an in-process child sharing the clock)
+ * lapses its own authority after ~60 incidental reads. An hour keeps ordinary
+ * passes inside authority; scenarios that test expiry advance the clock past
+ * it explicitly (see overlap-lease-fencing). Mirrors the runner leaseTtlMs
+ * pinned in makeHarness. */
+export const SCENARIO_DISPATCH_LEASE_SECONDS = 3600
+export const SCENARIO_DISPATCH_LEASE_RENEWAL_SECONDS = 20
+
 export const CONFIG_TOML = `
 baseBranch = "main"
 capacity = 2
@@ -100,6 +111,8 @@ command = "test"
 
 [policy]
 stallRounds = 3
+dispatchLeaseTimeoutSeconds = ${SCENARIO_DISPATCH_LEASE_SECONDS}
+dispatchLeaseRenewalSeconds = ${SCENARIO_DISPATCH_LEASE_RENEWAL_SECONDS}
 
 [roles.default]
 runtime = "scripted"
@@ -697,7 +710,8 @@ export async function makeHarness(opts: {
           host: 'e2e-host',
           ...(sessionEnv !== undefined ? { sessionEnv } : {}),
           // Long lease/heartbeat: liveness is driven by the shared stepping
-          // clock; scenarios advance it explicitly to expire a lease.
+          // clock; scenarios advance it explicitly to expire a lease. The
+          // repository dispatch lease follows SCENARIO_DISPATCH_LEASE_SECONDS.
           opts: {
             heartbeatMs: 3_600_000,
             leaseTtlMs: 3_600_000,
