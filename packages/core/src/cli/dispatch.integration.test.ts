@@ -12250,6 +12250,14 @@ for (const intake of [true, false]) {
         const calls: string[] = []
         let measuring = false
         let ticks = 0
+        // The repository lease heartbeat, captured so one healthy beat can be
+        // measured alongside the idle tick.
+        const interval = globalThis.setInterval
+        let beat: (() => void) | undefined
+        globalThis.setInterval = ((callback: () => void, delay: number, ...args: unknown[]) => {
+          if (delay === 20_000) beat = callback
+          return interval(callback, delay, ...args)
+        }) as typeof setInterval
         const store = new Proxy(fx.store, {
           get(target, key) {
             const value = Reflect.get(target, key)
@@ -12300,6 +12308,14 @@ for (const intake of [true, false]) {
                 'getRepoBuildDigests',
                 'finishRepoTick',
               ])
+              // A healthy renewal of an idle holder's lease is one request:
+              // reclaiming adds nothing while the lease is healthy.
+              calls.length = 0
+              measuring = true
+              beat!()
+              await settleBeat()
+              measuring = false
+              expect(calls).toEqual(['heartbeatRepo'])
               stop.abort()
             },
           })
@@ -12307,6 +12323,7 @@ for (const intake of [true, false]) {
           expect(fx.err).toEqual([])
           expect(fx.agents.sessions.size).toBe(0)
         } finally {
+          globalThis.setInterval = interval
           stop.abort()
           await fx.cleanup()
         }
@@ -12315,7 +12332,13 @@ for (const intake of [true, false]) {
   }
 }
 
-for (const renewal of ['success', 'error', 'lost'] as const) {
+/** Let a fired heartbeat's store calls (beat, then the resolver's read and
+ * claim) settle without a timer. */
+async function settleBeat(): Promise<void> {
+  for (let turn = 0; turn < 20; turn++) await Promise.resolve()
+}
+
+for (const renewal of ['success', 'error', 'lost', 'peer'] as const) {
   test(`lease currency uses safe heartbeat deadlines (${renewal})`, async () => {
     const clock = manualClock()
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
@@ -12330,12 +12353,16 @@ for (const renewal of ['success', 'error', 'lost'] as const) {
     const heartbeat = fx.store.heartbeatRepo.bind(fx.store)
     let claims = 0
     let ticks = 0
-    fx.store.claimRepoLease = async (...args) => {
-      claims++
-      return claim(...args)
+    let holder: string | undefined
+    fx.store.claimRepoLease = async (repo, claimant, ttl) => {
+      if (claimant !== 'peer') claims++
+      holder ??= claimant
+      return claim(repo, claimant, ttl)
     }
     fx.store.heartbeatRepo = async (...args) => {
       if (renewal === 'error') throw new Error('unreachable')
+      // A beat the store refuses while the record still names this run (a
+      // stalled host's lapsed lease) is reclaimed, never read as a takeover.
       if (renewal === 'lost') return false
       return heartbeat(...args)
     }
@@ -12352,11 +12379,17 @@ for (const renewal of ['success', 'error', 'lost'] as const) {
           ticks++
           if (ticks === 1) {
             expect(claims).toBe(1)
+            if (renewal === 'peer') {
+              // The holder stalls past expiry and a live peer takes over.
+              clock.advance(61_000)
+              expect(await fx.store.claimRepoLease(fx.origin, 'peer', 60_000)).toBe(true)
+              beat!()
+              await settleBeat()
+              return
+            }
             clock.advance(50_000)
             beat!()
-            await Promise.resolve()
-            await Promise.resolve()
-            if (renewal === 'lost') return
+            await settleBeat()
             clock.advance(11_000)
           } else if (ticks === 2) {
             expect(claims).toBe(renewal === 'success' ? 1 : 2)
@@ -12368,10 +12401,23 @@ for (const renewal of ['success', 'error', 'lost'] as const) {
           }
         },
       })
-      expect(ticks).toBe(renewal === 'lost' ? 1 : 3)
+      expect(ticks).toBe(renewal === 'peer' ? 1 : 3)
       expect(fx.err).toEqual(
-        renewal === 'lost' ? ['dispatcher superseded by another invocation — detaching'] : [],
+        renewal === 'peer' ? ['dispatcher superseded by another invocation — detaching'] : [],
       )
+      const repoEvents = await fx.store.getRepoEvents(fx.origin)
+      // Never a yield to ourselves.
+      expect(
+        repoEvents.filter(
+          (event) => event.type === 'dispatcher.tick-yielded' && event.payload.holder === holder,
+        ),
+      ).toEqual([])
+      const stopped = repoEvents.filter((event) => event.type === 'dispatcher.run-stopped')
+      expect(
+        stopped.map((event) => (event.payload as { reason?: string }).reason ?? 'normal'),
+      ).toEqual([renewal === 'peer' ? 'superseded' : 'normal'])
+      if (renewal === 'peer')
+        expect((await fx.store.getRepo(fx.origin))?.lease?.holder).toBe('peer')
     } finally {
       globalThis.setInterval = interval
       stop.abort()
@@ -12379,6 +12425,501 @@ for (const renewal of ['success', 'error', 'lost'] as const) {
     }
   })
 }
+
+/** Durable evidence of a run's stop and of any yield naming `holder`. */
+async function leaseOutcome(fx: Fixture, holder: string | undefined) {
+  const events = await fx.store.getRepoEvents(fx.origin)
+  return {
+    selfYields: events.filter(
+      (event) => event.type === 'dispatcher.tick-yielded' && event.payload.holder === holder,
+    ).length,
+    stops: events
+      .filter((event) => event.type === 'dispatcher.run-stopped')
+      .map((event) => (event.payload as { reason?: string }).reason ?? 'normal'),
+  }
+}
+
+for (const stage of ['tick-start', 'begin', 'finish'] as const) {
+  test(`a stall past lease expiry at ${stage} reclaims and keeps dispatching`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const stop = new AbortController()
+    const claim = fx.store.claimRepoLease.bind(fx.store)
+    const begin = fx.store.beginRepoTick.bind(fx.store)
+    const finish = fx.store.finishRepoTick.bind(fx.store)
+    let holder: string | undefined
+    let claims = 0
+    let armed = false
+    let finished = 0
+    fx.store.claimRepoLease = async (repo, claimant, ttl) => {
+      holder ??= claimant
+      claims++
+      return claim(repo, claimant, ttl)
+    }
+    fx.store.beginRepoTick = async (repo, run) => {
+      if (armed && stage === 'begin') {
+        armed = false
+        clock.advance(61_000)
+      }
+      return begin(repo, run)
+    }
+    fx.store.finishRepoTick = async (repo, run, completion, events) => {
+      if (armed && stage === 'finish') {
+        armed = false
+        clock.advance(61_000)
+      }
+      const result = await finish(repo, run, completion, events)
+      if (result !== null) finished++
+      return result
+    }
+    let ticks = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          ticks++
+          if (ticks === 1) {
+            expect(finished).toBe(1)
+            if (stage === 'tick-start') clock.advance(61_000)
+            else armed = true
+          } else if (ticks === 2) {
+            // The stalled tick reclaimed its own lease and closed its boundary.
+            expect(claims).toBe(2)
+            expect(finished).toBe(2)
+          } else {
+            expect(finished).toBe(3)
+            stop.abort()
+          }
+        },
+      })
+      expect(ticks).toBe(3)
+      expect(fx.err).toEqual([])
+      expect(await leaseOutcome(fx, holder)).toEqual({ selfYields: 0, stops: ['normal'] })
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
+
+test('configured lease timing sets the beat interval and the stored expiry', async () => {
+  const clock = manualClock()
+  const fx = await makeFixture(
+    [],
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML.replace(
+      '[policy]\n',
+      '[policy]\ndispatchLeaseTimeoutSeconds = 120\ndispatchLeaseRenewalSeconds = 30\n',
+    ),
+    clock,
+  )
+  const stop = new AbortController()
+  const interval = globalThis.setInterval
+  const delays: number[] = []
+  globalThis.setInterval = ((callback: () => void, delay: number, ...args: unknown[]) => {
+    delays.push(delay)
+    return interval(callback, delay, ...args)
+  }) as typeof setInterval
+  try {
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      wire: fx.wire,
+      signal: stop.signal,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      sleep: async () => {
+        const lease = (await fx.store.getRepo(fx.origin))?.lease
+        expect(Date.parse(lease!.expiresAt)).toBe(clock().getTime() + 120_000)
+        stop.abort()
+      },
+    })
+    expect(delays).toContain(30_000)
+    expect(delays).not.toContain(20_000)
+  } finally {
+    globalThis.setInterval = interval
+    stop.abort()
+    await fx.cleanup()
+  }
+})
+
+for (const adoption of ['claimed', 'claim-throws'] as const) {
+  test(`a reloaded lease pair is adopted at the next tick through one claim (${adoption})`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const stop = new AbortController()
+    const interval = globalThis.setInterval
+    const clear = globalThis.clearInterval
+    const beats = new Map<unknown, { delay: number; callback: () => void }>()
+    globalThis.setInterval = ((callback: () => void, delay: number, ...args: unknown[]) => {
+      const handle = interval(callback, delay, ...args)
+      if (delay === 20_000 || delay === 90_000) beats.set(handle, { delay, callback })
+      return handle
+    }) as typeof setInterval
+    globalThis.clearInterval = ((handle: Parameters<typeof clearInterval>[0]) => {
+      beats.delete(handle)
+      return clear(handle)
+    }) as typeof clearInterval
+    const claim = fx.store.claimRepoLease.bind(fx.store)
+    const ttls: number[] = []
+    let failAdoption = adoption === 'claim-throws'
+    fx.store.claimRepoLease = async (repo, claimant, ttl) => {
+      ttls.push(ttl)
+      if (ttl === 120_000 && failAdoption) {
+        failAdoption = false
+        throw new Error('store unreachable')
+      }
+      return claim(repo, claimant, ttl)
+    }
+    const expiry = async () => Date.parse((await fx.store.getRepo(fx.origin))!.lease!.expiresAt)
+    let ticks = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          ticks++
+          if (ticks === 1) {
+            expect(await expiry()).toBe(clock().getTime() + 60_000)
+            expect([...beats.values()].map((beat) => beat.delay)).toEqual([20_000])
+            expect(ttls).toEqual([60_000])
+            await writeFile(
+              join(fx.checkout, 'autobuild.toml'),
+              DISPATCH_CONFIG_TOML.replace(
+                '[policy]\n',
+                '[policy]\ndispatchLeaseTimeoutSeconds = 120\ndispatchLeaseRenewalSeconds = 90\n',
+              ),
+            )
+            clock.advance(1_000)
+            return
+          }
+          if (ticks === 2 && adoption === 'claim-throws') {
+            // The held pair stays in force; the next tick retries.
+            expect(ttls).toEqual([60_000, 120_000])
+            expect([...beats.values()].map((beat) => beat.delay)).toEqual([20_000])
+            return
+          }
+          const adopted = adoption === 'claimed' ? [60_000, 120_000] : [60_000, 120_000, 120_000]
+          expect(ttls).toEqual(adopted)
+          expect(await expiry()).toBe(clock().getTime() + 120_000)
+          const live = [...beats.values()]
+          expect(live.map((beat) => beat.delay)).toEqual([90_000])
+          clock.advance(5_000)
+          live[0]!.callback()
+          await settleBeat()
+          expect(await expiry()).toBe(clock().getTime() + 120_000)
+          expect(ttls).toEqual(adopted)
+          stop.abort()
+        },
+      })
+      expect(fx.err).toEqual([])
+    } finally {
+      globalThis.setInterval = interval
+      globalThis.clearInterval = clear
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
+
+for (const race of ['stale-beat', 'overlapping-reclaim'] as const) {
+  test(`a shortened lease pair is never undone by an older renewal (${race})`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const stop = new AbortController()
+    const interval = globalThis.setInterval
+    let beat: (() => void) | undefined
+    globalThis.setInterval = ((callback: () => void, delay: number, ...args: unknown[]) => {
+      if (delay === 20_000) beat ??= callback
+      return interval(callback, delay, ...args)
+    }) as typeof setInterval
+    const claim = fx.store.claimRepoLease.bind(fx.store)
+    const heartbeat = fx.store.heartbeatRepo.bind(fx.store)
+    const begin = fx.store.beginRepoTick.bind(fx.store)
+    const ttls: number[] = []
+    let delayNextClaim = false
+    let releaseClaim: (() => void) | undefined
+    fx.store.claimRepoLease = async (repo, claimant, ttl) => {
+      if (claimant === 'peer') return claim(repo, claimant, ttl)
+      if (delayNextClaim) {
+        delayNextClaim = false
+        // The beat's reclaim lands in the store, but its answer is late.
+        const granted = await claim(repo, claimant, ttl)
+        ttls.push(ttl)
+        await new Promise<void>((resolve) => {
+          releaseClaim = resolve
+          setTimeout(resolve, 20)
+        })
+        return granted
+      }
+      ttls.push(ttl)
+      return claim(repo, claimant, ttl)
+    }
+    let staleBeat: ((alive: boolean) => void) | undefined
+    fx.store.heartbeatRepo = async (...args) => {
+      if (race === 'overlapping-reclaim') {
+        // A refused beat hands the lease to the resolver, which reclaims
+        // under the held 60 s TTL while the reload is adopted.
+        delayNextClaim = true
+        return false
+      }
+      const alive = await heartbeat(...args)
+      return new Promise<boolean>((resolve) => {
+        staleBeat = () => resolve(alive)
+      })
+    }
+    let begins = 0
+    fx.store.beginRepoTick = async (repo, run) => {
+      begins++
+      return begin(repo, run)
+    }
+    const expiry = async () => Date.parse((await fx.store.getRepo(fx.origin))!.lease!.expiresAt)
+    let ticks = 0
+    let beginsBefore = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: fx.wire,
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          ticks++
+          if (ticks === 1) {
+            // A beat is sent under 60/20, then the pair is reloaded as 30/10.
+            beat!()
+            await settleBeat()
+            await writeFile(
+              join(fx.checkout, 'autobuild.toml'),
+              DISPATCH_CONFIG_TOML.replace(
+                '[policy]\n',
+                '[policy]\ndispatchLeaseTimeoutSeconds = 30\ndispatchLeaseRenewalSeconds = 10\n',
+              ),
+            )
+            clock.advance(1_000)
+            return
+          }
+          if (ticks === 2) {
+            releaseClaim?.()
+            // The stale beat answers only after the shorter pair was adopted.
+            staleBeat?.(true)
+            await settleBeat()
+            // The adoption was the last write to the stored TTL.
+            expect(ttls.at(-1)).toBe(30_000)
+            expect(await expiry()).toBe(clock().getTime() + 30_000)
+            // The host stalls past the new expiry and a live peer takes over.
+            clock.advance(31_000)
+            expect(await fx.store.claimRepoLease(fx.origin, 'peer', 60_000)).toBe(true)
+            beginsBefore = begins
+            return
+          }
+          stop.abort()
+        },
+      })
+      // The local deadline followed the stored 30 s TTL, so the woken run
+      // resolved the takeover before opening another tick boundary.
+      expect(begins).toBe(beginsBefore)
+      expect(fx.err).toEqual(['dispatcher superseded by another invocation — detaching'])
+      expect((await fx.store.getRepo(fx.origin))?.lease?.holder).toBe('peer')
+    } finally {
+      globalThis.setInterval = interval
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
+
+for (const point of ['after-execution-lease', 'last-await'] as const) {
+  test(`a launch that resumes after a peer took over starts nothing (${point})`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture(
+      readyTicket('stalled-launch'),
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML,
+      clock,
+    )
+    const stop = new AbortController()
+    const takeOver = async () => {
+      clock.advance(61_000)
+      expect(await fx.store.claimRepoLease(fx.origin, 'peer', 60_000)).toBe(true)
+    }
+    let launchSlug: string | undefined
+    const claimLease = fx.store.claimLease.bind(fx.store)
+    fx.store.claimLease = async (slug, holder, ttl) => {
+      const claimed = await claimLease(slug, holder, ttl)
+      if (point === 'after-execution-lease' && launchSlug === undefined) {
+        launchSlug = slug
+        // The host stalls right after the launch reserved its execution lease.
+        await takeOver()
+      }
+      return claimed
+    }
+    let starts = 0
+    const pushesBefore = () => fx.forge.pushes.length
+    let pushes = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        wire: () => {
+          const wiring = fx.wire()
+          const execution = wiring.buildExecution
+          wiring.buildExecution = {
+            start: async (...args) => {
+              starts++
+              return execution.start(...args)
+            },
+          }
+          if (point === 'last-await') {
+            wiring.storeRef = 'http://store.invalid'
+            wiring.credentialIssuer = (async (
+              _ref: string,
+              _token: unknown,
+              scope: { id: string },
+            ) => {
+              launchSlug = scope.id
+              // The last await before the executor starts.
+              await takeOver()
+              return 'scoped-token'
+            }) as unknown as typeof wiring.credentialIssuer
+          }
+          return wiring
+        },
+        signal: stop.signal,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        sleep: async () => {
+          pushes = fx.forge.pushes.length
+          stop.abort()
+        },
+      })
+      expect(launchSlug).toBeDefined()
+      const slug = launchSlug!
+      expect(starts).toBe(0)
+      const buildEvents = await fx.store.getEvents(slug)
+      expect(
+        buildEvents.filter((event) =>
+          ['execution.started', 'infrastructure.failed', 'dispatch.failed'].includes(event.type),
+        ),
+      ).toEqual([])
+      const repoEvents = await fx.store.getRepoEvents(fx.origin)
+      expect(repoEvents.filter((event) => event.type === 'dispatcher.runner-settled')).toEqual([])
+      expect(
+        repoEvents
+          .filter((event) => event.type === 'dispatcher.run-stopped')
+          .map((event) => (event.payload as { reason?: string }).reason),
+      ).toEqual(['superseded'])
+      // The execution lease was released, so the peer can launch at once.
+      expect(await fx.store.claimLease(slug, 'peer-execution', 60_000)).toBe(true)
+      expect(fx.forge.pushes.length).toBe(pushes)
+      expect(pushesBefore()).toBe(pushes)
+      expect((await fx.store.getRepo(fx.origin))?.lease?.holder).toBe('peer')
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  })
+}
+
+test('a child that exits after a peer took over settles nothing on the forge', async () => {
+  const clock = manualClock()
+  const fx = await makeFixture(
+    readyTicket('late-exit'),
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML,
+    clock,
+  )
+  const stop = new AbortController()
+  let slug: string | undefined
+  let pushesAtTakeover: number | undefined
+  let forgeCallsAfter = 0
+  try {
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      wire: () => {
+        const wiring = fx.wire()
+        const execution = wiring.buildExecution
+        wiring.buildExecution = {
+          start: async (input, auth) => {
+            slug = input.slug
+            const handle = await execution.start(input, auth)
+            return {
+              ...handle,
+              completion: handle.completion.then(async (exit) => {
+                // The host stalls while the child finishes; a peer takes over.
+                clock.advance(61_000)
+                expect(await fx.store.claimRepoLease(fx.origin, 'peer', 60_000)).toBe(true)
+                pushesAtTakeover = fx.forge.pushes.length
+                return exit
+              }),
+            }
+          },
+        }
+        const forge = wiring.forge
+        wiring.forge = new Proxy(forge, {
+          get(target, key) {
+            const value = Reflect.get(target, key, target)
+            if (typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              if (
+                pushesAtTakeover !== undefined &&
+                !['observeRequests', 'withReadScope'].includes(String(key))
+              )
+                forgeCallsAfter++
+              return value.apply(target, args)
+            }
+          },
+        })
+        return wiring
+      },
+      signal: stop.signal,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      sleep: async () => {
+        await waitFor(async () =>
+          slug === undefined
+            ? false
+            : (await fx.store.getEvents(slug)).some((event) => event.type === 'execution.ended'),
+        )
+        stop.abort()
+      },
+    })
+    expect(slug).toBeDefined()
+    const events = await fx.store.getEvents(slug!)
+    expect(events.filter((event) => event.type === 'execution.ended')).toHaveLength(1)
+    const repoEvents = await fx.store.getRepoEvents(fx.origin)
+    expect(repoEvents.filter((event) => event.type === 'dispatcher.runner-settled')).toEqual([])
+    expect(
+      repoEvents
+        .filter((event) => event.type === 'dispatcher.run-stopped')
+        .map((event) => (event.payload as { reason?: string }).reason),
+    ).toEqual(['superseded'])
+    expect(fx.forge.pushes.length).toBe(pushesAtTakeover!)
+    expect(forgeCallsAfter).toBe(0)
+    // The execution lease was released: the peer can launch at once.
+    expect(await fx.store.claimLease(slug!, 'peer-execution', 60_000)).toBe(true)
+  } finally {
+    stop.abort()
+    await fx.cleanup()
+  }
+})
 
 for (const failingRead of ['listBuilds', 'getReducerValue'] as const) {
   test(`harvest launch gate contains a transient ${failingRead} failure and retries next tick`, async () => {
@@ -12948,6 +13489,8 @@ for (const scenario of [
   'uncommitted-read-error',
   'authorization-error',
   'rejected',
+  'expired-lease',
+  'peer-lease',
 ] as const)
   test(`handoff acceptance preserves execution fencing (${scenario})`, async () => {
     const deadline = scenario === 'deadline' || scenario === 'stopped-relaunch'
@@ -12988,6 +13531,23 @@ for (const scenario of [
     fx.store.claimRepoLease = (repo, holder, ttl) => {
       claimCalls.push(holder)
       return claim(repo, holder, ttl)
+    }
+    // Acceptance reads the repository record once: an own lease that expired
+    // while the host stalled, or a record naming another run.
+    let leaseOverride: 'expired' | 'peer' | undefined
+    const getRepo = fx.store.getRepo.bind(fx.store)
+    fx.store.getRepo = async (repo) => {
+      const record = await getRepo(repo)
+      const override = leaseOverride
+      if (override === undefined || !record?.lease) return record
+      leaseOverride = undefined
+      return {
+        ...record,
+        lease:
+          override === 'peer'
+            ? { ...record.lease, holder: 'peer' }
+            : { ...record.lease, expiresAt: new Date(clock().getTime() - 1).toISOString() },
+      }
     }
 
     let rejectRead = false
@@ -13201,7 +13761,24 @@ for (const scenario of [
           evidence: 'test shared store',
         },
       })
+      const claimsBeforeRequest = claimCalls.filter((holder) => holder === 'predecessor').length
+      if (scenario === 'expired-lease') leaseOverride = 'expired'
+      if (scenario === 'peer-lease') leaseOverride = 'peer'
       request.resolve()
+      if (scenario === 'peer-lease') {
+        await running
+        const events = await fx.store.getRepoEvents(fx.origin)
+        expect(events.some((event) => event.type === 'dispatcher.handoff-started')).toBe(false)
+        expect(
+          events
+            .filter((event) => event.type === 'dispatcher.run-stopped')
+            .map((event) => (event.payload as { reason?: string }).reason),
+        ).toEqual(['superseded'])
+        expect(claimCalls.filter((holder) => holder === 'predecessor')).toHaveLength(
+          claimsBeforeRequest,
+        )
+        return
+      }
       if (scenario === 'rejected') {
         await running
         const events = await fx.store.getRepoEvents(fx.origin)
@@ -13211,6 +13788,11 @@ for (const scenario of [
         return
       }
       await yielded.promise
+      // The stalled holder reclaimed its own lease before accepting.
+      if (scenario === 'expired-lease')
+        expect(claimCalls.filter((holder) => holder === 'predecessor')).toHaveLength(
+          claimsBeforeRequest + 1,
+        )
       if (scenario === 'read-error' || scenario === 'uncommitted-read-error')
         expect(readFailures).toBe(1)
       if (scenario === 'read-error') expect(refusedReports).toBe(2)

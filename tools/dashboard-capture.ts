@@ -567,9 +567,22 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     .flatMap((spec) => [spec, { ...spec, id: `${spec.id}-light`, ground: 'light' as const }]),
 ]
 
-const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 4')
+// One capture pass appends many durable receipts on the stepping clock, so it
+// spans minutes of fixture time. An hour-long repository lease keeps the
+// dispatch loop's authority for the whole pass.
+const CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 4').replace(
+  'stallRounds = 3',
+  'stallRounds = 3\ndispatchLeaseTimeoutSeconds = 3600',
+)
 const HAPPY_CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity = 6')
 const HAPPY_LEASE_TTL_MS = 24 * 60 * 60 * 1000
+
+/** Read the harness's one-second stepping clock without advancing it. */
+function peekClock(clock: E2eHarness['clock']): Date {
+  const now = clock()
+  clock.advance(-1000)
+  return now
+}
 
 const HAPPY_BUILDS = [
   { id: 'AUT-131', title: 'Cache warm on deploy', slug: 'cache-warm-on-deploy', stage: 'merged' },
@@ -1884,7 +1897,13 @@ async function capturePaint(
     once: true,
     terminal,
     input: NO_INPUT,
-    wire: () => harness.wiring,
+    // Outside the happy fixture, the dispatch loop reads the stepping clock
+    // without advancing it: fixture time moves only with durable store
+    // receipts, so the frames do not depend on how often the loop samples time
+    // for its own deadlines, such as its repository lease fence. The happy
+    // fixture's held-off harvest adoption relies on the loop's own clock reads.
+    wire: () =>
+      happyHarness ? harness.wiring : { ...harness.wiring, clock: () => peekClock(harness.clock) },
     resolveDashboardRenderer: () => (model, options) => {
       // The happy fixture pins its pre-seeded builds with sentinel leases so
       // this real dispatch pass cannot mutate their journals. Those deliberate

@@ -1,4 +1,9 @@
 import { proveTargetLineage } from '../kernel/target-lineage'
+import {
+  isRepositoryAuthorityLapse,
+  RepositoryAuthorityLapsed,
+  rethrowAuthorityLapse,
+} from '../cli/repo-lease'
 import { assertTargetOid, observeTarget } from '../kernel/target-observation'
 import {
   MissingAccountCredentialsError,
@@ -692,6 +697,11 @@ export interface TickOpts {
 export type LaunchRunnerResult = 'scheduled' | 'already-active'
 
 export interface DispatcherDeps {
+  /** Whether this process currently holds repository authority (SPEC §12).
+   * Synchronous and without I/O. Absent means always true. When false, the
+   * tick starts no further unit of work, and its durable new-work writes are
+   * refused with `RepositoryAuthorityLapsed`. */
+  holdsRepoAuthority?: () => boolean
   /** Current selected-account presence; no store reads. */
   missingAccounts?: () => MissingAccountCredential[]
   accountCredentialSource?: MissingAccountCredential['source']
@@ -1118,7 +1128,10 @@ export class Dispatcher {
    * loops consult this before starting each new forge/store transport call,
    * bounding the tick's overrun to the one call already in flight. */
   private outOfBudget(opts: TickOpts): boolean {
-    return opts.deadlineAt !== undefined && this.deps.clock().getTime() >= opts.deadlineAt
+    return (
+      (opts.deadlineAt !== undefined && this.deps.clock().getTime() >= opts.deadlineAt) ||
+      this.deps.holdsRepoAuthority?.() === false
+    )
   }
 
   lastForgeRequests?: import('../ports/forge-telemetry').ForgeRequestCounts
@@ -1991,6 +2004,7 @@ export class Dispatcher {
           report.sandboxIdleStops += 1
         }
       } catch (error) {
+        rethrowAuthorityLapse(error)
         // Contained: the next tick retries this environment.
         report.sandboxSettleFailures += 1
         report.janitorDiagnostics.push(
@@ -2062,6 +2076,7 @@ export class Dispatcher {
     if (tail === 'launch' && !(await this.leafAdmission(slug))) return 'slot-wait'
     const branch = record.branch ?? `ab/${slug}`
     const generation = events.workspaceGenerations
+    if (this.deps.holdsRepoAuthority?.() === false) return 'in-flight'
     await this.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.provision-started',
@@ -2204,6 +2219,9 @@ export class Dispatcher {
       // was kicked, and its lease and map entry have held the slot since.
       else if (this.accountsAvailable()) await this.startRunner(slug, emptyTickReport())
     } catch (error) {
+      // A lapsed repository lease started nothing: no failure fact. The
+      // finally releases the execution lease; the successor adopts the marker.
+      if (isRepositoryAuthorityLapse(error)) return
       // Dispatch boundaries own their failure facts and exhaustion repair.
       // A failed tail read/write leaves durable unfinished work for the next
       // tick; it is not another provider workspace failure. Replacement
@@ -2324,6 +2342,7 @@ export class Dispatcher {
       try {
         await reportIntegrationFailures(this.store, record.slug)
       } catch (error) {
+        rethrowAuthorityLapse(error)
         report.janitorDiagnostics.push(
           `build ${record.slug}: integration attention recovery failed — ${String(error)}`,
         )
@@ -2703,6 +2722,7 @@ export class Dispatcher {
                   forge: this.deps.forge,
                 })
               } catch (error) {
+                rethrowAuthorityLapse(error)
                 if (janitorDeferral(error)) throw error
                 if (facts.log.restack.distance?.count != null)
                   report.janitorDiagnostics.push(
@@ -2753,6 +2773,11 @@ export class Dispatcher {
           }
           await completeNodePoll()
         } catch (error) {
+          // A lapsed repository lease is not this build's janitor failure.
+          if (isRepositoryAuthorityLapse(error)) {
+            attempted = false
+            throw error
+          }
           // The guarded forge already recorded a classified rate limit as repository
           // degradation; like the cooldown that follows it, it neither starts nor ages
           // this build's janitor episode.
@@ -2806,6 +2831,7 @@ export class Dispatcher {
       })
       return true
     } catch (error) {
+      rethrowAuthorityLapse(error)
       if (janitorDeferral(error)) throw error
       report.janitorDiagnostics.push(
         `build ${record.slug}: node read priming failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
@@ -2833,6 +2859,7 @@ export class Dispatcher {
       if (state.kind === 'node') await this.observeNodeParent(record, state, report)
       else await this.observeWorkTarget(record, state, report)
     } catch (error) {
+      rethrowAuthorityLapse(error)
       report.janitorDiagnostics.push(
         `build ${record.slug}: ticket target observation failed — ${error instanceof Error || isForgeFailure(error) ? error.message : String(error)}`,
       )
@@ -3005,6 +3032,7 @@ export class Dispatcher {
         )
           throw new Error('destination generation changed; retry target update')
       } catch (error) {
+        rethrowAuthorityLapse(error)
         if (request)
           await this.store.append(record.slug, {
             actor: DISPATCHER,
@@ -3072,6 +3100,7 @@ export class Dispatcher {
         })) !== 'unchanged'
       )
     } catch (error) {
+      rethrowAuthorityLapse(error)
       const message =
         error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       report.janitorDiagnostics.push(`build ${slug}: target observation failed — ${message}`)
@@ -3171,6 +3200,7 @@ export class Dispatcher {
           if (!(await this.nodeHasCapacity(record.slug))) return
           await this.prepareIntegration(record, state, report, launched)
         } catch (error) {
+          rethrowAuthorityLapse(error)
           report.janitorDiagnostics.push(
             `build ${record.slug}: node admission failed — ${String(error)}`,
           )
@@ -3288,6 +3318,7 @@ export class Dispatcher {
       Object.assign(events, (await readBuildFacts(store, record.slug)).value)
     }
     const fail = (operation: string, identity: string, error: unknown): never => {
+      rethrowAuthorityLapse(error)
       if (error instanceof ForgeCooldown || isForgeFailure(error)) throw error
       const detail = error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       throw new Error(
@@ -3492,6 +3523,7 @@ export class Dispatcher {
       const message = await read.call(this.deps.forge, workspacePath, sha)
       return { sha, buildTrailerPresent: hasBuildTrailer(message, record.slug) }
     } catch (error) {
+      rethrowAuthorityLapse(error)
       await this.store.append(record.slug, {
         actor: KERNEL,
         type: 'observation.recorded',
@@ -4301,6 +4333,7 @@ export class Dispatcher {
           payload: { hostedSeq: hosted.seq },
         })
       } catch (error) {
+        rethrowAuthorityLapse(error)
         if (error instanceof ForgeCooldown) throw error
         try {
           await this.store.append(slug, {
@@ -4452,6 +4485,7 @@ export class Dispatcher {
         reason,
       )
     } catch (error) {
+      rethrowAuthorityLapse(error)
       // Keep this generation and its pending work until forge recovery,
       // while allowing the sweep to supervise the remaining builds.
       if (error instanceof ForgeRequestDeferred) return false
@@ -4500,6 +4534,7 @@ export class Dispatcher {
       Object.assign(events, (await readBuildFacts(this.store, slug)).value)
       return true
     } catch (error) {
+      rethrowAuthorityLapse(error)
       const message =
         error instanceof Error || isForgeFailure(error) ? error.message : String(error)
       const _failed = await this.store.append(slug, {
@@ -4584,6 +4619,7 @@ export class Dispatcher {
         })
         Object.assign(events, (await readBuildFacts(this.store, slug)).value)
       } catch (error) {
+        rethrowAuthorityLapse(error)
         const message =
           error instanceof Error || isForgeFailure(error) ? error.message : String(error)
         const _failed = await this.store.append(slug, {
@@ -4817,6 +4853,7 @@ export class Dispatcher {
         events = (await readBuildFacts(store, record.slug)).value
       }
     } catch (error) {
+      rethrowAuthorityLapse(error)
       if (await this.holdForMissingAccounts(error)) return 'parked'
       if (error instanceof MixedVersionDeferral) return 'parked'
       const events = (await readBuildFacts(store, record.slug)).value
@@ -4970,6 +5007,7 @@ export class Dispatcher {
       if (authored && report !== undefined) report.authored += 1
       return 'completed'
     } catch (error) {
+      rethrowAuthorityLapse(error)
       if (await this.holdForMissingAccounts(error)) return 'parked'
       const events = (await readBuildFacts(store, record.slug)).value
       const attempt = events.dispatchFailureCount + 1
@@ -5129,6 +5167,7 @@ export class Dispatcher {
       try {
         await this.sweepBuild(record, report, launched, paused, now)
       } catch (error) {
+        rethrowAuthorityLapse(error)
         // Per-build containment: one build's failure never stops the sweep
         // from advancing the others. Workspace failures are already durable
         // against the build; a repository-wide cooldown still ends the tick.
@@ -5365,6 +5404,7 @@ export class Dispatcher {
       const result = await this.launch(record.slug, launched, report)
       if (result === 'scheduled') report.swept += 1
     } catch (error) {
+      rethrowAuthorityLapse(error)
       // Launchers normally record provider failures themselves. Preserve
       // durable attention if orphan cleanup fails before that boundary,
       // without counting an already-recorded failure twice.
@@ -5403,6 +5443,7 @@ export class Dispatcher {
       try {
         await this.recoverTicketPreparation(attempt)
       } catch (error) {
+        rethrowAuthorityLapse(error)
         failures.push(error)
       }
     }
@@ -5500,6 +5541,7 @@ export class Dispatcher {
         handback === attempt.readyState ? 'handed-back' : 'bounced',
       )
     } catch (error) {
+      rethrowAuthorityLapse(error)
       const message = error instanceof Error ? error.message : String(error)
       try {
         await this.store.appendRepo(this.deps.repo, {
@@ -5855,6 +5897,8 @@ export class Dispatcher {
         claimed: false,
       }
       await store.ensureRepo(this.deps.repo)
+      // A lapsed run leaves the ticket Ready for whoever holds the repository.
+      if (this.deps.holdsRepoAuthority?.() === false) break
       await store.appendRepo(this.deps.repo, {
         actor: DISPATCHER,
         type: 'ticket-preparation.intended',
@@ -5967,6 +6011,9 @@ export class Dispatcher {
         established = true
         await this.preparationResolved(attempt, 'owned')
       } catch (error) {
+        // A lapse is not a preparation failure: the successor recovers the
+        // intended attempt through `recoverTicketPreparations`.
+        rethrowAuthorityLapse(error)
         // Settlement and completion errors after successful creation cannot
         // release the claim. A later tick settles the retained creation identity.
         if (established) throw error
@@ -6388,6 +6435,8 @@ export class Dispatcher {
           beforeReplay,
           canWrite: async () => {
             if (await deferMixedVersion(this.store, record.slug)) return false
+            // A lapse is not lost writer authority: it must escape unrecorded.
+            if (this.deps.holdsRepoAuthority?.() === false) throw new RepositoryAuthorityLapsed()
             if (this.outOfBudget(opts)) return false
             if (state.pr && (await forge.getPrState(checkout, state.pr.number)).state !== 'open')
               return false
@@ -6481,6 +6530,7 @@ export class Dispatcher {
         }
       }
     } catch (error) {
+      rethrowAuthorityLapse(error)
       if (await this.holdForMissingAccounts(error)) return
       const message =
         error instanceof Error || isForgeFailure(error) ? error.message : String(error)
