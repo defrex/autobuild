@@ -2,7 +2,7 @@ import { loadReducerSnapshot, persistReducerSnapshot } from '../store/snapshots'
 import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
-import { DispatchRepositoryFeed } from './dispatch-repository-feed'
+import { DispatchRepositoryFeed, dispatchFrontendReducer } from './dispatch-repository-feed'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 
 const tickCounters = {
@@ -92,33 +92,41 @@ test('persisted projection advances past discarded events and restarts with only
   })
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
-  const snapshot = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 4,
-  })
+  const snapshot = await loadReducerSnapshot(
+    store,
+    { kind: 'repo', repo },
+    'dispatchFrontend',
+    dispatchFrontendReducer,
+  )
   expect(snapshot?.cursor).toBe(3)
   expect(JSON.stringify(snapshot?.state)).not.toContain('run-stopped')
+  expect(JSON.stringify(snapshot?.state)).not.toContain('dispatcher.intake-set')
+  expect(snapshot?.state).toEqual({ identities: feed.identities })
   await setting(store, true)
   store.getRepoStateEvents = async () => {
     throw new Error('must restore')
   }
   const resumed = new DispatchRepositoryFeed(store, repo, clock)
   expect((await resumed.refresh()).map((e) => e.seq)).toEqual([4])
-  expect(reduceDispatchSettings(resumed.events)).toEqual(
-    reduceDispatchSettings(await store.getRepoEvents(repo)),
-  )
+  expect(runs(resumed.identities)).toEqual(['old'])
+  await canonicalSettings(store)
 })
 
-for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
-  test(`${bad} snapshot uses canonical seed without full replay`, async () => {
+for (const [bad, legacy] of ['missing', 'version', 'malformed', 'ahead', 'unreadable'].flatMap(
+  (bad) => [[bad, false] as const, [bad, true] as const],
+)) {
+  test(`${bad} ${legacy ? 'legacy v4' : 'current'} snapshot uses canonical seed without full replay`, async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo(repo)
     await setting(store)
     await start(store, 'old')
+    const seeds = countCanonicalSeeds(store)
+    const entries = bad === 'malformed' ? [{}] : []
     if (bad !== 'missing')
       await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-        version: bad === 'version' ? 3 : 4,
+        version: bad === 'version' ? 3 : legacy ? 4 : dispatchFrontendReducer.version,
         cursor: bad === 'ahead' ? 999 : 1,
-        state: { retained: bad === 'malformed' ? [{}] : [], incompleteIdentities: true },
+        state: legacy ? { retained: entries, incompleteIdentities: true } : { identities: entries },
       })
     if (bad === 'unreadable')
       store.getReducerSnapshot = async () => {
@@ -135,7 +143,7 @@ for (const bad of ['missing', 'version', 'malformed', 'ahead', 'unreadable']) {
     await feed.warm()
     expect(reads.every((since) => since > 0)).toBe(true)
     expect(runs(feed.identities)).toEqual(['old'])
-    expect(feed.events).toEqual([])
+    expect(seeds.seeds).toBe(1)
   })
 }
 
@@ -150,11 +158,9 @@ test('a gapped delta leaves the committed cursor retryable; overlapping refreshe
   const get = store.getRepoEvents.bind(store)
   store.getRepoEvents = async (repo, since) => (await get(repo, since)).slice(1)
   await expect(feed.refresh()).rejects.toThrow('invalid dashboard')
-  expect(feed.events).toEqual([])
   store.getRepoEvents = get
   const deltas = await Promise.all([feed.refresh(), feed.refresh()])
-  expect(deltas.map((delta) => delta.length)).toEqual([2, 0])
-  expect(feed.events.map((e) => e.seq)).toEqual([2, 3])
+  expect(deltas.map((delta) => delta.map((e) => e.seq))).toEqual([[2, 3], []])
 })
 
 test('failed prelaunch seed recovers all invocation facts despite a competing anchor', async () => {
@@ -257,7 +263,7 @@ test.each([false, true])(
   30_000,
 )
 
-test('scripted harvest, settings and live status retain full replay and rendered parity', async () => {
+test('scripted harvest, settings and live status present canonical facts with an identities-only checkpoint', async () => {
   const { randomHarvestJournal, randomSettingsJournal, randomStatusJournal } = await import(
     '../kernel/generators/repository-journals'
   )
@@ -265,6 +271,7 @@ test('scripted harvest, settings and live status retain full replay and rendered
   const { reduceHarvest } = await import('../kernel/harvest')
   const { buildDashboardFromProjected } = await import('./dashboard/model')
   const { renderDashboard } = await import('./dashboard/render')
+  const { readRepositoryFacts } = await import('../store/reduced-reads')
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
   const feed = new DispatchRepositoryFeed(store, repo, clock)
@@ -288,10 +295,17 @@ test('scripted harvest, settings and live status retain full replay and rendered
     status = reduceDispatchStatus(delta, 'run-a', status)
     const full = await store.getRepoEvents(repo)
     expect(status).toEqual(reduceDispatchStatus(full, 'run-a'))
-    const { lastSeq: _projectedSeq, ...projectedHarvest } = reduceHarvest(feed.events)
+    const facts = (await readRepositoryFacts(store, repo)).value
     const { lastSeq: _fullSeq, ...fullHarvest } = reduceHarvest(full)
-    expect(projectedHarvest).toEqual(fullHarvest)
-    expect(reduceDispatchSettings(feed.events)).toEqual(reduceDispatchSettings(full))
+    expect(facts.harvest).toMatchObject(fullHarvest)
+    expect(facts.settings).toEqual(reduceDispatchSettings(full))
+    const saved = await loadReducerSnapshot(
+      store,
+      { kind: 'repo', repo },
+      'dispatchFrontend',
+      dispatchFrontendReducer,
+    )
+    expect((saved!.state as { identities: unknown[] }).identities.length).toBeLessThanOrEqual(2)
     const input = {
       repo,
       queued: status.queued ?? 0,
@@ -300,7 +314,7 @@ test('scripted harvest, settings and live status retain full replay and rendered
       capacity: 4,
     }
     const options = { color: true, width: 100, height: 24, now: clock().getTime() }
-    expect(renderDashboard(buildDashboardFromProjected([], input, feed.events), options)).toEqual(
+    expect(renderDashboard(buildDashboardFromProjected([], input, facts), options)).toEqual(
       renderDashboard(buildDashboardFromProjected([], input, full), options),
     )
   }
@@ -329,15 +343,28 @@ test('foreign repository cache facts are rejected and missing repositories are n
   expect(await store.getRepo(repo)).toBeNull()
   await store.ensureRepo(repo)
   const fact = await setting(store)
+  const identity = await start(store, 'own')
   await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
     version: 4,
-    cursor: 1,
+    cursor: 2,
     state: { retained: [{ ...fact, repo: '/other' }], incompleteIdentities: true },
   })
   noJournalSeed(store)
+  const seeds = countCanonicalSeeds(store)
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await feed.warm()
-  expect(feed.events).toEqual([])
+  expect(seeds.seeds).toBe(1)
+  expect(feed.identities).toEqual([identity])
+  await start(store, 'next')
+  await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+    version: dispatchFrontendReducer.version,
+    cursor: 3,
+    state: { identities: [{ ...identity, repo: '/other' }] },
+  })
+  const current = new DispatchRepositoryFeed(store, repo, clock)
+  await current.warm()
+  expect(seeds.seeds).toBe(2)
+  expect(runs(current.identities)).toEqual(['next'])
   const { readRepositoryFacts } = await import('../store/reduced-reads')
   expect((await readRepositoryFacts(store, repo)).value.settings).toEqual(
     reduceDispatchSettings([fact]),
@@ -357,8 +384,14 @@ test('a stale frontend cannot replace a newer persisted cursor', async () => {
   await current.save(true)
   await stale.save(true)
   expect(
-    (await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', { version: 4 }))
-      ?.cursor,
+    (
+      await loadReducerSnapshot(
+        store,
+        { kind: 'repo', repo },
+        'dispatchFrontend',
+        dispatchFrontendReducer,
+      )
+    )?.cursor,
   ).toBe(2)
 })
 
@@ -527,7 +560,6 @@ test('handoff seed, deadline delta and restored completion agree with the full j
     projectHandoffs((await readRepositoryFacts(store, repo)).value.upgrades)
   const expected = async () =>
     projectHandoffs(dispatchUpgradeReducer.reduce(await store.getRepoEvents(repo)))
-  expect(feed.events).toEqual([])
   expect(await presented()).toEqual(await expected())
   const startEvent = events[2]!
   if (startEvent.type !== 'dispatcher.handoff-started') throw new Error('fixture')
@@ -558,8 +590,8 @@ test('handoff seed, deadline delta and restored completion agree with the full j
     throw new Error('snapshot should restore')
   }
   const restored = new DispatchRepositoryFeed(store, repo, clock)
-  await restored.refresh()
-  expect(restored.events).toEqual(feed.events)
+  expect(await restored.refresh()).toEqual([])
+  expect(restored.identities).toEqual(feed.identities)
   expect(runs(restored.identities)).toEqual(['next-generation'])
 })
 
@@ -657,20 +689,66 @@ test('restored clean snapshots and duplicate remembers stay clean; holder change
   expect(feed.identities.map((e) => e.seq)).toEqual([2])
 })
 
-test('legacy complete history normalizes to bounded identities and remains lookup eligible', async () => {
+test('legacy v4 dashboard-event cache normalizes once to a constant identities-only checkpoint', async () => {
+  const legacySizes: number[] = []
+  const currentSizes: number[] = []
   for (const count of [100, 10000]) {
     const store = new MemoryBuildStore({ clock })
     await store.ensureRepo(repo)
+    // A v4 cache retained every dashboard-class fact after its restoration point.
     const history = []
-    for (let i = 0; i < count; i++) history.push(await start(store, `old-${i}`))
+    for (let i = 0; i < count; i++) {
+      history.push(await start(store, `old-${i}`))
+      history.push(await setting(store, i % 2 === 0))
+    }
     const latest = await start(store, 'latest')
-    await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
+    const scope = { kind: 'repo', repo } as const
+    await persistReducerSnapshot(store, scope, 'dispatchFrontend', {
       version: 4,
       cursor: latest.seq,
-      state: { retained: [...history, latest], incompleteIdentities: false },
+      state: { retained: [...history, latest], incompleteIdentities: false, holder: 'old-0' },
     })
+    legacySizes.push(
+      JSON.stringify((await loadReducerSnapshot(store, scope, 'dispatchFrontend', { version: 4 }))!)
+        .length,
+    )
+    const reads: number[] = []
+    const puts: { version: number; cursor: number; bytes: number }[] = []
+    const get = store.getReducerSnapshot.bind(store)
+    store.getReducerSnapshot = async (...args) => {
+      reads.push(args[2])
+      return get(...args)
+    }
+    const put = store.putReducerSnapshot.bind(store)
+    store.putReducerSnapshot = async (...args) => {
+      puts.push({
+        version: args[2].version,
+        cursor: args[2].cursor,
+        // Sequence-number width aside, the row's size is fixed by its identities.
+        bytes: JSON.stringify(args[2]).replace(/\d+/g, '0').length,
+      })
+      return put(...args)
+    }
+    const seeds = countCanonicalSeeds(store)
     const feed = new DispatchRepositoryFeed(store, repo, clock)
     await feed.warm()
+    expect(seeds.seeds).toBe(0)
+    expect(reads).toEqual([dispatchFrontendReducer.version, 4])
+    expect(runs(feed.identities)).toEqual(['old-0', 'latest'])
+    expect(puts.map(({ version, cursor }) => ({ version, cursor }))).toEqual([
+      { version: dispatchFrontendReducer.version, cursor: latest.seq },
+    ])
+    currentSizes.push(puts[0]!.bytes)
+    expect(await loadReducerSnapshot(store, scope, 'dispatchFrontend', { version: 4 })).toBeNull()
+    // The replaced row restores clean: no legacy read, no write.
+    reads.length = 0
+    const again = new DispatchRepositoryFeed(store, repo, clock)
+    await again.warm()
+    await again.save(true)
+    expect(reads).toEqual([dispatchFrontendReducer.version])
+    expect(puts).toHaveLength(1)
+    expect(again.identities).toEqual(feed.identities)
+    feed.selectHolder(undefined)
     expect(feed.identities).toEqual([latest])
     expect(feed.incompleteIdentities).toBe(true)
     const { StandbyIdentityResolver } = await import('./dispatcher-liveness')
@@ -691,6 +769,87 @@ test('legacy complete history normalizes to bounded identities and remains looku
       ).toBe(holder)
     }
   }
+  // The legacy cache grew with its history; the replacement does not.
+  expect(legacySizes[1]!).toBeGreaterThan(legacySizes[0]! * 50)
+  expect(currentSizes[1]).toBe(currentSizes[0])
+})
+
+test('mixed generations: a v4 writer cannot downgrade a v5 row and reseeds canonically', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  await start(store, 'current')
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  const scope = { kind: 'repo', repo } as const
+  await setting(store)
+  const { persistReducerSnapshotOutcome } = await import('../store/snapshots')
+  expect(
+    await persistReducerSnapshotOutcome(store, scope, 'dispatchFrontend', {
+      version: 4,
+      cursor: 2,
+      state: { retained: [], incompleteIdentities: true },
+    }),
+  ).toBe('refused')
+  // An older client reads no v4 row and seeds from canonical repository facts.
+  expect(await loadReducerSnapshot(store, scope, 'dispatchFrontend', { version: 4 })).toBeNull()
+  expect(
+    (await loadReducerSnapshot(store, scope, 'dispatchFrontend', dispatchFrontendReducer))?.cursor,
+  ).toBe(1)
+})
+
+test('fresh initialization saves v5 and stays constant across appended harvest and settings traffic', async () => {
+  const { randomHarvestJournal } = await import('../kernel/generators/repository-journals')
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const identity = await start(store, 'current')
+  noJournalSeed(store)
+  const seeds = countCanonicalSeeds(store)
+  const tails: number[] = []
+  const tail = store.getRepositoryTail.bind(store)
+  store.getRepositoryTail = async (repo, since = 0) => {
+    tails.push(since)
+    return tail(repo, since)
+  }
+  const sizes: number[] = []
+  const put = store.putReducerSnapshot.bind(store)
+  store.putReducerSnapshot = async (...args) => {
+    sizes.push(JSON.stringify(args[2].state).replace(/\d+/g, '0').length)
+    return put(...args)
+  }
+  const rows: number[] = []
+  const events = store.getRepoEvents.bind(store)
+  store.getRepoEvents = async (...args) => {
+    const delta = await events(...args)
+    rows.push(delta.length)
+    return delta
+  }
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  expect([seeds.seeds, tails]).toEqual([1, [1]])
+  expect(sizes).toHaveLength(1)
+  expect(feed.identities).toEqual([identity])
+  expect(await feed.refresh()).toEqual([])
+  expect(rows).toEqual([0])
+  let appended = 0
+  for (const event of randomHarvestJournal(3, 1000)) {
+    if (event.type === 'dispatcher.intake-set' || event.type === 'dispatcher.operator-reported')
+      event.actor = humanActor('test')
+    if (event.type === 'harvest.paused') {
+      event.actor = KERNEL
+      event.payload = {}
+    }
+    await store.appendRepo(repo, { actor: event.actor, type: event.type, payload: event.payload })
+    appended++
+    if (appended % 100 !== 0) continue
+    rows.length = 0
+    expect(await feed.refresh()).toHaveLength(100)
+    expect(rows).toEqual([100])
+    await feed.save(true)
+  }
+  await canonicalSettings(store)
+  expect(feed.identities).toEqual([identity])
+  expect(sizes.length).toBeGreaterThan(1)
+  expect(new Set(sizes).size).toBe(1)
 })
 
 test('refused equal-cursor correlation reconstructs on restart and rides the next cursor', async () => {
@@ -713,9 +872,15 @@ test('refused equal-cursor correlation reconstructs on restart and rides the nex
     expect(await resolver.refresh('self', undefined, clock())).toContain('holder; pid 1;')
     await feed.save(true)
     expect(
-      (await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', { version: 4 }))
-        ?.state,
-    ).toEqual({ retained: [feed.identities[1]], incompleteIdentities: true, holder: undefined })
+      (
+        await loadReducerSnapshot(
+          store,
+          { kind: 'repo', repo },
+          'dispatchFrontend',
+          dispatchFrontendReducer,
+        )
+      )?.state,
+    ).toEqual({ identities: [feed.identities[1]] })
   }
   initial.selectHolder('holder')
   await setting(store)
@@ -771,11 +936,12 @@ test('unsupported snapshots settle without retrying and forced teardown drains n
 test('recovery facts below a restored cursor still dirty the restored projection', async () => {
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
+  await start(store, 'own')
   await setting(store)
   await persistReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 4,
-    cursor: 1,
-    state: { retained: [], incompleteIdentities: true },
+    version: dispatchFrontendReducer.version,
+    cursor: 2,
+    state: { identities: [] },
   })
   const high = store.getRepoHighWater.bind(store)
   let probes = 0
@@ -795,7 +961,7 @@ test('recovery facts below a restored cursor still dirty the restored projection
     return false
   }
   await feed.refresh()
-  expect(feed.events).toHaveLength(1)
+  expect(runs(feed.identities)).toEqual(['own'])
   expect(attempts).toBe(1)
   await feed.save(true)
   expect(attempts).toBe(1)
@@ -857,19 +1023,21 @@ for (const gap of [1, 1000, 1001, 10_000]) {
       throw new Error('raw startup suffix')
     }
     const feed = new DispatchRepositoryFeed(store, repo, clock)
-    await feed.refresh()
+    const delta = await feed.refresh()
     expect(counter.seeds).toBe(gap > 1000 ? 1 : 0)
     // A stale cache restarts at the canonical cursor; within the window it keeps the delta.
-    expect(feed.events.at(-1)?.payload).toEqual(gap > 1000 ? undefined : { enabled: true })
+    expect(delta.at(-1)?.payload).toEqual(gap > 1000 ? undefined : { enabled: true })
     store.getRepoEvents = getRepoEvents
     expect((await canonicalSettings(store)).settings.intake).toBe(true)
-    const saved = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-      version: 4,
-    })
-    expect(saved?.cursor).toBe(gap + 1)
-    expect((saved!.state as { retained: unknown[] }).retained).toEqual(
-      [...feed.events, ...feed.identities].sort((a, b) => a.seq - b.seq),
+    const saved = await loadReducerSnapshot(
+      store,
+      { kind: 'repo', repo },
+      'dispatchFrontend',
+      dispatchFrontendReducer,
     )
+    expect(saved?.cursor).toBe(gap + 1)
+    expect((saved!.state as { identities: unknown[] }).identities).toEqual(feed.identities)
+    expect(runs(feed.identities)).toEqual(gap > 1 ? [`old-${gap - 2}`] : [])
   })
 }
 
@@ -915,11 +1083,14 @@ for (const barrier of ['snapshot', 'before-seed', 'after-seed', 'tail']) {
       expect(feed.identities.at(-1)).toEqual(
         full.findLast((e) => e.type === 'dispatcher.run-started'),
       )
-      expect(new Set(feed.events.map((e) => e.seq)).size).toBe(feed.events.length)
+      expect(new Set(feed.identities.map((e) => e.seq)).size).toBe(feed.identities.length)
       await feed.save(true)
-      const saved = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-        version: 4,
-      })
+      const saved = await loadReducerSnapshot(
+        store,
+        { kind: 'repo', repo },
+        'dispatchFrontend',
+        dispatchFrontendReducer,
+      )
       expect(saved?.cursor).toBe(full.at(-1)?.seq)
       expect(await feed.refresh()).toEqual([])
     })
@@ -941,11 +1112,10 @@ test('a second startup overflow surfaces once and leaves restoration retryable',
   const feed = new DispatchRepositoryFeed(store, repo, clock)
   await expect(feed.refresh()).rejects.toThrow('too old')
   expect(calls).toBe(2)
-  expect(feed.events).toEqual([])
+  expect(feed.identities).toEqual([])
   store.getRepositoryTail = tail
   noJournalSeed(store)
-  await feed.refresh()
-  expect(feed.events).toEqual([])
+  expect(await feed.refresh()).toEqual([])
   expect(runs(feed.identities)).toEqual(['burst-2-1000'])
   await canonicalSettings(store)
 })
@@ -967,7 +1137,6 @@ test('stale recovery preserves authoritative settings, harvest and handoff proje
   const { randomHarvestJournal } = await import('../kernel/generators/repository-journals')
   const { reduceHarvest } = await import('../kernel/harvest')
   const { dispatchUpgradeReducer } = await import('../kernel/dispatch-upgrade')
-  const { dispatchFrontendReducer } = await import('./dispatch-repository-feed')
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
   await setting(store)
@@ -993,10 +1162,7 @@ test('stale recovery preserves authoritative settings, harvest and handoff proje
   const { lastSeq: _fullSeq, ...fullHarvest } = reduceHarvest(full)
   expect(seedHarvest).toEqual(fullHarvest)
   expect(facts.upgrades).toEqual(dispatchUpgradeReducer.reduce(full))
-  expect(feed.events).toEqual([])
-  expect(feed.identities).toEqual(
-    dispatchFrontendReducer.reduce(full).filter((e) => e.type === 'dispatcher.run-started'),
-  )
+  expect(feed.identities).toEqual(dispatchFrontendReducer.reduce(full))
 })
 
 test('an expired failed-prelaunch boundary recovers current authority without historical replay', async () => {
@@ -1017,8 +1183,7 @@ test('an expired failed-prelaunch boundary recovers current authority without hi
   store.getRepoEvents = async () => {
     throw new Error('history replay')
   }
-  await feed.refresh()
-  expect(feed.events).toEqual([])
+  expect(await feed.refresh()).toEqual([])
   store.getRepoEvents = getRepoEvents
   expect((await canonicalSettings(store)).settings.intake).toBe(true)
   expect(
@@ -1045,7 +1210,6 @@ test('missing-checkpoint startup restarts from its checkpoint, advances incremen
   expect(await feed.warm()).toEqual([])
   expect(counter.seeds).toBe(1)
   expect(runs(feed.identities)).toEqual(['current'])
-  expect(feed.events).toEqual([])
   await feed.save(true)
   await canonicalSettings(store)
 
@@ -1064,12 +1228,15 @@ test('missing-checkpoint startup restarts from its checkpoint, advances incremen
   const later = await setting(store, false)
   expect(await restarted.refresh()).toEqual([holder, later])
   expect(runs(restarted.identities)).toEqual(['holder'])
-  expect(restarted.events).toEqual([next, later])
   await restarted.save(true)
-  const saved = await loadReducerSnapshot(store, { kind: 'repo', repo }, 'dispatchFrontend', {
-    version: 4,
-  })
+  const saved = await loadReducerSnapshot(
+    store,
+    { kind: 'repo', repo },
+    'dispatchFrontend',
+    dispatchFrontendReducer,
+  )
   expect(saved?.cursor).toBe(later.seq)
+  expect(saved?.state).toEqual({ identities: [holder] })
 
   // Reconnect after more than the window: cursor expiry reseeds canonically.
   await start(store, 'successor')
@@ -1096,7 +1263,6 @@ test('missing-checkpoint startup restarts from its checkpoint, advances incremen
   expect(await restarted.refresh()).toEqual([])
   const after = await setting(store, false)
   expect(await restarted.refresh()).toEqual([after])
-  expect(restarted.events).toEqual([after])
   expect(last.seq).toBeLessThan(after.seq)
   store.getRepoEvents = read
   await canonicalSettings(store)
