@@ -148,6 +148,12 @@ GitHub ticket to someone else this way. A source that cannot store assignees
 id is the ticket being edited; the second is its blocker. Both are safe to
 retry, and adding validates the blocker exists and is not the ticket itself.
 
+A label can also select one of the repository's `[profiles]` (role overrides
+for that ticket's build, defined in `autobuild.toml`; see the `ab-guide`
+skill). Give a ticket at most one profile label: a ready ticket carrying two
+profiles' labels is not claimed until one is removed. The profile is fixed when
+the ticket is claimed, so relabelling a ticket whose build exists has no effect.
+
 ## Report the backlog
 
 ```

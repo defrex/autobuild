@@ -538,3 +538,107 @@ describe('createRuntimeResolver — deprecated alias candidates', () => {
     )
   })
 })
+
+describe('createRuntimeResolver — label-selected profiles', () => {
+  const roles: Record<string, RuntimeSpec> = {
+    default: { runtime: 'pi', model: 'kimi-k3', args: ['web-access'], sessionBudgetSeconds: 600 },
+    implement: { model: 'gpt-5.6-sol', args: ['subagents'] },
+    'code-review': { alternates: [{ runtime: 'gemini', model: 'gpt-5.6-sol' }] },
+  }
+  const profiled = (entries: Record<string, RuntimeSpec>, base = roles) =>
+    createRuntimeResolver(registry, base, 3600, {}, { deep: { roles: entries } })
+
+  test('a model-only entry changes only the model', () => {
+    const r = profiled({ implement: { model: 'kimi-k4' } }).profile('deep')!
+    expect(r.resolve('implement')).toMatchObject({
+      runtime: 'pi',
+      model: 'kimi-k4',
+      args: ['subagents'],
+      sessionBudgetSeconds: 600,
+    })
+  })
+
+  test('an args-only entry keeps the repository model', () => {
+    const r = profiled({ implement: { args: ['--effort', 'high'] } }).profile('deep')!
+    expect(r.resolve('implement')).toMatchObject({
+      model: 'gpt-5.6-sol',
+      args: ['--effort', 'high'],
+    })
+  })
+
+  test('roles the profile does not name resolve exactly as without it', () => {
+    const base = createRuntimeResolver(registry, roles)
+    const r = profiled({ implement: { model: 'kimi-k4' } }).profile('deep')!
+    for (const role of ['plan', 'code-review', 'acceptance'])
+      expect(r.resolve(role)).toEqual(base.resolve(role))
+    expect(profiled({ implement: { model: 'kimi-k4' } }).resolve('implement').model).toBe(
+      'gpt-5.6-sol',
+    )
+  })
+
+  test('an entry on an undeclared role inherits the default', () => {
+    const r = profiled({ 'plan-review': { model: 'gpt-5.6-sol' } }).profile('deep')!
+    expect(r.resolve('plan-review')).toMatchObject({
+      runtime: 'pi',
+      model: 'gpt-5.6-sol',
+      args: ['web-access'],
+    })
+  })
+
+  test('a declared alternates list replaces the inherited one, [] included; an omitted one inherits', () => {
+    expect(
+      profiled({ 'code-review': { model: 'kimi-k4' } })
+        .profile('deep')!
+        .resolve('code-review').alternates,
+    ).toMatchObject([{ runtime: 'gemini', model: 'gpt-5.6-sol' }])
+    expect(
+      profiled({ 'code-review': { alternates: [] } })
+        .profile('deep')!
+        .resolve('code-review').alternates,
+    ).toEqual([])
+    expect(
+      profiled({ 'code-review': { alternates: [{ model: 'kimi-k4' }] } })
+        .profile('deep')!
+        .resolve('code-review').alternates,
+    ).toMatchObject([{ runtime: 'pi', model: 'kimi-k4' }])
+  })
+
+  test('a profile entry on the step name supersedes a repository alias role', () => {
+    const r = profiled(
+      { acceptance: { model: 'kimi-k4' } },
+      { ...roles, 'ab-acceptance': { runtime: 'gemini', model: 'gpt-5.6-sol' } },
+    ).profile('deep')!
+    expect(r.resolve('acceptance', 'ab-acceptance')).toMatchObject({
+      runtime: 'pi',
+      model: 'kimi-k4',
+    })
+  })
+
+  test('a profile entry on the active alias overrides when no step-named role exists', () => {
+    const r = profiled({ 'ab-acceptance': { model: 'gpt-5.6-sol' } }).profile('deep')!
+    expect(r.resolve('acceptance', 'ab-acceptance').model).toBe('gpt-5.6-sol')
+  })
+
+  test('a repository step-named role still supersedes a profile entry on its alias', () => {
+    const r = profiled(
+      { 'ab-acceptance': { model: 'gpt-5.6-sol' } },
+      { ...roles, acceptance: { model: 'kimi-k4' } },
+    ).profile('deep')!
+    expect(r.resolve('acceptance', 'ab-acceptance').model).toBe('kimi-k4')
+  })
+
+  test('an incompatible model or unknown runtime fails with the profile label', () => {
+    const error = runtimeConfigError(() =>
+      profiled({ implement: { runtime: 'claude' }, plan: { runtime: 'nope' } }),
+    )
+    expect(error.problems.join('\n')).toContain('[profiles.deep.roles.implement]')
+    expect(error.problems.join('\n')).toContain('serves only [claude-]')
+    expect(error.problems.join('\n')).toContain('[profiles.deep.roles.plan]')
+  })
+
+  test('an unknown profile name returns undefined, and a profile resolver has no profiles', () => {
+    const r = profiled({ implement: { model: 'kimi-k4' } })
+    expect(r.profile('missing')).toBeUndefined()
+    expect(r.profile('deep')!.profile('deep')).toBeUndefined()
+  })
+})

@@ -2821,12 +2821,22 @@ export async function ticketRoleTickBudget(
 export async function urgentIntakeReadBudget() {
   const { MemoryBuildStore } = await import('../store/memory')
   const sha = 'a'.repeat(40)
-  const config = parseConfig(
-    '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n',
-  )
+  const plain =
+    '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n[verify]\nsteps = []\n[finalize]\nsteps = []\n'
+  // Profile selection is pure label matching over the listing the scan
+  // already holds (SPEC §9): one selected and one conflicting ticket must
+  // cost no extra source request or store row.
+  const profiled = `${plain}[profiles.deep]\nlabel = "deep"\n[profiles.cheap]\nlabel = "cheap"\n`
   const methods = ['listReady', 'get', 'dependencyStates', 'listAll'] as const
   const results = new Map<string, { calls: Record<string, number>[]; rows: number[] }>()
-  for (const urgent of [false, true]) {
+  const profileResults = new Map<string, { calls: Record<string, number>[]; rows: number[] }>()
+  for (const [urgent, profiles] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ] as const) {
+    const config = parseConfig(profiles ? profiled : plain)
     for (const length of [100, 100_000]) {
       const source = new FakeTicketSource([], { createState: 'triage', doneState: 'done' })
       const calls: Record<string, number> = Object.fromEntries(methods.map((name) => [name, 0]))
@@ -2847,6 +2857,9 @@ export async function urgentIntakeReadBudget() {
           title,
           body: 'Budget',
           ...(urgent && index === 2 ? { priority: 'urgent' as const } : {}),
+          ...(profiles
+            ? { labels: index === 0 ? ['deep'] : index === 1 ? ['deep', 'cheap'] : [] }
+            : {}),
         })
         await source.addBlocker(ticket.ref.id, blocker.ref.id)
         await source.transition(ticket.ref.id, 'ready')
@@ -2855,7 +2868,7 @@ export async function urgentIntakeReadBudget() {
       let now = 1_800_000_000_000
       const clock = () => new Date(now)
       const store = new MemoryBuildStore({ clock })
-      const repo = `https://github.com/budget/urgent-intake-${urgent}-${length}`
+      const repo = `https://github.com/budget/urgent-intake-${urgent}-${profiles}-${length}`
       await store.ensureRepo(repo)
       for (let i = 0; i < length; i++)
         await store.appendRepo(repo, {
@@ -2899,7 +2912,9 @@ export async function urgentIntakeReadBudget() {
         )
         rows.push(counter.rows)
         expect(report.dispatched).toBe(0)
-        expect(report.dependencyBlocked).toBe(3)
+        // A conflicting ticket is withheld before dependency checks.
+        expect(report.dependencyBlocked).toBe(profiles ? 2 : 3)
+        expect(report.invalidTickets).toBe(profiles ? 1 : 0)
         expect(counter.rows).toBeLessThanOrEqual(32)
         // Prepare the tick's own tail, then prove an unchanged read costs zero rows.
         await readRepositoryFacts(store, repo)
@@ -2909,12 +2924,23 @@ export async function urgentIntakeReadBudget() {
         await readBuildDigests(store, repo)
         expect(counter.rows).toBe(0)
       }
-      results.set(`${urgent}:${length}`, { calls: perTick, rows })
+      ;(profiles ? profileResults : results).set(`${urgent}:${length}`, {
+        calls: perTick,
+        rows,
+      })
       await store.close()
     }
   }
   const [baseline, ...rest] = [...results.values()]
   for (const result of rest) expect(result).toEqual(baseline!)
+  const [profileBaseline, ...profileRest] = [...profileResults.values()]
+  for (const result of profileRest) expect(result).toEqual(profileBaseline!)
+  // Profiles never add a request or a row; withholding a conflict can only save.
+  profileBaseline!.calls.forEach((tick, index) => {
+    for (const name of methods)
+      expect(tick[name]).toBeLessThanOrEqual(baseline!.calls[index]![name]!)
+    expect(profileBaseline!.rows[index]).toBeLessThanOrEqual(baseline!.rows[index]!)
+  })
   return baseline!.calls[0]!
 }
 
