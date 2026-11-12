@@ -4,7 +4,7 @@
   "title": "Writing a plugin",
   "group": "guides",
   "description": "Build, contract-test, package, and publish an Autobuild infrastructure adapter.",
-  "textHash": "0549d4673c26366e1bd59deaadf0fd492349fefd01b87bb2a550ab41a7313471",
+  "textHash": "9b7e1d21e05fff78e83d152ebf8c0c3e8b62a1748c6818b4764fb39c25c49fa3",
   "headings": [
     "1. Choose the port and preserve its semantics",
     "2. Create a repository-local module",

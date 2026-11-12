@@ -540,10 +540,12 @@ refuse a configured `readyAssignee` with an error naming the source and plugin.
 Three optional methods support it:
 
 - `prepareReadyAssignee(): Promise<void>` is called once at dispatcher startup,
-  before the loop and never in a tick, whether or not `readyAssignee` is set.
+  before the loop and never in a tick, whether or not `readyAssignee` or
+  `createAssignee` is set.
   Resolve whatever `"me"` needs and memoize it. A credential with no user is a
   recorded result, not a throw; throw only for infrastructure failures, which
-  fail startup when `readyAssignee` is set and are otherwise a warning.
+  fail startup when `readyAssignee` or `createAssignee` is set and are
+  otherwise a warning.
 - `readyAssigneeRefusal(value): string | undefined` is synchronous and makes no
   request. Return why the value can't be honoured from what was prepared, or
   `undefined`. Startup and every reload call it, so a refused reload keeps the
