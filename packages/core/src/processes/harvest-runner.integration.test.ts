@@ -22,6 +22,10 @@ import {
 import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../ports/runner/fake'
 import type { TicketSource, SessionStreamEmitter } from '../ports/types'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
+import { GitHubTicketSource } from '../ports/tickets/github'
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
+import { ticketsSchema } from '../config/schema'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock, steppingClock } from '../testing/fixed'
 import { HARVEST_PROPOSAL_LABEL, HarvestRunner } from './harvest-runner'
@@ -758,6 +762,68 @@ describe('HarvestRunner', () => {
     expect(tickets.claims).toEqual([])
     const ready = await tickets.listReady({ state: 'Ready', labels: [HARVEST_PROPOSAL_LABEL] })
     expect(ready.tickets.map((ticket) => ticket.ref.id)).toEqual(['fake-1'])
+  })
+
+  test('createAssignee = "me" assigns a filed proposal to the dispatcher credential owner', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-create-assignee-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const ids = sequentialIds()
+    const seeded = await seedOpenRun({
+      store,
+      tickets: new FakeTicketSource(),
+      ids,
+      workspace,
+      stage: 'reviewed',
+    })
+    const github = new FakeGitHubIssues()
+    github.assignable.add('alice')
+    const tickets = new GitHubTicketSource({
+      transport: github.transportAs('alice'),
+      repository: github.repository,
+      lifecycle: ticketLifecycle(ticketsSchema.parse({ source: 'github' })),
+      readyLabels: [],
+    })
+    // Dispatcher startup resolves the owner before any tick.
+    await tickets.prepareReadyAssignee()
+    const neverRun = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an approved run files without another agent')
+      },
+    })
+    const githubConfig = parseConfig(
+      [
+        '[tickets]',
+        'source = "github"',
+        'createAssignee = "me"',
+        '[roles.default]',
+        'runtime = "scripted"',
+        '[policy]',
+        'harvestThreshold = 1',
+      ].join('\n'),
+    )
+
+    expect(
+      await new HarvestRunner({
+        store,
+        tickets,
+        config: githubConfig,
+        runtimes: { scripted: { runner: neverRun, servesModels: [''] } },
+        repo: '/repo',
+        workspacePath: workspace,
+        ids,
+        uuids: randomUuids(),
+        clock: steppingClock(),
+        instance: ids('instance'),
+        opts: { heartbeatMs: 100_000 },
+      }).run(),
+    ).toEqual({ outcome: 'completed', launch: 'resumed', run: seeded.run })
+
+    const filed = (await tickets.listAll()).tickets
+    expect(filed).toHaveLength(1)
+    expect(filed[0]).toMatchObject({ labels: [HARVEST_PROPOSAL_LABEL], assignees: ['alice'] })
+    // The owner came from startup preparation: filing sent no GET /user.
+    expect(github.count('user')).toBe(1)
   })
 
   test('files validated deduplicated blockers on an approved create', async () => {

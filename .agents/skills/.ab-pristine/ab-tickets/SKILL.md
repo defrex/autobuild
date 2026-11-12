@@ -93,7 +93,7 @@ the spec.
 ## Create a ticket
 
 ```
-ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api] [--blocked-by file-1,file-2] [--issues 824,820:refs] [--priority urgent]
+ab ticket create "Rate-limit auth endpoints" --body spec.md [--labels bug,api] [--blocked-by file-1,file-2] [--issues 824,820:refs] [--priority urgent] [--assignees alice,me]
 ```
 
 It lands in `triage/` and prints the new id. `--body` is a file, and its
@@ -106,6 +106,11 @@ succeeds. When the ticket originates from a forge issue, attach it with
 `--issues`: `N` (intent `closes`, the default) when the ticket fully resolves
 the issue, `N:refs` when it only partly addresses it. `--priority urgent` makes
 the dispatcher claim it before normal ready work; omit it for normal.
+`--assignees` assigns the ticket on a source that stores assignees (GitHub):
+usernames, or `me` for the owner of the GitHub credential. Without it, a
+configured `[tickets].createAssignee` assigns the ticket, and `--assignees ''`
+files it unassigned. Under `[tickets].readyAssignee` an unassigned ticket never
+becomes ready, so assign a ticket to whoever's dispatcher should build it.
 
 For dependencies on any source, follow the
 [safe blocker-filing workflow](../ab-guide/references/ticket-dependencies.md).
@@ -125,6 +130,7 @@ ab ticket update file-3 --title "New title" --labels bug,api
 ab ticket update file-3 --labels ''
 ab ticket update file-3 --issues 824:refs
 ab ticket update file-3 --priority urgent
+ab ticket update 412 --assignees octocat,me
 ab ticket block file-3 file-1
 ab ticket unblock file-3 file-1
 ```
@@ -134,7 +140,11 @@ Update is partial: omitted fields stay untouched, while an explicitly empty
 `--issues ''` clears it. `--priority urgent|normal` sets the dispatch class;
 the file tracker writes `priority = "urgent"` and removes the key for normal. A
 source that cannot store priority refuses `urgent`, names itself, and writes
-nothing; `normal` succeeds there. It cannot change state. For block/unblock the first
+nothing; `normal` succeeds there. `--assignees` replaces the whole set of
+assignees, `--assignees ''` clears it, and omitting it leaves them alone;
+`ab ticket show` prints them and JSON reads carry an `assignees` array. Hand a
+GitHub ticket to someone else this way. A source that cannot store assignees
+(file, hosted, Linear) refuses the option, names itself, and writes nothing. It cannot change state. For block/unblock the first
 id is the ticket being edited; the second is its blocker. Both are safe to
 retry, and adding validates the blocker exists and is not the ticket itself.
 

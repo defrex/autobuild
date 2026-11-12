@@ -33,6 +33,8 @@ import { runCli } from './main'
 import { ticketsSchema } from '../config/schema'
 import { FileTicketSource } from '../ports/tickets/file'
 import { LinearTicketSource } from '../ports/tickets/linear'
+import { FakeGitHubIssues } from '../ports/tickets/github-fake'
+import { GitHubApiError } from '../ports/forge/github-transport'
 import type { TicketSource } from '../ports/types'
 
 // The test file lives at packages/core/src/cli/, so four levels up is the
@@ -1497,6 +1499,94 @@ readyAssignee = "${assignee}"
           runtimes: usableRuntime,
         }),
       ).rejects.toThrow('ghost@example.com" matches no user in the Linear workspace')
+    })
+  })
+
+  describe('createAssignee', () => {
+    const originalFetch = globalThis.fetch
+    afterEach(() => {
+      globalThis.fetch = originalFetch
+    })
+
+    async function githubRepo(assignee: string) {
+      const { repo } = await committedLocalRepo('ab-create-assignee-')
+      await writeFile(
+        join(repo, 'autobuild.toml'),
+        `baseBranch = "main"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "github"
+createAssignee = "${assignee}"
+`,
+      )
+      await spawnExec(['git', 'commit', '-am', 'github'], { cwd: repo })
+      return repo
+    }
+
+    /** Serve api.github.com from the in-memory fake as `login`. */
+    function stubGitHub(login: string | null): FakeGitHubIssues {
+      const github = new FakeGitHubIssues()
+      const transport = github.transportAs(login)
+      globalThis.fetch = (async (input: unknown, init?: { method?: string; body?: string }) => {
+        const url = new URL(String(input))
+        const query = Object.fromEntries(url.searchParams)
+        const body = init?.body === undefined ? undefined : JSON.parse(init.body)
+        const headers = { 'content-type': 'application/json' }
+        try {
+          const answer = await transport(init?.method ?? 'GET', url.pathname.slice(1), {
+            ...(Object.keys(query).length > 0 ? { query } : {}),
+            ...(body !== undefined ? { body } : {}),
+          })
+          const empty = answer.status === 204 || answer.status === 304
+          return new Response(empty ? null : JSON.stringify(answer.json ?? null), {
+            status: answer.status,
+            headers: { ...headers, ...answer.headers },
+          })
+        } catch (error) {
+          if (!(error instanceof GitHubApiError)) throw error
+          return new Response(JSON.stringify(error.body ?? { message: error.message }), {
+            status: error.status,
+            headers,
+          })
+        }
+      }) as unknown as typeof fetch
+      return github
+    }
+
+    const env = { GITHUB_TOKEN: 'ghp_test', AB_REPOSITORY: 'acme/widgets' }
+
+    test('reports the GitHub user createAssignee = "me" resolves to', async () => {
+      const repo = await githubRepo('me')
+      stubGitHub('alice').assignable.add('alice')
+      const output: string[] = []
+      await validateInitReadiness({
+        targetRepo: repo,
+        env,
+        exec: spawnExec,
+        runtimes: usableRuntime,
+        stdout: (line) => output.push(line),
+      })
+      expect(output).toContain('Ticket create assignee: me → @alice')
+    })
+
+    test('a credential with no user is reported naming createAssignee', async () => {
+      const repo = await githubRepo('me')
+      stubGitHub(null)
+      await expect(
+        validateInitReadiness({ targetRepo: repo, env, exec: spawnExec, runtimes: usableRuntime }),
+      ).rejects.toThrow('[tickets].createAssignee = "me" but the GitHub credential has no user')
+    })
+
+    test('a user who cannot be assigned is reported naming createAssignee', async () => {
+      const repo = await githubRepo('ghost')
+      stubGitHub('alice')
+      await expect(
+        validateInitReadiness({ targetRepo: repo, env, exec: spawnExec, runtimes: usableRuntime }),
+      ).rejects.toThrow(
+        '[tickets].createAssignee "ghost" cannot be assigned issues in acme/widgets',
+      )
     })
   })
 

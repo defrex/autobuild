@@ -3,6 +3,7 @@ import { checkTicketRevision } from './revision'
 import { validateTicketUpdate } from './update'
 import { refuseUnsupportedIssueLinks } from './issue-links'
 import { refuseUnsupportedPriority, withoutUnsupportedPriority } from './priority'
+import { refuseUnsupportedAssignees } from './assignees'
 
 /** Sources without a capability cannot present that capability's fields. */
 export function normalizeTicket(
@@ -10,8 +11,9 @@ export function normalizeTicket(
   supported = true,
   issueLinks = true,
   priority = true,
+  assignees = true,
 ): Ticket {
-  const { target, issueLinks: links, priority: urgency, ...rest } = ticket
+  const { target, issueLinks: links, priority: urgency, assignees: assigned, ...rest } = ticket
   return {
     ...rest,
     kind: supported ? (ticket.kind ?? 'work') : 'work',
@@ -19,12 +21,19 @@ export function normalizeTicket(
     ...(issueLinks && links !== undefined ? { issueLinks: links } : {}),
     // Normal is the absence of the field, so strict wire schemas never see it.
     ...(priority && urgency === 'urgent' ? { priority: urgency } : {}),
+    ...(assignees && assigned !== undefined ? { assignees: assigned } : {}),
   }
 }
 
 /** Apply the source's own capabilities to a ticket it returned. */
 export function normalizeSourceTicket(source: TicketSource, ticket: Ticket): Ticket {
-  return normalizeTicket(ticket, !!source.integrationTree, !!source.issueLinks, !!source.priority)
+  return normalizeTicket(
+    ticket,
+    !!source.integrationTree,
+    !!source.issueLinks,
+    !!source.priority,
+    !!source.assignees,
+  )
 }
 
 export function refuseUnsupportedMetadata(
@@ -37,6 +46,7 @@ export function refuseUnsupportedMetadata(
     )
   refuseUnsupportedIssueLinks(source, patch)
   refuseUnsupportedPriority(source, patch)
+  refuseUnsupportedAssignees(source, patch)
 }
 
 /** Validate before any part of a mixed patch is written. Canonical refs close alias cycles. */

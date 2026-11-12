@@ -1,4 +1,5 @@
 import {
+  assertCreateAssigneeAccepted,
   assertReadyAssigneeAccepted,
   prepareReadyAssigneeForDispatch,
 } from '../config/ready-assignee'
@@ -602,8 +603,9 @@ async function defaultWire(
     opened.localStateRoot,
     plugins,
   )
-  // Once, before the loop: whatever a readyAssignee value needs is resolved
-  // here so neither a tick nor a reload ever spends a request on it.
+  // Once, before the loop: whatever a readyAssignee or createAssignee value
+  // needs is resolved here so neither a tick nor a reload ever spends a
+  // request on it.
   await prepareReadyAssigneeForDispatch(tickets, config.tickets, (line) => {
     if (opts.silent !== true) opts.stderr(`warning: ${line}`)
   })
@@ -5662,7 +5664,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       wiring.updateRuntimeReferences?.(effectiveConfig)
     },
     startupDeprecations,
-    (next) => assertReadyAssigneeAccepted(next.tickets, wiring.tickets),
+    (next) => {
+      assertReadyAssigneeAccepted(next.tickets, wiring.tickets)
+      assertCreateAssigneeAccepted(next.tickets, wiring.tickets)
+    },
   )
 
   // Launch flags are durable repository setters. Omission writes nothing, so
