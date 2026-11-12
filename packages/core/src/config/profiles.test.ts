@@ -11,6 +11,7 @@ import {
   selectProfile,
 } from './profiles'
 import { effectiveRuntimeReferences } from './roles'
+import type { RoleConfig } from './schema'
 
 const BASE = `[tickets]
 source = "file"
@@ -35,7 +36,7 @@ function refusal(body: string): string {
 }
 
 describe('profileRoles', () => {
-  const roles = {
+  const roles: Record<string, RoleConfig> = {
     default: { runtime: 'claude' },
     implement: { model: 'claude-sonnet-5-5', args: ['--a'], alternates: [{ runtime: 'pi' }] },
   }
@@ -48,7 +49,7 @@ describe('profileRoles', () => {
       alternates: [{ runtime: 'pi' }],
     })
     expect(overlaid.default).toBe(roles.default)
-    expect(roles.implement.model).toBe('claude-sonnet-5-5')
+    expect(roles.implement!.model).toBe('claude-sonnet-5-5')
   })
 
   test('an entry on an undeclared role stands alone, and a declared alternates list replaces', () => {
