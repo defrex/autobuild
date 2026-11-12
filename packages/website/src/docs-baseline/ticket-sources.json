@@ -4,7 +4,7 @@
   "title": "Tickets",
   "group": "reference",
   "description": "Configure file, Linear, hosted, or GitHub tickets and implement a ticket-source adapter.",
-  "textHash": "45f6733e96b57a09caff2a9c39562dfa73801ee2ca323643b0863428126a4131",
+  "textHash": "de42665e8973bea27e35ea70742a4931026013ed79d19bc1f23766f0bb91908d",
   "headings": [
     "Responsibility",
     "Shipped adapters",
@@ -16,6 +16,7 @@
     "bun ab connect --tickets https://tickets.example.com",
     "[tickets]\nsource = \"hosted\"\nteamKey = \"ENG\"\nurl = \"https://tickets.example.com\"\nreadyState = \"ready\"\nreadyLabels = []\nclaimedState = \"doing\"\ncreateState = \"triage\"\ntriageState = \"triage\"\nproposalState = \"triage\"\ndoneState = \"done\"\nbacklogState = \"backlog\"\nrejectedState = \"rejected\"",
     "[tickets]\nsource = \"github\"\nreadyState = \"ready\"\nreadyLabels = [\"autobuild\"]\nclaimedState = \"doing\"\ncreateState = \"triage\"\ntriageState = \"triage\"\nproposalState = \"triage\"\ndoneState = \"done\"\nbacklogState = \"backlog\"\nrejectedState = \"rejected\"",
+    "on: { issues: { types: [opened] } }\npermissions: { issues: write }\njobs:\n  assign:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh issue edit \"$NUMBER\" --repo \"$REPO\" --add-assignee \"$AUTHOR\"\n        env:\n          GH_TOKEN: ${{ github.token }}\n          NUMBER: ${{ github.event.issue.number }}\n          REPO: ${{ github.repository }}\n          AUTHOR: ${{ github.event.issue.user.login }}",
     "bun ab plugin test ticket-source acme"
   ]
 }

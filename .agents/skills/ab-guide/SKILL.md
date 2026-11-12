@@ -1319,6 +1319,7 @@ state eligible.
 | `url` | selected build service | HTTPS URL (loopback HTTP allowed), no userinfo/query/fragment; hosted only | Ticket service independent of builds; required for local builds. |
 | `readyState` | hosted, github: `ready` | non-blank string; required for other sources | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file matches it case-insensitively to a state directory (`ready` → `ready/`); github matches the `autobuild:<state>` label ignoring case. There is no any-state mode. |
 | `readyAssignee` | — | optional; sources that declare the capability: `linear` (`"me"` or an email), `github` (`"me"` or a username, managed-user `name_shortcode` logins included), declaring plugins; refused for `file`/`hosted` | Also require the ticket to be assigned to that user; unassigned tickets are never ready. `me` is the credential owner: of `LINEAR_API_KEY` for `linear`, of the GitHub token for `github`. A `github` issue with several assignees matches any one of them. |
+| `createAssignee` | — | optional; sources that declare the `assignees` capability: `github` (`"me"` or a username), declaring plugins; refused for `file`/`hosted`/`linear` | Assign every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals) to that user unless the create names its own assignees. `me` is the creating credential's owner, so a harvest proposal belongs to the filing dispatcher's owner. Pairs with `readyAssignee = "me"`. |
 | `teamKey` | — | required by `linear` and `hosted`, forbidden by `file` and `github`, allowed for plugins | The Linear team key (e.g. `"ENG"`), the captured prefix for new hosted ticket ids (`ENG-1`), or a plugin configuration field. Hosted numbers are project-local and continue across prefix changes; legacy ids remain aliases and readable inputs are case-insensitive. |
 | `claimedState` | hosted, github: `doing` | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `doneState` | hosted, github: `"done"` | optional nonblank string | Project completion state and merged-ticket transition; hosted and github tickets only. A github ticket is done when its issue is closed as completed. |
@@ -1356,6 +1357,10 @@ Cross-field rules, each an **error**:
   `hosted`, or a plugin source without it). The error names the source; for a
   plugin it comes at startup and `ab init --validate`, after plugins load, and
   a live reload that adds it is rejected.
+- `createAssignee` on a source that can't store assignees (`file`, `hosted`,
+  `linear`, or a plugin source without the `assignees` capability), the same
+  way. `ab init --validate` also reports a `"me"` whose credential has no user
+  and a user who can't be assigned issues in the repository.
 - `source = "file"` with `teamKey` or `claimedState` set. `dir` is **optional**
   here — absent means the default above, which is why the schema leaves it
   optional rather than giving it a `.default()`: that is what keeps the
@@ -1739,8 +1744,9 @@ every agent session as `AB_STORE`.
 One repository driven by several dispatchers — for example each engineer
 running `ab dispatch` locally — should share one store: connect every
 dispatcher to the same service with `ab connect`. Assignee gating
-(`[tickets].readyAssignee`) divides tickets between dispatchers but not
-store-owned state. Separate local stores each see only their own builds:
+(`[tickets].readyAssignee`, with `createAssignee = "me"` so each person's
+tickets and harvest proposals are assigned to them) divides tickets between
+dispatchers but not store-owned state. Separate local stores each see only their own builds:
 
 - **Nodes are owned by one store.** A child ticket can target only a node built
   in its own store; elsewhere it stays queued with `target node … is being
@@ -1838,12 +1844,12 @@ repository's `[tickets]` table selects. These forms therefore work unchanged
 with the file tracker, Linear, hosted tickets and GitHub issues, without
 provider-specific API/MCP calls:
 
-- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--json]`
+- `ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--assignees a,b] [--json]`
   files a ticket. Without `--state`, the source uses `[tickets].createState` or
   its own default. A named state is passed through unchanged and the selected
   source validates it before creating anything. Blocker ids belong to the same
   source and are also checked before the single create call.
-- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--priority urgent|normal] [--json]`
+- `ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--priority urgent|normal] [--assignees a,b] [--json]`
   partially replaces editable fields. At least one editable flag is required;
   `--json` alone is not an update.
 - `ab ticket block <id> <blocker-id[,blocker-id...]> [--json]` adds one or more
@@ -1916,6 +1922,15 @@ alone); plugin sources without the capability read every ticket as normal,
 refuse `urgent` naming themselves and writing nothing, and accept `normal`
 as a no-op. JSON
 ticket output always includes `priority`, and list output marks urgent tickets.
+`--assignees a,b` names usernames, or `me` for the owner of the source's
+credential, on a source that stores assignees (GitHub). On create it replaces
+the `[tickets].createAssignee` default and `--assignees ''` files the ticket
+unassigned; on update it replaces the whole set, `''` clears it, and omitting
+it leaves them alone. A user who can't be assigned, or a write the provider
+accepts without the assignees, fails naming the cause. `ab ticket show` prints
+assignees and JSON reads carry an `assignees` array; sources that can't store
+them (file, hosted, Linear) carry no field and refuse the option, naming
+themselves and writing nothing.
 Supplied title/body values must be
 nonblank. State is intentionally not an update field — `transition()` remains its sole owner —
 and every validation or unknown-ticket error occurs before

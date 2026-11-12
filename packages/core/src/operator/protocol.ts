@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { issueLinksInputSchema } from '../ports/tickets/issue-links'
 import { TICKET_MOVE_ROLES } from '../ports/tickets/lifecycle'
 import { ticketPrioritySchema } from '../ports/tickets/priority'
+import { ticketAssigneesSchema } from '../ports/tickets/assignees'
 
 const issueLinksField = issueLinksInputSchema
   .optional()
@@ -13,6 +14,12 @@ const priorityField = ticketPrioritySchema
   .optional()
   .describe(
     'Dispatch class: "urgent" is claimed before normal ready work (never preempting a running build); "normal" (the default) removes urgency. Sources that cannot store priority refuse urgent.',
+  )
+
+const assigneesField = ticketAssigneesSchema
+  .optional()
+  .describe(
+    'Usernames to assign, or "me" for the owner of the ticket-source credential. On create, replaces the [tickets].createAssignee default ([] creates an unassigned ticket); on update, a complete replacement ([] clears). Sources that cannot store assignees refuse it.',
   )
 
 export const buildListScopeSchema = z.enum(['active', 'queued', 'all'])
@@ -73,6 +80,7 @@ export const ticketCreateRequestSchema = z.strictObject({
   blockedBy: z.array(z.string().min(1)).optional(),
   issueLinks: issueLinksField,
   priority: priorityField,
+  assignees: assigneesField,
 })
 const expectedRevisionSchema = z
   .string()
@@ -88,6 +96,7 @@ export const ticketUpdateRequestSchema = z
     labels: z.array(z.string()).optional(),
     issueLinks: issueLinksField,
     priority: priorityField,
+    assignees: assigneesField,
   })
   .refine(
     (value) =>
@@ -96,6 +105,7 @@ export const ticketUpdateRequestSchema = z
       value.labels !== undefined ||
       value.issueLinks !== undefined ||
       value.priority !== undefined ||
+      value.assignees !== undefined ||
       value.kind !== undefined ||
       value.target !== undefined,
     'update must name at least one field',

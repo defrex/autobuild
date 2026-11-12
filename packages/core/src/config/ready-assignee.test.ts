@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import type { TicketSource } from '../ports/types'
 import { parseConfig } from './load'
 import {
+  assertCreateAssigneeAccepted,
+  assertCreateAssigneeSupported,
   assertReadyAssigneeAccepted,
+  createAssigneeUnsupported,
   prepareReadyAssigneeForDispatch,
   readyAssigneeUnsupported,
 } from './ready-assignee'
@@ -68,5 +71,62 @@ describe('readyAssignee capability', () => {
     await expect(
       prepareReadyAssigneeForDispatch(source(), tickets('me'), () => {}),
     ).rejects.toThrow('cannot filter ready tickets by assignee')
+  })
+})
+
+const creating = (createAssignee?: string): TicketsConfig =>
+  parseConfig(
+    `[tickets]\nsource = "jira"\nreadyState = "Open"\n${
+      createAssignee !== undefined ? `createAssignee = "${createAssignee}"\n` : ''
+    }`,
+  ).tickets
+
+describe('createAssignee capability', () => {
+  test('the unsupported message names the key, source and plugin', () => {
+    expect(createAssigneeUnsupported('jira', 'acme')).toBe(
+      '[tickets].createAssignee: ticket source "jira" from plugin "acme" cannot assign tickets — remove createAssignee (selected source: "jira")',
+    )
+  })
+
+  test('a plugin source without the assignees declaration is refused', () => {
+    expect(() => assertCreateAssigneeSupported(creating('me'), source(), 'acme')).toThrow(
+      'from plugin "acme" cannot assign tickets',
+    )
+    expect(assertCreateAssigneeSupported(creating(), source())).toBeUndefined()
+    expect(assertCreateAssigneeSupported(creating('me'), source({ assignees: true }))).toBe(
+      undefined,
+    )
+  })
+
+  test('assertCreateAssigneeAccepted applies the source refusal synchronously', () => {
+    const refusing = source({
+      assignees: true,
+      createAssigneeRefusal: (value) => (value === 'me' ? 'no user behind the token' : undefined),
+    })
+    expect(() => assertCreateAssigneeAccepted(creating('me'), refusing)).toThrow(
+      'no user behind the token',
+    )
+    expect(assertCreateAssigneeAccepted(creating('pat'), refusing)).toBeUndefined()
+  })
+
+  test('dispatch preparation fails with createAssignee alone and applies its refusal', async () => {
+    const failing = source({
+      assignees: true,
+      prepareReadyAssignee: () => Promise.reject(new Error('network down')),
+    })
+    await expect(
+      prepareReadyAssigneeForDispatch(failing, creating('me'), () => {}),
+    ).rejects.toThrow('network down')
+    const refusing = source({
+      assignees: true,
+      prepareReadyAssignee: async () => {},
+      createAssigneeRefusal: () => 'refused create assignee',
+    })
+    await expect(
+      prepareReadyAssigneeForDispatch(refusing, creating('me'), () => {}),
+    ).rejects.toThrow('refused create assignee')
+    await expect(
+      prepareReadyAssigneeForDispatch(source(), creating('me'), () => {}),
+    ).rejects.toThrow('cannot assign tickets')
   })
 })

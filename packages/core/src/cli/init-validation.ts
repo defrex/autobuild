@@ -577,6 +577,7 @@ async function validateInitReadinessInner(opts: {
   ])
   let caps: WorkspaceProviderCapabilities | undefined
   let assigneeLine: string | undefined
+  let createAssigneeLine: string | undefined
   let roles: Awaited<ReturnType<typeof ticketRoleReadiness>> = { notes: [], checks: [] }
   let forgeChecks: ForgeReadinessCheck[] = readinessChecks(
     'unknown',
@@ -659,6 +660,11 @@ async function validateInitReadinessInner(opts: {
       const assignee = config.tickets.readyAssignee
       if (assignee !== undefined && ticketSource.describeReadyAssignee !== undefined)
         assigneeLine = `Ticket assignee gate: ${await ticketSource.describeReadyAssignee(assignee)}`
+      // Who every created ticket would be assigned to, so a create never
+      // finds out first.
+      const createAssignee = config.tickets.createAssignee
+      if (createAssignee !== undefined && ticketSource.describeCreateAssignee !== undefined)
+        createAssigneeLine = `Ticket create assignee: ${await ticketSource.describeCreateAssignee(createAssignee)}`
       await ticketSource.listReady({
         ...(config.tickets.readyLabels !== undefined ? { labels: config.tickets.readyLabels } : {}),
         state: config.tickets.readyState,
@@ -809,6 +815,7 @@ async function validateInitReadinessInner(opts: {
   stdout(`Store: ${state.storeRef}`)
   stdout(`Forge: ${config.forge}`)
   if (assigneeLine !== undefined) stdout(assigneeLine)
+  if (createAssigneeLine !== undefined) stdout(createAssigneeLine)
   for (const note of roles.notes) stdout(note)
   // Same raw `[workspace.config]` fallback guestEnvNames gets (f_55ba7591): a
   // provider that declares describeEnvironment without a configSchema still

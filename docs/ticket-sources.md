@@ -113,7 +113,7 @@ rejectedState = "rejected"
 
 ### GitHub (`github`)
 
-Tickets are the issues of the forge repository, the GitHub repository that `origin` names, so a team grooms and tracks work where it already looks. The source authenticates as the `github` forge does: `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's `gh auth login`. A fine-grained token needs Issues read and write, and Metadata read, on the repository, and a user token's user needs triage or write access: GitHub silently drops label changes from anyone below that, so a label write that doesn't come back fails with a permission error instead of reporting success. `ab init --validate` names a missing token, a token that can't read and write issues, a user who can't set labels, disabled issues, an `origin` that isn't a GitHub repository, a state that can't be a label, and a `readyAssignee` that names no user who can be assigned issues in the repository.
+Tickets are the issues of the forge repository, the GitHub repository that `origin` names, so a team grooms and tracks work where it already looks. The source authenticates as the `github` forge does: `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's `gh auth login`. A fine-grained token needs Issues read and write, and Metadata read, on the repository, and a user token's user needs triage or write access: GitHub silently drops label changes from anyone below that, so a label write that doesn't come back fails with a permission error instead of reporting success. `ab init --validate` names a missing token, a token that can't read and write issues, a user who can't set labels, disabled issues, an `origin` that isn't a GitHub repository, a state that can't be a label, and a `readyAssignee` or `createAssignee` that names no user who can be assigned issues in the repository, or `"me"` with a credential that has no user.
 
 <!-- seam-config:start -->
 ```toml
@@ -139,6 +139,7 @@ rejectedState = "rejected"
 - **Reopen goes to triage.** If a state label survived the close, the adapter strips that stale label the first time it reads the reopened issue. It tells stale from fresh by the issue's last 100 label and reopen events; an issue whose deciding event is older than that is left out of listings with a diagnostic until its state label is removed and re-added.
 - **Labels.** `readyLabels` defaults to `["autobuild"]`; `[]` removes the gate. Missing labels are created on demand. State and link labels are never part of a ticket's labels, and a write that names one is refused. The `autobuild:proposal` and `autobuild:aborted` labels that harvest and abort apply are ordinary labels, so `proposal` and `aborted` can't be states.
 - **Assignee.** `readyAssignee = "me"` keeps only issues assigned to the login that owns the GitHub credential; a username, including an Enterprise Managed User login such as `mona_acme`, names a specific user. The ready read itself is narrowed by assignee, an unassigned issue is never ready, and any one of several assignees matches. `"me"` costs one `GET /user` per dispatcher start, never during a tick, so a reload that enables it needs no restart unless startup couldn't resolve the credential's owner.
+- **Assignees.** Tickets carry the issue's assignees as an `assignees` array of usernames in JSON reads, whether they were set on GitHub or through `ab`, and `ab ticket show` prints them. They aren't part of the ticket's `revision`. `--assignees` on `ab ticket create` and `ab ticket update`, and the `assignees` field of the operator `tickets.create` and `tickets.update` tools, set them: each entry is a username or `me`, at most ten entries counted before duplicates collapse, and an update replaces the whole set. `createAssignee = "me"` (or a username) assigns every ticket Autobuild creates, through `ab ticket create`, operator `tickets.create` and harvest proposals, unless the create names its own assignees; a harvest proposal goes to the owner of the filing dispatcher's credential. That pairs with `readyAssignee = "me"`, so each person's dispatcher picks up the tickets they file. A create or update fails, naming the cause and writing nothing, when `me` has no user behind the credential (a GitHub App installation token has none) or a user can't be assigned issues in the repository. GitHub silently drops assignees a token without push access sets, so a write whose assignees don't come back fails, naming the issue and saying it is unassigned; a retried harvest create adopts that issue and assigns it. A write naming assignees costs one check per user per process, `me` reuses the `readyAssignee` `GET /user`, and reads cost nothing extra.
 - **Blockers** are native issue dependencies ("blocked by"), visible on both issues, including ones added on GitHub. A blocker resolves when its issue is done. One in another repository never resolves and is named in the dependency diagnostics. An issue transferred to another repository is no longer a ticket here: its old number reads as missing, so it is never written and never resolves a blocker.
 - **Issue links.** The ticket's own issue is always a `closes` link that can't be removed. Links to other issues are labels named `autobuild-link:<intent> #<n>`, such as `autobuild-link:refs #820`, so they show on the issue and survive edits on GitHub. Each linked issue and intent adds one repository label, which appears in GitHub's label picker; unused link labels are never deleted.
 - **Comments and assets.** Dispatcher notices post as issue comments, but tickets carry no comment history, so `ab ticket show` lists none; export and import read comment history explicitly. Assets live in the BuildStore, with the usual note left as an issue comment.
@@ -148,6 +149,23 @@ rejectedState = "rejected"
 - **Cost.** Dispatcher reads are conditional requests. Their validators live under the local state root, in `github-tickets/<owner>/<repo>/validators/`, and are evicted after 7 days unused, so a tick on an unchanged repository spends no primary rate-limit budget. A process without them, such as a cold hosted instance, pays one read sized by the ready candidates. A ready candidate whose parent issue isn't in the listing adds one conditional read of that parent, at most one per distinct parent. A node's completeness check reads the node issue and its sub-issues, conditionally, whatever the repository's size. Rate limits surface as the ticket-source rate-limit error, with GitHub's reset time.
 - **State counts** are display-only: one fresh GraphQL request per call, plus one more for each further page of 100 `autobuild:` labels, never cached and never reading issue history, with done and rejected subject to GitHub's search-index lag. Three cases approximate. A stale reopen label counts in its label's state until the first read strips it. An issue with two or more state labels counts once in each until its labels are fixed; the first read reports it. A closure that predates GitHub's close reasons reads as done but may count as rejected or `not-planned`, and never heals.
 - **Creation keys** live in a hidden marker in the issue body. A keyed create needs `idempotencyKeyReservedAt`; harvest supplies it.
+
+Issues filed directly on GitHub aren't assigned by Autobuild, so under `readyAssignee` they never become ready until someone assigns them. A small Actions workflow can assign each opened issue to its author:
+
+```yaml
+on: { issues: { types: [opened] } }
+permissions: { issues: write }
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh issue edit "$NUMBER" --repo "$REPO" --add-assignee "$AUTHOR"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+```
 
 ### Optional issue links
 
@@ -187,6 +205,8 @@ bun ab plugin test ticket-source acme
 ```
 
 Declare `readyAssignee` only if `listReady` filters by `criteria.assignee`; without it, a configured `readyAssignee` is refused, naming your source. See the [optional ready assignee capability](plugin-authoring.md#optional-ready-assignee-capability).
+
+Declare `assignees` only if you store, return and verify ticket assignees; without it, a write naming assignees and a configured `createAssignee` are refused, naming your source. See the [optional assignees capability](plugin-authoring.md#optional-assignees-capability).
 
 Declare tree support only if you keep the [optional tree contract](plugin-authoring.md#optional-ticket-tree-capability) on the same port and harness: exhaustive pagination, canonical targets, revision coverage and atomic rejection.
 

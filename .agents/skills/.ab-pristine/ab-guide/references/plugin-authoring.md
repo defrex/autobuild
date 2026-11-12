@@ -540,10 +540,12 @@ refuse a configured `readyAssignee` with an error naming the source and plugin.
 Three optional methods support it:
 
 - `prepareReadyAssignee(): Promise<void>` is called once at dispatcher startup,
-  before the loop and never in a tick, whether or not `readyAssignee` is set.
+  before the loop and never in a tick, whether or not `readyAssignee` or
+  `createAssignee` is set.
   Resolve whatever `"me"` needs and memoize it. A credential with no user is a
   recorded result, not a throw; throw only for infrastructure failures, which
-  fail startup when `readyAssignee` is set and are otherwise a warning.
+  fail startup when `readyAssignee` or `createAssignee` is set and are
+  otherwise a warning.
 - `readyAssigneeRefusal(value): string | undefined` is synchronous and makes no
   request. Return why the value can't be honoured from what was prepared, or
   `undefined`. Startup and every reload call it, so a refused reload keeps the
@@ -551,6 +553,29 @@ Three optional methods support it:
 - `describeReadyAssignee(value): Promise<string>` serves `ab init --validate`:
   return a one-line summary of who the value names, such as `me → @octocat`,
   or throw an error that says how to fix a value that names nobody.
+
+## Optional assignees capability
+
+An adapter opts in with `assignees: true` and must then accept
+`assignees?: string[]` on create, update and revision-checked update, where
+each entry is a username or `me` (the owner of the source's credential) and an
+update replaces the whole set, `[]` clearing it. Return `assignees` on every
+read, `[]` when unassigned, and leave it out of revisions. Check each user
+before any write and refuse, writing nothing, when one can't be assigned. A
+write the provider accepts without the requested assignees must fail rather
+than report success, and a retried keyed create that adopts an existing ticket
+must leave it with the requested assignees. Without the flag, the
+compatibility facade refuses any write naming assignees, including `[]`, with
+`TicketAssigneesUnsupported` before your methods run, strips them from reads,
+and dispatcher startup, `ab init --validate` and live reloads refuse a
+configured `[tickets].createAssignee`, naming the source and plugin.
+
+Callers apply `createAssignee` themselves, so a draft's assignees are always
+exact. To support it, implement `createAssigneeRefusal(value)`, synchronous
+and request-free like `readyAssigneeRefusal`, and
+`describeCreateAssignee(value)` for `ab init --validate`. `"me"` should reuse
+what `prepareReadyAssignee` resolved, so a dispatcher never resolves it in a
+tick.
 
 ## Optional ticket paging capability
 
