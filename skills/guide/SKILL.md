@@ -443,8 +443,8 @@ evaluated as config logic.
 
 **Strictness:** unknown top-level keys/tables and unknown keys inside known
 tables are **errors**, not warnings — a typo must not silently disable a
-verifier. The open maps are `[accounts]`, `[commands]`, `[roles]`, `[profiles]` and
-each profile's `roles`, `[workspace.config]`,
+verifier. The open maps are `[accounts]`, `[commands]`, `[roles]`, `[profiles]`,
+`[profiles.<name>.roles]`, `[workspace.config]`,
 `[workspace.config.runtimeProvisioning]`, `[verify.<step>]`, and
 `[finalize.<step>]`. Autobuild strictly validates the
 repository-defined command, role, and step entries. `[workspace.config]` is

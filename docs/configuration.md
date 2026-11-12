@@ -259,7 +259,7 @@ Changing the store requires restarting dispatch.
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
 command references are errors. The open maps are `[accounts]`, `[commands]`, `[roles]`,
-`[profiles]` and each profile's `roles`, `[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
+`[profiles]`, `[profiles.<name>.roles]`, `[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
 `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
 validates repository-defined command, role, and step entries.
 `[workspace.config]` is plugin-owned and passed through unchanged for plugin
@@ -2397,6 +2397,7 @@ different role settings without touching the roles every other build reads.
 Each `[profiles.<name>]` names one ticket `label` and overrides only the role
 fields it declares:
 
+<!-- config-fragment:profiles -->
 ```toml
 [profiles.deep]
 label = "deep"

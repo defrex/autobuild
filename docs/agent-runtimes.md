@@ -128,7 +128,7 @@ alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
 <!-- seam-config:end -->
 
 - **Verifier roles** use the step name (`roles.acceptance`), not the skill name; author the `verify-acceptance` skill first. Check steps run commands and need no model.
-- **Inheritance.** Each role inherits omitted fields from `roles.default` field by field; an explicit `args` list replaces the inherited one. A ticket label can select a [role profile](configuration.md#profiles) that overrides named fields for that build only.
+- **Inheritance.** Each role inherits omitted fields from `roles.default` field by field; an explicit `args` list replaces the inherited one. A ticket label can select a [role profile](configuration-overview.md#roles-models-and-limits) that overrides named fields for that build only.
 - **Alternates** are ordered availability routes, not extra reviewers. Availability or exhaustion failures, or a missing executable, select the next route; credential and configuration failures need repair. A fallback may cost provider independence, so check which runtime ran.
 
 ## Writing your own
