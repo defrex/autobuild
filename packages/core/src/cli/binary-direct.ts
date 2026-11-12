@@ -187,6 +187,7 @@ export async function runDirectBinary(
         repo: record.repo,
         name: forge.name,
         wait: true,
+        scope: { process: `phase session ${cliEnv.session} (build ${cliEnv.build})` },
       })
     return await runCli(argv, {
       ...unscopedDeps,

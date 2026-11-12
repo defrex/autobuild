@@ -62,6 +62,8 @@ export { assertPublicSnapshotReducer } from '../snapshots'
 
 export {
   validateForgeDegradation,
+  validateForgeResetHorizon,
+  FORGE_RESET_EVENT_TYPES,
   MAX_FORGE_DEGRADATION_MS,
 } from '../../events/forge-degradation-policy'
 

@@ -1143,7 +1143,9 @@ test('delegated credentials cannot forge value checkpoints or extend an ended li
 })
 
 test.each(['build-runner', 'build-phase'] as const)(
-  '%s forge guard records cooldown through delegated HTTP authority and waits for dispatcher recovery',
+  // Runners pinned to releases before process-scoped guards still record the
+  // repository cooldown; the server keeps admitting it.
+  'a repository-scoped %s forge guard records cooldown through delegated HTTP authority and waits for dispatcher recovery',
   async (kind) => {
     const { RemoteBuildStore } = await import('@defrex/autobuild/remote-store')
     const { FakeForge, ForgeFailure } = await import('@defrex/autobuild/plugin-sdk')
@@ -1279,6 +1281,102 @@ test.each(['build-runner', 'build-phase'] as const)(
     expect(calls).toBe(2)
   },
   35_000,
+)
+
+test.each(['build-runner', 'build-phase'] as const)(
+  '%s guard reports a credential limit through delegated HTTP authority without pausing the repository',
+  async (kind) => {
+    const { RemoteBuildStore } = await import('@defrex/autobuild/remote-store')
+    const { FakeForge, ForgeFailure } = await import('@defrex/autobuild/plugin-sdk')
+    const { guardForge } = await import('@defrex/autobuild/testing')
+    const f = await fixture()
+    let token = f.token
+    if (kind === 'build-phase') {
+      await f.store.append('one', {
+        actor: { kind: 'kernel' },
+        type: 'session.started',
+        payload: {
+          session: 'limit-phase',
+          role: 'implement',
+          runner: 'fake',
+          phase: 'implement',
+          round: 1,
+        },
+      })
+      const response = await f.issue(f.token, { kind, id: 'one', session: 'limit-phase' })
+      expect(response.status).toBe(200)
+      token = (await response.json()).token
+    }
+    const limited = (resetAt: string) => ({
+      actor: { kind: 'kernel' },
+      type: 'forge.credential-limited',
+      payload: {
+        forge: 'github',
+        process: 'build-runner one',
+        credential: 'unauthenticated',
+        missingCredential: 'GITHUB_TOKEN and GH_TOKEN are unset',
+        message: 'API rate limit exceeded',
+        resetAt,
+      },
+    })
+    const beyond = new Date(+f.clock() + 24 * 60 * 60 * 1000 + 1).toISOString()
+    expect(
+      (
+        await f.server.fetch(
+          request(`/repos/${encodeURIComponent(A)}/events`, token, limited(beyond)),
+        )
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await f.server.fetch(
+          request(`/repos/${encodeURIComponent(A)}/events`, token, {
+            ...limited(new Date(+f.clock() + 1000).toISOString()),
+            actor: { kind: 'dispatcher' },
+          }),
+        )
+      ).status,
+    ).toBe(403)
+    const remote = new RemoteBuildStore({
+      url: 'http://store',
+      token,
+      fetchFn: ((input, init) => f.server.fetch(new Request(input, init))) as typeof fetch,
+    })
+    const raw = new FakeForge()
+    raw.getPrState = async () => {
+      throw new ForgeFailure('API rate limit exceeded', {
+        kind: 'rate-limited',
+        resetAt: new Date(f.clock().getTime() + 1000).toISOString(),
+        unauthenticated: 'GITHUB_TOKEN and GH_TOKEN are unset',
+      })
+    }
+    const guarded = guardForge(raw, {
+      store: remote,
+      repo: A,
+      name: 'github',
+      now: f.clock,
+      scope: { process: `${kind} one` },
+    })
+    await expect(guarded.getPrState(A, 1)).rejects.toThrow('API rate limit exceeded')
+    const events = await f.store.getRepoEvents(A)
+    expect(events.map((e) => e.type)).toEqual(['forge.credential-limited'])
+    expect(events[0]!.payload).toMatchObject({
+      process: `${kind} one`,
+      credential: 'unauthenticated',
+    })
+    // Recovery is still the dispatcher's alone.
+    expect(
+      (
+        await f.server.fetch(
+          request(`/repos/${encodeURIComponent(A)}/events`, token, {
+            actor: { kind: 'kernel' },
+            type: 'dispatcher.forge-recovered',
+            payload: { forge: 'github' },
+          }),
+        )
+      ).status,
+    ).toBe(403)
+  },
 )
 
 test('harvest suspension closes the old phase immediately while runner authority opens a fresh continuation', async () => {

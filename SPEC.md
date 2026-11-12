@@ -4790,7 +4790,7 @@ by the shared projection vocabulary and reused by terminal and CLI text.
 
 Destination heads come only from the authoritative forge branch; dispatcher-host
 refs are never a fallback. Failed remote reads retain the accepted observation;
-classified rate limits use repository forge degradation and cooldown. Changed
+dispatcher-classified rate limits use repository forge degradation and cooldown. Changed
 heads require immutable commit ancestry proof against the accepted target and
 the destination base already used by replay. Missing capability or failed proof
 defers new replay. A non-descendant without kernel lineage records
@@ -4842,7 +4842,7 @@ not consume `maxPhaseAttempts`. A seventh transient failure records
 error and six retries. Answering that escalation opens a fresh publication episode
 for the same retained intent without resetting agent phase failures. Pending
 publication keeps its workspace through backoff and unresolved exhaustion.
-Classified rate limits retain repository cooldown and consume no publication
+Dispatcher-classified rate limits retain repository cooldown and consume no publication
 retry allowance. Rejected pushes, lease conflicts, dirty trees and unclassified
 errors retain their existing behavior.
 
@@ -4882,7 +4882,8 @@ one durable `dispatcher.kernel-git-unavailable` repository condition, node work
 waits, and `dispatcher.kernel-git-recovered` closes the condition once a clone
 succeeds.
 
-A classified forge rate limit records repository degradation with `resetAt`.
+A rate limit the dispatcher classifies on its own authenticated request
+records repository degradation with `resetAt`.
 Forge work waits during cooldown; passing the deadline permits a recovery
 request; a successful probe records automatic recovery. An authorized operator
 may explicitly override erroneous recorded state with
@@ -4893,6 +4894,25 @@ success. A subsequent actual limit records a fresh cooldown. Hosted admission
 requires a schema-valid finite ISO `resetAt` no later than server time plus
 24 hours, inclusive; past deadlines remain valid. Rejection never clamps or
 invents a provider reset, and historical events remain readable.
+
+Only the dispatcher's own forge pauses the repository. A limit on a request
+that carried no credential, or one seen by a build runner or phase session,
+says nothing about the dispatcher's credential: that process waits out its own
+reset locally (a dispatcher defers that work instead), and records one advisory
+`forge.credential-limited` fact per episode naming the process, whether the
+request was `unauthenticated` (with why) or used the process's own credential,
+and the reset. It is `ab watch` attention and appears as
+`forgeCredentialLimits` in `ab repository status` until its reset;
+`forge-clear` does not apply. Remote guests receive no forge credential: their
+GitHub API requests fail with a typed error naming `GITHUB_TOKEN or GH_TOKEN`
+instead of going out anonymously, and they prove ancestry through their
+workspace's Git. An unauthenticated limit therefore points at a process missing
+`GITHUB_TOKEN`/`GH_TOKEN` or a `gh` login, or at guest-side forge use that must
+run kernel-side. Runners and sessions still wait out a dispatcher-recorded
+cooldown, but a limit they hit on a shared token no longer pauses the
+dispatcher in advance; the dispatcher records it on its own next limited
+request.
+
 Native merge application failures keep candidate-specific retry eligibility,
 including automatic decisions without a human command. Retries recheck consent,
 holds, verification and the exact candidate. Uncertain enables remain pending

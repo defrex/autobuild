@@ -4,7 +4,7 @@
   "title": "Operator surfaces",
   "group": "reference",
   "description": "Watch and act through the terminal, CLI, local stdio MCP, or Operator API with your operator agent.",
-  "textHash": "5c6fff287ee2a72dc64bcbd134860bbececb312bf3586d69f91082ecfc5821b0",
+  "textHash": "b799ccbcb6c563f32a6572a7aa060639cdc66f235b30af6228a349e5ef3c250c",
   "headings": [
     "Responsibility",
     "Shipped arrangements",

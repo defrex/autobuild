@@ -7,7 +7,7 @@
  * shelling `gh`.
  */
 import { z } from 'zod'
-import { ForgeFailure, isForgeFailure } from '../forge-failure'
+import { ForgeCredentialMissing, ForgeFailure, isForgeFailure } from '../forge-failure'
 import { spawnExec } from '../workspace/git-worktree'
 
 export interface GitHubRequestOpts {
@@ -58,6 +58,8 @@ export class GitHubApiError extends Error {
     message: string,
     body?: unknown,
     readonly headers: Record<string, string> = {},
+    /** Why the request went out without a credential, when it did. */
+    readonly unauthenticated?: string,
   ) {
     super(message)
     this.name = 'GitHubApiError'
@@ -106,14 +108,32 @@ export type GitHubTokenSource =
 /** Minimum interval between two invocations of a token resolver. */
 export const CREDENTIAL_MISS_TTL_MS = 60_000
 
+/** Marks a process environment whose GitHub API requests must carry a
+ * credential. Remote workspace providers set it for every guest process. */
+export const GITHUB_REQUIRE_CREDENTIAL_ENV = 'AB_GITHUB_REQUIRE_CREDENTIAL'
+
+/** The process label a transport names when it refuses an anonymous request:
+ * an explicit label, else a generic one when the environment carries
+ * {@link GITHUB_REQUIRE_CREDENTIAL_ENV}, else none (anonymous allowed). */
+export function githubCredentialRequirement(
+  env: Readonly<Record<string, string | undefined>>,
+  label?: string,
+): string | undefined {
+  if (label !== undefined) return label
+  return env[GITHUB_REQUIRE_CREDENTIAL_ENV] === '1' ? 'remote guest process' : undefined
+}
+
 /** Production transport: token-authenticated fetch against api.github.com.
  * Callers pass a literal token or a resolver such as
  * {@link githubTokenSource}; no `Authorization` header is sent when neither
- * yields one. */
+ * yields one — unless `requireCredential` names the process, in which case a
+ * request that would go out anonymously throws {@link ForgeCredentialMissing}
+ * before anything is sent. */
 export function createGitHubFetchTransport(opts: {
   token?: GitHubTokenSource
   apiBase?: string
   now?: () => number
+  requireCredential?: string
 }): GitHubRequest {
   const source = opts.token
   const now = opts.now ?? Date.now
@@ -162,6 +182,15 @@ export function createGitHubFetchTransport(opts: {
   return async (method, path, request = {}) => {
     const credential = await resolveToken()
     const token = credential.token
+    // `in` for the same strictNullChecks reason as the anonymous error below.
+    const missReason =
+      token === undefined || token === ''
+        ? 'reason' in credential
+          ? credential.reason
+          : 'no GitHub credential was available'
+        : undefined
+    if (missReason !== undefined && opts.requireCredential !== undefined)
+      throw new ForgeCredentialMissing(opts.requireCredential, missReason)
     let url = /^https:\/\//i.test(path) ? path : `${base}/${path.replace(/^\/+/, '')}`
     if (request.query !== undefined) {
       const params = new URLSearchParams(request.query)
@@ -232,6 +261,7 @@ export function createGitHubFetchTransport(opts: {
         `${githubErrorMessage(response.status, json, text)}${anonymous}`,
         json,
         headerMap,
+        missReason,
       )
     }
     return {
@@ -422,7 +452,14 @@ export function classifyGitHubFailure(error: unknown, now = Date.now()): unknown
   if (isForgeFailure(error)) return error
   const resetAt = githubRateLimitUntil(error, now)
   const message = error instanceof Error ? error.message : String(error)
-  if (resetAt) return new ForgeFailure(message, { kind: 'rate-limited', resetAt })
+  if (resetAt) {
+    const unauthenticated = error instanceof GitHubApiError ? error.unauthenticated : undefined
+    return new ForgeFailure(message, {
+      kind: 'rate-limited',
+      resetAt,
+      ...(unauthenticated ? { unauthenticated } : {}),
+    })
+  }
   const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
   if (
     (error instanceof GitHubApiError && error.status >= 500) ||

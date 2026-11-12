@@ -7,6 +7,7 @@ import { FakeForge } from './fake'
 import { GitHubForge } from './github'
 import { LocalGitForge } from './local-git'
 import { createForge, resolveForgeRegistration } from './create'
+import { ForgeCredentialMissing } from '../forge-failure'
 
 describe('createForge', () => {
   test('constructs the reserved GitHub builtin by default', async () => {
@@ -35,6 +36,35 @@ describe('createForge', () => {
     })
     await forge.kernelExec!(['git', 'rev-parse', 'HEAD'], {})
     expect(calls).toEqual([['git', 'rev-parse', 'HEAD']])
+  })
+
+  test('a required credential makes the GitHub builtin refuse instead of sending anonymously', async () => {
+    const original = globalThis.fetch
+    let requests = 0
+    globalThis.fetch = (async () => {
+      requests++
+      return Response.json({ commit: { sha: 'head' } })
+    }) as unknown as typeof fetch
+    try {
+      const forge = await createForge({
+        name: 'github',
+        registry: createPluginRegistry(),
+        env: {},
+        repoRoot: '.',
+        repository: 'https://github.com/acme/app',
+        exec: async () => ({ exitCode: 1, stdout: '', stderr: 'no oauth token found' }),
+        requireCredential: 'hosted operator sandbox backend',
+      })
+      const error = await forge.remoteBranchSha!('main').catch((caught) => caught)
+      expect(error).toBeInstanceOf(ForgeCredentialMissing)
+      expect(error.message).toStartWith(
+        'hosted operator sandbox backend: GitHub API request refused',
+      )
+      expect(error.message).toContain('GITHUB_TOKEN or GH_TOKEN')
+      expect(requests).toBe(0)
+    } finally {
+      globalThis.fetch = original
+    }
   })
 
   test('constructs the reserved local-git builtin', async () => {
