@@ -30,7 +30,10 @@ import { normalizeGitRemoteUrl } from '../../kernel/origin'
 import { HostedTicketSource, hostedTicketPolicy } from './remote'
 import { ticketLifecycle } from './lifecycle'
 import { normalizeServiceURL } from '../../connection'
-import { assertReadyAssigneeSupported } from '../../config/ready-assignee'
+import {
+  assertCreateAssigneeSupported,
+  assertReadyAssigneeSupported,
+} from '../../config/ready-assignee'
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -245,7 +248,9 @@ export async function createTicketSource(
   // Plugins load after config parse, so the capability is checked here, on
   // the constructed source, rather than in the schema.
   const owner = plugins?.ticketSources.get(config.source)?.owner
-  assertReadyAssigneeSupported(config, source, owner?.kind === 'plugin' ? owner.name : undefined)
+  const plugin = owner?.kind === 'plugin' ? owner.name : undefined
+  assertReadyAssigneeSupported(config, source, plugin)
+  assertCreateAssigneeSupported(config, source, plugin)
   return compatibleTicketSource(source)
 }
 

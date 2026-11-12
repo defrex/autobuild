@@ -14,7 +14,7 @@ import {
   restartRequiredChanges,
 } from './live'
 import { TOP_LEVEL_KEYS } from './schema'
-import { assertReadyAssigneeAccepted } from './ready-assignee'
+import { assertCreateAssigneeAccepted, assertReadyAssigneeAccepted } from './ready-assignee'
 import { FakeGitHubIssues } from '../ports/tickets/github-fake'
 import { GitHubTicketSource } from '../ports/tickets/github'
 
@@ -527,5 +527,47 @@ describe('live readyAssignee', () => {
     expect(outcome.kind).toBe('adopted')
     expect(live.current().config.tickets.readyAssignee).toBe('me')
     expect(fake.requests).toHaveLength(0)
+  })
+
+  test('a reload introducing a createAssignee the running source refuses is rejected', async () => {
+    const { fake, source } = await preparedSource(null)
+    const live = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+      [],
+      (next) => {
+        assertReadyAssigneeAccepted(next.tickets, source)
+        assertCreateAssigneeAccepted(next.tickets, source)
+      },
+    )
+    const outcome = await live.refresh(
+      github.replace('source = "github"', 'source = "github"\ncreateAssignee = "me"'),
+    )
+    expect(outcome).toMatchObject({ kind: 'rejected', notify: true })
+    if (outcome.kind === 'rejected') {
+      expect(outcome.error).toContain('[tickets].createAssignee = "me"')
+      expect(outcome.error).toContain('has no user')
+    }
+    expect(live.current().config.tickets.createAssignee).toBeUndefined()
+    expect(fake.requests).toHaveLength(0)
+    const prepared = await preparedSource('alice')
+    const adopting = new LiveConfig(
+      'autobuild.toml',
+      parseConfig(github),
+      github,
+      runtimes,
+      async () => {},
+      [],
+      (next) => assertCreateAssigneeAccepted(next.tickets, prepared.source),
+    )
+    const adopted = await adopting.refresh(
+      github.replace('source = "github"', 'source = "github"\ncreateAssignee = "me"'),
+    )
+    expect(adopted.kind).toBe('adopted')
+    expect(adopting.current().config.tickets.createAssignee).toBe('me')
+    expect(prepared.fake.requests).toHaveLength(0)
   })
 })

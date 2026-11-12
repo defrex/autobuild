@@ -169,6 +169,10 @@ export {
   urgentFirst,
 } from '../ports/tickets/priority'
 export {
+  TicketAssigneesUnsupported,
+  refuseUnsupportedAssignees,
+} from '../ports/tickets/assignees'
+export {
   issueKeywordLines,
   landingMessage,
   neutralizeClosingReferences,

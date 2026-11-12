@@ -1,6 +1,7 @@
 import { createTicket, updateTicket, moveTicket, changeBlockers } from './operations'
 import { normalizeIssueLinks, TicketIssueLinksUnsupported } from './issue-links'
 import { TicketPriorityUnsupported, urgentFirst } from './priority'
+import { TicketAssigneesUnsupported } from './assignees'
 import { compatibleTicketSource } from './tree'
 import { TicketRevisionConflict } from './revision'
 import { describe, expect, test } from 'bun:test'
@@ -512,6 +513,81 @@ export function describeTicketSourceContract(
             expected([{ issue: 3, intent: 'closes' }]),
           )
         }
+      })
+    })
+
+    test('assignees are read when declared and refused otherwise', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        const ready = harness.states.ready
+        if (!source.assignees) {
+          for (const assignees of [['someone'], []]) {
+            const title = contractTicketTitle('refused assignees')
+            const refusedCreate = await createTicket(source, {
+              title,
+              body: CONTRACT_TICKET_BODY,
+              state: ready,
+              assignees,
+            }).catch((error: unknown) => error)
+            expect(refusedCreate).toBeInstanceOf(TicketAssigneesUnsupported)
+            expect((refusedCreate as TicketAssigneesUnsupported).source).toBe(source.name)
+            const refusedProxy = await compatibleTicketSource(source)
+              .create({ title, body: CONTRACT_TICKET_BODY, assignees }, { state: ready })
+              .catch((error: unknown) => error)
+            expect(refusedProxy).toBeInstanceOf(TicketAssigneesUnsupported)
+            expect(
+              (await source.listReady({ state: ready })).tickets.some((t) => t.title === title),
+            ).toBe(false)
+          }
+          const created = await createTracked(
+            harness,
+            { title: contractTicketTitle('unassigned'), body: CONTRACT_TICKET_BODY },
+            { state: ready },
+          )
+          expect(created).not.toHaveProperty('assignees')
+          expect(await compatibleTicketSource(source).get(created.ref.id)).not.toHaveProperty(
+            'assignees',
+          )
+          for (const assignees of [['someone'], []]) {
+            const refusedUpdate = await updateTicket(source, created.ref.id, {
+              title: 'not written',
+              assignees,
+            }).catch((error: unknown) => error)
+            expect(refusedUpdate).toBeInstanceOf(TicketAssigneesUnsupported)
+            expect((refusedUpdate as TicketAssigneesUnsupported).source).toBe(source.name)
+          }
+          if (source.mutateIfRevision) {
+            const refusedGuarded = await updateTicket(
+              source,
+              created.ref.id,
+              { assignees: [] },
+              false,
+              created.revision,
+            ).catch((error: unknown) => error)
+            expect(refusedGuarded).toBeInstanceOf(TicketAssigneesUnsupported)
+          }
+          const unchanged = await source.get(created.ref.id)
+          expect(unchanged?.revision).toBe(created.revision)
+          expect(unchanged?.title).toBe(created.title)
+          return
+        }
+        // A declaring source returns the set on every read, empty when unassigned.
+        const created = await createTracked(
+          harness,
+          { title: contractTicketTitle('assignees'), body: CONTRACT_TICKET_BODY, assignees: [] },
+          { state: ready },
+        )
+        expect(created.assignees).toEqual([])
+        expect((await source.get(created.ref.id))?.assignees).toEqual([])
+        await updateTicket(source, created.ref.id, { assignees: [] })
+        const read = await source.get(created.ref.id)
+        expect(read?.assignees).toEqual([])
+        expect(read?.revision).toBe(created.revision)
+        expect(
+          (await source.listReady({ state: ready })).tickets.find(
+            (t) => t.ref.id === created.ref.id,
+          )?.assignees,
+        ).toEqual([])
       })
     })
 

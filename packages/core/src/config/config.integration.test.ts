@@ -1164,6 +1164,33 @@ describe('parseConfig — [tickets]', () => {
     }
   })
 
+  test('createAssignee accepts "me" or a GitHub username on github and is refused elsewhere', () => {
+    const github = (value: string) => `[tickets]\nsource = "github"\ncreateAssignee = ${value}\n`
+    for (const good of ['me', 'octocat', 'mona_acme'])
+      expect(parseConfig(github(JSON.stringify(good))).tickets.createAssignee).toBe(good)
+    expect(parseConfig('[tickets]\nsource = "github"\n').tickets.createAssignee).toBeUndefined()
+    for (const bad of ['', ' me', 'a@b.co', '-bad', 'bot[bot]']) {
+      const message = parseError(github(JSON.stringify(bad))).message
+      expect(message).toContain('tickets.createAssignee')
+      if (bad.trim().length > 0 && bad === bad.trim())
+        expect(message).toContain('[tickets].createAssignee must be "me"')
+    }
+    for (const source of ['file', 'hosted', 'linear']) {
+      const message = parseError(
+        `[tickets]\nsource = "${source}"\nteamKey = "ENG"\nreadyState = "Todo"\ncreateAssignee = "me"\n`,
+      ).message
+      expect(message).toContain('tickets.createAssignee')
+      expect(message).toContain(`selected source: "${source}"`)
+      expect(message).toContain('cannot assign tickets')
+    }
+    // A plugin source's capability is checked once constructed.
+    expect(
+      parseConfig(
+        '[tickets]\nsource = "jira-cloud"\nteamKey = "ENG"\nreadyState = "Todo"\ncreateAssignee = "me"\n',
+      ).tickets.createAssignee,
+    ).toBe('me')
+  })
+
   test('github needs no other key and refuses Linear, file and hosted keys', () => {
     const tickets = parseConfig('[tickets]\nsource = "github"\n').tickets
     expect(tickets.readyState).toBe('ready')

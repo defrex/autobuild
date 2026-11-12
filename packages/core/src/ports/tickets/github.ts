@@ -25,6 +25,12 @@
  * (its `assignee` query parameter); `"me"` costs one `GET /user` per
  * dispatcher start, sent by `prepareReadyAssignee` before the loop and never
  * during a tick.
+ * Assignees cost reads nothing: every issue payload already carries them. A
+ * write naming assignees sends one `GET /repos/{o}/{r}/assignees/{login}` per
+ * distinct login per instance (positive answers are memoized) and resolves
+ * `"me"` through the same memoized `GET /user`; a dispatcher prepared it at
+ * startup, so a harvest proposal filed under `createAssignee = "me"` adds no
+ * `GET /user` and an idle tick adds nothing.
  */
 import { z } from 'zod'
 import {
@@ -85,7 +91,12 @@ import {
   validCreationKey,
   writeForState,
 } from './github-issues'
-import { GITHUB_READY_ASSIGNEE } from '../../config/ready-assignee'
+import {
+  GITHUB_CREATE_ASSIGNEE,
+  GITHUB_READY_ASSIGNEE,
+  githubAssigneeForm,
+} from '../../config/ready-assignee'
+import { MAX_TICKET_ASSIGNEES } from './assignees'
 import { type GitHubValidatorStore, MemoryGitHubValidatorStore } from './github-validators'
 import { normalizeIssueLinks } from './issue-links'
 import { holdsState, type TicketLifecycle } from './lifecycle'
@@ -203,6 +214,12 @@ function etagOf(read: { etag?: string }): { etag?: string } {
   return read.etag !== undefined ? { etag: read.etag } : {}
 }
 
+/** Requested logins the issue does not hold, compared case-insensitively. */
+function missingAssignees(issue: GitHubIssue, requested: readonly string[]): string[] {
+  const held = loginSet(assigneeLogins(issue))
+  return requested.filter((login) => !held.has(login.toLowerCase()))
+}
+
 function blockerList(ids: string[]): string {
   return ids.length > 0 ? ids.map((id) => `"${id}"`).join(', ') : 'none'
 }
@@ -217,14 +234,30 @@ const githubCommentSchema = z
 /** Who the credential belongs to, as `prepareReadyAssignee` found it. */
 type Viewer = { login: string } | { noUser: true } | { failed: string }
 
-const NO_USER_ASSIGNEE =
-  'github tickets: [tickets].readyAssignee = "me" but the GitHub credential has no user (a GitHub App installation token has none) — set readyAssignee to a GitHub username'
+type AssigneeKey = 'readyAssignee' | 'createAssignee'
+
+const NO_USER_ASSIGNEE = (key: AssigneeKey): string =>
+  `github tickets: [tickets].${key} = "me" but the GitHub credential has no user (a GitHub App installation token has none) — set ${key} to a GitHub username`
+
+/** The key-neutral form, for a write whose assignees name `me`. */
+const NO_USER_WRITE =
+  'the GitHub credential has no user (a GitHub App installation token has none) — name a GitHub username instead of me'
+
+/** Logins compared as GitHub does: case-insensitively. */
+function loginSet(logins: readonly string[]): Set<string> {
+  return new Set(logins.map((login) => login.toLowerCase()))
+}
+
+function assigneeLogins(issue: GitHubIssue): string[] {
+  return (issue.assignees ?? []).map((assignee) => assignee.login)
+}
 
 export class GitHubTicketSource implements TicketSource {
   readonly name = 'github'
   readonly issueLinks = true
   readonly allocatesIds = true
   readonly readyAssignee = true
+  readonly assignees = true
   readonly integrationTree = true
 
   private readonly transport: GitHubRequest
@@ -245,6 +278,8 @@ export class GitHubTicketSource implements TicketSource {
   private creationScan?: { floor: number; newest: number; keys: Map<string, number> }
   /** The credential's owner, memoized for the instance's lifetime. */
   private viewer?: Viewer
+  /** Logins (lowercased) GitHub confirmed can be assigned issues here. */
+  private readonly assignable = new Set<string>()
 
   constructor(opts: GitHubTicketSourceOptions) {
     for (const label of opts.readyLabels) {
@@ -450,6 +485,17 @@ export class GitHubTicketSource implements TicketSource {
       if (wanted.size !== held.size || [...wanted].some((name) => !held.has(name)))
         throw new Error(
           `github ${operation}: token lacks push access; label changes were dropped on #${number} (${issue.html_url})`,
+        )
+    }
+    // Assignees the token may not set are dropped the same way.
+    if (Array.isArray(body.assignees)) {
+      const wanted = loginSet(body.assignees as string[])
+      const held = loginSet(assigneeLogins(issue))
+      if (wanted.size !== held.size || [...wanted].some((login) => !held.has(login)))
+        throw new Error(
+          `github ${operation}: #${number} (${issue.html_url}) was written but its assignees were not applied — GitHub holds ${
+            held.size > 0 ? [...held].join(', ') : 'none (it is unassigned)'
+          } instead of ${wanted.size > 0 ? [...wanted].join(', ') : 'none'}; the token needs push access to assign`,
         )
     }
     return issue
@@ -798,6 +844,8 @@ export class GitHubTicketSource implements TicketSource {
       labels: ticketLabelsOf(issue),
       ...(blockedBy.length > 0 ? { blockedBy } : {}),
       issueLinks,
+      // Not part of the revision: ticketRevision picks its fields explicitly.
+      assignees: assigneeLogins(issue),
     }
     ticket.revision = ticketRevision(ticket)
     return ticket
@@ -1231,6 +1279,8 @@ export class GitHubTicketSource implements TicketSource {
           : Date.parse(opts.idempotencyKeyReservedAt)
       if (!Number.isFinite(reservedAt)) throw new TicketCreationKeyReservationRequired()
     }
+    const assignees =
+      draft.assignees === undefined ? [] : await this.resolveAssignees('create', draft.assignees)
     const state = await this.resolveTarget('create', opts.state ?? this.lifecycle.create)
     const target =
       draft.target === undefined || draft.target === null
@@ -1240,7 +1290,7 @@ export class GitHubTicketSource implements TicketSource {
     const write = writeForState(state, this.lifecycle, [...labels, ...links.map(linkLabel)])
     if (key !== undefined && reservedAt !== undefined) {
       const adopted = await this.findByCreationKey(key, reservedAt)
-      if (adopted !== undefined) return this.adopt(adopted, blockedBy)
+      if (adopted !== undefined) return this.adopt(adopted, blockedBy, assignees)
     }
     // A closing create state opens the issue without a state label and
     // closes it as a follow-up.
@@ -1257,6 +1307,7 @@ export class GitHubTicketSource implements TicketSource {
         title: draft.title,
         body: key === undefined ? draft.body : encodeCreationMarker(draft.body, key, intent),
         labels: initial,
+        ...(assignees.length > 0 ? { assignees } : {}),
       },
     })
     const issue = this.parseIssue('create', response.json)
@@ -1264,6 +1315,13 @@ export class GitHubTicketSource implements TicketSource {
     if (!initial.every((name) => held.includes(name.toLowerCase())))
       throw new Error(
         `github create: token lacks push access; labels were dropped on #${issue.number} (${issue.html_url})`,
+      )
+    // GitHub silently drops assignees the token may not set. A keyed create's
+    // marker stays pending, so a retry adopts this issue and reconciles them.
+    const dropped = missingAssignees(issue, assignees)
+    if (dropped.length > 0)
+      throw new Error(
+        `github create: #${issue.number} (${issue.html_url}) was created but is unassigned — GitHub dropped assignee(s) ${dropped.join(', ')}; the token needs push access to assign`,
       )
     return this.finishCreate(issue, intent, key, false)
   }
@@ -1324,10 +1382,22 @@ export class GitHubTicketSource implements TicketSource {
     return read.issue
   }
 
-  /** A retry found the issue its key opened. A pending marker finishes the
-   * first attempt's recorded intent; a plain one reconciles only missing
-   * blockers from this retry, as Linear does. */
-  private async adopt(issue: GitHubIssue, retryBlockers: string[]): Promise<Ticket> {
+  /** A retry found the issue its key opened. Missing requested assignees are
+   * added first. A pending marker finishes the first attempt's recorded
+   * intent; a plain one reconciles only missing blockers from this retry, as
+   * Linear does. */
+  private async adopt(
+    found: GitHubIssue,
+    retryBlockers: string[],
+    assignees: string[],
+  ): Promise<Ticket> {
+    let issue = found
+    if (missingAssignees(issue, assignees).length > 0) {
+      const held = assigneeLogins(issue)
+      issue = await this.patchIssue('create', issue.number, {
+        assignees: [...held, ...missingAssignees(issue, assignees)],
+      })
+    }
     const marker = splitCreationMarker(issue.body).marker!
     if (marker.pending !== undefined)
       return this.finishCreate(issue, marker.pending, marker.key, true)
@@ -1636,9 +1706,14 @@ export class GitHubTicketSource implements TicketSource {
           if (local !== canonical) parentWrite = { set: canonical, replace: parentIsNode }
         }
       }
-      if (ticketLabels?.includes(NODE_LABEL) && !held.includes(NODE_LABEL))
-        await this.ensureNodeLabel('update')
     }
+    const assignees =
+      validated.assignees === undefined
+        ? undefined
+        : await this.resolveAssignees('update', validated.assignees)
+    // The first write: every refusal above, assignees included, writes nothing.
+    if (ticketLabels?.includes(NODE_LABEL) && !held.includes(NODE_LABEL))
+      await this.ensureNodeLabel('update')
     const body: Record<string, unknown> = {}
     if (validated.title !== undefined) body.title = validated.title
     if (validated.body !== undefined) {
@@ -1655,6 +1730,7 @@ export class GitHubTicketSource implements TicketSource {
       await this.ensureLabels('update', labels)
       body.labels = [...new Set(labels)]
     }
+    if (assignees !== undefined) body.assignees = assignees
     const fields = Object.keys(body)
     if (fields.length > 0) await this.patchIssue('update', number, body)
     if (parentWrite === undefined) return
@@ -1920,41 +1996,106 @@ export class GitHubTicketSource implements TicketSource {
     }
   }
 
-  readyAssigneeRefusal(value: string): string | undefined {
-    if (!GITHUB_READY_ASSIGNEE.accepts(value)) return GITHUB_READY_ASSIGNEE.message
+  private assigneeRefusal(key: AssigneeKey, value: string): string | undefined {
+    const form = key === 'readyAssignee' ? GITHUB_READY_ASSIGNEE : GITHUB_CREATE_ASSIGNEE
+    if (!form.accepts(value)) return form.message
     if (value !== 'me') return undefined
     if (this.viewer === undefined || 'failed' in this.viewer)
-      return `github tickets: [tickets].readyAssignee = "me" but the GitHub credential owner could not be resolved at dispatcher startup (${
+      return `github tickets: [tickets].${key} = "me" but the GitHub credential owner could not be resolved at dispatcher startup (${
         this.viewer === undefined ? 'not prepared' : this.viewer.failed
-      }); restart dispatch to enable readyAssignee = "me"`
-    return 'noUser' in this.viewer ? NO_USER_ASSIGNEE : undefined
+      }); restart dispatch to enable ${key} = "me"`
+    return 'noUser' in this.viewer ? NO_USER_ASSIGNEE(key) : undefined
   }
 
-  /** The login a `readyAssignee` value names. An unprepared one-shot surface
-   * (`ab ticket list`, init validation) resolves `"me"` once, lazily. */
-  private async assigneeLogin(value: string): Promise<string> {
+  readyAssigneeRefusal(value: string): string | undefined {
+    return this.assigneeRefusal('readyAssignee', value)
+  }
+
+  createAssigneeRefusal(value: string): string | undefined {
+    return this.assigneeRefusal('createAssignee', value)
+  }
+
+  /** The login a value names. An unprepared one-shot surface (`ab ticket
+   * list`, `ab ticket create`, init validation) resolves `"me"` once, lazily. */
+  private async assigneeLogin(value: string, noUser = NO_USER_ASSIGNEE('readyAssignee')) {
     if (value !== 'me') return value
     if (this.viewer === undefined || 'failed' in this.viewer) this.viewer = await this.readViewer()
-    if ('noUser' in this.viewer) throw new Error(NO_USER_ASSIGNEE)
+    if ('noUser' in this.viewer) throw new Error(noUser)
     return (this.viewer as { login: string }).login
   }
 
-  async describeReadyAssignee(value: string): Promise<string> {
-    if (value === 'me') await this.prepareReadyAssignee()
-    const refusal = this.readyAssigneeRefusal(value)
-    if (refusal !== undefined) throw new Error(refusal)
-    const login = await this.assigneeLogin(value)
+  /** Whether GitHub lets `login` be assigned issues here: one 204/404 read,
+   * memoized when positive. */
+  private async canAssign(operation: string, login: string): Promise<boolean> {
+    if (this.assignable.has(login.toLowerCase())) return true
     const check = await this.request(
-      'readyAssignee',
+      operation,
       'GET',
       this.path(`/assignees/${encodeURIComponent(login)}`),
       { missing: true },
     )
-    if (check === null)
+    if (check === null) return false
+    this.assignable.add(login.toLowerCase())
+    return true
+  }
+
+  private async describeAssignee(key: AssigneeKey, value: string): Promise<string> {
+    if (value === 'me') await this.prepareReadyAssignee()
+    const refusal = this.assigneeRefusal(key, value)
+    if (refusal !== undefined) throw new Error(refusal)
+    const login = await this.assigneeLogin(value, NO_USER_ASSIGNEE(key))
+    if (!(await this.canAssign(key, login)))
       throw new Error(
-        `github tickets: [tickets].readyAssignee "${login}" cannot be assigned issues in ${this.fullName} — use a GitHub username with access to the repository, or "me"`,
+        `github tickets: [tickets].${key} "${login}" cannot be assigned issues in ${this.fullName} — use a GitHub username with access to the repository, or "me"`,
       )
     return `${value} → @${login}`
+  }
+
+  async describeReadyAssignee(value: string): Promise<string> {
+    return this.describeAssignee('readyAssignee', value)
+  }
+
+  async describeCreateAssignee(value: string): Promise<string> {
+    return this.describeAssignee('createAssignee', value)
+  }
+
+  /**
+   * The exact logins a write names, before anything is written: each entry's
+   * form, at most ten (GitHub's limit), `me` resolved to the credential's
+   * owner, duplicates dropped, and each login confirmed assignable.
+   */
+  private async resolveAssignees(operation: string, entries: readonly string[]): Promise<string[]> {
+    const form = githubAssigneeForm('createAssignee')
+    for (const entry of entries)
+      if (!form.accepts(entry))
+        throw new Error(
+          `github ${operation}: assignee "${entry}" must be "me" or a GitHub username — nothing was written`,
+        )
+    const logins: string[] = []
+    const seen = new Set<string>()
+    for (const entry of entries) {
+      let login: string
+      try {
+        login = await this.assigneeLogin(entry, NO_USER_WRITE)
+      } catch (error) {
+        throw new Error(`github ${operation}: ${message(error)} — nothing was written`, {
+          cause: error,
+        })
+      }
+      if (seen.has(login.toLowerCase())) continue
+      seen.add(login.toLowerCase())
+      logins.push(login)
+    }
+    if (logins.length > MAX_TICKET_ASSIGNEES)
+      throw new Error(
+        `github ${operation}: at most ${MAX_TICKET_ASSIGNEES} assignees per issue — nothing was written`,
+      )
+    for (const login of logins)
+      if (!(await this.canAssign(operation, login)))
+        throw new Error(
+          `github ${operation}: "${login}" cannot be assigned issues in ${this.fullName} — nothing was written`,
+        )
+    return logins
   }
 
   // ── Init validation ───────────────────────────────────────────────────────

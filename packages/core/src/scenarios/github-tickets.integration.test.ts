@@ -295,6 +295,46 @@ test('an assignee gate adds no GitHub request to any dispatcher tick', async () 
   expectNoCounts(y)
 }, 30_000)
 
+test('createAssignee = "me" adds no GitHub request to any dispatcher tick', async () => {
+  const CREATE_ME_TOML = GITHUB_TOML.replace(
+    'source = "github"\n',
+    'source = "github"\ncreateAssignee = "me"\n',
+  )
+  const x = new FakeGitHubIssues()
+  fileReady(x, 'Add rate limiting')
+  const w = new FakeGitHubIssues()
+  fileReady(w, 'Add rate limiting')
+  const xSource = sourceAs(x, 'alice')
+  const wSource = sourceAs(w, 'alice')
+  // Dispatch startup prepares every source before its first tick.
+  for (const source of [xSource, wSource]) await source.prepareReadyAssignee()
+  for (const github of [x, w]) github.resetRequests()
+  const hx = await makeHarness({
+    handlers: happyHandlers(),
+    ticketSource: xSource,
+    configToml: GITHUB_TOML,
+  })
+  const hw = await makeHarness({
+    handlers: happyHandlers(),
+    ticketSource: wSource,
+    configToml: CREATE_ME_TOML,
+  })
+  harnesses.push(hx, hw)
+  const tick = async (h: E2eHarness, github: FakeGitHubIssues) => {
+    const before = github.requests.length
+    const report = await h.dispatcher.tick()
+    return { report, requests: github.requests.length - before }
+  }
+  for (let round = 1; round <= 3; round++) {
+    const [xr, wr] = [await tick(hx, x), await tick(hw, w)]
+    expect(wr.report).toEqual(xr.report)
+    expect(wr.requests).toBe(xr.requests)
+  }
+  expect(w.count('user')).toBe(0)
+  expect(w.count('assignee-check')).toBe(0)
+  expectNoCounts(w)
+}, 30_000)
+
 test('a ready sub-issue of a non-node grouping issue dispatches as an ordinary root leaf', async () => {
   const { h, github, issue } = await githubHarness()
   const group = github.fileIssue({ title: 'Grouping epic', labels: ['autobuild'] })

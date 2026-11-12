@@ -387,6 +387,7 @@ These fields hot-reload:
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
+| `tickets.createAssignee` | Next ticket create, including the next harvest filing. |
 | `tickets.backlogState`, `tickets.rejectedState` | Next role move, ready-ticket scan, or node completeness observation. |
 
 Adapter selectors and factory inputs are constructed once and require a
@@ -2820,6 +2821,19 @@ state. Within a present table, `source` is required; `hosted` and `github` defau
 **Description:** Require the ticket to be assigned to one user, in addition to the state and label gates.
 
 **Constraints:** [tickets].readyAssignee must be a nonblank value with no surrounding whitespace; Allowed for sources that can filter by assignee: linear ("me" or an email), github ("me" or a GitHub username, including managed-user logins such as mona_acme), and plugin sources that declare readyAssignee. Refused for file and hosted.
+
+#### `tickets.createAssignee`
+
+**TOML key:** `tickets.createAssignee`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Assign every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals) to one user unless the create names its own assignees.
+
+**Constraints:** [tickets].createAssignee must be a nonblank value with no surrounding whitespace; Allowed for github ("me" or a GitHub username) and plugin sources that declare assignees. Refused for file, hosted and linear.
 
 #### `tickets.teamKey`
 
