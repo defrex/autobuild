@@ -4880,6 +4880,7 @@ class DispatchLoop {
           config.roles,
           config.policy.sessionBudgetSeconds,
           config.accounts,
+          config.profiles,
         )
         const deadline = new Date(
           Date.parse(retirement.startedAt) + config.policy.upgradeDrainSeconds * 1000,

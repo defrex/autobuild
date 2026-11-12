@@ -65,6 +65,12 @@ export interface NodeIssueLinksState {
   published?: { pr: number; issueLinks: IssueLink[]; seq: number }
 }
 
+/** A build's frozen role profile (SPEC §9). */
+export interface BuildProfile {
+  name: string
+  configured: boolean
+}
+
 export interface OpenEscalation {
   id: string
   phase: EscalationTarget
@@ -331,6 +337,11 @@ export interface BuildState {
   /** seq of the fact that closed the downgrade window: `issue-links.sealed`,
    * `publication.requested {operation: 'finalize'}` or `finalize.completed`. */
   issueLinksSealedSeq?: number
+  /** The role profile `build.created` froze at claim. `configured` is the
+   * latest `session.started` observation of whether the session's config
+   * still defined it; true until a session says otherwise. Absent for builds
+   * without a profile and historical logs. */
+  profile?: BuildProfile
   /** Latest spec artifact rev — `spec.imported`/`spec.authored` set it,
    * `spec.revised` bumps it (§6.3: rev N+1 restarts leaves from plan and nodes from collection). */
   specRev?: number
@@ -496,6 +507,7 @@ export interface BuildAcc {
   pinnedAssets: PinnedAsset[]
   issueLinks: BuildIssueLink[]
   issueLinksSealedSeq?: number
+  profile?: BuildProfile
   finalizeCompletedSeq: number
   pipelineSettled?: number
   finalizeSteps: BuildState['finalizeSteps']
@@ -527,7 +539,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 32
+export const BUILD_REDUCER_VERSION = 33
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -802,6 +814,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         acc.baseBranch = event.payload.baseBranch
         pinnedAssets = event.payload.assets ?? []
         acc.issueLinks = (event.payload.issueLinks ?? []).map((link) => ({ ...link }))
+        if (event.payload.profile !== undefined)
+          acc.profile = { name: event.payload.profile, configured: true }
         break
       case 'issue-link.downgraded': {
         // One-way and only before the seal: a later, a repeated or an
@@ -980,6 +994,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
 
       case 'session.started': {
+        if (event.payload.profile !== undefined && event.payload.profile.name === acc.profile?.name)
+          acc.profile = { ...acc.profile, configured: event.payload.profile.configured }
         const root = event.payload.continuation?.root ?? event.payload.session
         acc.sessionTotals[root] ??= { activeMs: 0, transcripts: [] }
         const totals = acc.sessionTotals[root]
@@ -1491,6 +1507,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     ...(acc.issueLinksSealedSeq !== undefined
       ? { issueLinksSealedSeq: acc.issueLinksSealedSeq }
       : {}),
+    ...(acc.profile !== undefined ? { profile: { ...acc.profile } } : {}),
     specRev: acc.specRev,
     restartSince: acc.restartSince,
     plan: acc.plan,
