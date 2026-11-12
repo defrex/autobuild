@@ -3,6 +3,7 @@ import { expandIssues } from '../../zod-issues'
 import type { TicketUpdate } from '../types'
 import { issueLinksInputSchema, normalizeIssueLinks } from './issue-links'
 import { ticketPrioritySchema } from './priority'
+import { ticketAssigneesSchema } from './assignees'
 
 const ticketUpdateSchema = z
   .strictObject({
@@ -23,6 +24,7 @@ const ticketUpdateSchema = z
     labels: z.array(z.string()).optional(),
     issueLinks: issueLinksInputSchema.optional(),
     priority: ticketPrioritySchema.optional(),
+    assignees: ticketAssigneesSchema.optional(),
   })
   .refine(
     (patch) =>
@@ -32,8 +34,9 @@ const ticketUpdateSchema = z
       patch.kind !== undefined ||
       patch.target !== undefined ||
       patch.issueLinks !== undefined ||
-      patch.priority !== undefined,
-    'update must name at least one of title, body, labels, issue links, priority, kind, or target',
+      patch.priority !== undefined ||
+      patch.assignees !== undefined,
+    'update must name at least one of title, body, labels, issue links, priority, assignees, kind, or target',
   )
 
 /** Render ticket-update issues while retaining nested union branch detail. */
@@ -70,5 +73,6 @@ export function validateTicketUpdate(patch: TicketUpdate): TicketUpdate {
       ? { issueLinks: normalizeIssueLinks(result.data.issueLinks) }
       : {}),
     ...(result.data.priority !== undefined ? { priority: result.data.priority } : {}),
+    ...(result.data.assignees !== undefined ? { assignees: [...result.data.assignees] } : {}),
   }
 }

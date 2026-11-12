@@ -340,6 +340,11 @@ out of ready to make room. Urgency never preempts a running build, and a blocked
 urgent ticket still waits on its blockers. A source that cannot store priority
 refuses `urgent` and names itself; tell the human.
 
+On GitHub tickets, `--assignees` on create or update sets who a ticket is
+assigned to (`me` is the credential owner; on update it replaces the set). Under
+`[tickets].readyAssignee` only the assigned person's dispatcher claims a ticket,
+so reassign to hand work to someone else rather than moving it between states.
+
 Move tickets by lifecycle role rather than by native state name:
 `ab ticket move <id> --role triage|ready|backlog|rejected`. "Ice it",
 "icebox" and "backlog" mean `--role backlog` (deferred work); "reject" and

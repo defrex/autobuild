@@ -14,7 +14,9 @@
  * adapter read of those fails a test with a 404.
  * Identity routes answer for the requesting credential: `GET user` returns
  * its login (or 403 for `transportAs(null)`), and the assignee-check route
- * answers 204 for `assignable` logins.
+ * answers 204 for `assignable` logins. Issue create and edit set the
+ * `assignees` they name, silently dropping any login that is not `assignable`,
+ * or every one under `dropAssignees`, as GitHub does without push access.
  *
  * UI-style mutators simulate what people do on GitHub outside the adapter.
  */
@@ -141,6 +143,9 @@ export class FakeGitHubIssues {
   /** Simulates a token without push access: GitHub silently drops label
    * changes on issue create and edit. */
   dropLabels = false
+  /** Simulates a token without push access: GitHub silently drops assignee
+   * changes on issue create and edit. */
+  dropAssignees = false
   /** When false, UI labelling leaves `updated_at` untouched. */
   labelsBumpUpdatedAt = true
   searchLagMs: number
@@ -803,10 +808,18 @@ export class FakeGitHubIssues {
     }
   }
 
+  /** The assignees an edit leaves: the requested assignable logins, or the
+   * current set unchanged under `dropAssignees`. */
+  private assigned(requested: string[], current: string[]): string[] {
+    if (this.dropAssignees) return current
+    return [...new Set(requested)].filter((login) => this.assignable.has(login.toLowerCase()))
+  }
+
   private createIssue(body: unknown): { json: unknown; status: number } {
-    const input = body as { title?: string; body?: string; labels?: string[] }
+    const input = body as { title?: string; body?: string; labels?: string[]; assignees?: string[] }
     if (!input?.title) throw new GitHubApiError(422, 'Validation Failed', { message: 'title' })
     const issue = this.insert(input.title, input.body ?? null, [])
+    if (input.assignees !== undefined) issue.assignees = this.assigned(input.assignees, [])
     if (!this.dropLabels)
       for (const name of input.labels ?? []) {
         const label = this.ensureLabel(name)
@@ -825,8 +838,11 @@ export class FakeGitHubIssues {
       labels?: string[]
       state?: 'open' | 'closed'
       state_reason?: string | null
+      assignees?: string[]
     }
     if (input.title !== undefined) issue.title = input.title
+    if (input.assignees !== undefined)
+      issue.assignees = this.assigned(input.assignees, issue.assignees)
     if (input.body !== undefined) issue.body = input.body
     if (input.labels !== undefined && !this.dropLabels) {
       const next = input.labels.map((name) => this.ensureLabel(name).name)

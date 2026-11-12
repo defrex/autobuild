@@ -1486,6 +1486,30 @@ describe('runCli — ticket routing', () => {
     )
   })
 
+  test('a source that cannot store assignees refuses --assignees and writes nothing', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    const { deps, out, err } = sessionlessDeps()
+    for (const value of ['alice', '']) {
+      expect(
+        await runCli(
+          ['ticket', 'create', 'Hotfix', '--body', bodyFile, '--assignees', value],
+          deps,
+        ),
+      ).toBe(1)
+      expect(err.join('\n')).toContain('file ticket source cannot store assignees')
+    }
+    expect(existsSync(join(tmp, 'tickets', 'triage', 'file-1.md'))).toBe(false)
+    expect(await runCli(['ticket', 'create', 'Plain', '--body', bodyFile, '--json'], deps)).toBe(0)
+    expect(JSON.parse(out.pop()!)).not.toHaveProperty('assignees')
+    err.length = 0
+    expect(
+      await runCli(['ticket', 'update', 'file-1', '--title', 'New', '--assignees', 'alice'], deps),
+    ).toBe(1)
+    expect(err.join('\n')).toContain('file ticket source cannot store assignees')
+  })
+
   test('an invalid --priority exits nonzero naming the flag', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const bodyFile = join(tmp, 'spec.md')
@@ -2136,6 +2160,78 @@ describe('ticket metadata CLI', () => {
     expect(JSON.parse(out.pop()!).target).toBeUndefined()
     await abTicket(['update', node.ref.id, '--kind', 'work'], opts)
     expect((await source.get(node.ref.id))!.kind).toBe('work')
+  })
+
+  test('--assignees and createAssignee assign github tickets, and show and JSON read them', async () => {
+    await writeRepo('[tickets]\nsource = "github"\ncreateAssignee = "me"\n')
+    const body = join(tmp, 'spec.md')
+    await writeFile(body, 'spec')
+    const issues = new FakeGitHubIssues()
+    for (const login of ['alice', 'bob', 'carol']) issues.assignable.add(login)
+    const source = new GitHubTicketSource({
+      transport: issues.transportAs('alice'),
+      repository: issues.repository,
+      lifecycle: {
+        triage: 'triage',
+        ready: 'ready',
+        doing: 'doing',
+        done: 'done',
+        create: 'triage',
+        proposal: 'triage',
+      },
+      readyLabels: [],
+    })
+    const out: string[] = []
+    const opts = {
+      targetRepo: tmp,
+      env: {},
+      stdout: (line: string) => out.push(line),
+      stderr: () => {},
+      sourceFactory: () => source,
+    }
+    // The configured default: the credential owner.
+    await abTicket(['create', 'Default', '--body', body], opts)
+    expect(out.pop()).toContain('— assigned to alice')
+    await abTicket(['create', 'Default', '--body', body, '--json'], opts)
+    const defaulted = JSON.parse(out.pop()!)
+    expect(defaulted.assignees).toEqual(['alice'])
+    // Explicit assignees replace the default; '' creates an unassigned ticket.
+    await abTicket(
+      ['create', 'Explicit', '--body', body, '--assignees', 'bob,carol', '--json'],
+      opts,
+    )
+    expect(JSON.parse(out.pop()!).assignees).toEqual(['bob', 'carol'])
+    await abTicket(['create', 'Nobody', '--body', body, '--assignees', '', '--json'], opts)
+    const nobody = JSON.parse(out.pop()!)
+    expect(nobody.assignees).toEqual([])
+    expect(issues.issue(Number(nobody.ref.id))?.assignees).toEqual([])
+
+    // Update replaces the set, '' clears it, and omission leaves it alone.
+    await abTicket(['update', nobody.ref.id, '--assignees', 'carol,me', '--json'], opts)
+    expect(JSON.parse(out.pop()!).assignees).toEqual(['carol', 'alice'])
+    await abTicket(['update', nobody.ref.id, '--title', 'Renamed', '--json'], opts)
+    expect(JSON.parse(out.pop()!).assignees).toEqual(['carol', 'alice'])
+    await abTicket(['show', nobody.ref.id], opts)
+    expect(out).toContain('  assignees: carol, alice')
+    out.length = 0
+    await abTicket(['update', nobody.ref.id, '--assignees', ''], opts)
+    await abTicket(['show', nobody.ref.id], opts)
+    expect(out.some((line) => line.startsWith('  assignees:'))).toBe(false)
+    await abTicket(['show', nobody.ref.id, '--json'], opts)
+    expect(JSON.parse(out.pop()!).assignees).toEqual([])
+    await abTicket(['list', '--state', 'triage', '--json'], opts)
+    const listed = new Map(
+      (JSON.parse(out.pop()!) as Ticket[]).map((ticket) => [ticket.ref.id, ticket.assignees]),
+    )
+    expect(listed.get(defaulted.ref.id)).toEqual(['alice'])
+    expect(listed.get(nobody.ref.id)).toEqual([])
+
+    // An unassignable user writes nothing.
+    const before = issues.issueCount()
+    await expect(
+      abTicket(['create', 'Ghost', '--body', body, '--assignees', 'ghost'], opts),
+    ).rejects.toThrow('"ghost" cannot be assigned issues in acme/widgets')
+    expect(issues.issueCount()).toBe(before)
   })
 
   test('kind and target commands and tree JSON work against the github source', async () => {

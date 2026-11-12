@@ -55,6 +55,12 @@ When a ticket must go next, such as a fix for a stuck build, mark it urgent inst
 bun ab ticket update AUT-12 --priority urgent
 ```
 
+On the `github` source a ticket has assignees. `--assignees alice,me` on `ab ticket create` or `ab ticket update` sets them, where `me` is the owner of the GitHub credential. On update it replaces the whole set, `--assignees ''` clears it, and omitting the option leaves it alone. Set `[tickets].createAssignee` to assign every ticket Autobuild creates, including harvest proposals; explicit `--assignees` replace that default. `ab ticket show` prints the assignees, and JSON ticket reads carry an `assignees` array of usernames. Sources that can't store assignees refuse the option and name the source. See [Ticket sources](ticket-sources.md#shipped-adapters).
+
+```sh
+bun ab ticket update 412 --assignees octocat
+```
+
 
 ## Backlog and rejected
 

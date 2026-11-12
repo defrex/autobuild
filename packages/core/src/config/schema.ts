@@ -30,6 +30,8 @@ import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
 import { effectiveRuntimeReferences } from './roles'
 import {
+  createAssigneeUnsupported,
+  GITHUB_CREATE_ASSIGNEE,
   GITHUB_READY_ASSIGNEE,
   LINEAR_READY_ASSIGNEE,
   readyAssigneeUnsupported,
@@ -871,6 +873,21 @@ export const ticketsInputSchema = z.strictObject({
       '[tickets].readyAssignee must be a nonblank value with no surrounding whitespace',
     )
     .optional(),
+  /**
+   * Assigns every ticket Autobuild creates (`ab ticket create`, operator
+   * `tickets.create`, harvest proposals) to one user unless the create names
+   * its own assignees. A ticket-source capability: the source must declare
+   * `assignees`. github takes `"me"` (the owner of the creating credential —
+   * for harvest, the filing dispatcher's) or a username. Absent sends no
+   * assignee.
+   */
+  createAssignee: z
+    .string()
+    .refine(
+      (s) => s.trim().length > 0 && s === s.trim(),
+      '[tickets].createAssignee must be a nonblank value with no surrounding whitespace',
+    )
+    .optional(),
   /** Backend team key (e.g. "ENG") — required for linear and hosted;
    * forbidden for github. */
   teamKey: z.string().min(1).optional(),
@@ -946,6 +963,8 @@ documentFields(ticketsInputSchema, {
   readyState: 'The one workflow state eligible for dispatch.',
   readyAssignee:
     'Require the ticket to be assigned to one user, in addition to the state and label gates.',
+  createAssignee:
+    'Assign every ticket Autobuild creates (`ab ticket create`, operator `tickets.create`, harvest proposals) to one user unless the create names its own assignees.',
   teamKey: 'Backend team key such as `"ENG"`, or an existing plugin config field.',
   claimedState: 'Workflow state entered when a ticket is claimed.',
   doneState: 'Project completion state and merged-ticket transition.',
@@ -977,6 +996,10 @@ documentSchema(ticketsInputSchema.shape.dir, {
 documentSchema(ticketsInputSchema.shape.readyAssignee, {
   constraints:
     'Allowed for sources that can filter by assignee: linear ("me" or an email), github ("me" or a GitHub username, including managed-user logins such as mona_acme), and plugin sources that declare readyAssignee. Refused for file and hosted.',
+})
+documentSchema(ticketsInputSchema.shape.createAssignee, {
+  constraints:
+    'Allowed for github ("me" or a GitHub username) and plugin sources that declare assignees. Refused for file, hosted and linear.',
 })
 documentSchema(ticketsInputSchema.shape.readyLabels, {
   constraints:
@@ -1555,6 +1578,28 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
       !form.accepts(assignee)
     ) {
       ctx.addIssue({ code: 'custom', path: ['tickets', 'readyAssignee'], message: form.message })
+    }
+  }
+  // createAssignee is the `assignees` capability, checked the same way.
+  const createAssignee = tickets.createAssignee
+  if (createAssignee !== undefined) {
+    if (tickets.source === 'file' || tickets.source === 'hosted' || tickets.source === 'linear') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tickets', 'createAssignee'],
+        message: createAssigneeUnsupported(tickets.source),
+      })
+    } else if (
+      tickets.source === 'github' &&
+      createAssignee.trim().length > 0 &&
+      createAssignee === createAssignee.trim() &&
+      !GITHUB_CREATE_ASSIGNEE.accepts(createAssignee)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tickets', 'createAssignee'],
+        message: GITHUB_CREATE_ASSIGNEE.message,
+      })
     }
   }
   // Plugin sources receive the existing ticket lifecycle/configuration fields

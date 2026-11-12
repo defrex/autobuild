@@ -12,6 +12,7 @@ import {
 import { validateTicketTree } from '../ports/tickets/tree'
 import { refuseUnsupportedIssueLinks } from '../ports/tickets/issue-links'
 import { refuseUnsupportedPriority } from '../ports/tickets/priority'
+import { refuseUnsupportedAssignees } from '../ports/tickets/assignees'
 import { readBuildFacts } from '../store/reduced-reads'
 import type { BuildRecord, BuildStore } from '../store/types'
 import type { BuildState } from './reducer'
@@ -131,6 +132,7 @@ export async function updateTicketTarget(
   // cancels that request on revision errors.
   refuseUnsupportedIssueLinks(ctx.source, patch)
   refuseUnsupportedPriority(ctx.source, patch)
+  refuseUnsupportedAssignees(ctx.source, patch)
   if (patch.target === undefined) return updateTicket(ctx.source, id, patch, true, expectedRevision)
   const ticket = await requireTicket(ctx.source, id)
   if (expectedRevision !== undefined) {
