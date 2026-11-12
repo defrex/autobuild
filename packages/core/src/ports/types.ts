@@ -96,6 +96,9 @@ export interface Ticket {
   /** `urgent` dispatches before normal ready work. Absent means normal, or a
    * source that cannot store priority. Normalized tickets never carry `normal`. */
   priority?: TicketPriority
+  /** Usernames the ticket is assigned to. Present (possibly empty) only for
+   * sources with the `assignees` capability; not part of `revision`. */
+  assignees?: string[]
 }
 
 /** Dispatch class: urgent ready work is claimed before normal ready work. */
@@ -157,6 +160,10 @@ export interface TicketDraft {
   /** Dispatch class. A source without the `priority` capability refuses
    * `urgent`; `normal` is a no-op. */
   priority?: TicketPriority
+  /** Exact assignees: entries are usernames or `me` (the owner of the source's
+   * credential). Callers apply any `[tickets].createAssignee` default. A source
+   * without the `assignees` capability refuses, never discards. */
+  assignees?: string[]
 }
 
 /** One node of the dependency graph, as this source sees it. */
@@ -217,6 +224,10 @@ export interface TicketUpdate {
   /** `normal` removes urgency. A source without the `priority` capability
    * refuses `urgent`; `normal` is a no-op. */
   priority?: TicketPriority
+  /** A complete assignee replacement; entries are usernames or `me`. An
+   * explicit empty array clears assignees. A source without the `assignees`
+   * capability refuses, never discards. */
+  assignees?: string[]
 }
 
 /** One workflow state of a source that can enumerate them. */
@@ -282,6 +293,20 @@ export interface TicketSource {
    * boundary, including create and guarded writes. Sources without it read
    * every ticket as normal and refuse any write naming `urgent`. */
   readonly priority?: boolean
+  /** Opt in only when assignees are persisted, returned on every read (an
+   * empty array when unassigned) and verified at every write boundary,
+   * including create, keyed-create adoption and guarded writes; a write that
+   * the provider accepts without the requested assignees must fail. Sources
+   * without it refuse any write naming assignees and
+   * `[tickets].createAssignee`. */
+  readonly assignees?: boolean
+  /** Synchronous and request-free: why `[tickets].createAssignee` cannot be
+   * honoured given what `prepareReadyAssignee` resolved, or undefined.
+   * Checked at dispatcher startup and on every reload. */
+  createAssigneeRefusal?(value: string): string | undefined
+  /** `ab init --validate`: a one-line summary of who `[tickets].createAssignee`
+   * names; throws an actionable error when it names nobody assignable. */
+  describeCreateAssignee?(value: string): Promise<string>
   /** Opt in only when `listReady` (and `listPage`, if implemented) honour
    * `criteria.assignee` and an unassigned ticket is never ready while it is
    * set. Sources without it refuse `[tickets].readyAssignee` at startup,

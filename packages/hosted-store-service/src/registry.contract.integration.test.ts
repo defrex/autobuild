@@ -832,6 +832,26 @@ describe('agent tool registry contract', () => {
       await tool('tickets.update', { repo, id: 'AUT-1', priority: 'normal' }),
       normal.body,
     )
+
+    // A source without the assignees capability refuses them on both surfaces.
+    const unassignable = await route('PATCH', `${tickets}/AUT-1`, { assignees: ['alice'] })
+    expect(unassignable.status).toBe(409)
+    expect(unassignable.body).toMatchObject({ kind: 'refusal', code: 'assignees-unsupported' })
+    expectEqual(
+      await toolFailure(() => tool('tickets.update', { repo, id: 'AUT-1', assignees: ['alice'] })),
+      unassignable.body,
+    )
+    const unassignableCreate = await route('POST', tickets, {
+      title: 't',
+      body: 'b',
+      assignees: [],
+    })
+    expect(unassignableCreate.body).toMatchObject({ code: 'assignees-unsupported' })
+    expect(
+      await toolFailure(() =>
+        tool('tickets.create', { repo, title: 't', body: 'b', assignees: [] }),
+      ),
+    ).toMatchObject({ kind: 'refusal', code: 'assignees-unsupported' })
   })
 
   test('tickets.block and tickets.unblock match their routes', async () => {

@@ -6,6 +6,7 @@ import {
 import { updateTicketTarget } from '../kernel/node-parent'
 import { normalizeIssueLinks, type IssueLinkInput } from '../ports/tickets/issue-links'
 import { urgentFirst } from '../ports/tickets/priority'
+import { creationAssignees } from '../ports/tickets/assignees'
 import type { IssueLink } from '../ports/types'
 import { projectTicketTree, compatibleTicketSource } from '../ports/tickets/tree'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -283,6 +284,7 @@ export async function mutateOperatorTicket(opts: {
         blockedBy?: string[]
         issueLinks?: IssueLinkInput[]
         priority?: import('../ports/types').TicketPriority
+        assignees?: string[]
       }
     | {
         kind: 'update'
@@ -301,7 +303,14 @@ export async function mutateOperatorTicket(opts: {
   if (operation.kind === 'update') await requireTicket(source, operation.id)
   const ticket =
     operation.kind === 'create'
-      ? await createTicket(source, issueLinkDefaults({ ...operation, kind: operation.ticketKind }))
+      ? await createTicket(
+          source,
+          issueLinkDefaults({
+            ...operation,
+            kind: operation.ticketKind,
+            assignees: creationAssignees(context.tickets, operation.assignees),
+          }),
+        )
       : operation.kind === 'update'
         ? (await (operation.patch.target === undefined
             ? updateTicket(
