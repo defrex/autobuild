@@ -1855,6 +1855,20 @@ describe('github assignees', () => {
     expect((await source.get(id))!.title).toBe('In ready')
   })
 
+  test('a kind or labels update naming an unassignable user creates no label', async () => {
+    const { github, source } = assigneeSetup()
+    const id = await created(source, 'ready')
+    expect(github.labelNames()).not.toContain('node')
+    github.resetRequests()
+    for (const patch of [{ kind: 'node' as const }, { labels: ['fresh'] }])
+      await expect(source.update(id, { ...patch, assignees: ['ghost'] })).rejects.toThrow(
+        '"ghost" cannot be assigned issues in acme/widgets — nothing was written',
+      )
+    expect(github.writes()).toEqual([])
+    expect(github.labelNames()).not.toContain('node')
+    expect(github.labelNames()).not.toContain('fresh')
+  })
+
   test('an update whose assignees GitHub dropped fails', async () => {
     const { github, source } = assigneeSetup()
     github.assignable.add('bob')

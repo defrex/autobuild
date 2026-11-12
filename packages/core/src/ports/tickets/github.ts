@@ -1706,13 +1706,14 @@ export class GitHubTicketSource implements TicketSource {
           if (local !== canonical) parentWrite = { set: canonical, replace: parentIsNode }
         }
       }
-      if (ticketLabels?.includes(NODE_LABEL) && !held.includes(NODE_LABEL))
-        await this.ensureNodeLabel('update')
     }
     const assignees =
       validated.assignees === undefined
         ? undefined
         : await this.resolveAssignees('update', validated.assignees)
+    // The first write: every refusal above, assignees included, writes nothing.
+    if (ticketLabels?.includes(NODE_LABEL) && !held.includes(NODE_LABEL))
+      await this.ensureNodeLabel('update')
     const body: Record<string, unknown> = {}
     if (validated.title !== undefined) body.title = validated.title
     if (validated.body !== undefined) {
