@@ -2953,7 +2953,8 @@ and plugin sources that declare it accept it, each with its own value forms.
   assignees is ready when the user is any one of them.
 
 The gate is conjunctive with `readyState` and `readyLabels`, and a ticket with
-no assignee is never ready while it is set. It applies to every ready surface
+no assignee is never ready while it is set; the GitHub source reports such ready
+issues in the ticket diagnostics. It applies to every ready surface
 (dispatch, the queued count, and `ab ticket list` without filters); blockers
 still prevent claim. A blank value, or one outside the source's forms, fails
 validation. `file`, `hosted` and plugin sources that don't declare the

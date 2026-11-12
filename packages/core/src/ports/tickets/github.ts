@@ -24,7 +24,10 @@
  * A `readyAssignee` narrows the ready read itself
  * (its `assignee` query parameter); `"me"` costs one `GET /user` per
  * dispatcher start, sent by `prepareReadyAssignee` before the loop and never
- * during a tick.
+ * during a tick. It also adds one conditional `assignee=none` read per ready
+ * scan, plus one per further page, that reports ready issues with no
+ * assignee as diagnostics; its failures, rate limits included, never fail
+ * the scan or arm the source cooldown.
  */
 import { z } from 'zod'
 import {
@@ -115,6 +118,8 @@ const LINK_LABEL_DESCRIPTION = 'Autobuild issue link'
 const NODE_LABEL_DESCRIPTION = 'Autobuild integration node'
 /** GitHub limits a label description to 100 characters. */
 const LABEL_DESCRIPTION_MAX = 100
+/** Ready issues with no assignee a scan names before counting the rest. */
+const UNASSIGNED_REPORT_LIMIT = 10
 
 /** A keyed create reached the source without the key's reservation time. */
 export class TicketCreationKeyReservationRequired extends Error {
@@ -236,6 +241,9 @@ export class GitHubTicketSource implements TicketSource {
   private readonly now: () => number
   private readonly credentialMiss?: () => Promise<string | undefined>
   private cooldown?: TicketSourceRateLimitError
+  /** A rate limit hit by the unassigned-ready report, kept apart from
+   * `cooldown` so it never refuses the listing or claim reads. */
+  private unassignedCooldownUntil?: number
   /** Exact label name (lowercased) → the one registry write in progress. */
   private readonly pendingLabels = new Map<string, Promise<void>>()
   /** Labels this instance created or saw created, lowercased. */
@@ -975,7 +983,7 @@ export class GitHubTicketSource implements TicketSource {
     // A label state: the ready listing is the recurring dispatcher read, so
     // it alone is remembered, oldest first for a stable order.
     const recurring = holdsState(wanted, this.lifecycle.ready)
-    return this.listing(
+    const listing = await this.listing(
       await listIssues(
         'listReady',
         {
@@ -989,6 +997,75 @@ export class GitHubTicketSource implements TicketSource {
       holds,
       recurring,
     )
+    if (!recurring || login === undefined) return listing
+    return {
+      tickets: listing.tickets,
+      diagnostics: [...listing.diagnostics, ...(await this.unassignedReady(wanted, labels, login))],
+    }
+  }
+
+  /**
+   * Ready issues no `readyAssignee` read can see because nobody is assigned:
+   * one remembered `assignee=none` listing, never hydrated. It only reports;
+   * a failure becomes a diagnostic and leaves the source cooldown as it was,
+   * so assigned tickets are still listed and claimed.
+   */
+  private async unassignedReady(state: string, labels: string[], login: string): Promise<string[]> {
+    const failed = (reason: string) => [
+      `github tickets: could not check ready issues for a missing assignee (${reason}); assigned ready issues are unaffected`,
+    ]
+    const rateLimited = (resetAt: number) =>
+      failed(`rate limited until ${new Date(resetAt).toISOString()}`)
+    if (this.unassignedCooldownUntil !== undefined) {
+      if (this.now() < this.unassignedCooldownUntil)
+        return rateLimited(this.unassignedCooldownUntil)
+      this.unassignedCooldownUntil = undefined
+    }
+    const prior = this.cooldown
+    let issues: GitHubIssue[]
+    try {
+      issues = await this.listIssues(
+        'listReadyUnassigned',
+        {
+          state: 'open',
+          sort: 'created',
+          direction: 'asc',
+          labels: [stateLabel(state), ...labels].join(','),
+          assignee: 'none',
+        },
+        true,
+      )
+    } catch (error) {
+      this.cooldown = prior
+      if (error instanceof TicketSourceRateLimitError) {
+        this.unassignedCooldownUntil = error.resetAt
+        return rateLimited(error.resetAt)
+      }
+      return failed(message(error))
+    }
+    const required = labels.map((label) => label.toLowerCase())
+    const numbers = issues
+      .filter((issue) => {
+        if (issue.state !== 'open' || (issue.assignees ?? []).length > 0) return false
+        const current = issueState(issue, this.lifecycle)
+        if ('malformed' in current || !holdsState(current.state, state)) return false
+        const held = ticketLabelsOf(issue).map((label) => label.toLowerCase())
+        return required.every((label) => held.includes(label))
+      })
+      .map((issue) => issue.number)
+      .sort((a, b) => a - b)
+    const diagnostics = numbers
+      .slice(0, UNASSIGNED_REPORT_LIMIT)
+      .map(
+        (number) =>
+          `github #${number}: ready but unassigned — [tickets].readyAssignee claims only issues assigned to ${login}; assign it to make it claimable`,
+      )
+    const more = numbers.length - UNASSIGNED_REPORT_LIMIT
+    if (more > 0)
+      diagnostics.push(
+        `github: ${more} more ready issues are unassigned and unclaimed — assign them to make them claimable`,
+      )
+    return diagnostics
   }
 
   private async listing(
