@@ -158,7 +158,13 @@ function effectiveTargets(
 ): Array<{ runtime: string; models: string[] }> {
   // Preserve eager registry/model/argument validation, but probe only routes
   // the pipeline can consume rather than every declared role table.
-  createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds, config.accounts)
+  createRuntimeResolver(
+    runtimes,
+    config.roles,
+    config.policy.sessionBudgetSeconds,
+    config.accounts,
+    config.profiles,
+  )
   return effectiveRuntimeReferences(config).flatMap((group) => {
     const selected = Object.keys(config.accounts).length ? group.legacyAuthentication : group
     if (selected === undefined) return []

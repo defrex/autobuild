@@ -787,6 +787,8 @@ export class BuildRunner {
 
   private async startBracket(write: EventWrite<'session.started'>) {
     const { store, slug } = this.deps
+    if (this.boundaryProfile !== undefined)
+      write = { ...write, payload: { ...write.payload, profile: { ...this.boundaryProfile } } }
     const old = this.recovery
     const budgetMs = this.resolveSessionRole(write.payload.role).sessionBudgetSeconds * 1000
     if (
@@ -941,6 +943,8 @@ export class BuildRunner {
    * consults the mutable owner again. */
   private boundaryConfig: Config
   private boundaryResolver: RuntimeResolver
+  /** The build's profile and whether the boundary config still defines it. */
+  private boundaryProfile: { name: string; configured: boolean } | undefined
 
   constructor(private readonly deps: BuildRunnerDeps) {
     const redactor = accountRedactor(
@@ -979,12 +983,22 @@ export class BuildRunner {
     const state = (await readBuildFacts(this.deps.store, this.deps.slug)).value.state
     const config = await capturedBuildConfig(this.deps.store, this.deps.slug, state, deployment)
     this.boundaryConfig = config
-    this.boundaryResolver = createRuntimeResolver(
+    const base = createRuntimeResolver(
       this.deps.runtimes,
       config.roles,
       config.policy.sessionBudgetSeconds,
       config.accounts,
+      config.profiles,
     )
+    // The build's profile was fixed at claim; its contents come from the
+    // boundary-current config. A profile a reload removed falls back to the
+    // repository roles, and the next session.started records that.
+    const profile = state.profile === undefined ? undefined : base.profile(state.profile.name)
+    this.boundaryResolver = profile ?? base
+    this.boundaryProfile =
+      state.profile === undefined
+        ? undefined
+        : { name: state.profile.name, configured: profile !== undefined }
     return config
   }
 

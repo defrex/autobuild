@@ -259,7 +259,7 @@ Changing the store requires restarting dispatch.
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
 command references are errors. The open maps are `[accounts]`, `[commands]`, `[roles]`,
-`[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
+`[profiles]`, `[profiles.<name>.roles]`, `[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
 `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
 validates repository-defined command, role, and step entries.
 `[workspace.config]` is plugin-owned and passed through unchanged for plugin
@@ -319,9 +319,9 @@ the worktree file has uncommitted edits, because the clean/dirty comparison
 could not be performed (non-git workspace or a transient git error), or because
 the branch head never carried the file — the deposit records the source
 `worktree-dirty` with no commit. The build still runs the worktree bytes, but
-provenance declines to attribute them to any commit. **Deployment-owned** sections — `[accounts]` and `[roles]`
-(runtime, model, account, args, alternates, per-role `sessionBudgetSeconds`) and
-`[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
+provenance declines to attribute them to any commit. **Deployment-owned** sections — `[accounts]`, `[roles]`
+(runtime, model, account, args, alternates, per-role `sessionBudgetSeconds`),
+`[profiles]` and `[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
 `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
 dispatcher itself and are never interpreted by the build runner.
 
@@ -383,6 +383,7 @@ These fields hot-reload:
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
 | `[accounts]` | Descriptors are adopted atomically with roles at the next session boundary, except existing ChatGPT descriptors require stopped dispatch before replacement or removal (see [accounts](#accounts)); credentials refresh on observation ticks. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
+| `[profiles]` | Next agent session of a build that selected the profile; builds without it are unaffected. A build's selected profile name never changes after claim. |
 | `[upgrade]` | Cancels preparation when disabled; automatic target checks every 60 seconds. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
@@ -2388,6 +2389,270 @@ remains authoritative. Agent finalize post-step expiry instead records that
 failure-tolerant step as `ok = false` and files its follow-up observation.
 Harvest sessions and direct verify/finalize check commands are not covered by
 this setting.
+
+## `[profiles]`
+
+`[roles]` applies to every build. A profile lets one ticket's build use
+different role settings without touching the roles every other build reads.
+Each `[profiles.<name>]` names one ticket `label` and overrides only the role
+fields it declares:
+
+<!-- config-fragment:profiles -->
+```toml
+[profiles.deep]
+label = "deep"
+
+[profiles.deep.roles.plan-review]
+model = "claude-opus-5-5"
+
+[profiles.deep.roles.implement]
+args = ["--effort", "high"]
+```
+
+A ticket labelled `deep` builds with those two overrides; every other field and
+role comes from `[roles.<role>]`, then `[roles.default]`, exactly as without the
+profile. An entry may name any role, including agent verify and finalize step
+names and roles `[roles]` does not declare, and accepts the `[roles.<role>]`
+fields. A declared `alternates` list, including `[]`, replaces the inherited
+list. An entry named `default` is refused.
+
+Labels match case-insensitively after trimming. The dispatcher fixes a build's
+profile when it claims the ticket and records it on the build; relabelling
+later has no effect. A ready ticket carrying two profiles' labels is not
+claimed and appears in the scan's ticket diagnostics (`ab repository status`)
+until it carries at most one. The profile's contents are read at every session
+boundary, so an edit reaches the builds that selected it at their next
+session. If a reload removes the profile, those builds continue on the
+repository roles and `ab build status` reports the profile as no longer
+configured. Duplicate labels, a blank label, and an entry whose effective
+runtime, model, args or account is invalid are refused at load, by
+`ab init --validate`, and on live reload. Sessions outside a build (`slug`,
+`upgrade`, `harvest`, `harvest-review`) never use a profile.
+
+<!-- configuration-reference:profiles -->
+
+#### `profiles`
+
+**TOML key:** `profiles`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named role profiles selected by ticket label. A profile overrides only the role fields it declares, for the builds that selected it.
+
+**Constraints:** Entry names: nonempty
+
+#### `profiles.<name>`
+
+**TOML key:** `profiles.<name>`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named role profile. The build's profile is fixed when its ticket is claimed; the profile's contents are read at each session boundary.
+
+**Constraints:** None beyond the input type.
+
+#### `profiles.<name>.label`
+
+**TOML key:** `profiles.<name>.label`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ticket label that selects this profile, matched case-insensitively after trimming. A ticket carrying two profiles' labels is not claimed.
+
+**Constraints:** Nonblank; unique across profiles after trimming and case folding.
+
+#### `profiles.<name>.roles`
+
+**TOML key:** `profiles.<name>.roles`
+
+- **Type:** `table`
+- **Default:** `{} (input supplied on omission)`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Role entries this profile overrides. Any role name is accepted except the reserved default.
+
+**Constraints:** An entry named default is refused; Entry names: nonempty
+
+#### `profiles.<name>.roles.<name>`
+
+**TOML key:** `profiles.<name>.roles.<name>`
+
+- **Type:** `strict table`
+- **Default:** `omitted`
+- **Required:** Required
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Role override for builds whose ticket carries the profile's label. Omitted fields inherit `[roles.<role>]`, then `[roles.default]`; a declared alternates list, including [], replaces the inherited list.
+
+**Constraints:** None beyond the input type.
+
+#### `profiles.<name>.roles.<name>.account`
+
+**TOML key:** `profiles.<name>.roles.<name>.account`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
+
+**Constraints:** minimum length 1; matches /\S/
+
+#### `profiles.<name>.roles.<name>.runtime`
+
+**TOML key:** `profiles.<name>.roles.<name>.runtime`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select an agent adapter.
+
+**Constraints:** minimum length 1; Required on roles.default by runtime resolution; other roles inherit it. Must name a registered runtime.
+
+#### `profiles.<name>.roles.<name>.model`
+
+**TOML key:** `profiles.<name>.roles.<name>.model`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+
+**Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
+
+#### `profiles.<name>.roles.<name>.args`
+
+**TOML key:** `profiles.<name>.roles.<name>.args`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
+
+**Constraints:** Omission inherits the base list, otherwise resolves to an empty list; an explicit list replaces it.; Each item: minimum length 1
+
+#### `profiles.<name>.roles.<name>.extensions`
+
+**TOML key:** `profiles.<name>.roles.<name>.extensions`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
+
+**Constraints:** Each item: minimum length 1
+
+#### `profiles.<name>.roles.<name>.sessionBudgetSeconds`
+
+**TOML key:** `profiles.<name>.roles.<name>.sessionBudgetSeconds`
+
+- **Type:** `number`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Active-time budget for each build phase session routed through this logical role. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.
+
+**Constraints:** safe integer; > 0; Omission inherits roles.default.sessionBudgetSeconds, otherwise policy.sessionBudgetSeconds.
+
+#### `profiles.<name>.roles.<name>.alternates`
+
+**TOML key:** `profiles.<name>.roles.<name>.alternates`
+
+- **Type:** `array of strict table`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op.
+
+**Constraints:** Omission inherits the base alternate list, otherwise resolves to an empty list; each alternate overlays the resolved primary axes.
+
+#### `profiles.<name>.roles.<name>.alternates[].account`
+
+**TOML key:** `profiles.<name>.roles.<name>.alternates[].account`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Named billing account; inherits independently. Claude selects the sole subscription account when omitted.
+
+**Constraints:** minimum length 1; matches /\S/
+
+#### `profiles.<name>.roles.<name>.alternates[].runtime`
+
+**TOML key:** `profiles.<name>.roles.<name>.alternates[].runtime`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select an agent adapter.
+
+**Constraints:** minimum length 1; Required on roles.default by runtime resolution; other roles inherit it. Must name a registered runtime.
+
+#### `profiles.<name>.roles.<name>.alternates[].model`
+
+**TOML key:** `profiles.<name>.roles.<name>.alternates[].model`
+
+- **Type:** `string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Select the exact model. Codex uses unqualified `gpt-*`; Pi ids are provider-qualified.
+
+**Constraints:** minimum length 1; Omission inherits the base model, otherwise uses the selected runtime default. Must be compatible with that runtime.
+
+#### `profiles.<name>.roles.<name>.alternates[].args`
+
+**TOML key:** `profiles.<name>.roles.<name>.alternates[].args`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list.
+
+**Constraints:** Each item: minimum length 1
+
+#### `profiles.<name>.roles.<name>.alternates[].extensions`
+
+**TOML key:** `profiles.<name>.roles.<name>.alternates[].extensions`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`.
+
+**Constraints:** Each item: minimum length 1
+
+<!-- configuration-reference:/profiles -->
 
 ## `[policy]`
 

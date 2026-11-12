@@ -26,7 +26,8 @@ import { selectAccount, type SelectedAccount } from './accounts'
  * never requested on the other.
  */
 import { CORE_PHASES } from '../ontology'
-import type { Config } from './schema'
+import { profileRoles } from './profiles'
+import type { Config, RoleConfig } from './schema'
 
 // ── Vocabulary ───────────────────────────────────────────────────────────────
 
@@ -100,7 +101,8 @@ export interface RuntimeReferenceGroup {
  * bootstrap share one source of truth.
  */
 export function effectiveRuntimeReferences(
-  config: Pick<Config, 'roles' | 'verify' | 'finalize'> & Partial<Pick<Config, 'accounts'>>,
+  config: Pick<Config, 'roles' | 'verify' | 'finalize'> &
+    Partial<Pick<Config, 'accounts' | 'profiles'>>,
   options: { includeUnusedAccounts?: boolean } = {},
 ): RuntimeReferenceGroup[] {
   const defaultSpec = config.roles.default ?? {}
@@ -130,12 +132,18 @@ export function effectiveRuntimeReferences(
     string,
     { references: Set<string>; models: Set<string>; usesRuntimeDefaultModel: boolean }
   >()
-  const declaredSpec = (role: string, aliases: readonly string[] = []) => {
+  // MUST mirror the resolver's candidate walk (src/ports/runner/routing.ts).
+  // `selected` is the declared key that won, or undefined for the fallback.
+  const declaredSpec = (
+    roles: Record<string, RoleConfig>,
+    role: string,
+    aliases: readonly string[] = [],
+  ): { spec: RoleConfig; selected?: string } => {
     for (const key of [role, ...aliases]) {
-      if (key === RESERVED_ROLE) return defaultSpec
-      if (Object.hasOwn(config.roles, key)) return config.roles[key]!
+      if (key === RESERVED_ROLE) return { spec: defaultSpec }
+      if (Object.hasOwn(roles, key)) return { spec: roles[key]!, selected: key }
     }
-    return defaultSpec
+    return { spec: defaultSpec }
   }
   const add = (
     runtime: string | undefined,
@@ -170,20 +178,35 @@ export function effectiveRuntimeReferences(
     grouped.set(runtime, group)
   }
 
-  for (const route of routes) {
-    const spec = declaredSpec(route.role, route.aliases)
+  const addRoute = (spec: RoleConfig, label: string) => {
     const runtime = spec.runtime ?? defaultSpec.runtime
     const model = spec.model ?? defaultSpec.model
-    add(runtime, model, `${route.label} primary`, spec.account ?? defaultSpec.account)
+    add(runtime, model, `${label} primary`, spec.account ?? defaultSpec.account)
     const alternates = spec.alternates ?? defaultSpec.alternates ?? []
     alternates.forEach((alternate, index) => {
       add(
         alternate.runtime ?? runtime,
         alternate.model ?? model,
-        `${route.label} alternate[${index}]`,
+        `${label} alternate[${index}]`,
         alternate.account ?? spec.account ?? defaultSpec.account,
       )
     })
+  }
+
+  for (const route of routes)
+    addRoute(declaredSpec(config.roles, route.role, route.aliases).spec, route.label)
+
+  // A profile can select a runtime, model or account no repository route
+  // does. Only routes whose winning key is a profile entry add anything new.
+  const profiles = config.profiles ?? {}
+  for (const name of Object.keys(profiles)) {
+    const entries = profiles[name]!.roles
+    const overlaid = profileRoles(config.roles, entries)
+    for (const route of routes) {
+      const { spec, selected } = declaredSpec(overlaid, route.role, route.aliases)
+      if (selected === undefined || !Object.hasOwn(entries, selected)) continue
+      addRoute(spec, `profile ${displayName(name)} ${route.label}`)
+    }
   }
 
   // Unused accounts still require their actual runtime for readiness.
