@@ -5,6 +5,7 @@ import { createForge } from '../ports/forge/create'
 import { compatibleTicketSource, type TicketTreeEntry } from '../ports/tickets/tree'
 import { formatIssueLinks, parseIssueLinkList } from '../ports/tickets/issue-links'
 import { parsePriorityFlag, ticketPriority } from '../ports/tickets/priority'
+import { creationAssignees, parseAssigneesFlag } from '../ports/tickets/assignees'
 import { parseIssueId, rejectedStateOf } from '../ports/tickets/github-issues'
 import { readBuildDigests, readBuildFacts } from '../store/reduced-reads'
 import type { TicketRef } from '../ontology'
@@ -106,6 +107,9 @@ export interface TicketCreateOpts extends TicketCommandOpts {
   issueLinks?: import('../ports/types').IssueLink[]
   /** Dispatch class; a source without priority support refuses `urgent`. */
   priority?: import('../ports/types').TicketPriority
+  /** Usernames or `me`; replaces the `[tickets].createAssignee` default, and
+   * an explicit [] creates an unassigned ticket. Sources without support refuse. */
+  assignees?: string[]
 }
 
 export interface TicketUpdateOpts extends TicketCommandOpts {
@@ -122,6 +126,8 @@ export interface TicketUpdateOpts extends TicketCommandOpts {
   issueLinks?: import('../ports/types').IssueLink[]
   /** `normal` removes urgency; a source without priority support refuses `urgent`. */
   priority?: import('../ports/types').TicketPriority
+  /** Complete assignee replacement (usernames or `me`). An explicit [] clears. */
+  assignees?: string[]
 }
 
 export interface TicketBlockerOpts extends TicketCommandOpts {
@@ -368,6 +374,7 @@ function ticketDetail(
     lines.push(`  blocked by: ${blockers.join(', ')}`)
   }
   if (ticket.issueLinks?.length) lines.push(`  issues:  ${formatIssueLinks(ticket.issueLinks)}`)
+  if (ticket.assignees?.length) lines.push(`  assignees: ${ticket.assignees.join(', ')}`)
   if (ticket.ref.url !== undefined) lines.push(`  url:     ${ticket.ref.url}`)
   if (assets.length > 0) lines.push('  assets:', ...assets.map(assetLine))
   lines.push('  body:')
@@ -386,7 +393,8 @@ function emitTicketJson(opts: TicketCommandOpts, ticket: Ticket): void {
 export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
   // Read the complete body before constructing or calling a mutable source.
   const body = await readBody(opts.bodyFile)
-  const { source } = await resolveTicketCommand(opts, 'create')
+  const { source, config } = await resolveTicketCommand(opts, 'create')
+  const assignees = creationAssignees(config.tickets, opts.assignees)
 
   const ticket = await createTicket(
     source,
@@ -399,6 +407,7 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
       ...(opts.blockedBy !== undefined ? { blockedBy: opts.blockedBy } : {}),
       ...(opts.issueLinks !== undefined ? { issueLinks: opts.issueLinks } : {}),
       ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
+      ...(assignees !== undefined ? { assignees } : {}),
       ...(opts.state !== undefined ? { state: opts.state } : {}),
     },
     {
@@ -418,8 +427,9 @@ export async function abTicketCreate(opts: TicketCreateOpts): Promise<void> {
       : ''
   const issues = ticket.issueLinks?.length ? ` — ${formatIssueLinks(ticket.issueLinks)}` : ''
   const urgent = ticket.priority === 'urgent' ? ' — urgent' : ''
+  const assigned = ticket.assignees?.length ? ` — assigned to ${ticket.assignees.join(', ')}` : ''
   opts.stdout(
-    `ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${urgent}${blockers}${issues}${url}`,
+    `ticket created: ${ticket.ref.source}:${ticket.ref.id} (${state})${urgent}${assigned}${blockers}${issues}${url}`,
   )
 }
 
@@ -434,6 +444,7 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
     ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
     ...(opts.issueLinks !== undefined ? { issueLinks: [...opts.issueLinks] } : {}),
     ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
+    ...(opts.assignees !== undefined ? { assignees: [...opts.assignees] } : {}),
   }
   const updated =
     patch.target === undefined
@@ -931,9 +942,9 @@ export async function abTicketStateCreate(opts: TicketStateCreateOpts): Promise<
 }
 
 const CREATE_USAGE =
-  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--kind work|node] [--target <id> | --no-target] [--json] (§8.8)'
+  'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--assignees a,b] [--kind work|node] [--target <id> | --no-target] [--json] (§8.8)'
 const UPDATE_USAGE =
-  'usage: ab ticket update <id> [--kind work|node] [--target <id> | --no-target] [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--priority urgent|normal] [--expected-revision <opaque>] [--json] (§8.8)'
+  'usage: ab ticket update <id> [--kind work|node] [--target <id> | --no-target] [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--priority urgent|normal] [--assignees a,b] [--expected-revision <opaque>] [--json] (§8.8)'
 const BLOCK_USAGE =
   'usage: ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json] (§8.8)'
 const UNBLOCK_USAGE =
@@ -1065,6 +1076,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
           'blocked-by': 'value',
           issues: 'value',
           priority: 'value',
+          assignees: 'value',
           json: 'boolean',
         },
         TICKET_USAGE,
@@ -1080,6 +1092,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       const blockedBy = stringFlag(parsed, 'blocked-by')
       const issues = stringFlag(parsed, 'issues')
       const priority = stringFlag(parsed, 'priority')
+      const assignees = stringFlag(parsed, 'assignees')
       await abTicketCreate({
         ...opts,
         ...metadataFlags(parsed),
@@ -1090,6 +1103,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(blockedBy !== undefined ? { blockedBy: commaList(blockedBy) } : {}),
         ...(issues !== undefined ? { issueLinks: parseIssueLinkList(issues) } : {}),
         ...(priority !== undefined ? { priority: parsePriorityFlag(priority) } : {}),
+        ...(assignees !== undefined ? { assignees: parseAssigneesFlag(assignees) } : {}),
         json: parsed.flags.has('json'),
       })
       return
@@ -1114,6 +1128,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
           labels: 'value',
           issues: 'value',
           priority: 'value',
+          assignees: 'value',
           'expected-revision': 'value',
           json: 'boolean',
         },
@@ -1126,6 +1141,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         'labels',
         'issues',
         'priority',
+        'assignees',
         'kind',
         'target',
         'no-target',
@@ -1138,6 +1154,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       const labels = stringFlag(parsed, 'labels')
       const issues = stringFlag(parsed, 'issues')
       const priority = stringFlag(parsed, 'priority')
+      const assignees = stringFlag(parsed, 'assignees')
       if (bodyFile !== undefined && bodyFile.trim() === '') {
         throw new Error(TICKET_USAGE)
       }
@@ -1151,6 +1168,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
         ...(issues !== undefined ? { issueLinks: parseIssueLinkList(issues) } : {}),
         ...(priority !== undefined ? { priority: parsePriorityFlag(priority) } : {}),
+        ...(assignees !== undefined ? { assignees: parseAssigneesFlag(assignees) } : {}),
         json: parsed.flags.has('json'),
       })
       return
