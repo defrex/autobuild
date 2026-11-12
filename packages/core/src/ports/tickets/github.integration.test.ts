@@ -1585,7 +1585,9 @@ describe('github ready assignee', () => {
     expect(await ids(source, 'ALICE')).toEqual([alice, shared])
     expect(await ids(source, 'carol')).toEqual([shared])
     expect(await ids(source, 'bob')).toEqual([bob])
-    const lists = github.requests.filter((r) => r.kind === 'list-issues')
+    const lists = github.requests.filter(
+      (r) => r.kind === 'list-issues' && r.params?.assignee !== 'none',
+    )
     expect(lists.map((r) => r.params?.assignee)).toEqual(['alice', 'ALICE', 'carol', 'bob'])
     expect(github.count('user')).toBe(0)
   })
@@ -1689,7 +1691,7 @@ describe('github ready assignee', () => {
     expect(source.readyAssigneeRefusal('mona_acme')).toBeUndefined()
   })
 
-  test('an assignee gate costs no more requests than none, from the first call', async () => {
+  test('an assignee gate costs one more conditional request, and nothing on an unchanged repository', async () => {
     const without = assigneeSetup('alice')
     const withMe = assigneeSetup('alice')
     for (const fixture of [without, withMe]) {
@@ -1700,14 +1702,157 @@ describe('github ready assignee', () => {
     await withMe.source.prepareReadyAssignee()
     withMe.github.resetRequests()
     for (let call = 1; call <= 3; call++) {
-      const before = { a: without.github.requests.length, b: withMe.github.requests.length }
+      const before = {
+        a: without.github.requests.length,
+        b: withMe.github.requests.length,
+        aPrimary: without.github.primary,
+        bPrimary: withMe.github.primary,
+        aNotModified: without.github.notModified,
+        bNotModified: withMe.github.notModified,
+      }
       await ids(without.source)
       await ids(withMe.source, 'me')
       expect(withMe.github.requests.length - before.b).toBe(
-        without.github.requests.length - before.a,
+        without.github.requests.length - before.a + 1,
       )
+      if (call > 1) {
+        expect(without.github.primary - before.aPrimary).toBe(0)
+        expect(withMe.github.primary - before.bPrimary).toBe(0)
+        expect(withMe.github.notModified - before.bNotModified).toBe(
+          without.github.notModified - before.aNotModified + 1,
+        )
+      }
     }
     expect(withMe.github.count('user')).toBe(0)
+  })
+
+  const unassignedLine = (n: string, login = 'alice') =>
+    `github #${n}: ready but unassigned — [tickets].readyAssignee claims only issues assigned to ${login}; assign it to make it claimable`
+  const unassignedRequests = (github: FakeGitHubIssues) =>
+    github.count('list-issues', (r) => r.params?.assignee === 'none')
+
+  test('reports each ready unassigned issue and leaves it unclaimed', async () => {
+    const { github, source, file } = assigneeSetup()
+    const alice = file('alice')
+    file('bob')
+    const first = file()
+    const second = file()
+    github.fileIssue({ labels: ['autobuild:backlog'] })
+    github.fileIssue({ labels: ['autobuild:ready'], state: 'closed' })
+    github.resetRequests()
+    const listing = await source.listReady({ ...READY, assignee: 'alice' })
+    expect(listing.tickets.map((ticket) => ticket.ref.id)).toEqual([alice])
+    expect(listing.diagnostics).toEqual([unassignedLine(first), unassignedLine(second)])
+    expect(unassignedRequests(github)).toBe(1)
+    expect(github.writes()).toEqual([])
+    expect(github.issue(Number(first))?.assignees).toEqual([])
+    expect(github.issue(Number(first))?.labels).toEqual(['autobuild:ready'])
+  })
+
+  test('only issues carrying every readyLabels entry are reported', async () => {
+    const { github, source } = assigneeSetup()
+    github.fileIssue({ labels: ['autobuild:ready'] })
+    const tagged = String(github.fileIssue({ labels: ['autobuild:ready', 'autobuild'] }))
+    const listing = await source.listReady({ ...READY, labels: ['autobuild'], assignee: 'alice' })
+    expect(listing.diagnostics).toEqual([unassignedLine(tagged)])
+  })
+
+  test('the report clears once an issue is assigned, moved out of ready, or closed', async () => {
+    const { github, source, file } = assigneeSetup()
+    const assigned = file()
+    const moved = file()
+    const closed = file()
+    const diagnostics = async () =>
+      (await source.listReady({ ...READY, assignee: 'alice' })).diagnostics
+    expect(await diagnostics()).toEqual([
+      unassignedLine(assigned),
+      unassignedLine(moved),
+      unassignedLine(closed),
+    ])
+    github.uiAssign(Number(assigned), 'carol')
+    expect(await diagnostics()).toEqual([unassignedLine(moved), unassignedLine(closed)])
+    github.uiRemoveLabel(Number(moved), 'autobuild:ready')
+    github.uiAddLabel(Number(moved), 'autobuild:backlog')
+    expect(await diagnostics()).toEqual([unassignedLine(closed)])
+    github.uiClose(Number(closed))
+    expect(await diagnostics()).toEqual([])
+  })
+
+  test('more than ten names the ten lowest and counts the rest', async () => {
+    const { source, file } = assigneeSetup()
+    const numbers = Array.from({ length: 13 }, () => file())
+    const listing = await source.listReady({ ...READY, assignee: 'alice' })
+    expect(listing.diagnostics).toEqual([
+      ...numbers.slice(0, 10).map((n) => unassignedLine(n)),
+      'github: 3 more ready issues are unassigned and unclaimed — assign them to make them claimable',
+    ])
+  })
+
+  test('without an assignee gate there is no extra read and no report', async () => {
+    const { github, source, file } = assigneeSetup()
+    file()
+    file('alice')
+    github.resetRequests()
+    const listing = await source.listReady(READY)
+    expect(listing.diagnostics).toEqual([])
+    expect(github.count('list-issues')).toBe(1)
+    expect(unassignedRequests(github)).toBe(0)
+  })
+
+  test('a failed check is a diagnostic; assigned tickets are still listed', async () => {
+    const { github, source, file } = assigneeSetup()
+    const alice = file('alice')
+    file()
+    let lists = 0
+    github.failNext(500, {}, { message: 'boom' }, (method, path) =>
+      method === 'GET' && path.endsWith('/issues') ? ++lists === 2 : false,
+    )
+    const listing = await source.listReady({ ...READY, assignee: 'alice' })
+    expect(listing.tickets.map((ticket) => ticket.ref.id)).toEqual([alice])
+    expect(listing.diagnostics).toHaveLength(1)
+    expect(listing.diagnostics[0]).toStartWith(
+      'github tickets: could not check ready issues for a missing assignee (',
+    )
+    expect(listing.diagnostics[0]).toContain('boom')
+    expect(listing.diagnostics[0]).toEndWith('; assigned ready issues are unaffected')
+  })
+
+  test('a rate-limited check never stops listing or claiming assigned tickets', async () => {
+    let now = CLOCK_START
+    const github = new FakeGitHubIssues()
+    const source = new GitHubTicketSource({
+      transport: github.transportAs('alice'),
+      repository: github.repository,
+      lifecycle: LIFECYCLE,
+      readyLabels: [],
+      now: () => now,
+    })
+    const alice = String(github.fileIssue({ labels: ['autobuild:ready'], assignees: ['alice'] }))
+    const other = String(github.fileIssue({ labels: ['autobuild:ready'], assignees: ['alice'] }))
+    github.fileIssue({ labels: ['autobuild:ready'] })
+    let lists = 0
+    github.failNext(
+      403,
+      { 'retry-after': '120' },
+      { message: 'You have exceeded a secondary rate limit' },
+      (method, path) => (method === 'GET' && path.endsWith('/issues') ? ++lists === 2 : false),
+    )
+    const limited = `github tickets: could not check ready issues for a missing assignee (rate limited until ${new Date(now + 120_000).toISOString()}); assigned ready issues are unaffected`
+    const listing = await source.listReady({ ...READY, assignee: 'alice' })
+    expect(listing.tickets.map((ticket) => ticket.ref.id)).toEqual([alice, other])
+    expect(listing.diagnostics).toEqual([limited])
+    expect(await source.claim(alice)).toBe(true)
+    github.resetRequests()
+    now += 60_000
+    const again = await source.listReady({ ...READY, assignee: 'alice' })
+    expect(again.tickets.map((ticket) => ticket.ref.id)).toEqual([other])
+    expect(again.diagnostics).toEqual([limited])
+    expect(unassignedRequests(github)).toBe(0)
+    now += 61_000
+    const after = await source.listReady({ ...READY, assignee: 'alice' })
+    expect(after.diagnostics).toHaveLength(1)
+    expect(after.diagnostics[0]).toContain('ready but unassigned')
+    expect(unassignedRequests(github)).toBe(1)
   })
 })
 

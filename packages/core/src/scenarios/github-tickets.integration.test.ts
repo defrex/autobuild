@@ -216,11 +216,12 @@ test('two dispatchers with readyAssignee = "me" list disjoint ready sets', async
   expect(await ready('bob')).toEqual([bob])
 })
 
-test('an assignee gate adds no GitHub request to any dispatcher tick', async () => {
+test('an assignee gate adds one conditional GitHub request to each dispatcher tick', async () => {
   const userRequests = (github: FakeGitHubIssues) => github.count('user')
   // X: no gate. Y: "me" from the start. Z: "me" enabled by a reload. Y and Z
   // also hold issues their user must never claim (Z's arrives with the
-  // reload); the gate narrows the one ready read, so those cost nothing.
+  // reload); the gate narrows the ready read, so those cost nothing, and the
+  // unassigned-ready report adds one conditional read.
   const x = new FakeGitHubIssues()
   fileReady(x, 'Add rate limiting', 'alice')
   const y = new FakeGitHubIssues()
@@ -263,18 +264,27 @@ test('an assignee gate adds no GitHub request to any dispatcher tick', async () 
     const report = await h.dispatcher.tick()
     return { report, requests: github.requests.length - before }
   }
+  const unassigned = (n: number) =>
+    `github #${n}: ready but unassigned — [tickets].readyAssignee claims only issues assigned to alice; assign it to make it claimable`
 
-  // First tick: Y's gate costs what X's ungated tick costs, and Y claims only alice's issue.
+  // First tick: Y's gate costs X's ungated tick plus the unassigned-ready
+  // read, reports the unassigned issue, and Y claims only alice's issue.
   const [x1, y1] = [await tick(hx, x), await tick(hy, y)]
   expect(x1.report).toEqual({ ...emptyTickReport(), dispatched: 1 })
-  expect(y1.report).toEqual({ ...emptyTickReport(), dispatched: 1 })
-  expect(y1.requests).toBe(x1.requests)
+  expect(y1.report).toEqual({
+    ...emptyTickReport(),
+    dispatched: 1,
+    invalidTickets: 1,
+    ticketDiagnostics: [unassigned(1003)],
+  })
+  expect(y1.requests).toBe(x1.requests + 1)
   expect(y.issue(1002)?.labels).toEqual(['autobuild', 'autobuild:ready'])
   expect(y.issue(1003)?.labels).toEqual(['autobuild', 'autobuild:ready'])
 
   // Z's first tick dispatches like X's (no gate yet). Then a reload enables
   // "me" on Z while X reloads another ready-query change: each changed
-  // ready query costs the same one fresh read, and "me" costs nothing more.
+  // ready query costs the same one fresh read, and "me" adds the one
+  // unassigned-ready read.
   const z1 = await tick(hz, z)
   expect(z1.requests).toBe(x1.requests)
   zConfig.current = parseConfig(ME_TOML)
@@ -283,8 +293,11 @@ test('an assignee gate adds no GitHub request to any dispatcher tick', async () 
   )
   fileReady(z, 'For bob', 'bob')
   const [x2, z2] = [await tick(hx, x), await tick(hz, z)]
-  expect(z2.requests).toBe(x2.requests)
-  expect(z.requests.findLast((r) => r.kind === 'list-issues')?.params?.assignee).toBe('alice')
+  expect(z2.requests).toBe(x2.requests + 1)
+  expect(
+    z.requests.findLast((r) => r.kind === 'list-issues' && r.params?.assignee !== 'none')?.params
+      ?.assignee,
+  ).toBe('alice')
   expect(z.issue(1002)?.labels).toEqual(['autobuild', 'autobuild:ready'])
 
   // Warm ticks keep matching.
