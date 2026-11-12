@@ -756,7 +756,7 @@ documentSchema(profileSchema.shape.label, {
   constraints: 'Nonblank; unique across profiles after trimming and case folding.',
 })
 documentSchema(profileSchema.shape.roles, {
-  constraints: 'An entry named default is refused.',
+  constraints: 'An entry named default is refused',
 })
 documentSchema(profileSchema, {
   description:

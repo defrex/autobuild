@@ -884,7 +884,9 @@ test('startup warnings and the latest scan queue diagnostics reach both status p
       roleWarnings: [warning],
     },
   })
-  const scan = (dependencyDiagnostics: string[]) =>
+  const conflict =
+    'ticket T-7: labels "budget" and "deep" select more than one profile ("cheap", "deep") — remove all but one profile label to make it claimable'
+  const scan = (dependencyDiagnostics: string[], ticketDiagnostics: string[] = []) =>
     store.appendRepo(REPO, {
       actor: DISPATCHER,
       type: 'dispatcher.ticket-scan-completed',
@@ -894,23 +896,25 @@ test('startup warnings and the latest scan queue diagnostics reach both status p
         criteriaFingerprint: 'c',
         mode: 'admission',
         queued: 1,
-        invalidTickets: 0,
-        ticketDiagnostics: [],
+        invalidTickets: ticketDiagnostics.length,
+        ticketDiagnostics,
         dependencyBlocked: 1,
         dependencyDiagnostics,
         creationWithheld: 0,
         creationDiagnostics: [],
       },
     })
-  await scan(['ticket OLD: superseded'])
-  await scan([foreign])
+  await scan(['ticket OLD: superseded'], ['ticket OLDER: superseded'])
+  await scan([foreign], [conflict])
 
   const projected = projectRepositoryStatus(REPO, await store.getRepoEvents(REPO))
   expect(projected.warningLines).toEqual([warning])
   expect(projected.dependencyDiagnostics).toEqual([foreign])
+  expect(projected.ticketDiagnostics).toEqual([conflict])
   const lines = renderRepositoryStatus(projected)
   expect(lines).toContain(warning)
   expect(lines).toContain(`queue: ${foreign}`)
+  expect(lines).toContain(`queue: ${conflict}`)
   expect(lines.join('\n')).not.toContain('superseded')
 
   const opts = options(store, { json: true })
@@ -918,4 +922,5 @@ test('startup warnings and the latest scan queue diagnostics reach both status p
   const json = JSON.parse(opts.output.join('\n'))
   expect(json.warningLines).toEqual([warning])
   expect(json.dependencyDiagnostics).toEqual([foreign])
+  expect(json.ticketDiagnostics).toEqual([conflict])
 })

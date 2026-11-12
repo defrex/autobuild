@@ -63,6 +63,16 @@ sessionBudgetSeconds = 3600
 - **Capacity** bounds concurrent work.
 - **Policy limits** bound review rounds, retries and session budgets, and decide when automation stops for attention.
 
+Roles apply to every build. A [profile](configuration.md#profiles) gives the builds of tickets carrying its label their own overrides, and everything it leaves out still comes from `[roles]`:
+
+```toml
+[profiles.deep]
+label = "deep"
+
+[profiles.deep.roles.implement]
+model = "claude-opus-5-5"
+```
+
 
 ## Accounts
 

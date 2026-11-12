@@ -4,7 +4,7 @@
   "title": "Agent runtimes",
   "group": "reference",
   "description": "Choose Claude Code, Codex, or Pi, route producer and reviewer models, and implement a runtime adapter.",
-  "textHash": "65b79e3d1894ce1b3b917788b3f3a60cda03336a384b0a9b3d248ed1276baa2c",
+  "textHash": "bf933cf4c274e2bc0558a3b1754934dd5bb15ce0d6dfc424f51b5e18900b23be",
   "headings": [
     "Responsibility",
     "Shipped adapters",
