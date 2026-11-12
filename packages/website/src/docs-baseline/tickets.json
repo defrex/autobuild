@@ -4,7 +4,7 @@
   "title": "Tickets and specs",
   "group": "concepts",
   "description": "How your operator agent writes buildable specs, chooses ticket kinds, and grooms work for the ready gate.",
-  "textHash": "e879f4ca29030b47dface30528265aa39bd70445b65989588301d660a8ba8bbc",
+  "textHash": "39c52e6b81f4893329b8c8fefc00247286720e9e1379cc55a3f7a34e862f6cf0",
   "headings": [
     "Choose a source",
     "Groom a buildable spec",
@@ -16,6 +16,7 @@
     "[tickets]\nsource = \"file\"\nreadyState = \"ready\"",
     "bun ab ticket create \"Close stale sandboxes\" --body spec.md --issues 824,820:refs",
     "bun ab ticket update AUT-12 --priority urgent",
+    "bun ab ticket update 412 --assignees octocat",
     "bun ab ticket move AUT-12 --role backlog",
     "bun ab answer <slug> --revise-spec-from-ticket"
   ]
