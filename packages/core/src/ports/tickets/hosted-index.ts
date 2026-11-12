@@ -41,6 +41,7 @@ export {
   urgentFirst,
   type TicketPriority,
 } from './priority'
+export { TicketAssigneesUnsupported } from './assignees'
 
 export {
   hostedTicketPolicySchema,

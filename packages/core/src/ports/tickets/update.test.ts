@@ -55,3 +55,12 @@ test('metadata-only updates retain null clears and validate kind and nonblank id
   expect(() => validateTicketUpdate({ target: '  ' })).toThrow('target must not be blank')
   expect(() => validateTicketUpdate({ kind: 'other' } as unknown as TicketUpdate)).toThrow('kind')
 })
+
+test('assignees count as a field and are copied', () => {
+  const assignees = ['alice', 'me']
+  const validated = validateTicketUpdate({ assignees })
+  expect(validated).toEqual({ assignees: ['alice', 'me'] })
+  expect(validated.assignees).not.toBe(assignees)
+  expect(validateTicketUpdate({ assignees: [] })).toEqual({ assignees: [] })
+  expect(() => validateTicketUpdate({ assignees: [''] })).toThrow('assignee must not be blank')
+})

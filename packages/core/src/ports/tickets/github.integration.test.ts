@@ -1711,6 +1711,211 @@ describe('github ready assignee', () => {
   })
 })
 
+describe('github assignees', () => {
+  function assigneeSetup(identity: string | null = 'alice') {
+    const github = new FakeGitHubIssues()
+    const bodies: Array<{ method: string; path: string; body: Record<string, unknown> }> = []
+    const inner = github.transportAs(identity)
+    const transport: GitHubRequest = (method, path, opts = {}) => {
+      if (method !== 'GET' && opts.body !== undefined)
+        bodies.push({ method, path, body: opts.body as Record<string, unknown> })
+      return inner(method, path, opts)
+    }
+    const source = new GitHubTicketSource({
+      transport,
+      repository: github.repository,
+      lifecycle: LIFECYCLE,
+      readyLabels: [],
+    })
+    const issueWrites = () =>
+      bodies.filter((write) => /\/issues(\/\d+)?$/.test(write.path)).map((write) => write.body)
+    return { github, source, issueWrites }
+  }
+
+  test('declares the capability and reads assignees set on GitHub, outside the revision', async () => {
+    const { github, source } = assigneeSetup()
+    expect(source.assignees).toBe(true)
+    const id = await created(source, 'ready')
+    const before = (await source.get(id))!
+    expect(before.assignees).toEqual([])
+    github.uiAssign(Number(id), 'carol', 'dave')
+    const after = (await source.get(id))!
+    expect(after.assignees).toEqual(['carol', 'dave'])
+    expect(after.revision).toBe(before.revision)
+    expect((await source.listAll()).tickets[0]!.assignees).toEqual(['carol', 'dave'])
+  })
+
+  test('a create naming "me" assigns the credential owner', async () => {
+    const { github, source, issueWrites } = assigneeSetup('alice')
+    github.assignable.add('alice')
+    const ticket = await source.create({ title: 't', body: 'b', assignees: ['me'] })
+    expect(ticket.assignees).toEqual(['alice'])
+    expect(issueWrites()[0]!.assignees).toEqual(['alice'])
+    expect(github.count('user')).toBe(1)
+  })
+
+  test('a create without assignees sends none', async () => {
+    const { github, source, issueWrites } = assigneeSetup()
+    const ticket = await source.create({ title: 't', body: 'b' })
+    expect(ticket.assignees).toEqual([])
+    expect(issueWrites()[0]).not.toHaveProperty('assignees')
+    expect(github.count('user')).toBe(0)
+    expect(github.count('assignee-check')).toBe(0)
+  })
+
+  test('a user who cannot be assigned fails the create before any write', async () => {
+    const { github, source } = assigneeSetup()
+    await expect(source.create({ title: 't', body: 'b', assignees: ['ghost'] })).rejects.toThrow(
+      '"ghost" cannot be assigned issues in acme/widgets — nothing was written',
+    )
+    expect(github.count('create-issue')).toBe(0)
+    expect(github.issueCount()).toBe(0)
+  })
+
+  test('"me" with a credential that has no user fails the create before any write', async () => {
+    const { github, source } = assigneeSetup(null)
+    await expect(source.create({ title: 't', body: 'b', assignees: ['me'] })).rejects.toThrow(
+      'the GitHub credential has no user',
+    )
+    expect(github.count('create-issue')).toBe(0)
+  })
+
+  test('malformed or too many entries are refused before any request', async () => {
+    const { github, source } = assigneeSetup()
+    await expect(source.create({ title: 't', body: 'b', assignees: ['a@b.co'] })).rejects.toThrow(
+      'assignee "a@b.co" must be "me" or a GitHub username',
+    )
+    const eleven = Array.from({ length: 11 }, (_, i) => `user${i}`)
+    await expect(source.create({ title: 't', body: 'b', assignees: eleven })).rejects.toThrow(
+      'at most 10 assignees',
+    )
+    expect(github.requests).toHaveLength(0)
+  })
+
+  test('a create whose assignee GitHub dropped fails naming the unassigned issue', async () => {
+    const { github, source } = assigneeSetup()
+    github.assignable.add('bob')
+    github.dropAssignees = true
+    await expect(source.create({ title: 't', body: 'b', assignees: ['bob'] })).rejects.toThrow(
+      /#\d+ \(.*\) was created but is unassigned — GitHub dropped assignee\(s\) bob/,
+    )
+  })
+
+  test('a keyed retry after a dropped assignee adopts the issue and assigns it', async () => {
+    const { github, source } = assigneeSetup()
+    github.assignable.add('bob')
+    github.dropAssignees = true
+    const key = { idempotencyKey: 'k-assign', idempotencyKeyReservedAt: new Date().toISOString() }
+    const draft = { title: 't', body: 'b', assignees: ['bob'] }
+    const failure = await source.create(draft, key).catch((error: Error) => error.message)
+    expect(failure).toContain('unassigned')
+    expect(github.issueCount()).toBe(1)
+    github.dropAssignees = false
+    const retry = await source.create(draft, key)
+    expect(failure).toContain(`#${retry.ref.id} `)
+    expect(retry.assignees).toEqual(['bob'])
+    expect(github.issueCount()).toBe(1)
+  })
+
+  test('a keyed retry of a completed create adds a missing assignee and keeps the rest', async () => {
+    const { github, source } = assigneeSetup()
+    github.assignable.add('bob')
+    github.assignable.add('carol')
+    const key = { idempotencyKey: 'k-done', idempotencyKeyReservedAt: new Date().toISOString() }
+    const first = await source.create({ title: 't', body: 'b' }, key)
+    github.uiAssign(Number(first.ref.id), 'carol')
+    const retry = await source.create({ title: 't', body: 'b', assignees: ['bob'] }, key)
+    expect(retry.ref.id).toBe(first.ref.id)
+    expect(retry.assignees).toEqual(['carol', 'bob'])
+    expect(github.issueCount()).toBe(1)
+  })
+
+  test('update replaces the set, [] clears it, and omission leaves it alone', async () => {
+    const { github, source, issueWrites } = assigneeSetup('alice')
+    github.assignable.add('alice')
+    github.assignable.add('bob')
+    const id = await created(source, 'ready')
+    await source.update(id, { assignees: ['bob', 'me'] })
+    expect((await source.get(id))!.assignees).toEqual(['bob', 'alice'])
+    await source.update(id, { title: 'Renamed' })
+    expect(issueWrites().at(-1)).not.toHaveProperty('assignees')
+    expect((await source.get(id))!.assignees).toEqual(['bob', 'alice'])
+    await source.update(id, { assignees: [] })
+    expect((await source.get(id))!.assignees).toEqual([])
+  })
+
+  test('an update naming an unassignable user writes nothing', async () => {
+    const { github, source } = assigneeSetup()
+    const id = await created(source, 'ready')
+    github.resetRequests()
+    await expect(source.update(id, { title: 'New', assignees: ['ghost'] })).rejects.toThrow(
+      '"ghost" cannot be assigned issues in acme/widgets — nothing was written',
+    )
+    expect(github.count('patch-issue')).toBe(0)
+    expect((await source.get(id))!.title).toBe('In ready')
+  })
+
+  test('an update whose assignees GitHub dropped fails', async () => {
+    const { github, source } = assigneeSetup()
+    github.assignable.add('bob')
+    const id = await created(source, 'ready')
+    github.dropAssignees = true
+    await expect(source.update(id, { assignees: ['bob'] })).rejects.toThrow(
+      'its assignees were not applied',
+    )
+  })
+
+  test('the assignable check is memoized per login', async () => {
+    const { github, source } = assigneeSetup()
+    github.assignable.add('bob')
+    await source.create({ title: 'a', body: 'b', assignees: ['bob'] })
+    await source.create({ title: 'c', body: 'd', assignees: ['Bob'] })
+    expect(github.count('assignee-check')).toBe(1)
+  })
+
+  test('reading assignees adds no request to get or the ready listing', async () => {
+    const plain = setup()
+    const assigned = assigneeSetup()
+    assigned.github.assignable.add('bob')
+    const a = await created(plain.source, 'ready')
+    const b = (
+      await assigned.source.create(
+        { title: 'In ready', body: 'Body.', assignees: ['bob'] },
+        {
+          state: 'ready',
+        },
+      )
+    ).ref.id
+    plain.github.resetRequests()
+    assigned.github.resetRequests()
+    await plain.source.get(a)
+    await assigned.source.get(b)
+    await plain.source.listReady({ state: 'ready', labels: [] })
+    await assigned.source.listReady({ state: 'ready', labels: [] })
+    expect(assigned.github.requests.map((r) => r.kind)).toEqual(
+      plain.github.requests.map((r) => r.kind),
+    )
+  })
+
+  test('createAssignee refusals and descriptions name the key', async () => {
+    const { github, source } = assigneeSetup('alice')
+    expect(source.createAssigneeRefusal('me')).toContain(
+      '[tickets].createAssignee = "me" but the GitHub credential owner could not be resolved',
+    )
+    expect(source.createAssigneeRefusal('a@b.co')).toContain('[tickets].createAssignee must be')
+    github.assignable.add('alice')
+    expect(await source.describeCreateAssignee('me')).toBe('me → @alice')
+    expect(source.createAssigneeRefusal('me')).toBeUndefined()
+    await expect(source.describeCreateAssignee('ghost')).rejects.toThrow(
+      '[tickets].createAssignee "ghost" cannot be assigned issues in acme/widgets',
+    )
+    const noUser = assigneeSetup(null)
+    await expect(noUser.source.describeCreateAssignee('me')).rejects.toThrow(
+      '[tickets].createAssignee = "me" but the GitHub credential has no user',
+    )
+  })
+})
+
 describe('github integration tree', () => {
   function tree(opts: { subIssuePageCap?: number } = {}) {
     const github = new FakeGitHubIssues(opts)
