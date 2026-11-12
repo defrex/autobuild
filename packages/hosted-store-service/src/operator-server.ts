@@ -1,6 +1,7 @@
 import { AccessError } from '@defrex/autobuild-postgres-store/organizations'
 import { withRepositoryReads } from '@defrex/autobuild-postgres-store/request-context'
 import {
+  TicketAssigneesUnsupported,
   TicketIssueLinksUnsupported,
   TicketPriorityUnsupported,
   TicketRevisionConflict,
@@ -699,6 +700,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             return failure(409, 'refusal', error.message, { code: 'issue-links-unsupported' })
           if (error instanceof TicketPriorityUnsupported)
             return failure(409, 'refusal', error.message, { code: 'priority-unsupported' })
+          if (error instanceof TicketAssigneesUnsupported)
+            return failure(409, 'refusal', error.message, { code: 'assignees-unsupported' })
           if (error instanceof TicketOperationError) {
             return failure(
               error.code === 'not-found' ? 404 : 409,

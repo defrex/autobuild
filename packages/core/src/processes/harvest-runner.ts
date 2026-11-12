@@ -1,4 +1,5 @@
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
+import { creationAssignees } from '../ports/tickets/assignees'
 import {
   guardNativeHandle,
   nativeSessionHandleSchema,
@@ -1434,6 +1435,9 @@ export class HarvestRunner {
             reservations.set(proposalKey, reservation)
           }
           const body = renderHarvestProposal(proposal, observations)
+          // A configured createAssignee (`me` is this dispatcher's credential
+          // owner) assigns the proposal; none sends no assignee.
+          const assignees = creationAssignees(config.tickets)
           // Harvest proposals are always normal priority; grooming may mark one urgent.
           const ticket = (
             await tickets.create(
@@ -1442,6 +1446,7 @@ export class HarvestRunner {
                 body,
                 labels: [HARVEST_PROPOSAL_LABEL],
                 ...(blockers.blockedBy.length > 0 ? { blockedBy: blockers.blockedBy } : {}),
+                ...(assignees !== undefined ? { assignees } : {}),
               },
               {
                 state: defaultProposalState(config),

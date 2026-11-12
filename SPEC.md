@@ -2661,6 +2661,27 @@ create` and `update` take `--priority urgent|normal`; operator and MCP ticket
 requests take `priority`; JSON ticket output always names it. Harvest files
 every proposal normal; grooming marks one urgent.
 
+**Ticket assignees.** A ticket may carry the usernames it is assigned to.
+Sources declare support with the `assignees` capability; only the GitHub source
+does, reading each issue's assignees (set on GitHub or through Autobuild alike)
+as an `assignees` array that is empty when unassigned and outside the ticket's
+revision. A write names assignees as usernames or `me`, the owner of the
+source's credential; create sets them and update replaces the whole set, an
+empty set clearing it. The source checks every user can be assigned before
+anything is written, and a write the provider accepts without the requested
+assignees fails rather than reporting success; a retried keyed create that
+adopts the existing ticket assigns it. `[tickets].createAssignee` names a
+default for every ticket Autobuild creates (`ab ticket create`, operator
+`tickets.create` and harvest proposals) that names no assignees of its own; the
+caller applies it, so a harvest proposal filed under `"me"` belongs to the
+owner of the filing dispatcher's credential, resolved at dispatcher startup and
+never during a tick. File, hosted, Linear and plugin sources without the
+capability refuse any write naming assignees, including an empty set, and a
+configured `createAssignee`, with an error naming the source, before anything
+is written; their tickets carry no `assignees` field. `ab ticket create` and
+`update` take `--assignees a,b`; operator and MCP ticket requests take
+`assignees`.
+
 A build freezes its ticket's links into `build.created` when it claims the
 ticket, from the same sample as the body. Later ticket edits and spec revisions
 never change them. An agent in the build may downgrade one linked `closes`
@@ -4662,7 +4683,8 @@ reapply the intended changes before retrying; conflicts are never merged.
 File and Linear revisions fingerprint kind, target, title, body, canonical label/blocker sets,
 state and urgent priority; file revisions also cover nonempty issue links. GitHub revisions
 fingerprint kind, target, title, body, canonical label/blocker sets, state and issue links,
-including the ticket's own issue; GitHub tickets carry no comments. Reverting
+including the ticket's own issue; GitHub tickets carry no comments, and assignees
+are not part of a GitHub revision. Reverting
 identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
 Direct file edits and state-directory moves change revisions. File revisions also
