@@ -2195,6 +2195,45 @@ deterministic fail-safe.
   tuple is recorded on `session.started`; fallback starts cite the preceding target and
   verbatim error, while exhausted `phase.failed`/`harvest.failed` facts carry
   the complete ordered attempt list.
+- **Role profiles (§16.1):** `[roles]` is the repository's default for every
+  build. A repository may also declare named `[profiles.<name>]` tables, each
+  with exactly one ticket `label` and any number of
+  `[profiles.<name>.roles.<role>]` entries for any role name, including
+  verify and finalize step names and roles `[roles]` does not declare. An
+  entry accepts the `[roles.<role>]` fields. For a build with that profile,
+  an entry's declared fields overlay `[roles.<role>]`, and every omitted field
+  takes the value the repository roles would give it: `[roles.<role>]`, then
+  `[roles.default]`. A declared `alternates` list, including `[]`, replaces the
+  inherited list; an omitted one inherits it, and each alternate overlays the
+  profile-adjusted primary. Key selection walks the step or phase name, then
+  any deprecated alias, against profile entries and `[roles]` together, so a
+  profile entry on a key wins where a `[roles]` entry on that key would. A
+  profile entry named `default` is refused; so are duplicate labels (trimmed,
+  case-insensitive), a missing or blank label, and an entry whose effective
+  runtime, model, args or account would be refused for a `[roles]` entry. The
+  eager resolver validates every profile with the roles, so dispatch startup,
+  `ab init --validate` and a live reload refuse the same problems.
+
+  The profile is **fixed when the dispatcher claims the ticket**: the label
+  match runs over the labels the ready listing already returned, and the
+  selected name is recorded on `build.created.profile`. Later relabelling
+  never changes it. A node and each child select from their own ticket's
+  labels. A ready ticket carrying two profiles' labels is not claimed; the
+  scan reports it in the persisted ticket diagnostics until at most one
+  profile label remains. A ticket never supplies a model, runtime or argument
+  itself.
+
+  The profile's **contents** are read from the current configuration at each
+  session boundary, like `[roles]`, so an edit reaches the in-flight builds that
+  selected the profile at their next session and no other build. Every agent
+  session of the build resolves through it — plan, plan review, implement,
+  code review, agent verify and finalize steps, and reconcile — and
+  `session.started.profile` records `{ name, configured }`. When a reload
+  removes the profile, later sessions use the repository roles with
+  `configured: false`, and `ab build status` says the recorded profile is no
+  longer configured. A resumed session keeps its recorded target as before.
+  Sessions outside a build (`slug`, `upgrade`, `harvest`, `harvest-review`)
+  never use a profile.
 - **Transcripts come back through the interface**, not scraped from disk, so
   every adapter must produce one whenever its owning runner reaches the session
   end boundary, including turns rejected by a provider after a handle exists.
@@ -4306,6 +4345,11 @@ runtime = "pi"
 model = "moonshotai/kimi-k3"
 sessionBudgetSeconds = 7200       # optional role override
 
+[profiles.deep]                 # selected by a ticket labelled "deep" (§9)
+label = "deep"
+[profiles.deep.roles.implement] # overrides only the fields it names
+args = ["--effort", "high"]
+
 [policy]
 upgradeDrainSeconds = 900         # local generation drain deadline, hot-reloaded
 dispatchLeaseTimeoutSeconds = 60  # repository dispatch lease lifetime without renewal
@@ -4363,7 +4407,7 @@ decide where a build's effective configuration is composed from:
 | Class | Sections | Source at deposit |
 |---|---|---|
 | Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The execution checkout at each verification cycle; launch deposits use the branch head or recorded workspace base until a cycle capture exists. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
-| Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
+| Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`), `[profiles]` (label-selected role overlays) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
 | Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`, `merge`, `upgrade` | The dispatcher's live snapshot; the build runner never interprets them. |
 
 Dispatcher lease sweeps may reuse parsed effective-config pins in a disposable

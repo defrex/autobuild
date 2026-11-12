@@ -185,6 +185,9 @@ export interface BuildDetail extends BuildSummary {
   issueLinks?: BuildState['issueLinks']
   /** Present with `issueLinks`: whether finalize sealed them for the PR. */
   issueLinksSealed?: boolean
+  /** The role profile frozen at claim; `configured: false` when the latest
+   * session found it removed and used the repository roles. Omitted when none. */
+  profile?: { name: string; configured: boolean }
   suspendedSessions: OpenSession[]
   sessionTotals: BuildState['sessions']['totals']
   openSessions: StatusOpenSession[]
@@ -412,6 +415,7 @@ export function detailFromFacts(
           issueLinksSealed: state.issueLinksSealedSeq !== undefined,
         }
       : {}),
+    ...(state.profile !== undefined ? { profile: { ...state.profile } } : {}),
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
@@ -637,6 +641,10 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     const sealed = d.issueLinksSealed === true ? ' (sealed)' : ''
     lines.push(`  issues:   ${safeStatusText(describeIssueLinks(d.issueLinks))}${sealed}`)
   }
+  if (d.profile !== undefined)
+    lines.push(
+      `  profile:  ${safeStatusText(d.profile.name)}${d.profile.configured ? '' : " (no longer configured — sessions use the repository's roles)"}`,
+    )
   if (d.target)
     lines.push(
       `  ${d.kind ?? 'work'} · target ${d.target}${d.integration ? ` · ${d.integration}` : ''}`,

@@ -187,6 +187,7 @@ import { recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import type { AutoMergeDefaultFact } from '../kernel/auto-merge-default'
 import { decideNextFromFacts, landingRestackDue } from '../kernel/engine'
 import { composeBuildConfig } from '../config/live'
+import { profileConflictDiagnostic, selectProfile } from '../config/profiles'
 import { BUILD_EFFECTIVE_CONFIG_ARTIFACT, parseEffectiveBuildConfig } from './build-execution-state'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
@@ -1484,9 +1485,15 @@ export class Dispatcher {
         if (record.ticket && digest.terminal === undefined) refs.push(record.ticket)
       }
       const activeTicketIds = await this.activeTicketIdentities(refs, listing.tickets)
+      const conflicts = this.profileConflicts(
+        listing.tickets.filter(
+          (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
+        ),
+      )
       report.queued = listing.tickets.filter(
         (ticket) =>
           !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`) &&
+          !conflicts.tickets.has(ticket) &&
           !Object.values(this.store.repositoryFacts().preparation).some((attempt) => {
             const ref = resolveTicketRef(
               this.store.repositoryFacts().ticketMigrations,
@@ -1497,8 +1504,8 @@ export class Dispatcher {
             return ref.source === ticket.ref.source && ref.id === ticket.ref.id
           }),
       ).length
-      report.invalidTickets = listing.diagnostics.length
-      report.ticketDiagnostics = [...listing.diagnostics]
+      report.invalidTickets = listing.diagnostics.length + conflicts.diagnostics.length
+      report.ticketDiagnostics = [...listing.diagnostics, ...conflicts.diagnostics]
       report.dependencyBlocked = 0
       report.dependencyDiagnostics = []
       report.creationWithheld = 0
@@ -4681,11 +4688,36 @@ export class Dispatcher {
   /** The claim-time `build.created` payload. Assets and issue links are
    * omitted when the ticket had none, so such a build's log is exactly what it
    * was before. */
+  /** Ready tickets whose labels select two or more profiles (SPEC §9). They
+   * are never claimed; each gets a ticket diagnostic until relabelled. Pure
+   * over the listing the scan already holds. */
+  private profileConflicts(tickets: readonly Ticket[]): {
+    tickets: Set<Ticket>
+    diagnostics: string[]
+  } {
+    const conflicting = new Set<Ticket>()
+    const diagnostics: string[] = []
+    for (const ticket of tickets) {
+      const selection = selectProfile(this.deps.config.profiles, ticket.labels)
+      if (selection.kind !== 'conflict') continue
+      conflicting.add(ticket)
+      diagnostics.push(profileConflictDiagnostic(ticket.ref.id, selection.matches))
+    }
+    return { tickets: conflicting, diagnostics }
+  }
+
+  /** The profile a ticket's labels select at claim, if exactly one. */
+  private selectedProfile(ticket: Ticket): { profile: string } | Record<string, never> {
+    const selection = selectProfile(this.deps.config.profiles, ticket.labels)
+    return selection.kind === 'selected' ? { profile: selection.name } : {}
+  }
+
   private buildCreatedPayload(
     ticket: TicketRef,
     repo: string,
     seed:
       | {
+          profile?: string
           autoMergeUser?: string
           autoMergeDefaultSeq?: number
           assets?: PinnedAsset[]
@@ -4712,6 +4744,7 @@ export class Dispatcher {
       ...(seed?.issueLinks !== undefined && seed.issueLinks.length > 0
         ? { issueLinks: seed.issueLinks.map(({ issue, intent }) => ({ issue, intent })) }
         : {}),
+      ...(seed?.profile !== undefined ? { profile: seed.profile } : {}),
     }
   }
 
@@ -4781,6 +4814,7 @@ export class Dispatcher {
             ...(seed?.ticket.issueLinks !== undefined
               ? { issueLinks: seed.ticket.issueLinks }
               : {}),
+            ...(seed !== undefined ? this.selectedProfile(seed.ticket) : {}),
           }),
         })
         events = (await readBuildFacts(store, record.slug)).value
@@ -5669,9 +5703,12 @@ export class Dispatcher {
     )
     // Urgent first, each class in source order (stable). Every gate below is
     // unchanged; a source without the priority capability is all normal.
-    const ready = this.deps.tickets.priority ? urgentFirst(eligible) : eligible
-    report.invalidTickets += listing.diagnostics.length
-    report.ticketDiagnostics.push(...listing.diagnostics)
+    // A ticket whose labels select two profiles is never claimed (SPEC §9).
+    const conflicts = this.profileConflicts(eligible)
+    const claimable = eligible.filter((ticket) => !conflicts.tickets.has(ticket))
+    const ready = this.deps.tickets.priority ? urgentFirst(claimable) : claimable
+    report.invalidTickets += listing.diagnostics.length + conflicts.diagnostics.length
+    report.ticketDiagnostics.push(...listing.diagnostics, ...conflicts.diagnostics)
     report.queued = ready.length
     const withheld = new Set<string>()
     for (const ticket of ready) {
@@ -6022,6 +6059,8 @@ export class Dispatcher {
           // Frozen from the same claimed ticket sample as the body (SPEC
           // "Forge issue links"); later ticket edits never reach this build.
           ...(ticket.issueLinks !== undefined ? { issueLinks: ticket.issueLinks } : {}),
+          // Fixed at claim from the same sample: relabelling never changes it.
+          ...this.selectedProfile(ticket),
         }
         // `build.created` rides with the record so the pinned assets and the
         // record exist together or not at all.
