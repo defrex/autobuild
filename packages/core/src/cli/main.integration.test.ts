@@ -83,10 +83,10 @@ describe('runCli — routing and exit codes', () => {
     expect(await runCli(['help', 'ticket'], d)).toBe(0)
     const help = d.out.join('\n')
     for (const form of [
-      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--kind work|node] [--target <id> | --no-target] [--json]',
+      'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--issues N[:refs],...] [--priority urgent|normal] [--assignees a,b] [--kind work|node] [--target <id> | --no-target] [--json]',
       'ab ticket tree [--json]',
       'ab ticket edit <id>',
-      'ab ticket update <id> [--kind work|node] [--target <id> | --no-target] [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--priority urgent|normal] [--expected-revision <opaque>] [--json]',
+      'ab ticket update <id> [--kind work|node] [--target <id> | --no-target] [--title <title>] [--body <file>] [--labels a,b] [--issues N[:refs],...] [--priority urgent|normal] [--assignees a,b] [--expected-revision <opaque>] [--json]',
       'ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
       'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
       'ab ticket list [--state <state>] [--labels a,b] [--json]',
