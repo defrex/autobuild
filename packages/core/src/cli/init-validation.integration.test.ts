@@ -1589,6 +1589,40 @@ createAssignee = "${assignee}"
       )
     })
   })
+  for (const [problem, profile, expected] of [
+    [
+      'duplicate profile labels',
+      '[profiles.deep]\nlabel = "deep"\n[profiles.thorough]\nlabel = "DEEP"\n',
+      'profiles "deep" and "thorough" both declare label "DEEP"',
+    ],
+    [
+      'a profile model the runtime refuses',
+      '[profiles.deep]\nlabel = "deep"\n[profiles.deep.roles.implement]\nmodel = "claude-opus-5-5"\n',
+      '[profiles.deep.roles.implement] resolves runtime "fake" with model "claude-opus-5-5"',
+    ],
+  ] as const) {
+    test(`reports ${problem}`, async () => {
+      const { repo, config } = await committedLocalRepo('ab-profile-validate-')
+      await writeFile(join(repo, 'autobuild.toml'), `${config}${profile}`)
+      for (const command of [
+        ['git', 'add', 'autobuild.toml'],
+        ['git', 'commit', '-m', 'profile'],
+      ]) {
+        const result = await spawnExec(command, { cwd: repo })
+        expect(result.exitCode, result.stderr).toBe(0)
+      }
+      const output: string[] = []
+      const report = await validateInitReadiness({
+        targetRepo: repo,
+        env: {},
+        exec: spawnExec,
+        runtimes: usableRuntime,
+        stdout: (line) => output.push(line),
+      }).catch((error: Error) => ({ exitCode: 1, error: error.message }))
+      expect(report.exitCode).not.toBe(0)
+      expect(`${output.join('\n')}\n${'error' in report ? report.error : ''}`).toContain(expected)
+    })
+  }
 
   test('reports an absent local Store without creating ignored repository state', async () => {
     const { repo } = await committedLocalRepo('ab-local-absent-')

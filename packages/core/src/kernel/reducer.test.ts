@@ -2381,6 +2381,60 @@ test('cancellation fences the verifier terminal before and after session end', (
   ).toContain('cancelled')
 })
 
+describe('role profile (SPEC §9)', () => {
+  const created = (profile?: string) =>
+    ev('build.created', {
+      ticket: { source: 'file', id: 'file-1' },
+      repo: 'defrex/app',
+      baseBranch: 'main',
+      ...(profile !== undefined ? { profile } : {}),
+    })
+  const started = (session: string, profile?: { name: string; configured: boolean }) =>
+    ev('session.started', {
+      session,
+      role: 'plan',
+      runner: 'claude',
+      phase: 'plan',
+      round: 1,
+      ...(profile !== undefined ? { profile } : {}),
+    })
+
+  test('is absent without a profile and frozen from build.created', () => {
+    expect(reduceBuild(toLog([created()]))).not.toHaveProperty('profile')
+    expect(reduceBuild(toLog([created('deep')])).profile).toEqual({
+      name: 'deep',
+      configured: true,
+    })
+  })
+
+  test('the latest session start records whether the profile is still configured', () => {
+    const removed = reduceBuild(
+      toLog([created('deep'), started('s_1', { name: 'deep', configured: false })]),
+    )
+    expect(removed.profile).toEqual({ name: 'deep', configured: false })
+    const restored = reduceBuild(
+      toLog([
+        created('deep'),
+        started('s_1', { name: 'deep', configured: false }),
+        started('s_2', { name: 'deep', configured: true }),
+      ]),
+    )
+    expect(restored.profile).toEqual({ name: 'deep', configured: true })
+  })
+
+  test('a session start without a profile observation, or for another name, changes nothing', () => {
+    const state = reduceBuild(
+      toLog([
+        created('deep'),
+        started('s_1'),
+        started('s_2', { name: 'cheap', configured: false }),
+      ]),
+    )
+    expect(state.profile).toEqual({ name: 'deep', configured: true })
+    expect(reduceBuild(toLog([created(), started('s_1')]))).not.toHaveProperty('profile')
+  })
+})
+
 describe('issueLinks (SPEC "Forge issue links")', () => {
   const created = (issueLinks?: { issue: number; intent: 'closes' | 'refs' }[]) =>
     ev('build.created', {

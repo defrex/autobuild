@@ -28,7 +28,8 @@ import {
 } from '../ports/workspace/provider-capabilities'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
-import { effectiveRuntimeReferences } from './roles'
+import { displayName, effectiveRuntimeReferences, RESERVED_ROLE } from './roles'
+import { normalizeProfileLabel, profileRoles } from './profiles'
 import {
   createAssigneeUnsupported,
   GITHUB_CREATE_ASSIGNEE,
@@ -729,6 +730,41 @@ documentSchema(roleSchema.shape.alternates, {
 })
 export type RoleConfig = z.infer<typeof roleSchema>
 
+// ── [profiles] ───────────────────────────────────────────────────────────────
+//
+// Open map: profile → one ticket label plus role entries (SPEC §9). A build
+// whose ticket carries the label at claim resolves its roles through this
+// overlay. Label uniqueness, nonblank labels, the refused `default` entry and
+// overlaid account selection are cross-validated in configSchema below;
+// runtime and model compatibility is checked by the eager resolver.
+
+const profileRoleSchema = roleSchema.extend({})
+documentSchema(profileRoleSchema, {
+  description:
+    "Role override for builds whose ticket carries the profile's label. Omitted fields inherit `[roles.<role>]`, then `[roles.default]`; a declared alternates list, including [], replaces the inherited list.",
+})
+
+const profileSchema = z.strictObject({
+  label: z.string(),
+  roles: openMap('[profiles.<name>.roles]', profileRoleSchema),
+})
+documentFields(profileSchema, {
+  label:
+    "Ticket label that selects this profile, matched case-insensitively after trimming. A ticket carrying two profiles' labels is not claimed.",
+  roles:
+    'Role entries this profile overrides. Any role name is accepted except the reserved default.',
+})
+documentSchema(profileSchema.shape.label, {
+  constraints: 'Nonblank; unique across profiles after trimming and case folding.',
+})
+documentSchema(profileSchema.shape.roles, {
+  constraints: 'An entry named default is refused',
+})
+documentSchema(profileSchema, {
+  description:
+    "Named role profile. The build's profile is fixed when its ticket is claimed; the profile's contents are read at each session boundary.",
+})
+
 // ── [policy] ─────────────────────────────────────────────────────────────────
 
 const DISPATCH_LEASE_PAIR_MESSAGE =
@@ -1225,6 +1261,7 @@ export const configRootSchema = z.strictObject({
   // therefore include the complete materialized runtime list in its diagnostic.
   accounts: openMap('[accounts]', accountSchema).default({}),
   roles: openMap('[roles]', roleSchema),
+  profiles: openMap('[profiles]', profileSchema),
   policy: policySchema.prefault({}),
   orchestrator: orchestratorSchema.prefault({}),
   // An absent [tickets] table must NOT silently default past the mandatory
@@ -1261,6 +1298,8 @@ documentFields(configRootSchema, {
   accounts:
     'Named Claude subscription, Kimi Code, or ChatGPT subscription billing accounts. Descriptors contain credential variable names only.',
   roles: 'Named agent roles. The reserved default role provides inherited runtime axes.',
+  profiles:
+    'Named role profiles selected by ticket label. A profile overrides only the role fields it declares, for the builds that selected it.',
   policy: 'Lifecycle budgets, retries, convergence and harvest limits.',
   orchestrator:
     'Operator-agent sandbox settings. This table does not start or host an operator agent.',
@@ -1338,31 +1377,79 @@ export const configSchema = normalizedConfigSchema.superRefine((config, ctx) => 
         path: ['orchestrator', 'sandbox', 'environmentVariables'],
         message: `Account credential variable ${JSON.stringify(name)} cannot enter an operator sandbox`,
       })
-  const defaults = config.roles.default ?? {}
-  for (const [role, spec] of Object.entries(config.roles)) {
-    const primary = {
-      runtime: spec.runtime ?? defaults.runtime,
-      account: spec.account ?? defaults.account,
-    }
-    const targets = [
-      primary,
-      ...(spec.alternates ?? defaults.alternates ?? []).map((alt) => ({
-        runtime: alt.runtime ?? primary.runtime,
-        account: alt.account ?? primary.account,
-      })),
-    ]
-    targets.forEach((target, index) => {
-      try {
-        selectAccount(
-          config.accounts,
-          target.runtime,
-          target.account,
-          `role ${JSON.stringify(role)}${index ? ` alternate[${index - 1}]` : ''}`,
-        )
-      } catch (error) {
-        ctx.addIssue({ code: 'custom', path: ['roles', role], message: (error as Error).message })
+  const checkRoleAccounts = (
+    roles: Record<string, RoleConfig>,
+    keys: readonly string[],
+    path: (role: string) => (string | number)[],
+    label: (role: string) => string,
+  ) => {
+    const defaults = roles.default ?? {}
+    for (const role of keys) {
+      const spec = roles[role]!
+      const primary = {
+        runtime: spec.runtime ?? defaults.runtime,
+        account: spec.account ?? defaults.account,
       }
+      const targets = [
+        primary,
+        ...(spec.alternates ?? defaults.alternates ?? []).map((alt) => ({
+          runtime: alt.runtime ?? primary.runtime,
+          account: alt.account ?? primary.account,
+        })),
+      ]
+      targets.forEach((target, index) => {
+        try {
+          selectAccount(
+            config.accounts,
+            target.runtime,
+            target.account,
+            `${label(role)}${index ? ` alternate[${index - 1}]` : ''}`,
+          )
+        } catch (error) {
+          ctx.addIssue({ code: 'custom', path: path(role), message: (error as Error).message })
+        }
+      })
+    }
+  }
+  checkRoleAccounts(
+    config.roles,
+    Object.keys(config.roles),
+    (role) => ['roles', role],
+    (role) => `role ${JSON.stringify(role)}`,
+  )
+
+  const profileLabels = new Map<string, string>()
+  for (const [name, profile] of Object.entries(config.profiles ?? {})) {
+    const normalized = normalizeProfileLabel(profile.label)
+    if (normalized.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['profiles', name, 'label'],
+        message: `profile ${displayName(name)} needs a nonblank label`,
+      })
+    } else if (profileLabels.has(normalized)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['profiles', name, 'label'],
+        message: `profiles ${displayName(profileLabels.get(normalized)!)} and ${displayName(name)} both declare label ${displayName(profile.label.trim())}; each profile needs its own label`,
+      })
+    } else profileLabels.set(normalized, name)
+    const keys = Object.keys(profile.roles).filter((role) => {
+      if (role !== RESERVED_ROLE) return true
+      ctx.addIssue({
+        code: 'custom',
+        path: ['profiles', name, 'roles', role],
+        message: `profile ${displayName(name)} cannot override the reserved default role; name each role it changes`,
+      })
+      return false
     })
+    if (config.roles !== undefined)
+      checkRoleAccounts(
+        profileRoles(config.roles, profile.roles),
+        keys,
+        (role) => ['profiles', name, 'roles', role],
+        (role) => `profile ${displayName(name)} role ${JSON.stringify(role)}`,
+      )
   }
 
   for (const kind of ['verify', 'finalize'] as const) {
