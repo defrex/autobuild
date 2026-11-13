@@ -872,7 +872,7 @@ describe('Dispatcher urgent intake order', () => {
     expect(after.some((type) => /pause|abort|stop/.test(type))).toBe(false)
   })
 
-  test('the intake scan reads the same with and without urgent tickets', async () => {
+  test('the intake scan reads the same with and without urgent tickets or role profiles', async () => {
     const { urgentIntakeReadBudget } = await import('../testing/reduced-read-budget')
     const calls = await urgentIntakeReadBudget()
     expect(calls.listReady).toBe(1)
@@ -1046,6 +1046,94 @@ describe('Dispatcher dispatch', () => {
       (event) => event.type === 'build.created',
     )
     expect(created !== undefined && 'issueLinks' in created.payload).toBe(false)
+  })
+
+  describe('label-selected role profiles (SPEC §9)', () => {
+    const PROFILES = `
+[profiles.deep]
+label = "deep"
+
+[profiles.deep.roles.implement]
+model = "claude-opus-5-5"
+
+[profiles.cheap]
+label = "Budget"
+`
+    const createdProfile = async (h: ReturnType<typeof harness>) => {
+      const [record] = await h.store.listBuilds()
+      const created = (await h.store.getEvents(record!.slug)).find(
+        (event) => event.type === 'build.created',
+      )
+      return { slug: record!.slug, payload: created?.payload }
+    }
+
+    test('a labelled ticket freezes its profile into build.created; relabelling changes nothing', async () => {
+      const h = harness({
+        toml: PROFILES,
+        tickets: [readyTicket('T-deep', { labels: ['autobuild', 'DEEP'] })],
+      })
+      await h.dispatcher.tick()
+      const { slug, payload } = await createdProfile(h)
+      expect(payload?.profile).toBe('deep')
+      await h.tickets.update('T-deep', { labels: ['budget'] })
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(reduceBuild(await h.store.getEvents(slug)).profile).toEqual({
+        name: 'deep',
+        configured: true,
+      })
+    })
+
+    test('a ticket without a profile label writes no profile key', async () => {
+      const h = harness({ toml: PROFILES, tickets: [readyTicket('T-plain')] })
+      await h.dispatcher.tick()
+      const { payload } = await createdProfile(h)
+      expect(payload !== undefined && 'profile' in payload).toBe(false)
+    })
+
+    test('a node ticket uses the profile its own labels select', async () => {
+      const h = harness({
+        toml: PROFILES,
+        tickets: [readyTicket('N', { kind: 'node', labels: ['budget'] })],
+      })
+      await h.dispatcher.tick()
+      const { payload } = await createdProfile(h)
+      expect(payload?.kind).toBe('node')
+      expect(payload?.profile).toBe('cheap')
+    })
+
+    test('a ticket selecting two profiles is not claimed until relabelled', async () => {
+      const h = harness({
+        toml: PROFILES,
+        tickets: [readyTicket('T-both', { labels: ['deep', 'budget'] })],
+      })
+      const diagnostic =
+        'ticket T-both: labels "Budget" and "deep" select more than one profile ("cheap", "deep") — remove all but one profile label to make it claimable'
+      const report = await h.dispatcher.tick()
+      expect(report.dispatched).toBe(0)
+      expect(report.invalidTickets).toBe(1)
+      expect(report.ticketDiagnostics).toEqual([diagnostic])
+      expect(h.tickets.claims).toEqual([])
+      expect(await h.store.listBuilds()).toEqual([])
+
+      // The persisted scan carries the diagnostic for status surfaces.
+      const cold = harness({ store: h.store, toml: PROFILES })
+      cold.clock.set(h.clock().toISOString())
+      expect((await cold.dispatcher.tick({ acceptNewWork: false })).ticketDiagnostics).toEqual([
+        diagnostic,
+      ])
+      expect(await h.dispatcher.observeReady({})).toMatchObject({
+        queued: 0,
+        invalidTickets: 1,
+        ticketDiagnostics: [diagnostic],
+      })
+
+      await h.tickets.update('T-both', { labels: ['deep'] })
+      h.clock.advance(60_000)
+      expect((await h.dispatcher.tick()).dispatched).toBe(1)
+      expect(h.tickets.claims).toEqual(['T-both'])
+      expect((await createdProfile(h)).payload?.profile).toBe('deep')
+    })
   })
 
   test('freezes an enabled PR image host into build.created', async () => {

@@ -443,7 +443,8 @@ evaluated as config logic.
 
 **Strictness:** unknown top-level keys/tables and unknown keys inside known
 tables are **errors**, not warnings — a typo must not silently disable a
-verifier. The open maps are `[accounts]`, `[commands]`, `[roles]`, `[workspace.config]`,
+verifier. The open maps are `[accounts]`, `[commands]`, `[roles]`, `[profiles]`,
+`[profiles.<name>.roles]`, `[workspace.config]`,
 `[workspace.config.runtimeProvisioning]`, `[verify.<step>]`, and
 `[finalize.<step>]`. Autobuild strictly validates the
 repository-defined command, role, and step entries. `[workspace.config]` is
@@ -841,6 +842,8 @@ The step's configured skill name remains a deprecated alias for existing
 configurations and will be removed in a future release. It applies only when
 `[roles.<step>]` is undeclared, so the step name always wins when both are
 present, and `ab dispatch` reports the alias with the step name to rename it to.
+A [role profile](#profiles) the build selected can override the step's role
+for that build.
 Written order never reorders execution: the event records the canonical config
 order. No front matter means all configured steps, preserving old plans and
 logs; an explicit empty list is valid only when all steps are optional. The
@@ -1090,6 +1093,8 @@ examples, remedies and regional routing are in [billing accounts](references/acc
 ### `[roles]`
 
 An **open map** of role name → `{ runtime?, model?, account?, args?, extensions?, sessionBudgetSeconds?, alternates? }`.
+These are the repository's roles for every build; a ticket label can select a
+[`[profiles]`](#profiles) entry that overrides some of them for that build.
 The four primary axes, session budget, and ordered alternate list inherit independently. The reserved `default` role must explicitly name a
 runtime, is the raw inheritance base for every other role, and is **never
 dispatched as a phase**. Its absence fails eager resolution before a session,
@@ -1210,6 +1215,50 @@ arrived first, that release remains an abort control outcome with no alternate
 or `phase.failed`. A typed terminal racing either boundary remains authoritative.
 Agent finalize post-step expiry is failure-tolerant; Harvest and direct check
 commands are outside this budget.
+
+### `[profiles]`
+
+An **open map** of profile name → `{ label, roles }`, for tickets that justify
+different role settings without changing the roles every other build reads.
+
+```toml
+[profiles.deep]
+label = "deep"
+
+[profiles.deep.roles.plan-review]
+model = "claude-opus-5-5"
+
+[profiles.deep.roles.implement]
+args = ["--effort", "high"]
+```
+
+- **Overlay.** A `[profiles.<name>.roles.<role>]` entry accepts the
+  `[roles.<role>]` fields and may name any role, including agent verify and
+  finalize step names and roles `[roles]` does not declare. Each declared
+  field overrides; each omitted field comes from `[roles.<role>]`, then
+  `[roles.default]`. A declared `alternates` list, including `[]`, replaces the
+  inherited list. Key selection walks the step name, then its deprecated
+  skill-name alias, against profile entries and `[roles]` together. An entry
+  named `default` is refused.
+- **Selection is fixed at claim.** `label` matches ticket labels
+  case-insensitively after trimming. The dispatcher records the selected
+  profile on `build.created`; relabelling later has no effect. A node and each
+  child select from their own ticket. A ready ticket carrying two profiles'
+  labels is not claimed and appears as a `queue:` line in
+  `ab repository status` until it carries at most one. A ticket can only
+  select a profile; it never supplies a model, runtime or argument itself.
+- **Contents are live.** Every agent session of the build (plan, plan
+  review, implement, code review, agent verify and finalize steps, reconcile)
+  resolves through the profile read from the current configuration, so an
+  edit reaches only the builds that selected it, at their next session.
+  `session.started.profile` records `{ name, configured }`. If a reload removes
+  the profile, those builds continue on the repository roles and
+  `ab build status` says the profile is no longer configured.
+- **Validation.** Duplicate labels, a missing or blank label, and an entry
+  whose effective runtime, model, args or account would be refused for a
+  `[roles]` entry fail config load, `ab init --validate` and a live reload.
+- **Scope.** Sessions outside a build (`slug`, `upgrade`, `harvest`,
+  `harvest-review`) never use a profile.
 
 Mixing models across roles is **intentional**, not an inconsistency to clean
 up: a reviewer that differs from the implementer catches more. The removed
@@ -2553,8 +2602,10 @@ repository-local precedence. The command uses the same reducer as the
 dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
 and starts no dispatcher work. Dispatcher identity includes the held run’s recorded
 runtime; historical starts without metadata display `runtime unrecorded`.
-It also lists the latest ticket scan's dependency diagnostics (`queue:` lines,
-`dependencyDiagnostics` in JSON), including tickets held because their target
+It also lists the latest ticket scan's ticket and dependency diagnostics
+(`queue:` lines, `ticketDiagnostics` and `dependencyDiagnostics` in JSON),
+including ready tickets whose labels select more than one role profile and
+tickets held because their target
 node is being built by another store, and dispatcher startup warnings
 (`warningLines`).
 
@@ -2583,7 +2634,9 @@ cycle, PR lifecycle, latest event, durable progress age, heartbeat, and lease.
 Every runner attach appears chronologically with its recorded runtime (version,
 commit, source kind/location), or `runtime unrecorded` for historical attaches;
 JSON exposes nullable runtime in `runnerAttaches`. Phases belong to the preceding
-attach boundary.
+attach boundary. A build created with a [role profile](#profiles) shows a
+`profile:` line (`profile` in JSON), marked no longer configured when a reload
+removed it; a build without one shows neither.
 For an open PR, the current work-owner decision reads the build-owned
 configuration from the store's deposited `build-runner-effective-config`
 artifact — deposited at every runner launch and refreshed on effective-config

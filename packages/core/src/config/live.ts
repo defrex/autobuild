@@ -29,6 +29,7 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
   verify: 'hot',
   finalize: 'hot',
   roles: 'hot',
+  profiles: 'hot',
   accounts: 'hot',
   policy: 'hot',
   orchestrator: 'restart',
@@ -218,6 +219,7 @@ export class LiveConfig {
         startup.roles,
         startup.policy.sessionBudgetSeconds,
         startup.accounts,
+        startup.profiles,
       ),
       revision: 0,
     }
@@ -300,6 +302,7 @@ export class LiveConfig {
         config.roles,
         config.policy.sessionBudgetSeconds,
         config.accounts,
+        config.profiles,
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

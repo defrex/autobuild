@@ -173,6 +173,10 @@ export interface RepositoryStatus extends DispatchSettings {
   capacity?: DispatchCapacity
   /** Dispatcher startup warnings, then forge readiness warnings. */
   warningLines?: string[]
+  /** Standing ticket diagnostics from the latest completed ticket scan — for
+   * example an invalid ticket, or a ready ticket whose labels select more than
+   * one role profile and is therefore not claimed. */
+  ticketDiagnostics?: string[]
   /** Standing dependency/target diagnostics from the latest completed ticket
    * scan — for example a ticket held because its target node is being built
    * by another store. */
@@ -267,6 +271,10 @@ export function projectRepositoryStatus(
     latestScan?.type === 'dispatcher.ticket-scan-completed'
       ? latestScan.payload.dependencyDiagnostics
       : []
+  const ticketDiagnostics =
+    latestScan?.type === 'dispatcher.ticket-scan-completed'
+      ? latestScan.payload.ticketDiagnostics
+      : []
   return {
     ...(forgeHealthReducer.reduce(events)
       ? { forgeDegradation: forgeHealthReducer.reduce(events) }
@@ -282,6 +290,7 @@ export function projectRepositoryStatus(
     upgradeStatus: projectUpgradeStatus(dispatchUpgradeReducer.reduce(events), dispatcher),
     rollbackHold: effectiveRollbackHold(dispatchUpgradeReducer.reduce(events), dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
+    ...(ticketDiagnostics.length ? { ticketDiagnostics: [...ticketDiagnostics] } : {}),
     ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
     dispatcher,
     ...(() => {
@@ -317,6 +326,7 @@ export function repositoryStatusFromFacts(
     ? [...facts.status.roleWarnings, ...forgeReadinessWarnings(facts.status)]
     : []
   const dependencyDiagnostics = facts.scan?.dependencyDiagnostics ?? []
+  const ticketDiagnostics = facts.scan?.ticketDiagnostics ?? []
   return {
     ...(Object.keys(facts.missingAccounts).length
       ? { missingAccounts: facts.missingAccounts }
@@ -327,6 +337,7 @@ export function repositoryStatusFromFacts(
     upgradeStatus: projectUpgradeStatus(facts.upgrades, dispatcher),
     rollbackHold: effectiveRollbackHold(facts.upgrades, dispatcher),
     ...(warningLines.length ? { warningLines } : {}),
+    ...(ticketDiagnostics.length ? { ticketDiagnostics: [...ticketDiagnostics] } : {}),
     ...(dependencyDiagnostics.length ? { dependencyDiagnostics: [...dependencyDiagnostics] } : {}),
     dispatcher,
     ...(() => {
@@ -481,6 +492,7 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `intake: ${setting(status.intake)}`,
     `repository pause: ${setting(status.paused)}`,
     `default auto-merge: ${setting(status.defaultAutoMerge)}`,
+    ...(status.ticketDiagnostics ?? []).map((line) => `queue: ${line}`),
     ...(status.dependencyDiagnostics ?? []).map((line) => `queue: ${line}`),
     ...status.sandboxes.map(
       (sandbox) =>
