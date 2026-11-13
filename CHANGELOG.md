@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v1.7.0 — 2026-11-13
+
+This release adds label-selected role profiles, letting individual tickets choose how they are executed. GitHub ticket handling is tighter throughout: tickets are now assigned at creation with assignees exposed, ready issues lacking an assignee are reported, rate limits are isolated by credential scope, and newest-ticket paging is defined as newest filed first. Reliability improves as well, with hosted ticket preparations recovering after lost creation responses, scenario dispatch leases staying valid across stepping-clock passes, and feed checkpoints no longer carrying redundant dashboard history. The account-menu disclosure also now renders with a supported packaged font.
+
+- [#938](https://github.com/defrex/autobuild/pull/938) — Add label-selected role profiles for per-ticket execution
+- [#937](https://github.com/defrex/autobuild/pull/937) — Assign GitHub tickets at creation and expose assignees
+- [#936](https://github.com/defrex/autobuild/pull/936) — Report ready GitHub issues that have no assignee
+- [#933](https://github.com/defrex/autobuild/pull/933) — Isolate GitHub rate limits by credential scope
+- [#932](https://github.com/defrex/autobuild/pull/932) — Define newest ticket paging as newest filed first
+- [#931](https://github.com/defrex/autobuild/pull/931) — Keep scenario dispatch leases valid across stepping-clock passes
+- [#930](https://github.com/defrex/autobuild/pull/930) — Render the account-menu disclosure with a supported packaged font
+- [#929](https://github.com/defrex/autobuild/pull/929) — Recover hosted ticket preparations after lost creation responses
+- [#928](https://github.com/defrex/autobuild/pull/928) — Remove redundant dashboard history from feed checkpoints
+
 ## v1.6.0 — 2026-11-11
 
 This release focuses on keeping dispatch resilient and capacity available: finished builds waiting for merge no longer hold capacity, stalled dispatchers keep running when their lease remains unclaimed, and prolonged janitor failures now escalate while recovery continues. Local worktrees can be restored from remote archive refs, hosted harvest authority is preserved across dispatch invocations, and checkout-mode dispatch now starts with the GitHub ticket source. Operators also get clearer signals, with abandoned ticket preparations surfaced in default watch attention and the durable effects of merge readiness refusals clarified, alongside more reliable node integration scenarios under load.
