@@ -738,7 +738,17 @@ export type RoleConfig = z.infer<typeof roleSchema>
 // overlaid account selection are cross-validated in configSchema below;
 // runtime and model compatibility is checked by the eager resolver.
 
-const profileRoleSchema = roleSchema.extend({})
+const profileRoleSchema = roleSchema.extend({
+  // A distinct field schema so its reference names the profile inheritance
+  // order; the repository role's own budget sits between the entry and default.
+  sessionBudgetSeconds: z.number().int().positive().optional(),
+})
+documentSchema(profileRoleSchema.shape.sessionBudgetSeconds, {
+  description:
+    'Active-time budget for each build phase session routed through this role in a profiled build. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.',
+  constraints:
+    'Omission inherits roles.<role>.sessionBudgetSeconds, then roles.default.sessionBudgetSeconds, otherwise policy.sessionBudgetSeconds.',
+})
 documentSchema(profileRoleSchema, {
   description:
     "Role override for builds whose ticket carries the profile's label. Omitted fields inherit `[roles.<role>]`, then `[roles.default]`; a declared alternates list, including [], replaces the inherited list.",

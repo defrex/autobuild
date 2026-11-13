@@ -2571,9 +2571,9 @@ runtime, model, args or account is invalid are refused at load, by
 - **Required:** Optional
 - **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
 
-**Description:** Active-time budget for each build phase session routed through this logical role. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.
+**Description:** Active-time budget for each build phase session routed through this role in a profiled build. Suspended intervals are excluded; native continuation retains the original ceiling and accumulated active time. One budget covers the primary and every alternate target.
 
-**Constraints:** safe integer; > 0; Omission inherits roles.default.sessionBudgetSeconds, otherwise policy.sessionBudgetSeconds.
+**Constraints:** safe integer; > 0; Omission inherits roles.<role>.sessionBudgetSeconds, then roles.default.sessionBudgetSeconds, otherwise policy.sessionBudgetSeconds.
 
 #### `profiles.<name>.roles.<name>.alternates`
 
