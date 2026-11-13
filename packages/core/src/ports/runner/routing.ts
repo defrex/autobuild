@@ -1,10 +1,18 @@
 import { selectAccount, type Accounts, type SelectedAccount } from '../../config/accounts'
+import { profileRoles } from '../../config/profiles'
 /**
  * Eager runtime/model/args role resolution (SPEC §9, §16.1). Primary
  * fields and the ordered alternate list inherit independently from the
  * reserved `[roles.default]` entry. A declared role list, including `[]`,
  * replaces the inherited list wholesale; each entry overlays that concrete
  * role's effective primary axes and is validated at construction.
+ *
+ * Profiles (`[profiles.<name>]`) are resolved eagerly here too. A profile entry
+ * for role R overlays its declared fields on `[roles.R]` (or on nothing when R
+ * is undeclared) and then inherits from `[roles.default]` like any role, so an
+ * omitted field falls back to `[roles.R]`, then default. `profile(name)` walks
+ * the same candidate keys against profile entries and repository roles
+ * together, so alias precedence is identical with and without a profile.
  */
 import type { AgentRunner } from '../types'
 import { serves, type RuntimeRegistration, type RuntimeRegistry } from './runtime'
@@ -60,6 +68,14 @@ export class RuntimeConfigError extends Error {
 export interface RuntimeResolver {
   /** Resolve the earliest declared role/alias, otherwise `[roles.default]`. */
   resolve(role: string, ...aliases: string[]): ResolvedRole
+  /** The resolver for one configured profile, or `undefined` when no profile
+   * by that name is configured. A profile resolver has no profiles itself. */
+  profile(name: string): RuntimeResolver | undefined
+}
+
+/** One `[profiles.<name>]` table as the resolver needs it. */
+export interface RuntimeProfileSpec {
+  roles: Record<string, RuntimeSpec>
 }
 
 function runtimeNames(registry: RuntimeRegistry): string {
@@ -215,12 +231,28 @@ function resolveRole(
       }
 }
 
+/** Walk the candidate keys in order; `default` and no declared key both fall
+ * back. Shared by repository and profile resolvers so they cannot drift. */
+function walk(
+  keys: readonly string[],
+  lookup: (key: string) => ResolvedRole | undefined,
+  fallback: ResolvedRole,
+): ResolvedRole {
+  for (const key of keys) {
+    if (key === 'default') return fallback
+    const resolved = lookup(key)
+    if (resolved !== undefined) return resolved
+  }
+  return fallback
+}
+
 /** Build and eagerly validate the complete role resolver. */
 export function createRuntimeResolver(
   registry: RuntimeRegistry,
   roles: Record<string, RuntimeSpec>,
   policySessionBudgetSeconds = 3600,
   accounts: Accounts = {},
+  profiles: Record<string, RuntimeProfileSpec> = {},
 ): RuntimeResolver {
   const problems: string[] = []
   const defaultSpec = roles.default ?? {}
@@ -249,17 +281,46 @@ export function createRuntimeResolver(
     if (resolved !== undefined) resolvedRoles[role] = resolved
   }
 
+  const resolvedProfiles = new Map<string, Record<string, ResolvedRole>>()
+  for (const name of Object.keys(profiles)) {
+    const entries = profiles[name]!.roles
+    const overlaid = profileRoles(roles, entries)
+    const resolved: Record<string, ResolvedRole> = Object.create(null)
+    for (const role of Object.keys(entries)) {
+      // The schema refuses a profile `default` entry; never let one through.
+      if (role === 'default') continue
+      const result = resolveRole(
+        overlaid[role]!,
+        defaultSpec,
+        policySessionBudgetSeconds,
+        registry,
+        `[profiles.${name}.roles.${role}]`,
+        problems,
+        accounts,
+      )
+      if (result !== undefined) resolved[role] = result
+    }
+    resolvedProfiles.set(name, resolved)
+  }
+
   if (problems.length > 0) throw new RuntimeConfigError(problems)
   const fallback = resolvedDefault!
+  const base = (key: string) => resolvedRoles[key]
 
   return {
     resolve(role: string, ...aliases: string[]): ResolvedRole {
-      for (const key of [role, ...aliases]) {
-        if (key === 'default') return fallback
-        const resolved = resolvedRoles[key]
-        if (resolved !== undefined) return resolved
+      return walk([role, ...aliases], base, fallback)
+    },
+    profile(name: string): RuntimeResolver | undefined {
+      const entries = resolvedProfiles.get(name)
+      if (entries === undefined) return undefined
+      const lookup = (key: string) => entries[key] ?? base(key)
+      return {
+        resolve(role: string, ...aliases: string[]): ResolvedRole {
+          return walk([role, ...aliases], lookup, fallback)
+        },
+        profile: () => undefined,
       }
-      return fallback
     },
   }
 }

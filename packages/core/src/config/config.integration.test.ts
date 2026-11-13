@@ -152,6 +152,7 @@ describe('parseConfig — complete flattened surface', () => {
         default: { runtime: 'claude' },
         'code-review': { runtime: 'pi', model: 'kimi-k3', sessionBudgetSeconds: 7200 },
       },
+      profiles: {},
       policy: {
         upgradeDrainSeconds: 900,
         dispatchLeaseTimeoutSeconds: 60,
@@ -207,6 +208,7 @@ describe('parseConfig — defaults', () => {
       verify: { afterReconcile: true, steps: [], stepConfigs: {} },
       finalize: { steps: [], stepConfigs: {} },
       roles: {},
+      profiles: {},
       policy: {
         upgradeDrainSeconds: 900,
         dispatchLeaseTimeoutSeconds: 60,

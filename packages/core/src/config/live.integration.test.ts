@@ -87,6 +87,37 @@ describe('live dispatcher config', () => {
     expect(published).toHaveLength(2)
   })
 
+  test('a reload introducing an invalid profile is rejected and keeps the running snapshot', async () => {
+    const live = new LiveConfig('autobuild.toml', parseConfig(base), base, runtimes, async () => {})
+    const accepted = live.current()
+    const duplicate = `${base}
+[profiles.deep]
+label = "deep"
+
+[profiles.thorough]
+label = "Deep"
+`
+    const incompatible = `${base}
+[profiles.deep]
+label = "deep"
+
+[profiles.deep.roles.implement]
+model = "claude-opus-5-5"
+`
+    const first = await live.refresh(duplicate)
+    expect(first.kind).toBe('rejected')
+    expect(first.kind === 'rejected' && first.error).toContain('both declare label')
+    const second = await live.refresh(incompatible)
+    expect(second.kind).toBe('rejected')
+    expect(second.kind === 'rejected' && second.error).toContain('[profiles.deep.roles.implement]')
+    expect(live.current()).toBe(accepted)
+
+    const valid = incompatible.replace('claude-opus-5-5', 'gpt-new')
+    expect((await live.refresh(valid)).kind).toBe('adopted')
+    expect(live.current().resolver.profile('deep')?.resolve('implement').model).toBe('gpt-new')
+    expect(live.current().resolver.resolve('implement').model).toBe('gpt-old')
+  })
+
   test('retains the accepted disk snapshot across deletion and resumes after restoration', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ab-live-config-'))
     const source = join(dir, 'autobuild.toml')

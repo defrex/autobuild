@@ -993,6 +993,51 @@ describe('publication.lost loss-record protocol', () => {
   })
 })
 
+describe('role profile fields', () => {
+  const created = { ticket: { source: 'file', id: 'T-1' }, repo: 'o/r', baseBranch: 'main' }
+  const started = { session: 's_profiled', role: 'plan', runner: 'claude', phase: 'plan', round: 1 }
+
+  test('build.created accepts an optional nonblank profile name', () => {
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...created, profile: 'deep' },
+      }).payload,
+    ).toMatchObject({ profile: 'deep' })
+    expect(
+      validateEventWrite({ actor: DISPATCHER, type: 'build.created', payload: created }).payload,
+    ).not.toHaveProperty('profile')
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...created, profile: '' },
+      }),
+    ).toThrow(/profile/)
+  })
+
+  test('session.started accepts an optional strict profile observation', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { ...started, profile: { name: 'deep', configured: false } },
+      }).payload,
+    ).toMatchObject({ profile: { name: 'deep', configured: false } })
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'session.started', payload: started }).payload,
+    ).not.toHaveProperty('profile')
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { ...started, profile: { name: 'deep' } },
+      }),
+    ).toThrow(/profile/)
+  })
+})
+
 describe('session.started prompt field', () => {
   const base = { session: 's_prompted', role: 'plan', runner: 'claude', phase: 'plan', round: 1 }
 
