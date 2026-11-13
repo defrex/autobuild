@@ -347,6 +347,10 @@ export const eventPayloadSchemas = {
       )
       .superRefine(refineUniqueIssues)
       .optional(),
+    /** The `[profiles.<name>]` the ticket's labels selected, frozen at claim;
+     * later relabelling never changes it. Omitted for builds without a
+     * profile and in historical logs. */
+    profile: z.string().min(1).optional(),
   }),
   'node.opening': z.strictObject({
     branch: z.string().min(1),
@@ -995,6 +999,10 @@ export const eventPayloadSchemas = {
      * continue, the interruption notice for a native resume. Absent on
      * historical events and when the runtime cannot report it. */
     prompt: z.string().min(1).optional(),
+    /** The build's frozen profile and whether this session's configuration
+     * still defined it. Present only for builds created with a profile; a
+     * `configured: false` session resolved through the repository roles. */
+    profile: z.strictObject({ name: z.string().min(1), configured: z.boolean() }).optional(),
   }),
   'session.suspended': z.strictObject({
     session: z.string().min(1),

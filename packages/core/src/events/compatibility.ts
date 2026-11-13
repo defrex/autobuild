@@ -26,7 +26,8 @@ export interface StoredEvent {
 // Revision 3 retains optional billing-account descriptors in session/attempt projections.
 // Revision 4 retains the optional effective prompt in session projections.
 // Revision 5 retains the optional preparation creation key.
-export const READ_DECODER_REVISION = 5
+// Revision 6 retains the optional role profile on build creation and session starts.
+export const READ_DECODER_REVISION = 6
 export function catalogIdentity(
   build: Record<string, string> = buildEventPolicy,
   repository: Record<string, string> = repositoryEventPolicy,

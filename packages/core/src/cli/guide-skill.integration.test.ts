@@ -84,6 +84,9 @@ const TABLE_FIELDS: Record<string, string[]> = {
     ...Object.keys(finalizeAgentStepSchema.shape),
   ],
   roles: Object.keys(roleSchema.shape),
+  // Open map of profile name → { label, roles }; entries reuse the documented
+  // [roles] fields, so only the heading is required.
+  profiles: [],
   policy: Object.keys(policySchema.shape),
   tickets: Object.keys(ticketsInputSchema.shape),
   // Derived like the strict-shape entries above: a schema field added without

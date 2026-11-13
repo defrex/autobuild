@@ -179,6 +179,7 @@ async function runGenerationPreflight(
             config.roles,
             config.policy.sessionBudgetSeconds,
             config.accounts,
+            config.profiles,
           )
           const facts = (await readDispatcherRunFacts(opened.store, opened.repo, handoff.run)).value
           const start = facts.start
