@@ -65,7 +65,9 @@ export function foldReadDeferrals(acc: ReadDeferralsAcc, events: readonly AbEven
       const agentBoundary =
         event.actor.kind === 'agent' &&
         event.actor.session === id &&
-        (event.type === 'escalation.raised' || event.type === 'publication.requested')
+        (event.type === 'escalation.raised' ||
+          event.type === 'wait.requested' ||
+          event.type === 'publication.requested')
       if (actorMatches && (completion || agentBoundary)) {
         session.terminal = true
         acc.pending = acc.pending.filter((item) => item.session !== id)
