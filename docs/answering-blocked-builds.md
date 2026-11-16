@@ -49,7 +49,8 @@ pending operator commands.
 A build whose agent ran `ab wait-on` asks to wait on other tickets. Until the
 dispatcher validates the request on its next tick, the build keeps its
 capacity slot and `ab build status <slug>` reports the wait as requested. A
-refused request writes nothing and the declaring phase re-runs with the
+refused request writes nothing to the source ticket; the request and its
+refusal stay in the build log, and the declaring phase re-runs with the
 refusal as guidance.
 
 Once accepted, the build's escalation question begins `Waiting on`,
