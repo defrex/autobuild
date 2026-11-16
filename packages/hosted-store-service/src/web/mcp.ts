@@ -65,7 +65,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
   'Autobuild runs builds from tickets: a dispatcher claims groomed tickets, an embedded agent implements each build through plan/implement/verify rounds, and every durable action is attributed.',
   'Call `repositories.list` first to discover which repository identities this deployment serves; every tool names its repository explicitly via `repo`.',
   'Mutating tools append durable, human-attributed events under the signed-in operator who authorized this client; destructive controls are annotated.',
-  'Read tools mirror the operator API routes — every result equals the corresponding route — and `builds.events` after a cursor is the polling companion to `builds.get`.',
+  'Read tools mirror the operator API routes — every result equals the corresponding route — and `builds.events` after a cursor is the polling companion to `builds.get`; `repository.events` after a cursor delivers repository attention such as `ticket.handed-back`.',
 ].join(' ')
 
 export interface McpEndpointOptions {
@@ -228,7 +228,10 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
               }
               let input: unknown = args
               const waitSeconds = (parsed as { waitSeconds?: unknown }).waitSeconds
-              if (entry.name === 'builds.events' && typeof waitSeconds === 'number') {
+              if (
+                (entry.name === 'builds.events' || entry.name === 'repository.events') &&
+                typeof waitSeconds === 'number'
+              ) {
                 input = {
                   ...(args as object),
                   waitSeconds: Math.min(waitSeconds, MCP_MAX_WAIT_SECONDS),
