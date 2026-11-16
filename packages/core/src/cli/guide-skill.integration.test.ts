@@ -434,7 +434,7 @@ describe('ab-guide — durable build-control coverage', () => {
     const forms: [string, RegExp][] = [
       ['pause', /`ab pause <slug> \[--store <ref>\]`/],
       ['resume', /`ab resume <slug> \[--store <ref>\]`/],
-      ['merge', /`ab merge <slug> \[--store <ref>\]`/],
+      ['merge', /`ab merge <slug> \[--head <sha>\] \[--store <ref>\]`/],
       ['hold', /`ab hold <slug> \[--store <ref>\]`/],
       ['answer guidance', /`ab answer <slug> <text> \[--store <ref>\]`/],
       ['answer retry', /`ab answer <slug> \[--store <ref>\]`/],
