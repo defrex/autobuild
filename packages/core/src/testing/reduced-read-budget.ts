@@ -3347,3 +3347,155 @@ export async function hostedHarvestAuthorityReadBudget() {
   expect(large.appended.size).toBe(small.appended.size)
   return { small, large }
 }
+
+/** Head path facts are recorded by producers, never derived on the landing
+ * poll: an awaiting-PR leaf costs fresh-dispatcher ticks no path-deriving git
+ * command, zero `head-paths` artifact reads and zero event rows once warm, and the
+ * same store requests at 100 and 100,000 events. Returns the measured vector
+ * so a caller can compare a recorded build against a pre-change one. */
+export async function headPathsLandingReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  repo: string
+  slug: string
+  /** Whether the PR head carries a recorded fact. */
+  recorded: boolean
+  /** One tick on a fresh dispatcher. */
+  tick: () => Promise<unknown>
+  advance: (ms: number) => void
+  /** Git commands attempted so far. */
+  git: () => readonly string[][]
+}) {
+  const { store, repo, slug } = opts
+  /** The commands that derive a head's path facts. */
+  const pathFact = /^(merge-base|diff|merge-tree|worktree|cherry-pick|write-tree)$/
+  const { candidateHeadPaths, HEAD_PATHS_ARTIFACT, HEAD_PATHS_PREVIEW } = await import(
+    '../kernel/head-paths'
+  )
+  let artifactReads = 0
+  const getArtifact = store.getArtifact.bind(store)
+  store.getArtifact = async (s, kind, rev) => {
+    if (kind === HEAD_PATHS_ARTIFACT) artifactReads++
+    return getArtifact(s, kind, rev)
+  }
+  await store.ensureRepo(repo)
+  let seeded = 0
+  const vectors: Record<string, number>[] = []
+  try {
+    for (const length of [100, 100_000]) {
+      for (; seeded < length; seeded++) {
+        await store.appendRepo(repo, {
+          actor: humanActor('budget'),
+          type: 'dispatcher.intake-set',
+          payload: { enabled: true },
+        })
+        if (seeded % 10 === 0)
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'observation.recorded',
+            payload: { id: `obs-${seeded}`, kind: 'followup', summary: `budget padding ${seeded}` },
+          })
+      }
+      for (let n = 0; n < 2; n++) {
+        opts.advance(120_000)
+        await opts.tick()
+      }
+      const rows = memoryRepositoryReadCounter(store, repo)
+      const requests = memoryStoreRequestCounter(store)
+      try {
+        let vector: Record<string, number> | undefined
+        for (let n = 0; n < 3; n++) {
+          opts.advance(120_000)
+          rows.reset()
+          requests.reset()
+          artifactReads = 0
+          const before = opts.git().length
+          await opts.tick()
+          const spawned = opts.git().slice(before)
+          expect(spawned.filter((cmd) => pathFact.test(cmd[1] ?? ''))).toEqual([])
+          expect(artifactReads).toBe(0)
+          expect(rows.rows).toBe(0)
+          expect(rows.buildRows).toBe(0)
+          const measured = { ...requests.vector(), gitSpawns: spawned.length }
+          if (vector) expect(measured).toEqual(vector)
+          vector = measured
+        }
+        vectors.push(vector!)
+      } finally {
+        requests.restore()
+      }
+    }
+  } finally {
+    store.getArtifact = getArtifact
+  }
+  expect(vectors[1]).toEqual(vectors[0])
+  const answer = candidateHeadPaths((await readBuildFacts(store, slug)).value.state)
+  expect(answer.recorded).toBe(opts.recorded)
+  if (answer.recorded) {
+    expect(answer.record.total).toBeGreaterThan(HEAD_PATHS_PREVIEW)
+    expect(answer.record.preview).toHaveLength(HEAD_PATHS_PREVIEW)
+  }
+  return vectors[0]!
+}
+
+/** Build state carries bounded head path summaries: past the record capacity,
+ * with every complete set far beyond the preview, a fresh reader's warm build
+ * facts read zero events and serve the same size at 1,000 and 10,000 events. */
+export async function headPathsStateReadBudget(opts: {
+  store: BuildStore
+  costs: ReducedReadCosts
+  fresh: () => Promise<BuildStore>
+}) {
+  const { store, costs } = opts
+  const { headPathsWrite, readHeadPaths, HEAD_PATHS_RECORDS } = await import('../kernel/head-paths')
+  const slug = 'head-paths-budget'
+  const oid = (n: number) => n.toString(16).padStart(40, '0')
+  const paths = Array.from({ length: 1_001 }, (_, i) => `src/f${String(i).padStart(5, '0')}.ts`)
+  await store.createBuild({ slug, repo, branch: `ab/${slug}` })
+  let appended = 0
+  let facts = 0
+  let size: number | undefined
+  for (const length of [1_000, 10_000]) {
+    while (appended < length) {
+      if (appended % 100 === 0) {
+        const { artifacts, makeEvent } = headPathsWrite(
+          {
+            version: 1,
+            head: oid(++facts),
+            destination: oid(0x10_0000 + facts),
+            mergeBase: oid(0x20_0000 + facts),
+            paths,
+          },
+          'finalize',
+          KERNEL,
+        )
+        await store.appendWithArtifacts(slug, artifacts, makeEvent)
+      } else
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'observation.recorded',
+          payload: { id: `obs-${appended}`, kind: 'followup', summary: `padding ${appended}` },
+        })
+      appended++
+    }
+    expect(facts).toBeGreaterThan(HEAD_PATHS_RECORDS)
+    for (const reader of [store, await opts.fresh()]) {
+      await readBuildFacts(reader, slug)
+      costs.events = costs.metadata = costs.bytes = 0
+      const { state } = (await readBuildFacts(reader, slug)).value
+      expect(costs.events).toBe(0)
+      const records = state.headPaths ?? []
+      expect(records.map((record) => record.head)).toEqual(
+        Array.from({ length: HEAD_PATHS_RECORDS }, (_, i) =>
+          oid(facts - HEAD_PATHS_RECORDS + 1 + i),
+        ),
+      )
+      // Seqs and revisions grow by a digit; the served summaries do not.
+      const served = JSON.stringify(
+        records.map(({ seq: _seq, artifact: _artifact, ...summary }) => summary),
+      ).length
+      if (size === undefined) size = served
+      else expect(served).toBe(size)
+      expect((await readHeadPaths(reader, slug, records.at(-1)!)).paths).toEqual(paths)
+    }
+  }
+}

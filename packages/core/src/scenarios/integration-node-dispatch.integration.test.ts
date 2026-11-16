@@ -5,6 +5,7 @@ import { summarize } from '../cli/status'
 import { afterEach, expect, test as bunTest } from 'bun:test'
 import { happyHandlers, readyTicket, CONFIG_TOML, ofType, scenarioScope } from './harness'
 import { reduceBuild } from '../kernel/reducer'
+import { candidateHeadPaths } from '../kernel/head-paths'
 import { controlBuild } from '../cli/build-control'
 import { KERNEL } from '../events/envelope'
 
@@ -1211,6 +1212,17 @@ test('complete nodes verify and land a linear stack only after explicit consent'
     })
     for (let i = 0; i < 3; i++) await h.dispatcher.tick()
     expect(ofType(await h.events(node.slug), 'integration.prepared')).toHaveLength(1)
+    // The cycle's candidate head is recorded once, with the cycle, before it.
+    const prepared = reduceBuild(await h.events(node.slug))
+    const candidate = candidateHeadPaths(prepared)
+    if (!candidate.recorded) throw new Error('the integration candidate head must be recorded')
+    expect(candidate.record).toMatchObject({
+      source: 'integration',
+      head: prepared.integration!.cycle!.head,
+      destination: prepared.integration!.cycle!.parent,
+    })
+    expect(candidate.record.total).toBeGreaterThan(0)
+    expect(candidate.record.seq).toBeLessThan(prepared.integration!.cycle!.seq)
     await h.runLatest()
     await h.dispatcher.tick()
     const verified = reduceBuild(await h.events(node.slug))
