@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { agentActor, humanActor, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { FakeForge } from '../ports/forge/fake'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
@@ -330,6 +330,8 @@ describe('openProductionSessionStore', () => {
     const workspace = tempRoot()
     const storeRoot = join(workspace, 'store')
     await Bun.$`git init -q ${workspace}`
+    await Bun.$`git -C ${workspace} -c user.name=t -c user.email=t@t commit -q --allow-empty -m initial`
+    const head = (await Bun.$`git -C ${workspace} rev-parse HEAD`.text()).trim()
     const seed = openLocalStore(storeRoot)
     await seed.createBuild({
       slug: 'finalize-build',
@@ -337,6 +339,26 @@ describe('openProductionSessionStore', () => {
       branch: 'ab/finalize-build',
     })
     await seed.append('finalize-build', buildCreatedWrite())
+    // Local finalize records the published head's changed paths first.
+    await seed.append('finalize-build', {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'worktree',
+        ref: workspace,
+        branch: 'ab/finalize-build',
+        base: { source: 'remote', sha: head },
+      },
+    })
+    await seed.append('finalize-build', {
+      actor: agentActor('implement', 's_implement'),
+      type: 'implement.completed',
+      payload: {
+        round: 1,
+        commits: { base: head, head },
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
     await seed.append('finalize-build', {
       actor: KERNEL,
       type: 'finalize.started',
