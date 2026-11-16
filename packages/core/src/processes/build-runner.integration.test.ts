@@ -543,6 +543,12 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       if ('error' in result) return { stdout: '', stderr: result.error, exitCode: 128 }
       return result
     }
+    // Head path facts: a scripted merge base and changed-path set, answered
+    // before the generic diff so they never consume verifyDiffs entries.
+    if (cmd[0] === 'git' && cmd[1] === 'merge-base' && cmd[2] !== '--is-ancestor')
+      return { stdout: `${HEAD_PATHS_MERGE_BASE}\n`, stderr: '', exitCode: 0 }
+    if (cmd[0] === 'git' && cmd[1] === 'diff' && cmd[5] === HEAD_PATHS_MERGE_BASE)
+      return { stdout: 'CHANGELOG.md\0', stderr: '', exitCode: 0 }
     if (cmd[0] === 'git' && cmd[1] === 'diff') {
       const diff = verifyDiffs[Math.min(verifyDiffIndex, verifyDiffs.length - 1)] ?? {
         error: 'no conditional verify diff configured',
@@ -2229,6 +2235,8 @@ describe('happy path (§15.6)', () => {
 
 // ── Finalize post-step publication (§5, D7) ──────────────────────────────────
 
+const HEAD_PATHS_MERGE_BASE = 'e'.repeat(40)
+
 describe('finalize post-step publication', () => {
   const FINALIZE_HEAD = 'f'.repeat(40)
 
@@ -2278,13 +2286,41 @@ describe('finalize post-step publication', () => {
       headSha: FINALIZE_HEAD,
     })
     expect(selectPublishedBranchHead(events)).toBe(FINALIZE_HEAD)
-    expect(h.execCalls.slice(-5).map((call) => call.cmd)).toEqual([
+    const base = '0'.repeat(40)
+    expect(h.execCalls.slice(-9).map((call) => call.cmd)).toEqual([
       ['git', 'status', '--porcelain'],
       ['git', 'status', '--porcelain'],
       ['git', 'rev-parse', 'HEAD'],
       ['git', 'merge-base', '--is-ancestor', 'sha-head-1', FINALIZE_HEAD],
       ['git', 'rev-list', '--reverse', `sha-head-1..${FINALIZE_HEAD}`],
+      // The pushed head's paths are recorded against the leaf landing base.
+      ['git', 'cat-file', '-e', `${FINALIZE_HEAD}^{commit}`],
+      ['git', 'cat-file', '-e', `${base}^{commit}`],
+      ['git', 'merge-base', base, FINALIZE_HEAD],
+      [
+        'git',
+        'diff',
+        '--no-renames',
+        '--name-only',
+        '-z',
+        HEAD_PATHS_MERGE_BASE,
+        FINALIZE_HEAD,
+        '--',
+      ],
     ])
+    const recorded = ofType(events, 'head.paths-recorded')
+    expect(recorded.map((event) => event.payload)).toEqual([
+      {
+        source: 'finalize-step',
+        head: FINALIZE_HEAD,
+        destination: base,
+        mergeBase: HEAD_PATHS_MERGE_BASE,
+        total: 1,
+        preview: ['CHANGELOG.md'],
+        artifact: { kind: 'head-paths', rev: 0 },
+      },
+    ])
+    expect(recorded[0]!.seq).toBeLessThan(ofType(events, 'finalize.step-completed').at(-1)!.seq)
     // A clean worktree never runs the preflight's diff capture (and therefore
     // never consumes verifyDiffs entries either).
     expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff'])
@@ -2314,6 +2350,12 @@ describe('finalize post-step publication', () => {
         sha: FINALIZE_HEAD,
         step: 'release-notes',
       })
+      // The guest records the head before requesting its publication.
+      const recorded = ofType(await h.store.getEvents(SLUG), 'head.paths-recorded')
+      expect(recorded.map((event) => [event.payload.source, event.payload.head])).toEqual([
+        ['finalize-step', FINALIZE_HEAD],
+      ])
+      expect(recorded[0]!.seq).toBeLessThan(requests[0]!.seq)
     }
   })
 

@@ -1688,6 +1688,12 @@ Object packs retain newly introduced replay trees/blobs as well as commit bytes.
 Replay retention stores thin Git packs in bounded binary chunks, with a fixed-size completion manifest written only after every chunk is acknowledged. Digest-keyed chunks make interrupted writes retryable; incomplete uploads are never restored. Recovery validates all chunk sizes and the pack digest before installation, and requires the base objects (restoring node prefixes in order). Existing single-artifact base64 packs remain readable. Retained replay artifacts are read only when the requested commit is missing locally, never by idle polling.
 
 
+`kernel/head-paths.ts` records `head.paths-recorded` for every candidate head a
+build produces (finalize, post-step pushes, restacks, reconciles, node rewrites
+and integration cycles) before the write that establishes it, with the complete
+path sets in a `head-paths` artifact; `kernel/head-paths-state.ts` folds bounded
+summaries into build state and answers the current candidate's paths without Git.
+
 GitHub archive push/fresh-fetch and rewrite contracts are manual opt-in cases in
 `ports/forge/github.live.integration.test.ts`, using `AB_RUN_LIVE_PORT_CONTRACTS=1` and an
 explicit disposable `AB_GITHUB_CONTRACT_REPO`. Offline transport tests are not
