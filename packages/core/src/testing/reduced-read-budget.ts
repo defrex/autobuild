@@ -1537,6 +1537,57 @@ export async function parkedSweepReadBudget(opts: {
   }
 }
 
+/** Ticket waits (SPEC §11 "Ticket waits"): idle dispatcher ticks over leaves
+ * parked by a ticket wait — one open, one ended and waiting for a resume slot
+ * behind an occupied slot — read zero historical rows, append nothing and
+ * make no wait ticket-source call, at 100 and 100,000 events. `waitCalls`
+ * counts ticket-source calls the wait stage could make (blocker reads,
+ * completion checks and blocker writes). */
+export async function ticketWaitIdleReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  slugs: string[]
+  dispatcher: () => Dispatcher
+  waitCalls: () => number
+  advance: () => void
+}): Promise<void> {
+  const { store, slugs } = opts
+  let historicalRows = 0
+  for (const length of [100, 100_000]) {
+    for (const slug of slugs) await seedBuildFiller(store, slug, length)
+    const restore: (() => void)[] = []
+    for (const slug of slugs) {
+      const events = buildEventRows(store, slug)
+      const boundary = events.at(-1)!.seq
+      const slice = Array.prototype.slice
+      events.slice = function (start?: number, end?: number) {
+        const result = slice.call(this, start, end) as typeof events
+        historicalRows += result.filter((event) => event.seq <= boundary).length
+        return result
+      }
+      restore.push(() => Reflect.deleteProperty(events, 'slice'))
+    }
+    const dispatcher = opts.dispatcher()
+    // Warm durable projections over the new tail once.
+    opts.advance()
+    await dispatcher.tick()
+    const calls = opts.waitCalls()
+    historicalRows = 0
+    for (const _ of [0, 1]) {
+      opts.advance()
+      const requests = await countStoreRequests(store, () =>
+        dispatcher.tick().then(() => undefined),
+      )
+      expect(requests.append ?? 0).toBe(0)
+      expect(requests.appendIfCurrent ?? 0).toBe(0)
+      expect(requests.appendWithArtifactsIfCurrent ?? 0).toBe(0)
+    }
+    expect(historicalRows).toBe(0)
+    expect(opts.waitCalls()).toBe(calls)
+    for (const undo of restore) undo()
+    console.log('ticket wait idle read budget', { history: length, builds: slugs.length })
+  }
+}
+
 /** Count every MemoryBuildStore method call made while `run` executes. */
 async function countStoreRequests(
   store: import('../store/memory').MemoryBuildStore,

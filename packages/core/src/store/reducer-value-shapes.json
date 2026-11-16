@@ -27122,6 +27122,10 @@
         "nodeTargets": {
           "type": "20",
           "optional": false
+        },
+        "waitPending": {
+          "type": "733",
+          "optional": true
         }
       }
     },
@@ -27191,6 +27195,10 @@
         },
         "readinessChangeSeq": {
           "type": "49",
+          "optional": true
+        },
+        "waitPending": {
+          "type": "733",
           "optional": true
         },
         "reclaimPending": {

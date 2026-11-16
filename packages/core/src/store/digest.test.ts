@@ -313,7 +313,7 @@ describe('reduceBuildDigest node targets', () => {
   })
 
   test('the version bump re-reduces saved digests that predate node targets', () => {
-    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(11)
+    expect(BUILD_DIGEST_REDUCER_VERSION).toBe(12)
   })
 
   test('collects every named node as a sorted unique set that only grows', () => {

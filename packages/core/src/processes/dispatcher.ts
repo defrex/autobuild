@@ -1263,10 +1263,6 @@ export class Dispatcher {
     if (this.outOfBudget(opts)) return report
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
-    // Ticket waits are bookkeeping for existing work: validated whether or not
-    // the repository is paused or accepting new work.
-    await this.serviceWaitRequests(report, opts)
-    if (this.outOfBudget(opts)) return report
     await this.leaseSweep(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
     // Nodes with a durable verification request take freed slots before
@@ -5179,31 +5175,31 @@ export class Dispatcher {
    * the build; refused, `wait.refused` writes nothing to the ticket and the
    * declaring phase re-runs with the reason as guidance.
    *
-   * Per-tick cost: one `buildFacts` per nonterminal leaf against the cached
-   * repository view, the same incremental reduced read capacity already makes,
-   * with zero event rows while the log is unchanged. Ticket-source calls happen
-   * only while a request is pending — one tick per declaration, plus retries
-   * after a source failure.
+   * Runs from the lease sweep's per-build pass, before that build's sweep,
+   * whether or not the repository is paused or accepting new work: waits are
+   * bookkeeping for existing work.
+   *
+   * Per-tick cost: none beyond the digest listing the sweep already makes.
+   * Only a build whose digest marks a pending request (`waitPending`) is read
+   * further — one reduced `buildFacts` read plus its ticket-source calls. A
+   * request is pending for one tick per declaration, plus retries after a
+   * source failure.
    */
-  private async serviceWaitRequests(report: TickReport, opts: TickOpts = {}): Promise<void> {
-    for (const { record, digest } of await this.repoBuildDigests()) {
-      if (digest.terminal !== undefined || digest.kind === 'node') continue
-      if (this.outOfBudget(opts)) break
-      const { state } = await this.store.buildFacts(record.slug)
-      const request = pendingWaitRequest(state)
-      if (request === undefined || state.kind === 'node') continue
-      try {
-        await this.serviceWaitRequest(record, state, request)
-      } catch (error) {
-        rethrowAuthorityLapse(error)
-        // A source failure writes nothing; the request is decided next tick.
-        const message =
-          error instanceof Error || isForgeFailure(error) ? error.message : String(error)
-        report.janitorFailed += 1
-        report.janitorDiagnostics.push(
-          `build ${record.slug}: ticket wait ${request.id} not checked — ${message}`,
-        )
-      }
+  private async serviceWaitRequests(record: BuildRecord, report: TickReport): Promise<void> {
+    const { state } = await this.store.buildFacts(record.slug)
+    const request = pendingWaitRequest(state)
+    if (request === undefined || state.kind === 'node') return
+    try {
+      await this.serviceWaitRequest(record, state, request)
+    } catch (error) {
+      rethrowAuthorityLapse(error)
+      // A source failure writes nothing; the request is decided next tick.
+      const message =
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+      report.janitorFailed += 1
+      report.janitorDiagnostics.push(
+        `build ${record.slug}: ticket wait ${request.id} not checked — ${message}`,
+      )
     }
   }
 
@@ -5324,10 +5320,13 @@ export class Dispatcher {
     const now = this.deps.clock().getTime()
     // Terminal builds are filtered on the digest before the lease and TTL
     // checks, so a zero TTL cannot fall through to a log read.
-    for (const record of await this.nonterminalBuilds()) {
-      if (launched.has(record.slug)) continue
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (digest.terminal !== undefined) continue
       // Budget gate: the sweep re-attaches runners per expired build.
       if (this.outOfBudget(opts)) break
+      if (digest.waitPending && digest.kind !== 'node')
+        await this.serviceWaitRequests(record, report)
+      if (launched.has(record.slug)) continue
       try {
         await this.sweepBuild(record, report, launched, paused, now)
       } catch (error) {
