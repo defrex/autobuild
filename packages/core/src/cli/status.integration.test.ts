@@ -1182,6 +1182,74 @@ describe('renderers', () => {
     expect(renderDetail(deferred, NOW).join('\n')).not.toContain('waiting:  on PR — auto merge')
   })
 
+  test('an undecided awaiting-PR leaf states why it has no landing decision (#944)', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedAwaitingPr(store, '/ws/merge-wait', undefined, false, true)
+    const parked = { kind: 'awaiting-pr' } as const
+    const render = async () => {
+      const d = detail(
+        record({ slug: 'merge-wait' }),
+        await store.getEvents('merge-wait'),
+        NOW,
+        undefined,
+        parked,
+      )
+      return { d, text: renderDetail(d, NOW).join('\n') }
+    }
+
+    let { d, text } = await render()
+    expect(d.landingUndecided).toStartWith('no refusal is recorded')
+    expect(text).toContain(
+      '  landing:  undecided — no refusal is recorded; the dispatcher decides at its next janitor poll',
+    )
+    expect(JSON.parse(JSON.stringify(d)).landingUndecided).toBe(d.landingUndecided)
+
+    await store.append('merge-wait', {
+      actor: DISPATCHER,
+      type: 'build.janitor-attempt-failed',
+      payload: {
+        firstFailureAt: '2026-07-15T11:58:00.000Z',
+        attempt: 1,
+        message: 'Merge policy source ticket ENG-1 is unavailable; retrying on next poll',
+        nextAttemptAt: '2026-07-15T12:01:00.000Z',
+      },
+    })
+    ;({ text } = await render())
+    expect(text).toContain(
+      '  landing:  undecided — dispatcher janitor attempt 1 failed — Merge policy source ticket ENG-1 is unavailable; retrying on next poll; next attempt 2026-07-15T12:01:00.000Z',
+    )
+
+    await store.append('merge-wait', {
+      actor: DISPATCHER,
+      type: 'build.janitor-recovered',
+      payload: {},
+    })
+    const finalized = (await store.getEvents('merge-wait')).findLast(
+      (e) => e.type === 'finalize.completed',
+    )!
+    if (finalized.type !== 'finalize.completed') throw new Error('unreachable')
+    await store.append('merge-wait', {
+      actor: DISPATCHER,
+      type: 'landing.decided',
+      payload: {
+        candidate: {
+          head: finalized.payload.pr.headSha,
+          parent: 'base',
+          cycle: String(finalized.seq),
+        },
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      },
+    })
+    ;({ d, text } = await render())
+    expect(d.landingUndecided).toBeUndefined()
+    expect(text).not.toContain('landing:  undecided')
+    expect('landingUndecided' in JSON.parse(JSON.stringify(d))).toBe(false)
+  })
+
   test('merged and closed PRs render repository completion without runner recovery guidance', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
