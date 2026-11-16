@@ -201,7 +201,10 @@ export async function readTerminalGuardBoundary(
   )
   if (!validateReducerValue('terminalGuard', result.value))
     throw new Error('invalid terminalGuard value')
-  return { cursor: result.cursor, value: result.value as { diagnostic?: string } }
+  return {
+    cursor: result.cursor,
+    value: result.value as { diagnostic?: string; waitHeld?: string },
+  }
 }
 
 export async function readOpenTick(store: Reader, repo: string, run: string, historical = true) {
