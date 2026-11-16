@@ -452,6 +452,78 @@ for (const release of matrixReleases)
     ).toBe(broken)
   })
 
+for (const release of matrixReleases)
+  test(`published ${release.version}: recorded head paths and node resolutions project away`, async () => {
+    const catalog = RELEASED_REDUCER_VALUES[release.contract!]!
+    const store = new MemoryBuildStore()
+    const slug = 'released-head-paths'
+    await store.createBuild({ slug, repo: 'repo' })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'head.paths-recorded',
+      payload: {
+        source: 'node-rewrite',
+        head: 'a'.repeat(40),
+        destination: 'b'.repeat(40),
+        mergeBase: 'c'.repeat(40),
+        total: 2,
+        preview: ['a.ts', 'b.ts'],
+        resolution: { total: 1, preview: ['a.ts'] },
+        artifact: { kind: 'head-paths', rev: 0 },
+      },
+    })
+    for (const write of [
+      {
+        type: 'node.writer-reserved' as const,
+        payload: {
+          id: 'rw',
+          operation: 'restack' as const,
+          expected: 'old',
+          parent: 'parent',
+          oldBase: 'base',
+          archive: 'refs/autobuild/archive/x',
+          changes: [{ sha: 'change', build: 'child' }],
+          upstreamBuilds: [],
+          merges: [],
+        },
+      },
+      { type: 'node.item-prepared' as const, payload: { id: 'rw', index: 0, base: 'parent' } },
+      {
+        type: 'node.item-conflicted' as const,
+        payload: { id: 'rw', index: 0, base: 'parent', files: ['a.ts'] },
+      },
+      {
+        type: 'node.item-replayed' as const,
+        payload: { id: 'rw', index: 0, base: 'parent', head: 'resolved', dropped: false },
+      },
+    ])
+      await store.append(slug, { actor: KERNEL, ...write } as never)
+    let checked = 0
+    for (const reducer of ['build', 'buildReadFacts', 'buildStreamSeed', 'nodeRestack']) {
+      if (!Object.hasOwn(catalog.versions, reducer)) continue
+      const answer = await store.getReducerValue({ kind: 'build', slug }, { reducer })
+      expect(JSON.stringify(answer.value)).toMatch(/"(headPaths|resolved)":/)
+      const projected = reducerValueForClient(
+        {
+          version: release.version,
+          projects: release.projects ?? false,
+          catalogIdentity: release.catalogIdentity,
+        },
+        reducer,
+        answer,
+        matrixReleases,
+      )
+      expect(projected.version, reducer).toBe(catalog.versions[reducer]!)
+      expect(projectReducerValue(reducer, projected.value, catalog), reducer).toEqual({
+        value: projected.value,
+      })
+      const served = JSON.stringify(projected.value)
+      expect(served, reducer).not.toMatch(/"(headPaths|resolved)":/)
+      checked++
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
 test('default and next-minor services admit only recorded historical protocols', () => {
   for (const service of ['1.3.0', '1.4.0']) {
     for (const client of ['1.2.0', '1.2.999', '1.3.0', '1.3.999'])

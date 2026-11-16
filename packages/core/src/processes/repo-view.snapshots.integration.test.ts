@@ -7,6 +7,7 @@ import {
   reducedReadBudget,
   targetLineageReadBudget,
   replacedHeadsReadBudget,
+  headPathsStateReadBudget,
   finalizePrRejectionReadBudget,
   summaryHandoffReadBudget,
   countHistoricalRows,
@@ -80,6 +81,7 @@ test('local SQL row budgets include adapter-internal persisted reads on fresh co
     await reducedReadBudget(harness)
     await targetLineageReadBudget(harness)
     await replacedHeadsReadBudget(harness)
+    await headPathsStateReadBudget(harness)
     await finalizePrRejectionReadBudget(harness)
     await summaryHandoffReadBudget(harness)
   } finally {
