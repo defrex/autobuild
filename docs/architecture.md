@@ -708,6 +708,14 @@ boundary in the reducer and log index, independently of reconcile identity.
 The advisory `pipeline.settled` fact records that the engine reached a leaf's
 `wait awaiting-pr`; `kernel/dispatch-capacity.ts` reads it so a finished build
 parked for its merge decision holds no slot.
+Ticket waits (SPEC §11) span four seams. `cli/terminals.ts` (`waitOn`, routed
+as `ab wait-on`) appends the agent's terminal `wait.requested`; the build
+digest marks it pending. The dispatcher's lease-sweep pass validates a pending
+request against the ticket source, adds `blockedBy`, and appends `wait.entered`
+or `wait.refused`. `kernel/ticket-wait.ts` holds the reduced-state predicates
+the engine, capacity, `ab context` and `ab build status` share: a pending
+request decides `wait ticket-wait`, an entered wait parks the leaf without a
+slot, and an ended one requests a `resume` slot.
 The runner refreshes after workspace mutation and before constructing members;
 concurrent siblings settle before another stage is selected. Recovery and
 readiness compose live deployment settings onto the captured artifact revision.

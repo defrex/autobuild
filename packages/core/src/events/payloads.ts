@@ -40,6 +40,31 @@ import {
   type VerifyOutcome,
 } from '../ontology'
 
+/** Most tickets one wait may name. */
+export const WAIT_TICKET_LIMIT = 20
+/** Ticket ids an agent declares a wait on: 1..20 trimmed, nonblank, unique. */
+export const waitTicketIdsSchema = z
+  .array(z.string().trim().min(1))
+  .min(1)
+  .max(WAIT_TICKET_LIMIT)
+  .superRefine((ids, ctx) => {
+    const seen = new Set<string>()
+    for (const [index, id] of ids.entries()) {
+      if (seen.has(id))
+        ctx.addIssue({ code: 'custom', path: [index], message: `duplicate ticket id "${id}"` })
+      seen.add(id)
+    }
+  })
+export const waitRefusalCauseSchema = z.enum([
+  'unknown-ticket',
+  'own-ticket',
+  'completed',
+  'no-source-ticket',
+])
+export type WaitRefusalCause = z.infer<typeof waitRefusalCauseSchema>
+export const waitEndCauseSchema = z.enum(['operator', 'automatic'])
+export type WaitEndCause = z.infer<typeof waitEndCauseSchema>
+
 export const gitOid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
 const targetLineageSchema = z
   .array(
@@ -1380,6 +1405,43 @@ export const eventPayloadSchemas = {
     evidenceSeq: z.number().int().positive(),
     question: z.string().min(1),
     refs: z.array(z.string()),
+  }),
+  /** An agent's terminal declaring that its build waits on other tickets
+   * (SPEC §11 "Ticket waits"). Advisory until the dispatcher validates it:
+   * `wait.entered` or `wait.refused` with the same `id` answers it. */
+  'wait.requested': z.strictObject({
+    id: z.string().min(1),
+    phase: phaseSchema,
+    round,
+    tickets: waitTicketIdsSchema,
+    reason: z.string().trim().min(1),
+  }),
+  /** The dispatcher refused a ticket wait. Nothing was written to the ticket
+   * and no wait began; the declaring phase re-runs with `message` as its
+   * guidance. `tickets` names the offending ids. */
+  'wait.refused': z.strictObject({
+    id: z.string().min(1),
+    cause: waitRefusalCauseSchema,
+    tickets: z.array(z.string().min(1)),
+    message: z.string().trim().min(1),
+  }),
+  /** Entering a ticket wait. The source ticket's `blockedBy` already lists
+   * every ticket; `escalation` identifies the wait's escalation, which an
+   * operator answers to end the wait early. A waiting leaf holds no slot. */
+  'wait.entered': z.strictObject({
+    id: z.string().min(1),
+    escalation: z.string().min(1),
+    tickets: z.array(ticketRefSchema).min(1).max(WAIT_TICKET_LIMIT),
+    reason: z.string().trim().min(1),
+    question: z.string().min(1),
+  }),
+  /** A ticket wait ended without an operator answer: `automatic` when its
+   * blockers completed, `operator` from an operator surface that ends the
+   * wait without answering. An answer to the wait's escalation also ends it. */
+  'wait.ended': z.strictObject({
+    id: z.string().min(1),
+    cause: waitEndCauseSchema,
+    message: z.string().trim().min(1),
   }),
   'phase.failed': z.strictObject({
     phase: phaseSchema,
