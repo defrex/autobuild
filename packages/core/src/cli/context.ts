@@ -30,7 +30,7 @@ import {
   type TerminalCommand,
 } from '../kernel/phases'
 import type { BuildState } from '../kernel/reducer'
-import { waitBlock, waitSummary } from '../kernel/ticket-wait'
+import { waitBlock, waitGuidance, waitSummary } from '../kernel/ticket-wait'
 import {
   isVerifyPhase,
   verifyReportKind,
@@ -509,9 +509,19 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   // carries a `wait` block saying what the session waited on.
   const wait = waitBlock(state, phase, round)
   const waitIds = new Set([wait?.id, wait && state.wait?.escalation])
+  // seq of the refusal or end the wait block reports, and of the answer
+  // behind the guidance.json written so far: only a strictly newer answer
+  // may stand in for the wait's own guidance.
+  const waitSeq =
+    wait?.outcome === 'refused' ? state.waitRequest?.outcome?.seq : state.wait?.ended?.seq
   let guidanceWritten: string | undefined
+  let guidanceSeq: number | undefined
+  const answeredSeq = (id: string) =>
+    [...state.answeredEscalations, ...waitGuidance(state)].find((item) => item.id === id)
+      ?.answeredSeq
   const writeGuidance = async (guidance: { escalation: string; answer: string }) => {
     guidanceWritten = guidance.escalation
+    guidanceSeq = answeredSeq(guidance.escalation)
     const document = waitIds.has(guidance.escalation) ? { ...guidance, wait } : guidance
     await writeDerived('guidance.json', `${JSON.stringify(document, null, 2)}\n`)
   }
@@ -616,14 +626,19 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   }
 
   // A refused wait, or a wait ended without guidance text (a bare retry or an
-  // automatic end), still tells the session what it waited on. Newer guidance
-  // the engine chose over the wait's own keeps precedence.
-  if (wait !== undefined && guidanceWritten === undefined) {
+  // automatic end), still tells the session what it waited on. Only guidance
+  // answered after the refusal or end keeps precedence; an older answer the
+  // blocks above found never hides the wait.
+  const waitSuperseded =
+    guidanceWritten !== undefined &&
+    (guidanceSeq === undefined || waitSeq === undefined || guidanceSeq >= waitSeq)
+  if (wait !== undefined && !waitSuperseded) {
     const guidance = {
       escalation: wait.outcome === 'refused' ? wait.id : (state.wait?.escalation ?? wait.id),
       answer: waitSummary(wait),
     }
-    manifest.feedback ??= { guidance }
+    if (manifest.feedback === undefined || 'guidance' in manifest.feedback)
+      manifest.feedback = { guidance }
     await writeGuidance(guidance)
   }
 
