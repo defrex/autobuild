@@ -124,7 +124,7 @@ JSON bodies are strict: unknown fields are rejected.
 
 | Method and path | Body |
 |---|---|
-| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}` |
+| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}`; `land` alone accepts an optional `"head":"<sha>"` (full or at least seven characters) that binds consent to that candidate head. |
 | `POST …/builds/{slug}/restack` | Empty body; durable node restack demand. |
 | `POST …/builds/{slug}/answer` | One answer variant described below. |
 | `PUT …/settings/intake` | `{"enabled":boolean}` |
@@ -225,7 +225,9 @@ refusal` and preserve the shared `BuildControlError` code and exact reason text.
 A `land` control whose merge candidate is not ready is refused with code
 `merge-not-ready`, and its reason names the unmet condition; a node that fails
 the live completeness check is refused with code `node-incomplete`, naming any
-open children. Neither records consent or starts a merge, so refresh the
+open children. A `land` whose `head` is not the current candidate head is
+refused with code `head-mismatch`, and its reason names the current head.
+None of these records consent or starts a merge, so refresh the
 build's status and retry once the reason is resolved.
 A partial bulk failure uses code `bulk-partial` and includes the durable write
 progress and unattempted builds. Unexpected failures are `500 internal`.

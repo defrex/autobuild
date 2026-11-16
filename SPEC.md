@@ -4073,6 +4073,10 @@ before readiness. `ab merge <slug>` requires readiness, clears hold, and consent
 to this build/node merge into its frozen destination. Consent survives head
 replacement, restacking, verification and re-finalization until another hold or
 completion. It is consent to the merge, not approval of an immutable diff.
+The optional `ab merge <slug> --head <sha>` (operator `head`) refuses with
+`head-mismatch`, recording nothing, unless `<sha>` (full or at least seven
+characters) is the current candidate head. The consented head is the head of
+the recorded decision the consent named; consent survival is unchanged.
 Commands and acknowledgements are sequence-correlated; hold acknowledgement
 requires confirmed native cancellation, while merge acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available
@@ -4835,6 +4839,8 @@ The web dashboard consumes shared terminology without introducing a tree surface
 `ab merges [--json] [--store <ref>]` and registry `merges.list` expose the
 same deterministic, repository-scoped ready consent/held candidates. A recorded
 current decision is required; auto-authorized and consented candidates are absent.
+Queue entries and build status show the current candidate head and the head
+consent was given at (null without consent).
 Source `ab ticket tree` / `tickets.tree` enumerate all ticket states with listing
 diagnostics; effective build targets remain frozen independently of source metadata.
 

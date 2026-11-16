@@ -796,6 +796,18 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       `  pr:       #${d.pr.number}${d.pr.state !== undefined ? ` (${d.pr.state})` : ''} ${d.pr.url}`,
     )
   }
+  if (d.tree !== undefined && (d.landing?.command || d.landing?.decision)) {
+    const command = d.landing.command
+    const consent =
+      command?.kind === 'hold'
+        ? 'held'
+        : command?.kind === 'land'
+          ? d.tree.consentedHead
+            ? `consented at ${d.tree.consentedHead}`
+            : 'consented (head not recorded)'
+          : 'no consent recorded'
+    lines.push(`  merge:    ${consent} · current head ${d.tree.currentHead ?? 'unknown'}`)
+  }
   if (d.decision?.kind === 'awaiting-pr') {
     // The deferral reason (a durable observation about WHY consent could not
     // be applied) takes precedence; otherwise the auto-merge state itself is

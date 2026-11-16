@@ -594,6 +594,33 @@ function corpora(): unknown[][] {
       seq: index + 1,
       ts: '2026-11-12T00:00:00Z',
     })),
+    [
+      {
+        type: 'build.created',
+        payload: { ticket: { source: 'fake', id: 'C-1' }, repo: 'repo', baseBranch: 'main' },
+      },
+      {
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: 'aaa', parent: 'base', cycle: '1' },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'consent',
+          rule: { default: true },
+        },
+      },
+      { type: 'build.land-requested', payload: { decisionSeq: 2 } },
+    ].map((event, index) => ({
+      ...event,
+      build: 'consented',
+      actor:
+        event.type === 'build.land-requested'
+          ? { kind: 'human', user: 'operator' }
+          : { kind: 'dispatcher' },
+      seq: index + 1,
+      ts: '2026-11-16T00:00:00Z',
+    })),
     ...SEEDS.map((seed) => randomBuildLog(seed, 150)),
     ...SEEDS.map((seed) => randomHarvestJournal(seed, 80)),
     ...SEEDS.map((seed) => randomSettingsJournal(seed, 30)),
@@ -659,11 +686,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 33,
+        "build": 34,
         "buildDelegation": 1,
         "buildDigest": 11,
-        "buildReadFacts": 86,
-        "buildStreamSeed": 48,
+        "buildReadFacts": 87,
+        "buildStreamSeed": 49,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 3,

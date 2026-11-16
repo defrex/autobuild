@@ -26,7 +26,12 @@ the pinned execution pipeline.
 `ab merge <slug>` requires readiness, clears hold and consents to this merge
 into its destination. Consent survives head replacement, restacking, verification
 and re-finalization until hold or completion; it approves the merge rather than
-an immutable diff. Accepted node reparenting revokes it. Commands and receipts
+an immutable diff. Accepted node reparenting revokes it.
+`ab merge <slug> --head <sha>` binds consent to the head the reviewer saw: it
+refuses with `head-mismatch`, recording nothing, unless `<sha>` (full or at
+least seven characters) is the current candidate head. Build status and the
+consent queue show the current candidate head beside the head consent was
+given at; consent survival is unchanged. Commands and receipts
 are sequence-correlated: hold acknowledgement confirms native cancellation;
 merge acknowledgement does not claim gates passed. MCP/operator tools offer the
 same actions; the terminal uses `l`/`o`. These controls record durable actions; merge consent does not mean the merge gates have passed.
@@ -192,5 +197,5 @@ unsupported spellings require the reported manual edit before retrying.
 
 MCP discovery offers `merges.list` and its deprecated alias `landings.list`.
 `builds.control` accepts canonical `merge` and deprecated `land` actions through
-both MCP bindings. HTTP control bodies and durable event fields retain their
+both MCP bindings, with an optional `head` that binds consent like `--head`. HTTP control bodies and durable event fields retain their
 existing wire names, including `land`, `landing.decided`, and `integration.landed`.

@@ -73,7 +73,7 @@ mode = "consent"
 
 Your operator agent manages consent:
 
-- `ab merge <slug>` records consent to a ready merge and clears a hold.
+- `ab merge <slug>` records consent to a ready merge and clears a hold. `--head <sha>` refuses unless `<sha>` is the current candidate head.
 - `ab hold <slug>` suppresses merge, even before readiness, and withdraws consent.
 
 Neither control, nor automatic authorization, bypasses readiness, verification, forge checks, protection, or merge gates.

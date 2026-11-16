@@ -12,7 +12,7 @@ export async function abLandings(opts: StatusOpts): Promise<void> {
     else
       for (const entry of entries)
         opts.stdout(
-          `${entry.slug} → ${entry.target.ticket?.id ?? entry.target.branch ?? treeVocabulary.root} · ${entry.branch ?? 'unknown branch'} · ${entry.reason} · ${treeVocabulary.verify} ${entry.verification.results.map((r) => `${r.step}:${r.outcome}`).join(', ') || 'no steps'}${entry.kind === 'node' ? ` · ${treeVocabulary.children} ${entry.children?.length ?? 'unknown'} (${entry.completeness})` : ''}`,
+          `${entry.slug} → ${entry.target.ticket?.id ?? entry.target.branch ?? treeVocabulary.root} · ${entry.branch ?? 'unknown branch'} · ${entry.reason} · ${treeVocabulary.verify} ${entry.verification.results.map((r) => `${r.step}:${r.outcome}`).join(', ') || 'no steps'}${entry.kind === 'node' ? ` · ${treeVocabulary.children} ${entry.children?.length ?? 'unknown'} (${entry.completeness})` : ''} · ${treeVocabulary.head} ${entry.currentHead ?? 'unknown'}${entry.consentedHead ? ` · ${treeVocabulary.consentedAt} ${entry.consentedHead}` : ''}`,
         )
   })
 }

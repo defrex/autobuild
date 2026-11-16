@@ -254,3 +254,37 @@ test('CLI canonical merge commands and deprecated aliases share behavior and kee
       payload: { decisionSeq: 4 },
     })
 })
+
+test('ab merge --head binds consent to the current candidate head and ab merges shows it', async () => {
+  const { runCli } = await import('../cli/main')
+  const store = new MemoryBuildStore()
+  await ready(store, 'bound', '/repo')
+  const out: string[] = [],
+    err: string[] = []
+  const deps = {
+    workspacePath: '/repo',
+    processEnv: { AB_STORE: STORE_REF },
+    openStore: () => store,
+    stdout: (line: string) => out.push(line),
+    stderr: (line: string) => err.push(line),
+    exec: async (cmd: readonly string[]) =>
+      cmd[1] === 'remote'
+        ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+        : { stdout: '/repo/.git\n/repo/.git\n/repo\n', stderr: '', exitCode: 0 },
+  }
+  expect(await runCli(['merges'], deps)).toBe(0)
+  expect(out.pop()).toContain('· head head')
+  expect(await runCli(['merges', '--json'], deps)).toBe(0)
+  expect(JSON.parse(out.pop()!)[0]).toMatchObject({ currentHead: 'head', consentedHead: null })
+  const before = (await store.getEvents('bound')).length
+  expect(await runCli(['merge', 'bound', '--head', 'stale'], deps)).not.toBe(0)
+  expect(err.join('\n')).toContain('the current head is head')
+  expect(await runCli(['merge', 'bound', '--head', ' '], deps)).not.toBe(0)
+  expect(await runCli(['hold', 'bound', '--head', 'head'], deps)).not.toBe(0)
+  expect((await store.getEvents('bound')).length).toBe(before)
+  expect(await runCli(['merge', 'bound', '--head', 'HEAD'], deps)).toBe(0)
+  expect((await store.getEvents('bound')).at(-1)).toMatchObject({
+    type: 'build.land-requested',
+    payload: { decisionSeq: 4 },
+  })
+})

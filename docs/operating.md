@@ -124,6 +124,7 @@ bun ab hold my-build
 
 - **`merge`** requires a ready build, clears its hold and grants consent to merge into its destination.
 - **`hold`** suppresses merge and revokes consent, even before the build is ready.
+- **Reviewed head:** `merge --head <sha>` records consent only while `<sha>` is the current candidate head; otherwise it refuses with `head-mismatch` and records nothing.
 - **Persistence:** consent survives head changes, restacks, verification and re-finalization until a hold or completion. Accepted node reparenting revokes it.
 
 ## Choose an operator surface

@@ -51,6 +51,24 @@ describe('stored consent eligibility', () => {
       awaitsConsent(ready(), { ...restack, target: { seq: 9, branch: 'main', sha: 'new' } }),
     ).toBe(false)
   })
+  test('projects the current candidate head beside the head consent was given at', () => {
+    const record = { slug: 'leaf', repo: 'repo', createdAt: '', updatedAt: '' }
+    const state = ready()
+    expect(projectTree(record, state, restack)).toMatchObject({
+      consent: true,
+      currentHead: 'head',
+      consentedHead: null,
+    })
+    state.landing!.command = { kind: 'land', seq: 7, decisionSeq: 6, head: 'head' }
+    state.pr = { ...state.pr!, headSha: 'replacement' }
+    expect(projectTree(record, state, restack)).toMatchObject({
+      currentHead: 'replacement',
+      consentedHead: 'head',
+    })
+    state.landing!.command = { kind: 'hold', seq: 8 }
+    expect(projectTree(record, state, restack).consentedHead).toBeNull()
+    expect(projectTree(record, { ...state, pr: undefined }, restack).currentHead).toBeNull()
+  })
   test('unknown children are unknown and frozen target never comes from source metadata', () => {
     const state = {
       ...ready(),

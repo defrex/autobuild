@@ -5,6 +5,8 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { LeafRestackState } from './leaf-restack-state'
 import {
   actionableCommands,
+  candidateHeadMatches,
+  currentCandidateHead,
   landPreconditions,
   landRefusalReason,
   leafLandingCandidate,
@@ -271,5 +273,39 @@ describe('why an awaiting-pr leaf is undecided', () => {
     expect(leafLandingUndecidedReason(reduce(finalized()), based)).toStartWith(
       'no refusal is recorded; the dispatcher decides at its next janitor poll',
     )
+  })
+})
+
+describe('consent head matching', () => {
+  const sha = '0123456789abcdef0123456789abcdef01234567'
+  test('names the live head of a leaf and of a node', () => {
+    expect(
+      currentCandidateHead({
+        kind: 'leaf',
+        pr: { number: 1, url: 'u', headSha: 'leaf-head' },
+        integration: undefined,
+      } as never),
+    ).toBe('leaf-head')
+    expect(
+      currentCandidateHead({
+        kind: 'node',
+        pr: { number: 1, url: 'u', headSha: 'pr-head' },
+        integration: { cycle: { head: 'cycle-head' } },
+      } as never),
+    ).toBe('cycle-head')
+    expect(currentCandidateHead({ kind: 'leaf' } as never)).toBeUndefined()
+  })
+
+  test('matches exact heads, case-insensitively, and hexadecimal prefixes of seven or more', () => {
+    expect(candidateHeadMatches(sha, sha)).toBe(true)
+    expect(candidateHeadMatches(sha.toUpperCase(), sha)).toBe(true)
+    expect(candidateHeadMatches(sha.slice(0, 7), sha)).toBe(true)
+    expect(candidateHeadMatches(sha.slice(0, 12).toUpperCase(), sha)).toBe(true)
+    expect(candidateHeadMatches(sha.slice(0, 6), sha)).toBe(false)
+    expect(candidateHeadMatches('head', 'head')).toBe(true)
+    expect(candidateHeadMatches('head', 'headless')).toBe(false)
+    expect(candidateHeadMatches('feature-', 'feature-branch')).toBe(false)
+    expect(candidateHeadMatches('1234567', sha)).toBe(false)
+    expect(candidateHeadMatches(sha, undefined)).toBe(false)
   })
 })
