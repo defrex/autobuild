@@ -1,4 +1,6 @@
 import { readBuildPage } from '../store/event-reads'
+import { abortDestinationSchema } from '../events/payloads'
+import { readRepositoryAttentionPage } from './repository-events'
 import { requestNodeRestack } from './restack'
 import { listOperatorLandings } from './landings'
 import { getOperatorTicketTree } from './tickets'
@@ -276,7 +278,44 @@ const buildControlInput = z.strictObject({
   action: z
     .enum(['pause', 'cancel-pause', 'resume', 'merge', 'land', 'hold', 'abort', 'discard'])
     .describe(
-      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "merge" (deprecated alias "land") for merge consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
+      'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "merge" (deprecated alias "land") for merge consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, hands the ticket back to triage, or to ready with `to`) and "discard" (dequeue a queued build).',
+    ),
+  to: abortDestinationSchema
+    .optional()
+    .describe(
+      'Abort only: where cleanup hands the ticket back — "triage" (the default) or "ready" (blockers kept, redispatched once they merge; falls back to triage when the ticket no longer conforms to the spec standard).',
+    ),
+  reason: z
+    .string()
+    .optional()
+    .describe('Abort only: why, 1–2000 characters; quoted in the hand-back ticket comment.'),
+})
+
+const repositoryEventsInput = z.strictObject({
+  repo: repoField,
+  cursor: z
+    .number()
+    .int()
+    .min(0)
+    .safe()
+    .optional()
+    .describe(
+      'Repository journal cursor: return events with seq strictly greater than this. Omit to receive no events and a baseline cursor for the current head.',
+    ),
+  waitSeconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(30)
+    .default(0)
+    .describe(
+      'Bounded wait: hold the call for at most this many seconds waiting for a new event before returning an empty page (0–30; 0 returns immediately).',
+    ),
+  filter: z
+    .enum(['attention', 'all'])
+    .default('attention')
+    .describe(
+      '"attention" (the default) returns only the repository events `ab watch --operator` reports by default, such as ticket.handed-back; "all" returns every scanned event.',
     ),
 })
 
@@ -625,6 +664,10 @@ export const TOOLS: readonly ToolEntry[] = [
         ...received,
         action: received.action === 'merge' ? ('land' as const) : received.action,
       }
+      if (input.action !== 'abort' && (input.to !== undefined || input.reason !== undefined)) {
+        const error = `"to" and "reason" apply only to the abort action, not "${received.action}"`
+        throw new RegistryError('validation', error, { kind: 'validation', error })
+      }
       await controlPrechecks(ctx.store, input.repo, input.slug, input.action)
       // The route maps BOTH pause and cancel-pause to `dashboard-pause`:
       // on a running build it requests a pause, and on a build with a pending
@@ -635,7 +678,13 @@ export const TOOLS: readonly ToolEntry[] = [
           ? { kind: 'dashboard-pause' }
           : input.action === 'resume'
             ? { kind: 'dashboard-resume' }
-            : { kind: input.action }
+            : input.action === 'abort'
+              ? {
+                  kind: 'abort',
+                  ...(input.to !== undefined ? { to: input.to } : {}),
+                  ...(input.reason !== undefined ? { reason: input.reason } : {}),
+                }
+              : { kind: input.action }
       return controlBuild({
         store: ctx.store,
         ...operatorControlTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets }),
@@ -706,6 +755,20 @@ export const TOOLS: readonly ToolEntry[] = [
     async (raw, ctx) => {
       const input = raw as z.infer<typeof repositoryStatusInput>
       return getRepositoryStatus(ctx.store, input.repo)
+    },
+  ),
+  defineTool(
+    'repository.events',
+    'Read one repository’s journal after a cursor, optionally waiting (bounded, ≤30s) for a new event — the connected agent’s repository attention watch, matching `ab watch --operator`’s default repository filter (for example ticket.handed-back after a ticket hand-back). Build attention comes from builds.events.',
+    repositoryEventsInput,
+    '{events, cursor, hasMore}: the matching events among at most 256 scanned journal rows in sequence order, and the cursor to pass next time — the last scanned seq, which advances past filtered events. hasMore means more rows are already waiting. An expired cursor fails with code "cursor-too-old": re-baseline by omitting the cursor and reconcile with repository.status.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof repositoryEventsInput>
+      return readRepositoryAttentionPage(ctx.store, input.repo, {
+        ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+        waitSeconds: input.waitSeconds,
+        filter: input.filter,
+      })
     },
   ),
   defineTool(

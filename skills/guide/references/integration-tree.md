@@ -178,7 +178,8 @@ own issue; landed child commits keep their own messages.
 Human forge merges are an explicit escape hatch, including while incomplete,
 paused or unverified. The janitor records human provenance and whether the actual
 merged head was verified, then completes the ticket. Closing without merge or
-aborting closes admission and returns the ticket to triage; already claimed
+aborting closes admission and returns the ticket to triage (or ready with
+`ab abort --to ready`); already claimed
 children retain their frozen destination.
 
 ### Node verification context

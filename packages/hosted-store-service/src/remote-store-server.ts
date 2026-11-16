@@ -881,6 +881,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           await withDisconnect(
             req,
             store.getRepositoryTail(repo, since, {
+              ...(url.searchParams.has('through') ? { through: cursorParam(url, 'through') } : {}),
               ...(wait !== undefined ? { waitSeconds: wait } : {}),
               signal: req.signal,
             }),

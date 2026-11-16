@@ -625,9 +625,5 @@
   "packages/core/src/store/event-reads.ts::readHarvestTail::getRepoEvents": {
     "kind": "raw",
     "reason": "Explicit filtered harvest history, local adapter fallback only; hosted stores use indexed bounded pages."
-  },
-  "packages/core/src/store/remote/client.ts::RemoteBuildStore/getRepositoryTail::getRepoEvents": {
-    "kind": "raw",
-    "reason": "Forward the bounded hosted repository tail array, preserving typed expiry errors."
   }
 }
