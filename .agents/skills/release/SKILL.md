@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a release of this repository — bump the version, cut the changelog, tag, push, and publish the GitHub Release. Use whenever the maintainer asks to cut, publish, or tag a release, or asks how releasing this repo works.
+description: Cut a release of this repository — bump the version, cut the changelog, tag, push, publish the GitHub Release, and tell the reporters of resolved GitHub issues that their fix shipped. Use whenever the maintainer asks to cut, publish, or tag a release, or asks how releasing this repo works.
 ---
 
 # /release
@@ -9,7 +9,8 @@ Releasing is a maintainer-triggered repository operation, not part of any
 build pipeline. One command does the whole thing: `bun run release`
 (`tools/release.ts`). Your job is to get the preconditions right, dry-run,
 then run it — never to hand-edit the version, changelog, tag, or GitHub
-Release yourself.
+Release yourself. After a stable release, also
+[tell issue reporters it shipped](#tell-issue-reporters-it-shipped).
 
 This is repo-local maintainer tooling. `tools/` does not ship in the package,
 so nothing here is product surface.
@@ -191,6 +192,66 @@ is saved exactly:
 bun add -d --exact @defrex/autobuild@beta
 bun add -d --exact @defrex/autobuild@1.0.0-beta.0
 ```
+
+## Tell issue reporters it shipped
+
+Issues close when their PR merges, which is before the fix is installable. After
+a **stable** release, comment on every GitHub issue that release resolves, so
+whoever filed it (a person, or an agent working in another project) learns
+which version to install. This is part of the release: do it without being
+asked, and report what you posted.
+
+Skip this for prereleases. The stable release that follows consumes the same
+changelog entries and notifies once.
+
+Do it only after `npm view @defrex/autobuild version` prints the new version.
+The registry can lag a few minutes behind the publish, and the comment tells
+people to install.
+
+List the candidates first. This reads the PRs from the published release
+notes, then the issues each PR links, either as a closing reference or as
+`Closes`, `Fixes`, `Resolves` or `Refs #N` in the PR body:
+
+```sh
+V=v1.7.0   # the tag just released
+gh release view "$V" --json body --jq .body | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+' | sort -un |
+while read -r pr; do
+  gh pr view "$pr" --json closingIssuesReferences,body --jq '
+    ([.closingIssuesReferences[].number]
+     + [.body | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?) #([0-9]+)") | .[0] | tonumber])
+    | unique | .[]'
+done | sort -un |
+while read -r issue; do
+  gh issue view "$issue" --json number,state,stateReason,author,url,comments --jq \
+    "\"#\(.number) \(.state) \(.stateReason) by \(.author.login) \(.url) notified=\([.comments[].body | select(contains(\"/releases/tag/$V\"))] | length)\""
+done
+```
+
+Comment on an issue only when all of these hold:
+
+- Its URL is an issue, not a pull request (`Refs #N` can name a PR).
+- It is `CLOSED` with reason `COMPLETED`. An issue that is still open was only
+  partly addressed (`Refs`), so it gets no comment; name it in your report
+  instead. An issue closed as not planned gets none either.
+- `notified=0`. A nonzero count means an earlier run already posted for this
+  version, so a retry never comments twice.
+
+Then post one comment per issue, naming the PRs from this release that
+addressed it:
+
+```sh
+gh issue comment <issue> --body "This shipped in [v1.7.0](https://github.com/defrex/autobuild/releases/tag/v1.7.0) (#937, #936). Upgrade with \`bun add -d --exact @defrex/autobuild@1.7.0\`.
+
+Posted by <agent name>, working as @defrex's operator agent."
+```
+
+Keep the release URL in the body exactly as shown: it is the marker the
+`notified` check looks for. The last line applies when an agent posts under
+the maintainer's account; a maintainer posting by hand drops it. Do not
+reopen, close, relabel or otherwise change the issue.
+
+Finish by telling the maintainer which issues were notified, which were
+skipped, and why.
 
 Build entries live in `.changelog/<PR-number>.md`; nobody edits Unreleased by
 hand for a build. Existing Unreleased entries remain compatibility inputs for
