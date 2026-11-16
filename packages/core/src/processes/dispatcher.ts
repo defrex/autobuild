@@ -3648,7 +3648,6 @@ export class Dispatcher {
     report: TickReport,
   ): Promise<void> {
     const store = this.store
-    const { tickets } = this.deps
     await this.releaseWorkspace(record.slug, events, 'discard')
     if (record.lease !== undefined) {
       await store.releaseLease(record.slug, record.lease.holder)

@@ -1694,7 +1694,7 @@ describe('runCli — sessionless repository-wide controls', () => {
     // Splitting abort out of the shared case block left its grammar intact.
     const abort = bulkDeps(storeRef)
     expect(await runCli(['abort', 'a-running'], abort)).toBe(0)
-    expect(abort.out).toEqual(['build a-running: abort requested'])
+    expect(abort.out).toEqual(['build a-running: abort requested; ticket returns to triage'])
   })
 
   test('--store beats AB_STORE for the repository-wide form too', async () => {

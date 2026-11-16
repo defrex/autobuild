@@ -2917,7 +2917,8 @@ Human forge merges are an explicit escape hatch, even while incomplete, paused
 or unverified. The janitor records human provenance and whether the actual merged
 head had a successful cycle, then completes the node ticket.
 Closing without merge or aborting closes admission and returns the ticket to
-triage; children already claimed retain their frozen base. Nested nodes work.
+triage (or ready, when the abort asks for it); children already claimed retain
+their frozen base. Nested nodes work.
 A forge plugin needs node branch creation, comparison and
 head-read capabilities to admit node tickets.
 
@@ -3295,7 +3296,7 @@ durable failure. A human may discard only such a queued build. Discard is
 dispatcher cleanup, returns the ticket to its
 configured Ready state, and completes with
 `discarded`; it is deliberately distinct from abort, which returns work to
-Triage for human judgment. Any selected nonterminal build can be aborted from
+Triage for human judgment by default, or to Ready when the operator asks. Any selected nonterminal build can be aborted from
 the list or detail view with `a`; Enter confirms and Escape cancels, so the first
 keypress never writes destructive intent. CLI and dashboard both append the same
 `build.abort-requested` fact through the shared control service. The concrete
@@ -3404,8 +3405,8 @@ with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.cleanup-required`, `workspace.fenced`, `workspace.commits-preserved`, `workspace.commits-lost`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.runtime-recorded`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.ticket-returned`, `build.completed` |
+| Operator commands [D2] | `build.abort-requested {reason?, to?}` → `build.aborted`; `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.hold-requested`; `build.land-requested` → `landing.command-acknowledged`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
 | Merge policy | `landing.decided` (candidate, matched rule/default, labels, target, mode); `landing.native-enable-started`; `landing.native-applied` |
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (either positive `escalation` sequence or exclusive `operator: {user, via?}` provenance for an idle node; optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started` (including optional write-ahead continuation intent, budget ceiling, and the effective first `prompt` the bracket sent: the start prompt, the live continuation message, or the interruption notice); `session.suspended` with partial transcript and active duration; `session.resumed` acceptance (stale reports are inert); reasoned `session.resume-fallback`; kernel-only `session.native-handle-recorded` with bracket and native execution identity; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
@@ -3417,17 +3418,38 @@ with illustrative members:
 | Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
-| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
+| Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts; `ticket-preparation.*` claim boundaries; `ticket.handed-back` and `ticket.handback-settled` |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
 live, the janitor defers the saga so it cannot race process-tree teardown. Once
 that supervisor releases the lease, or an abruptly orphaned lease expires, cleanup
 closes an open unmerged PR without overriding a racing merge, releases the workspace,
 deletes the exact published remote branch and exact local branch, unions the
-`autobuild:aborted` label into the current ticket labels, posts an abort notice, and returns the ticket to
-configured Triage, and only then completes as `abandoned`. External effects are
+`autobuild:aborted` label into the current ticket labels, moves the ticket once
+to its destination and posts an abort notice, reports the hand-back, and only
+then completes as `abandoned`. The destination is configured Triage unless the
+request carried `to: ready`; then the ticket moves straight to configured Ready
+with its blockers untouched, or falls back to Triage, listing the missing parts,
+when its body no longer conforms to the spec standard. External effects are
 idempotent and the three `abort.*` facts checkpoint projections across crashes;
-missing Forge capabilities or outages leave the remainder due on the next tick.
+`abort.ticket-returned` records the destination, the requested role, the reason
+and the missing parts, so a retry reports exactly what the committed move did
+and never writes the ticket again. Missing Forge capabilities or outages leave
+the remainder due on the next tick.
+
+Every dispatcher hand-back of a claimed or ready ticket other than completion —
+abort, spec-standard bounce, preparation recovery returning a confirmed claim,
+closed-unmerged PR and discard — appends one repository `ticket.handed-back`
+only after its move is committed, and it is default watch attention. A build
+hand-back's identity is its slug: closed-PR and discard moves checkpoint as
+`build.ticket-returned`, and the dispatcher refreshes its repository view and
+skips the report when the reduced set of reported, unsettled identities already
+holds the slug, so an append whose acknowledgement was lost is never repeated.
+`ticket.handback-settled` follows `build.completed` and prunes the identity; a
+failed settlement is retried by a later tick, which keeps the reduced value
+bounded by in-flight hand-backs. A preparation hand-back's identity is its
+attempt, marked reported in the preparation reduction and pruned by its
+resolution.
 
 One deliberate subtlety worth recording: `pr.conflicted.baseSha` is
 detection-time evidence, while `reconcile.progress-checked.baseSha` is the
