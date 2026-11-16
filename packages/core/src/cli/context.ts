@@ -30,6 +30,7 @@ import {
   type TerminalCommand,
 } from '../kernel/phases'
 import type { BuildState } from '../kernel/reducer'
+import { waitBlock, waitSummary } from '../kernel/ticket-wait'
 import {
   isVerifyPhase,
   verifyReportKind,
@@ -503,6 +504,18 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
     }
   }
 
+  // A ticket wait refused or ended for this phase occurrence (SPEC §11
+  // "Ticket waits"): every guidance.json naming its escalation or request id
+  // carries a `wait` block saying what the session waited on.
+  const wait = waitBlock(state, phase, round)
+  const waitIds = new Set([wait?.id, wait && state.wait?.escalation])
+  let guidanceWritten: string | undefined
+  const writeGuidance = async (guidance: { escalation: string; answer: string }) => {
+    guidanceWritten = guidance.escalation
+    const document = waitIds.has(guidance.escalation) ? { ...guidance, wait } : guidance
+    await writeDerived('guidance.json', `${JSON.stringify(document, null, 2)}\n`)
+  }
+
   if (inputs.findings === 'current' || inputs.currentFeedback === true) {
     if (phase === 'implement') {
       const receiptSeq = state.verifyStage.implementations[String(round)]
@@ -550,7 +563,7 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
         )
       } else if ('guidance' in feedback) {
         // A human escalation answer fed in as authoritative feedback (§15.6-B).
-        await writeDerived('guidance.json', `${JSON.stringify(feedback.guidance, null, 2)}\n`)
+        await writeGuidance(feedback.guidance)
       }
     }
   }
@@ -581,21 +594,16 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
       (escalation) => escalation.resolution === 'guidance' && escalation.phase === phase,
     )
     const latest = answered.at(-1) // answeredEscalations is in answer order
-    if (latest !== undefined) {
-      await writeDerived(
-        'guidance.json',
-        `${JSON.stringify({ escalation: latest.id, answer: latest.answer }, null, 2)}\n`,
-      )
-    }
+    if (latest !== undefined) await writeGuidance({ escalation: latest.id, answer: latest.answer })
   }
 
-  // Read-deferral guidance repairs access for this same execution occurrence,
-  // including reviewers, which have no producer-feedback carrier.
+  // Read-deferral and ticket-wait guidance resumes this same review occurrence,
+  // which has no producer-feedback carrier.
   if (manifest.feedback === undefined && (phase === 'plan-review' || phase === 'code-review')) {
     const latest = state.answeredEscalations
       .filter(
         (item) =>
-          item.deferral === 'own-build-read' &&
+          (item.deferral === 'own-build-read' || item.wait !== undefined) &&
           item.resolution === 'guidance' &&
           item.phase === phase &&
           item.round === round,
@@ -603,11 +611,20 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
       .at(-1)
     if (latest) {
       manifest.feedback = { guidance: { escalation: latest.id, answer: latest.answer } }
-      await writeDerived(
-        'guidance.json',
-        `${JSON.stringify(manifest.feedback.guidance, null, 2)}\n`,
-      )
+      await writeGuidance(manifest.feedback.guidance)
     }
+  }
+
+  // A refused wait, or a wait ended without guidance text (a bare retry or an
+  // automatic end), still tells the session what it waited on. Newer guidance
+  // the engine chose over the wait's own keeps precedence.
+  if (wait !== undefined && guidanceWritten === undefined) {
+    const guidance = {
+      escalation: wait.outcome === 'refused' ? wait.id : (state.wait?.escalation ?? wait.id),
+      answer: waitSummary(wait),
+    }
+    manifest.feedback ??= { guidance }
+    await writeGuidance(guidance)
   }
 
   if (inputs.commitRange === true && state.kind === 'node' && state.integration?.cycle) {

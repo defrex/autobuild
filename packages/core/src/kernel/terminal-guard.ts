@@ -13,7 +13,7 @@ interface TerminalGuardAcc {
 export function terminalGuardReducer(env: CliEnv) {
   const spec = phaseSpecFor(env.phase)
   return defineReducer<TerminalGuardAcc, AbEvent, { diagnostic?: string }>({
-    version: 3,
+    version: 4,
     initial: () => ({ reconcileAttempt: 0 }),
     fold(acc, events) {
       for (const event of events) {
@@ -82,6 +82,17 @@ function checkEvent(
     throw new Error(
       `second terminal call rejected (D5): this session already escalated — ` +
         `escalation.raised "${event.payload.id}" at seq ${event.seq}. ` +
+        'Every phase ends with exactly one terminal command (§8.4).',
+    )
+  }
+  if (
+    event.type === 'wait.requested' &&
+    event.actor.kind === 'agent' &&
+    event.actor.session === env.session
+  ) {
+    throw new Error(
+      `second terminal call rejected (D5): this session already declared a wait — ` +
+        `wait.requested "${event.payload.id}" at seq ${event.seq}. ` +
         'Every phase ends with exactly one terminal command (§8.4).',
     )
   }

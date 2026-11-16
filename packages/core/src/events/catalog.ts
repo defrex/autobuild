@@ -211,6 +211,10 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'session.build-read-recovered': ['kernel'],
   'phase.deferred': ['kernel'],
   'phase.deferral-escalated': ['kernel'],
+  'wait.requested': ['agent'],
+  'wait.refused': ['dispatcher'],
+  'wait.entered': ['dispatcher'],
+  'wait.ended': ['dispatcher', 'kernel', 'human'],
 }
 
 /**
