@@ -83,11 +83,26 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   gate — urgent tickets first, then normal ones, each in the source's order —
   chooses a short immutable slug from the final conforming spec, and
   starts builds up to the top-level `capacity` bound, after slots reserved for
-  integration nodes awaiting verification or reconcile and for finished builds
-  waiting to re-verify or reconcile. `capacity` counts builds running work: a
-  build that finished its pipeline holds no slot while it waits for a merge
-  decision, though it keeps its workspace until it merges or closes. Priority
-  never preempts a running build.
+  integration nodes awaiting verification or reconcile, for finished builds
+  waiting to re-verify or reconcile, and for builds whose ticket wait ended.
+  `capacity` counts builds running work: a build that finished its pipeline
+  holds no slot while it waits for a merge decision, though it keeps its
+  workspace until it merges or closes. Priority never preempts a running build.
+- **Ticket waits.** A work build that cannot proceed until other tickets
+  complete parks without a slot. A phase agent ends its session with
+  `ab wait-on <ticket-id>... --reason <text>`, a terminal that needs no
+  ticket credential. The dispatcher checks the ids on its next tick, while the
+  build keeps its slot: an unknown id, the build's own ticket or an already
+  completed ticket is refused, nothing is written to the ticket, and the
+  declaring phase re-runs with the refusal as its guidance. Accepted, the ids
+  join the build ticket's `blockedBy`, the build is blocked on an escalation
+  whose question begins `Waiting on`, and it holds no slot while keeping its
+  branch, workspace and completed phase work. Completing the named tickets
+  does not end the wait: answering that escalation does, and the wait ends
+  with cause `operator`. The build then takes a slot
+  ahead of new ticket claims and the declaring phase re-runs at the same round
+  or attempt. `ab build status` shows a `waiting on:` line naming the tickets.
+  Node builds cannot declare waits.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
   after build-ownership readback at the selected slug and, for a keyed attempt,
@@ -496,7 +511,7 @@ under the preceding table.
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` replays the build change onto. |
 | `ticketScanIntervalSeconds` | `60` | positive integer seconds | Hot-reloaded ready scan cadence; tick spacing is the floor, and same-repository merge/completion/abort forces an early scan. |
-| `capacity` | `1` | positive integer | Maximum builds running work at once for this repository; builds parked for a merge decision hold no slot. |
+| `capacity` | `1` | positive integer | Maximum builds running work at once for this repository; builds parked for a merge decision or waiting on other tickets hold no slot. |
 | `forge` | `"github"` | nonblank string | Selects shipped `github` or `local-git`, or a plugin-registered Forge adapter. `github` authenticates with `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |
 
@@ -2177,8 +2192,9 @@ restack state and conflicting files remain in detail, along with every child's
 ticket id, title and live phase (or queued/merged), open-first counts, verification
 steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
-A work build that finished its pipeline and must re-verify or reconcile shows
-the same slot-wait alert on its row, and `ab builds` appends it to the phase.
+A work build that finished its pipeline and must re-verify or reconcile, or
+whose ticket wait ended (`resume`), shows the same slot-wait alert on its row,
+and `ab builds` appends it to the phase.
 
 
 On a TTY, execution-mode `ab dispatch` renders one fixed interactive frame that fills the
@@ -2206,7 +2222,8 @@ while it runs. It keeps its last good value through failed reads and through
 headless ticks that publish no count, and shows `–` until its first read
 succeeds or when the source has no state counts (Linear). `queue` is the
 ready-ticket queue depth, and `active` is occupied capacity (every unfinished
-build, plus finished builds running work again) against root `capacity`. Observation pressure is not a header counter: the
+build except one waiting on tickets, plus finished builds running work again)
+against root `capacity`. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports
 Harvest state.
 The execution-mode frontend checkpoints only the latest run start and the sampled
@@ -2486,6 +2503,13 @@ newest is eligible: it durably supersedes older answers, which do not resurface
 after the winner is delivered. Destinations remain independent, and a new
 answer recorded after an earlier delivery is eligible for the next appropriate
 run. `finalize` and `reconcile` receive their own answers on their next attempt.
+An answer to a ticket wait's escalation, with any resolution, ends the wait,
+and the phase that declared it resumes at the same round or attempt once it
+holds a slot; a reviewer's wait resumes that review round and never feeds the
+next producer. Its `$AB_CONTEXT_DIR/guidance.json` carries a `wait` block
+(`id`, `tickets`, `reason`, `outcome` `ended` or `refused`, `cause`,
+`message`), even after a bare retry or a `wait.ended`, which leave a one-line
+summary as the answer. A refused wait writes the same file with the refusal.
 In each of these routed cases, `ab context`
 writes the answer to `$AB_CONTEXT_DIR/guidance.json` in the build's workspace, and the
 receiving skill treats it as authoritative feedback for that round or attempt.
@@ -2493,8 +2517,8 @@ A producer round has one immediate feedback kind: on a guidance round,
 `$AB_CONTEXT_DIR/guidance.json` takes precedence over findings or the legacy
 single-report feedback. A referenced `verifyStageFailure` receipt remains
 available alongside guidance, with every failed report and cancelled/not-run
-member; it is not erased by feedback precedence. A bare retry writes no
-`$AB_CONTEXT_DIR/guidance.json` and displaces nothing: the resumed round still gets whatever
+member; it is not erased by feedback precedence. Except for a ticket wait, a
+bare retry writes no `$AB_CONTEXT_DIR/guidance.json` and displaces nothing: the resumed round still gets whatever
 the loop was already routing, such as the last review round's findings.
 
 `--dismiss` is per escalation. It answers only blockers that cite at least one

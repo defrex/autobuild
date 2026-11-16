@@ -82,6 +82,8 @@ import {
   slotRequest,
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
+import { pendingWaitRequest, waitParked } from '../kernel/ticket-wait'
+import { changeBlockers } from '../ports/tickets/operations'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
 import {
   landingAuthorized,
@@ -3160,7 +3162,7 @@ export class Dispatcher {
   private async leafAdmission(slug: string): Promise<boolean> {
     const { state } = await this.store.buildFacts(slug)
     if (
-      !epilogueLeaf(state) ||
+      !(epilogueLeaf(state) || waitParked(state)) ||
       state.pendingCommands.some(
         (command) => command.command === 'abort' || command.command === 'pause',
       )
@@ -3798,7 +3800,7 @@ export class Dispatcher {
         retained !== null &&
         this.workspaceOwner(retained)?.recovery !== undefined &&
         (events.lastExecution === 'lost' || events.lastExecution === 'stopped') &&
-        epilogueLeaf(events.state)
+        (epilogueLeaf(events.state) || waitParked(events.state))
       ) {
         report.conflicted += 1
         return
@@ -5163,6 +5165,127 @@ export class Dispatcher {
     }
   }
 
+  // ── c'. Ticket waits (SPEC §11 "Ticket waits") ─────────────────────────────
+
+  /**
+   * Validate every pending `wait.requested` against the ticket source: the
+   * dispatcher holds the source for local and hosted builds alike, so a
+   * build session needs no ticket credential to declare a wait. Accepted, the
+   * missing blockers are added to the build's ticket and `wait.entered` parks
+   * the build; refused, `wait.refused` writes nothing to the ticket and the
+   * declaring phase re-runs with the reason as guidance.
+   *
+   * Runs from the lease sweep's per-build pass, before that build's sweep,
+   * whether or not the repository is paused or accepting new work: waits are
+   * bookkeeping for existing work.
+   *
+   * Per-tick cost: none beyond the digest listing the sweep already makes.
+   * Only a build whose digest marks a pending request (`waitPending`) is read
+   * further — one reduced `buildFacts` read plus its ticket-source calls. A
+   * request is pending for one tick per declaration, plus retries after a
+   * source failure.
+   */
+  private async serviceWaitRequests(record: BuildRecord, report: TickReport): Promise<void> {
+    const { state } = await this.store.buildFacts(record.slug)
+    const request = pendingWaitRequest(state)
+    if (request === undefined || state.kind === 'node') return
+    try {
+      await this.serviceWaitRequest(record, state, request)
+    } catch (error) {
+      rethrowAuthorityLapse(error)
+      // A source failure writes nothing; the request is decided next tick.
+      const message =
+        error instanceof Error || isForgeFailure(error) ? error.message : String(error)
+      report.janitorFailed += 1
+      report.janitorDiagnostics.push(
+        `build ${record.slug}: ticket wait ${request.id} not checked — ${message}`,
+      )
+    }
+  }
+
+  private async serviceWaitRequest(
+    record: BuildRecord,
+    state: BuildState,
+    request: NonNullable<BuildState['waitRequest']>,
+  ): Promise<void> {
+    const refuse = async (
+      cause: EventPayload<'wait.refused'>['cause'],
+      tickets: string[],
+      message: string,
+    ): Promise<void> => {
+      await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'wait.refused',
+        payload: { id: request.id, cause, tickets, message },
+      })
+    }
+    const tickets = this.deps.tickets
+    if (!record.ticket)
+      return refuse(
+        'no-source-ticket',
+        request.tickets,
+        'this build has no source ticket to record blockers on; continue without waiting, or escalate',
+      )
+    const found: Ticket[] = []
+    const unknown: string[] = []
+    for (const id of request.tickets) {
+      const ticket = await tickets.get(id)
+      if (ticket === null) unknown.push(id)
+      else found.push(ticket)
+    }
+    if (unknown.length)
+      return refuse(
+        'unknown-ticket',
+        unknown,
+        `not found in the ${tickets.name} ticket source: ${unknown.join(', ')}; check the ids and declare the wait again, or continue without it`,
+      )
+    const ownId = await this.currentTicketId(record)
+    const own = found.filter((ticket) => ticket.ref.id === ownId).map((ticket) => ticket.ref.id)
+    if (own.length)
+      return refuse(
+        'own-ticket',
+        own,
+        `${ownId} is this build's own ticket; a build cannot wait on itself`,
+      )
+    const rejectedState = this.rejectedState()
+    const completed = found
+      .filter((ticket) => ticket.resolved && !holdsState(ticket.state, rejectedState))
+      .map((ticket) => ticket.ref.id)
+    if (completed.length)
+      return refuse(
+        'completed',
+        completed,
+        `already completed: ${completed.join(', ')}; continue without waiting on them`,
+      )
+    const canonical = [...new Map(found.map((ticket) => [ticket.ref.id, ticket.ref])).values()]
+    const self = await tickets.get(ownId)
+    if (self === null) throw new Error(`build ticket ${ownId} is missing from ${tickets.name}`)
+    const missing = canonical
+      .map((ref) => ref.id)
+      .filter((id) => !(self.blockedBy ?? []).includes(id))
+    if (missing.length) await changeBlockers(tickets, ownId, missing, 'block')
+    const escalation = this.deps.ids('esc')
+    const names = canonical.map((ref) => ref.id).join(', ')
+    await this.store.appendIfCurrent(record.slug, state.lastSeq, {
+      actor: DISPATCHER,
+      type: 'wait.entered',
+      payload: {
+        id: request.id,
+        escalation,
+        tickets: canonical.map((ref) => ({
+          source: ref.source,
+          id: ref.id,
+          ...(ref.url !== undefined ? { url: ref.url } : {}),
+          ...(ref.title !== undefined ? { title: ref.title } : {}),
+        })),
+        reason: request.reason,
+        question:
+          `Waiting on ${names} to complete: ${request.reason}. ` +
+          `Answer to end the wait early; ${request.phase} resumes with the answer.`,
+      },
+    })
+  }
+
   // ── d. Lease sweep (SPEC §15.6-C) ──────────────────────────────────────────
 
   /**
@@ -5197,10 +5320,13 @@ export class Dispatcher {
     const now = this.deps.clock().getTime()
     // Terminal builds are filtered on the digest before the lease and TTL
     // checks, so a zero TTL cannot fall through to a log read.
-    for (const record of await this.nonterminalBuilds()) {
-      if (launched.has(record.slug)) continue
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (digest.terminal !== undefined) continue
       // Budget gate: the sweep re-attaches runners per expired build.
       if (this.outOfBudget(opts)) break
+      if (digest.waitPending && digest.kind !== 'node')
+        await this.serviceWaitRequests(record, report)
+      if (launched.has(record.slug)) continue
       try {
         await this.sweepBuild(record, report, launched, paused, now)
       } catch (error) {
@@ -5382,10 +5508,15 @@ export class Dispatcher {
     if (runs && state.kind !== 'node' && !(await this.leafAdmission(record.slug))) return
     // A finished parked leaf keeps its workspace until merge or close; a
     // stale environment is reaped only for an admitted replacement.
+    // A leaf waiting on tickets, or on the dispatcher's check of its wait,
+    // keeps its workspace, branch and phase work the same way.
     if (
       !runs &&
       state.kind !== 'node' &&
-      ((decision.kind === 'wait' && decision.reason === 'awaiting-pr') || epilogueLeaf(state))
+      ((decision.kind === 'wait' && decision.reason === 'awaiting-pr') ||
+        epilogueLeaf(state) ||
+        waitParked(state) ||
+        pendingWaitRequest(state) !== undefined)
     )
       return
     // A provider- or log-proved END in the same generation re-attaches in
