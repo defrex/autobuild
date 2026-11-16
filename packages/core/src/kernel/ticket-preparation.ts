@@ -16,6 +16,10 @@ export interface TicketPreparation {
   error?: string
   recoveryError?: string
   retryAt?: string
+  /** Spec-standard parts a bounce found missing. */
+  missing?: string[]
+  /** Its hand-back has been reported (`ticket.handed-back`). */
+  reported?: boolean
 }
 /** Completed attempts leave no historical entries in the canonical value. */
 export const ticketPreparationReducer = defineReducer<
@@ -23,12 +27,18 @@ export const ticketPreparationReducer = defineReducer<
   RepositoryEvent,
   Record<string, TicketPreparation>
 >({
-  version: 2,
+  version: 3,
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
       if (event.type === 'ticket-preparation.intended') {
         acc[event.payload.attempt] = { ...event.payload, claimed: false }
+        continue
+      }
+      if (event.type === 'ticket.handed-back') {
+        const attempt = event.payload.attempt
+        const held = attempt === undefined ? undefined : acc[attempt]
+        if (held) held.reported = true
         continue
       }
       if (!event.type.startsWith('ticket-preparation.')) continue
@@ -45,6 +55,7 @@ export const ticketPreparationReducer = defineReducer<
           break
         case 'ticket-preparation.handback-selected':
           held.handback = event.payload.state
+          if (event.payload.missing) held.missing = [...event.payload.missing]
           break
         case 'ticket-preparation.failed':
           held.claimed = event.payload.claimed

@@ -928,8 +928,34 @@ export class RemoteBuildStore implements BuildStore {
       )
     return value as ReducerValue
   }
-  getRepositoryTail(repo: string, since = 0, opts?: EventReadOptions): Promise<RepositoryEvent[]> {
-    return this.getRepoEvents(repo, since, opts)
+  async getRepositoryTail(
+    repo: string,
+    since = 0,
+    opts?: EventReadOptions,
+  ): Promise<RepositoryEvent[]> {
+    validateEventCursor(since)
+    const params = new URLSearchParams({ since: String(since) })
+    const through = opts?.through
+    if (through !== undefined) {
+      validateEventCursor(through)
+      params.set('through', String(through))
+    }
+    if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
+    const events = await this.heldRequest(
+      opts?.signal,
+      (): RepositoryEvent[] => [],
+      () =>
+        this.requestJson(
+          'GET',
+          `${this.repoPath(repo)}/events?${params}`,
+          repositoryEventListSchema,
+          undefined,
+          opts?.signal,
+        ) as Promise<RepositoryEvent[]>,
+    )
+    // A server older than `through` ignores it; its resume window still caps
+    // the response, and the client never returns rows past the bound.
+    return through === undefined ? events : events.filter((event) => event.seq <= through)
   }
   getHarvestHistoryPage(
     repo: string,

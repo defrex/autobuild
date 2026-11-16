@@ -240,7 +240,10 @@ Before claiming, the dispatcher journals a repository-scoped preparation intent;
 a won claim, the selected creation slug and, when the build store attests keyed
 creation, the attempt's creation key are durable boundaries. Caught
 asset-copy, spec-authoring, naming, and build-creation failures return the ticket
-to configured Ready; a nonconforming spec goes to configured Triage. Recovery
+to configured Ready; a nonconforming spec goes to configured Triage. Once a
+confirmed claim's ticket is back, one repository `ticket.handed-back` reports it
+(cause `preparation-failed` or `spec-bounce`, with the missing spec parts) before
+the attempt resolves; an attempt reports at most once. Recovery
 point-reads the selected slug and, for a keyed attempt, the canonical slug derived
 from the repository, selected slug and key: one matching record and atomic
 `build.created` retain ownership even if creation threw after committing or its
