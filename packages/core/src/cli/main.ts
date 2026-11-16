@@ -63,7 +63,7 @@ import { abWatch, WATCH_USAGE } from './watch'
 import { abWait, WAIT_USAGE } from './wait'
 import { abMcp, AB_MCP_USAGE } from './mcp'
 import type { StoreOpener } from './store-opening'
-import { done, escalate, verdict } from './terminals'
+import { done, escalate, verdict, waitOn } from './terminals'
 import { abTicket, lazyTicketSource, openTicketSource } from './ticket'
 import { checkUpgradeCompatibility, type CompatibilityFetch } from './upgrade-compatibility'
 import { abUpgrade, type ResolveConflict } from './upgrade'
@@ -1653,6 +1653,23 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(refs !== undefined ? { refs } : {}),
       })
       stdout(`escalation raised: ${event.payload.id}`)
+      return 0
+    }
+
+    case 'wait-on': {
+      const usage = 'usage: ab wait-on <ticket-id>... --reason <text>'
+      const parsed = parseArgs(rest, { reason: 'value' }, usage)
+      if (parsed.positionals.length === 0) throw new Error(usage)
+      const reason = stringFlag(parsed, 'reason')
+      if (reason === undefined) throw new Error("'ab wait-on' requires --reason <text>")
+      const session = requireSession(command, deps)
+      const event = await waitOn(session, { tickets: parsed.positionals, reason })
+      stdout(
+        `wait requested on ${event.payload.tickets.join(', ')} (${event.payload.id}); ` +
+          'this session is complete. The dispatcher checks the tickets: if it accepts, the ' +
+          'build waits without a slot; if it refuses, this phase re-runs with the reason in ' +
+          'its guidance.',
+      )
       return 0
     }
 

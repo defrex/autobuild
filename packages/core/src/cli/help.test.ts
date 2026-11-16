@@ -35,6 +35,7 @@ const COMMANDS = [
   'done',
   'verdict',
   'escalate',
+  'wait-on',
   'harvest',
 ] as const
 
@@ -367,6 +368,13 @@ describe('layered CLI help catalog', () => {
         'external judgment',
         'operator agent or a human',
         'terminal command',
+      ],
+      'wait-on': [
+        'wait-on <ticket-id>...',
+        '--reason',
+        'terminal command',
+        'without holding',
+        'ab answer',
       ],
       harvest: [
         'harvest status',
