@@ -224,3 +224,25 @@ test('accepted parent alone changes effective node projections and clears same-S
     ),
   ).toEqual(state)
 })
+
+test('items a resolver finished after a conflict are resolved until the reservation resets', () => {
+  let state = nodeRestackReducer.advance(nodeRestackReducer.initial(), [
+    event('node.opened', { sha: 'initial' }),
+    reservation,
+    prepared(0, 'new-parent'),
+    receipt(0, 'new-parent', 'prefix'),
+    prepared(1, 'prefix'),
+    event('node.item-conflicted', { id: 'tx', index: 1, base: 'prefix', files: ['a.ts'] }),
+  ])
+  expect(state.resolved).toBeUndefined()
+  state = nodeRestackReducer.advance(state, [receipt(1, 'prefix', 'resolved')])
+  expect(state.resolved).toEqual([1])
+  state = nodeRestackReducer.advance(state, [
+    event('node.publish-intended', { id: 'tx', head: 'resolved' }),
+    event('node.rewritten', { id: 'tx', previous: 'old-head', head: 'resolved' }),
+    event('node.writer-settled', { id: 'tx', outcome: 'completed' }),
+  ])
+  expect(state.resolved).toBeUndefined()
+  state = nodeRestackReducer.advance(state, [reservation])
+  expect(state.resolved).toBeUndefined()
+})

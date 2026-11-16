@@ -61,6 +61,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'target.rewritten': ['dispatcher', 'kernel'],
   'target.rewrite-cleared': ['dispatcher', 'kernel'],
   'target.moved': ['dispatcher', 'kernel'],
+  'head.paths-recorded': ['kernel', 'dispatcher'],
   'restack.prepared': ['kernel', 'dispatcher'],
   'restack.replayed': ['kernel', 'dispatcher'],
   'restack.publish-intended': ['kernel', 'dispatcher'],

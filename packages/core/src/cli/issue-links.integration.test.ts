@@ -8,7 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
-import { agentActor, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import type { EventType } from '../events/payloads'
 import { reduceBuild } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
@@ -147,6 +147,28 @@ describe('ab issue downgrade', () => {
 describe('finalize seals and composes issue links', () => {
   let workspace: string
 
+  // Local finalize opens the PR from the implemented, published head and
+  // records that head's changed paths against the provisioned base first.
+  async function seedPublishedHead(): Promise<void> {
+    const base = await runGit(['rev-parse', 'main'], workspace)
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'worktree',
+        ref: workspace,
+        branch: BRANCH,
+        base: { source: 'remote', sha: base },
+      },
+    })
+    await store.append(BUILD, {
+      actor: agentActor('implement', 's_test'),
+      type: 'implement.completed',
+      payload: { round: 1, commits: { base, head }, artifact: { kind: 'implement-notes', rev: 0 } },
+    })
+  }
+
   beforeEach(async () => {
     workspace = join(tmp, 'ws-finalize')
     await initWorkspaceRepo(workspace)
@@ -162,6 +184,7 @@ describe('finalize seals and composes issue links', () => {
   })
 
   test('a capable forge gets neutralized title and keyword-ending body', async () => {
+    await seedPublishedHead()
     await downgradeIssueLink({ store, env: implementEnv }, { issue: '824', reason: 'API half' })
     const forge = new FakeForge({ closesIssues: true })
     await done(finalizeDeps(forge))
@@ -177,6 +200,7 @@ describe('finalize seals and composes issue links', () => {
   })
 
   test('a downgrade after the seal but before openPr is inert', async () => {
+    await seedPublishedHead()
     const forge = new FakeForge({ closesIssues: true })
     const openPr = forge.openPr.bind(forge)
     forge.openPr = async (opts) => {
@@ -193,6 +217,7 @@ describe('finalize seals and composes issue links', () => {
   })
 
   test('a retry after a lost finalize.completed reseals nothing and composes the same links', async () => {
+    await seedPublishedHead()
     const forge = new FakeForge({ closesIssues: true })
     const requested: unknown[] = []
     const openPr = forge.openPr.bind(forge)
@@ -203,7 +228,7 @@ describe('finalize seals and composes issue links', () => {
     const failing = Object.create(store) as MemoryBuildStore
     let fail = true
     failing.appendWithArtifactsIfCurrent = (async (slug, cursor, artifacts, make) => {
-      if (fail && make([]).type === 'finalize.completed') {
+      if (fail && artifacts.length === 0 && make([]).type === 'finalize.completed') {
         fail = false
         throw new Error('injected append failure')
       }
@@ -228,7 +253,7 @@ describe('finalize seals and composes issue links', () => {
         ref: 'sandbox-finalize',
         path: '/vercel/sandbox/workspace',
         branch: BRANCH,
-        base: { source: 'existing', sha: 'a'.repeat(40) },
+        base: { source: 'existing', sha: await runGit(['rev-parse', 'main'], workspace) },
       },
     })
     const forge = new FakeForge({ closesIssues: true })
@@ -255,6 +280,7 @@ describe('finalize seals and composes issue links', () => {
   })
 
   test('a forge without the capability records links but writes no keywords', async () => {
+    await seedPublishedHead()
     const forge = new FakeForge()
     let passed: unknown = 'unset'
     const openPr = forge.openPr.bind(forge)
@@ -280,6 +306,7 @@ describe('finalize seals and composes issue links', () => {
       kind: 'pr-description',
       content: '# Title\n\nfixes #824 here\n',
     })
+    await seedPublishedHead()
   }
 
   test('a leaf aimed at a node writes refs-only lines into its PR', async () => {
@@ -307,7 +334,7 @@ describe('finalize seals and composes issue links', () => {
     const failing = Object.create(store) as MemoryBuildStore
     let fail = true
     failing.appendWithArtifactsIfCurrent = (async (slug, cursor, artifacts, make) => {
-      if (fail && make([]).type === 'finalize.completed') {
+      if (fail && artifacts.length === 0 && make([]).type === 'finalize.completed') {
         fail = false
         throw new Error('injected append failure')
       }
@@ -333,6 +360,7 @@ describe('finalize seals and composes issue links', () => {
     await store.close()
     store = await seedStore()
     await store.putArtifact(BUILD, { kind: 'pr-description', content: '# Title\n\nBody.\n' })
+    await seedPublishedHead()
     const forge = new FakeForge({ closesIssues: true })
     await done(finalizeDeps(forge))
     expect(await types()).not.toContain('issue-links.sealed')

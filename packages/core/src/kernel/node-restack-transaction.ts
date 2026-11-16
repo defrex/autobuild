@@ -8,6 +8,7 @@ import type { BuildStore } from '../store/types'
 import type { EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import { snapshotParent } from './snapshot-parent'
+import { recordHeadPaths } from './head-paths'
 import type { RestackDeps } from './reconcile-restack'
 import { retainReplay, restoreReplay, requireRewrite } from './reconcile-restack'
 import {
@@ -341,6 +342,37 @@ export async function runNodeTransaction(
     node = (await current(deps.store, deps.slug)).nodeRestack!
   }
   const head = node!.items.at(-1)?.head ?? active.parent
+  // Record the head's paths before its publication intent; items a resolver
+  // finished after a conflict carry the node head's reconcile resolution.
+  await authority(deps)
+  const resolution = (node!.resolved ?? []).map((index) => {
+    const change = active.changes[index]!
+    const item = node!.items[index]!
+    return {
+      change: change.sha,
+      parent: `${change.sha}^${change.mainline ?? 1}`,
+      ...(change.mainline === undefined ? {} : { mainline: change.mainline }),
+      onto: item.base,
+      head: item.head,
+    }
+  })
+  const latest = await current(deps.store, deps.slug)
+  // A recovered publication intent predates this attempt's revision chain,
+  // exactly as the rewrite below refreshes it.
+  if (node!.intent) revision = latest.lastSeq
+  const recorded = await recordHeadPaths(
+    { ...deps, actor: KERNEL },
+    {
+      source: 'node-rewrite',
+      head,
+      destination: active.parent,
+      ...(resolution.length > 0 ? { resolution } : {}),
+      state: latest,
+      expectedSeq: revision,
+    },
+  )
+  if (recorded === null) throw new Error('node writer log advanced; retry reserved operation')
+  if (recorded.recorded === 'appended') revision = recorded.event.seq
   if (!node!.intent)
     await append({
       actor: KERNEL,
