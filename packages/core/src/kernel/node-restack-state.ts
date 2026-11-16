@@ -36,6 +36,9 @@ export interface NodeRestackState {
   contributionBase?: string
   active?: EventPayload<'node.writer-reserved'>
   items: EventPayload<'node.item-replayed'>[]
+  /** Indexes of `items` whose replay a resolver finished after a conflict:
+   * the node head's reconcile resolution is computed from exactly these. */
+  resolved?: number[]
   prepared?: EventPayload<'node.item-prepared'>
   conflict?: EventPayload<'node.item-conflicted'>
   intent?: EventPayload<'node.publish-intended'>
@@ -114,6 +117,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         state.contributionBoundaries ??= {}
         state.contributionBoundaries[event.payload.expected] = event.payload.oldBase
         state.items = []
+        delete state.resolved
         break
       case 'node.item-prepared':
         if (event.payload.id !== state.active?.id || event.payload.index !== state.items.length)
@@ -146,6 +150,8 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
           throw new Error('node receipt does not match the prepared change')
         if (event.payload.dropped && event.payload.head !== event.payload.base)
           throw new Error('dropped node change moved the replay prefix')
+        if (state.conflict?.index === event.payload.index)
+          state.resolved = [...(state.resolved ?? []), event.payload.index]
         state.items.push(event.payload)
         delete state.prepared
         delete state.conflict
@@ -214,6 +220,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
         delete state.intent
         delete state.rewritten
         state.items = []
+        delete state.resolved
         break
       case 'node.contribution-recorded':
         state.contribution = event.payload
@@ -233,7 +240,7 @@ export function advanceNodeRestack(state: NodeRestackState, events: readonly AbE
   }
 }
 export const nodeRestackReducer = defineReducer<NodeRestackState, AbEvent, NodeRestackState>({
-  version: 9,
+  version: 10,
   initial: () => ({ items: [] }),
   fold: advanceNodeRestack,
   finish: (state) => structuredClone(state),

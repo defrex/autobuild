@@ -30,6 +30,7 @@ export const executionProgress = {
   'target.rewritten': 'bookkeeping',
   'target.rewrite-cleared': 'bookkeeping',
   'target.moved': 'bookkeeping',
+  'head.paths-recorded': 'bookkeeping',
   'restack.prepared': 'progress',
   'restack.replayed': 'progress',
   'restack.publish-intended': 'progress',
