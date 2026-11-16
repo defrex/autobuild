@@ -87,6 +87,7 @@ async function terminalDeposit<T extends EventType>(
   deps: TerminalDeps,
   artifacts: ArtifactInput[],
   makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  refuse?: (guard: { waitHeld?: string }) => string | undefined,
 ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
   for (;;) {
     const boundary = await readTerminalGuardBoundary(
@@ -97,6 +98,8 @@ async function terminalDeposit<T extends EventType>(
       deps.env.session,
     )
     if (boundary.value.diagnostic) throw new Error(boundary.value.diagnostic)
+    const refusal = refuse?.(boundary.value)
+    if (refusal !== undefined) throw new Error(refusal)
     const deposited = await deps.store.appendWithArtifactsIfCurrent(
       deps.env.build,
       boundary.cursor,
@@ -965,10 +968,17 @@ export async function waitOn(
   const own = (await store.getBuild(env.build))?.ticket?.id
   if (own !== undefined && tickets.includes(own))
     throw new Error(`ticket "${own}" is this build's own ticket; a build cannot wait on itself`)
-  const { event } = await terminalDeposit(deps, [], () => ({
-    actor: agentActor(env.phase, env.session),
-    type: 'wait.requested',
-    payload: { id: deps.ids('wait'), phase: env.phase, round: env.round, tickets, reason },
-  }))
+  // Checked against the same prefix the append commits to, so concurrent
+  // verifiers cannot both declare: the loser re-reads and is refused.
+  const { event } = await terminalDeposit(
+    deps,
+    [],
+    () => ({
+      actor: agentActor(env.phase, env.session),
+      type: 'wait.requested',
+      payload: { id: deps.ids('wait'), phase: env.phase, round: env.round, tickets, reason },
+    }),
+    (guard) => guard.waitHeld,
+  )
   return event
 }

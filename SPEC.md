@@ -2415,7 +2415,11 @@ tickets complete ends its session with `ab wait-on <ticket-id>... --reason
 only what needs no ticket source — 1 to 20 unique nonblank ids, a nonblank
 reason, no prior terminal in the session, a work build, and not the build's own
 recorded ticket id — and appends one `wait.requested {id, phase, round,
-tickets, reason}` as the session's agent actor. A session therefore needs only
+tickets, reason}` as the session's agent actor. A build holds one ticket wait
+at a time: while another session's request is undecided or its wait is open,
+the command is refused with no write, checked against the same log prefix the
+append commits to, so of two concurrent verifiers only one declares and the
+other keeps its ordinary terminals. A session therefore needs only
 its build-phase store grant, local or hosted; it never holds a ticket-source
 credential for a wait.
 

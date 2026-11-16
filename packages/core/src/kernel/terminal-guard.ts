@@ -9,11 +9,14 @@ interface TerminalGuardAcc {
   sessionStartedSeq?: number
   permanent?: { seq: number; diagnostic: string }
   completion?: { seq: number; diagnostic: string }
+  /** The build's undecided or open ticket wait, from any session. Waits are
+   * build-wide, so a concurrent verifier may not declare a second one. */
+  wait?: { id: string; session: string; tickets: string[]; escalation?: string }
 }
 export function terminalGuardReducer(env: CliEnv) {
   const spec = phaseSpecFor(env.phase)
-  return defineReducer<TerminalGuardAcc, AbEvent, { diagnostic?: string }>({
-    version: 4,
+  return defineReducer<TerminalGuardAcc, AbEvent, { diagnostic?: string; waitHeld?: string }>({
+    version: 5,
     initial: () => ({ reconcileAttempt: 0 }),
     fold(acc, events) {
       for (const event of events) {
@@ -22,6 +25,7 @@ export function terminalGuardReducer(env: CliEnv) {
         if (event.type === 'reconcile.started') acc.reconcileAttempt = event.payload.attempt
         if (event.type === 'session.started' && event.payload.session === env.session)
           acc.sessionStartedSeq = event.seq
+        foldWait(acc, event)
         try {
           checkEvent(event, env, acc.reconcileAttempt, acc.sessionStartedSeq)
         } catch (error) {
@@ -34,9 +38,43 @@ export function terminalGuardReducer(env: CliEnv) {
       const first = [acc.permanent, acc.completion]
         .filter((item) => item !== undefined)
         .sort((a, b) => a.seq - b.seq)[0]
-      return first ? { diagnostic: first.diagnostic } : {}
+      return {
+        ...(first ? { diagnostic: first.diagnostic } : {}),
+        ...(acc.wait ? { waitHeld: waitHeldDiagnostic(acc.wait) } : {}),
+      }
     },
   })
+}
+function foldWait(acc: TerminalGuardAcc, event: AbEvent): void {
+  if (event.type === 'wait.requested' && event.actor.kind === 'agent')
+    acc.wait = {
+      id: event.payload.id,
+      session: event.actor.session,
+      tickets: [...event.payload.tickets],
+    }
+  else if (event.type === 'wait.entered' && acc.wait?.id === event.payload.id)
+    acc.wait.escalation = event.payload.escalation
+  else if (
+    (event.type === 'wait.refused' || event.type === 'wait.ended') &&
+    acc.wait?.id === event.payload.id
+  )
+    delete acc.wait
+  else if (
+    event.type === 'escalation.answered' &&
+    acc.wait?.escalation !== undefined &&
+    acc.wait.escalation === event.payload.id
+  )
+    delete acc.wait
+}
+/** One wait per build at a time: a second declaration while another session's
+ * wait is undecided or open would replace it, losing its tickets. */
+function waitHeldDiagnostic(wait: NonNullable<TerminalGuardAcc['wait']>): string {
+  return (
+    `wait rejected: session "${wait.session}" already declared wait "${wait.id}" on ` +
+    `${wait.tickets.join(', ')}, and a build holds one ticket wait at a time. ` +
+    'End this session with its ordinary terminal; if it also depends on other ' +
+    'tickets, name them with ab escalate instead.'
+  )
 }
 function checkEvent(
   event: AbEvent,
