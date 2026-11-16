@@ -1510,3 +1510,46 @@ describe('node issue link facts', () => {
     ).toThrow(/invalid payload/)
   })
 })
+
+test('an abort request carries an optional triage or ready destination', () => {
+  const write = (payload: unknown) =>
+    validateEventWrite({ actor: humanActor('alice'), type: 'build.abort-requested', payload })
+  expect(write({ to: 'ready', reason: 'waiting on T-2' }).payload).toEqual({
+    to: 'ready',
+    reason: 'waiting on T-2',
+  })
+  expect(write({}).payload).toEqual({})
+  expect(() => write({ to: 'backlog' })).toThrow()
+})
+
+test('hand-back checkpoints round-trip, and a legacy abort checkpoint still validates', () => {
+  const ticket = { source: 'fake', id: 'T-1' }
+  expect(
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'abort.ticket-returned',
+      payload: { ticket, state: 'Triage', label: 'autobuild:aborted' },
+    }).payload,
+  ).toEqual({ ticket, state: 'Triage', label: 'autobuild:aborted' })
+  expect(
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'abort.ticket-returned',
+      payload: {
+        ticket,
+        state: 'Triage',
+        label: 'autobuild:aborted',
+        role: 'triage',
+        requested: 'ready',
+        missing: ['a'],
+      },
+    }).payload,
+  ).toMatchObject({ role: 'triage', requested: 'ready' })
+  expect(
+    validateEventWrite({
+      actor: DISPATCHER,
+      type: 'build.ticket-returned',
+      payload: { ticket, state: 'Ready', cause: 'discard', role: 'ready' },
+    }).payload,
+  ).toEqual({ ticket, state: 'Ready', cause: 'discard', role: 'ready' })
+})

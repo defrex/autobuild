@@ -13,7 +13,13 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
 import { OPERATOR_TOOL_ANNOTATIONS } from '@defrex/autobuild/operator'
-import { buildRegistry, RegistryError, TOOLS } from '@defrex/autobuild/operator'
+import {
+  buildRegistry,
+  RegistryError,
+  repositoryNeedsAttention,
+  TOOLS,
+} from '@defrex/autobuild/operator'
+import type { RepositoryEvent } from '@defrex/autobuild/plugin-sdk'
 import { createOperatorServer } from './operator-server'
 import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
 import type { OperatorTicketBackend } from '@defrex/autobuild/operator'
@@ -1114,6 +1120,10 @@ describe('agent tool registry contract', () => {
       ['builds.events', { repo, slug: 'demo', cursor: -1 }],
       ['builds.events', { repo, slug: 'demo', cursor: 0, waitSeconds: 31 }],
       ['builds.events', { repo, slug: 'demo', cursor: 0, waitSeconds: 1.5 }],
+      ['repository.events', { repo, cursor: -1 }],
+      ['repository.events', { repo, cursor: 0, waitSeconds: 31 }],
+      ['repository.events', { repo, cursor: 0, filter: 'some' }],
+      ['builds.control', { repo, slug: 'demo', action: 'abort', to: 'backlog' }],
       ['builds.artifact', { repo, slug: 'demo', kind: 'notes', rev: -3 }],
       ['builds.control', { repo, slug: 'demo', action: 'explode' }],
       ['builds.answer', { repo, slug: 'demo', resolution: 'guidance' }],
@@ -1176,6 +1186,7 @@ describe('agent tool registry contract', () => {
       'builds.events': { repo, slug: 'demo', cursor: 0 },
       'builds.artifact': { repo, slug: 'demo', kind: 'notes' },
       'repository.status': { repo },
+      'repository.events': { repo },
       'harvest.status': { repo },
       'tickets.states': { repo },
       'tickets.state.create': { repo, name: 'icebox' },
@@ -1307,6 +1318,96 @@ describe('agent tool registry contract', () => {
       page.events.map((event) => event.type),
       ['build.pause-requested'],
     )
+  })
+
+  test('repository.events delivers exactly the ab watch repository attention set', async () => {
+    const world = await seedWorld()
+    const registry = buildRegistry({ store: world.store, clock })
+    const baseline = (await registry.call('repository.events', { repo })) as {
+      events: unknown[]
+      cursor: number
+      hasMore: boolean
+    }
+    expectEqual(baseline.events, [])
+    expect(baseline.hasMore).toBe(false)
+    await world.store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket.handed-back',
+      payload: {
+        ticket: { source: 'file', id: 'AUT-1' },
+        build: 'demo',
+        cause: 'abort',
+        state: 'Ready',
+        role: 'ready',
+      },
+    })
+    await world.store.appendRepo(repo, {
+      actor: humanActor('Ada'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+    const appended = (await world.store.getRepoEvents(repo, baseline.cursor)) as RepositoryEvent[]
+    const attention = (await registry.call('repository.events', {
+      repo,
+      cursor: baseline.cursor,
+    })) as { events: RepositoryEvent[]; cursor: number }
+    expectEqual(attention.events, appended.filter(repositoryNeedsAttention))
+    expectEqual(
+      attention.events.map((event) => event.type),
+      ['ticket.handed-back'],
+    )
+    // The cursor advances past filtered events.
+    expect(attention.cursor).toBe(appended.at(-1)!.seq)
+    const all = (await registry.call('repository.events', {
+      repo,
+      cursor: baseline.cursor,
+      filter: 'all',
+    })) as { events: RepositoryEvent[] }
+    expectEqual(all.events, appended)
+    // A bounded wait ends on a new event.
+    const waiting = registry.call('repository.events', {
+      repo,
+      cursor: attention.cursor,
+      waitSeconds: 10,
+    }) as Promise<{ events: { type: string }[] }>
+    await new Promise((resolve) => setTimeout(resolve, 750))
+    await world.store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket.handed-back',
+      payload: {
+        ticket: { source: 'file', id: 'AUT-2' },
+        attempt: 'prep',
+        cause: 'spec-bounce',
+        state: 'Triage',
+        role: 'triage',
+      },
+    })
+    expectEqual(
+      (await waiting).events.map((event) => event.type),
+      ['ticket.handed-back'],
+    )
+  })
+
+  test('builds.control records an abort destination and refuses it on other actions', async () => {
+    const world = await seedWorld()
+    const registry = buildRegistry({ store: world.store, tickets: world.backend, clock })
+    const refused = await registry
+      .call(
+        'builds.control',
+        { repo, slug: 'demo', action: 'pause', to: 'ready' },
+        { identity: 'Ada' },
+      )
+      .catch((error) => error)
+    expect(refused).toBeInstanceOf(RegistryError)
+    await registry.call(
+      'builds.control',
+      { repo, slug: 'demo', action: 'abort', to: 'ready', reason: 'waiting on AUT-2' },
+      { identity: 'Ada' },
+    )
+    expect((await world.store.getEvents('demo')).at(-1)).toMatchObject({
+      type: 'build.abort-requested',
+      payload: { to: 'ready', reason: 'waiting on AUT-2' },
+    })
   })
 
   test('notes.read and notes.write match their documented seams', async () => {

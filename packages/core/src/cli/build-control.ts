@@ -12,7 +12,7 @@ import { readBuildFacts } from '../store/reduced-reads'
  * normal runner and dispatcher consume them.
  */
 import type { AbEvent } from '../events/catalog'
-import type { PinnedAsset } from '../events/payloads'
+import type { AbortDestination, PinnedAsset } from '../events/payloads'
 import { humanActor, KERNEL, type Via } from '../events/envelope'
 import { discardInFlight, type BuildState, type OpenEscalation } from '../kernel/reducer'
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
@@ -21,6 +21,9 @@ import { specConformance } from '../spec-standard'
 import { samplePinnedAssets } from '../store/ticket-assets'
 import type { BuildStore } from '../store/types'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
+
+/** Matches the hand-back report's reason bound. */
+export const ABORT_REASON_LIMIT = 2000
 
 const ACTIVE_STATUSES: readonly BuildStatus[] = ['running', 'collecting', 'paused', 'blocked']
 
@@ -46,7 +49,13 @@ export type BuildControlAction =
   | { kind: 'land' }
   | { kind: 'pause' }
   | { kind: 'resume' }
-  | { kind: 'abort' }
+  | {
+      kind: 'abort'
+      /** Where cleanup hands the ticket back; omitted means triage. */
+      to?: AbortDestination
+      /** Recorded on the request and quoted in the hand-back comment. */
+      reason?: string
+    }
   | { kind: 'discard' }
   | { kind: 'auto-merge-on' }
   | { kind: 'auto-merge-off' }
@@ -124,6 +133,7 @@ export type BuildControlErrorCode =
   | 'incompatible-answer-options'
   | 'merge-not-ready'
   | 'node-incomplete'
+  | 'invalid-argument'
 
 /** Typed codes let the dashboard turn stale selections/prompts into warnings
  * while the CLI can surface the same underlying conflict as a command error. */
@@ -161,6 +171,7 @@ async function appendCommand(
   user: string,
   command: BuildControlCommand,
   via?: Via,
+  abort: { to?: AbortDestination; reason?: string } = {},
 ): Promise<BuildControlResult> {
   const actor = humanActor(user, via)
   let event: AbEvent
@@ -186,7 +197,10 @@ async function appendCommand(
       event = await store.append(slug, {
         actor,
         type: 'build.abort-requested',
-        payload: {},
+        payload: {
+          ...(abort.reason !== undefined ? { reason: abort.reason } : {}),
+          ...(abort.to !== undefined ? { to: abort.to } : {}),
+        },
       })
       break
     case 'discard':
@@ -295,7 +309,7 @@ function abortPending(slug: string): BuildControlError {
   return new BuildControlError(
     'abort-pending',
     `build "${slug}" is aborting; nothing was recorded. Abort is not revocable — ` +
-      'after cleanup returns the ticket to Triage, dispatch it as a fresh build',
+      'after cleanup hands the ticket back, dispatch it as a fresh build',
   )
 }
 
@@ -521,12 +535,33 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
   }
 
   if (opts.action.kind === 'abort') {
+    const reason = opts.action.reason?.trim()
+    if (opts.action.reason !== undefined && (!reason || reason.length > ABORT_REASON_LIMIT))
+      throw new BuildControlError(
+        'invalid-argument',
+        `abort reason must be 1–${ABORT_REASON_LIMIT} characters after trimming; nothing was recorded`,
+      )
+    const to = opts.action.to
     if (state.status !== 'queued') activeState(opts.slug, state)
     const existing = events.latestAbort
     if (existing !== undefined) {
+      // An identical repeat is the same request; a different destination or
+      // reason would be silently ignored by cleanup, so it is refused.
+      const recordedTo = existing.payload.to ?? 'triage'
+      const recordedReason = existing.payload.reason?.trim() || undefined
+      if (recordedTo !== (to ?? 'triage') || recordedReason !== reason)
+        throw new BuildControlError(
+          'abort-pending',
+          `build "${opts.slug}" already has an abort request returning its ticket to ` +
+            `${recordedTo}${recordedReason ? ` (reason: ${recordedReason})` : ''}; nothing was recorded. ` +
+            'An abort request is not revocable or editable.',
+        )
       return { kind: 'command', slug: opts.slug, command: 'abort', event: existing }
     }
-    return appendCommand(opts.store, opts.slug, user, 'abort', opts.via)
+    return appendCommand(opts.store, opts.slug, user, 'abort', opts.via, {
+      ...(to !== undefined ? { to } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    })
   }
 
   activeState(opts.slug, state)

@@ -1373,7 +1373,7 @@ state eligible.
 | `claimedState` | hosted, github: `doing` | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `doneState` | hosted, github: `"done"` | optional nonblank string | Project completion state and merged-ticket transition; hosted and github tickets only. A github ticket is done when its issue is closed as completed. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage; github: triage). |
-| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds, closed-unmerged PRs. Absent = Linear: Backlog; hosted, github: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
+| `triageState` | — | optional, nonempty string | State the dispatcher hands tickets back to for human triage — spec-gate bounces, aborted builds (unless `ab abort --to ready`), closed-unmerged PRs. Absent = Linear: Backlog; hosted, github: triage; file/plugin: Triage. Must name a state the tracker actually has — a Linear team only has "Triage" when its triage feature is enabled. |
 | `proposalState` | — | optional, nonempty string | State observation harvest files approved proposals into. Absent = the resolved `triageState`, which keeps the human grooming gate. Setting it to `readyState` waives that gate: harvested proposals dispatch without being read. Keep it distinct from `triageState` — see below. |
 | `backlogState` | — | optional nonblank string; every source | State that holds deliberately deferred work: the backlog role. Recommended (`ab init` writes `"backlog"` for file, hosted and github); unset means the role does not exist. Must differ, case-insensitively, from the ready, claimed, done, triage and proposal states and from `rejectedState`. |
 | `rejectedState` | — | optional nonblank string; every source | State that holds considered-and-declined work: the rejected role. Recommended (`ab init` writes `"rejected"` for file, hosted and github). On github it is an issue closed as not planned or duplicate. A ticket in it never resolves a blocker, even if the source counts it complete, and never keeps a node incomplete. Same distinctness rule. |
@@ -2407,7 +2407,7 @@ to the build's event log and apply the same write-time checks.
 | Dismiss cited finding chains | `ab answer <slug> --dismiss [--store <ref>]` | CLI only; build detail names the command. | One `escalation.answered` with `resolution: dismiss-finding` per blocker that cites a real review finding. |
 | Revise spec from a file | `ab answer <slug> --revise-spec <file> [--store <ref>]` | CLI only; build detail names the command. | For leaves, human `escalation.answered` then kernel `spec.revised`; eligible nodes publish `spec.revised` with operator provenance. |
 | Re-import revised ticket spec | `ab answer <slug> --revise-spec-from-ticket [--store <ref>]` | CLI only; build detail names the command. | The same leaf answer or direct node `spec.revised` protocol. |
-| Abort | `ab abort <slug> [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels). | `build.abort-requested` |
+| Abort | `ab abort <slug> [--to triage\|ready] [--reason <text>] [--store <ref>]` | Select any non-terminal build and press `a`, then Enter to confirm (Escape cancels); the dashboard aborts to triage. | `build.abort-requested`, then repository `ticket.handed-back` after cleanup moves the ticket |
 
 The two `--all` forms and the global-row keys are one walk behind two surfaces.
 The repository pause is written first and intake second, both absolutely —
@@ -2426,9 +2426,10 @@ to park.
 
 Discard is dashboard-only and queued-only. After any launching execution has
 released its process-tree lease, the dispatcher releases a partial workspace,
-returns the ticket to `[tickets].readyState`, and completes the old build as
-`discarded`; a later tick may claim the ticket into a fresh build. This is not
-abort: abort returns the ticket to Triage.
+returns the ticket to `[tickets].readyState`, reports one `ticket.handed-back`
+(cause `discard`), and completes the old build as `discarded`; a later tick may
+claim the ticket into a fresh build. This is not abort: abort hands the ticket
+back to Triage unless it asks for ready.
 
 Abort accepts queued, running, paused, or blocked builds. A live turn receives a
 cancellation signal and the runner acknowledges the request. Its execution
@@ -2439,9 +2440,25 @@ for runner suspension without a wall-clock force-exit deadline.
 The dispatcher defers cleanup while that lease is live, then performs the
 checkpointed, retry-safe cleanup: close an open unmerged PR, release the workspace,
 delete the exact remote and local build branches, preserve existing ticket labels
-while adding `autobuild:aborted`, return the ticket to configured Triage, and post
-an abort notice before
-completing as `abandoned`. Missing
+while adding `autobuild:aborted`, hand the ticket back, and post an abort notice
+before completing as `abandoned`. The ticket moves once, straight to its
+destination: configured Triage by default, or `[tickets].readyState` with
+`ab abort --to ready` (or the registry's `to: "ready"`), with its `blockedBy`
+list unchanged, so a build waiting on other work gives up its slot and
+redispatches once its blockers merge. A ticket that no longer conforms to the
+spec standard falls back to Triage; the notice says so and lists what is
+missing. `--reason` is recorded on the request and quoted in the notice. A
+repeated identical abort is a no-op; a different destination or reason is
+refused. After the move is checkpointed the dispatcher appends one repository
+`ticket.handed-back` event carrying the ticket, build, `cause: abort`,
+destination `state` and `role`, `requested` when it fell back, `missing`, and
+`reason`; no later dispatcher write for that hand-back touches the ticket, so
+an operator may move it as soon as the event arrives. Act on that event, not on
+`build.aborted` or the build leaving `ab builds`: cleanup is asynchronous. Every
+other non-completion hand-back reports the same event once after its move —
+spec-gate bounces (`spec-bounce`, with `missing`), preparation recovery
+returning a confirmed claim to Ready (`preparation-failed`), closed-unmerged
+PRs (`pr-closed`) and discards (`discard`). Missing
 Forge cleanup capabilities or provider outages leave cleanup pending with an
 actionable diagnostic for the next tick.
 
@@ -2762,6 +2779,13 @@ The default watch reports actionable conditions only:
   events written before `claimed` existed report the certainty as not recorded.
   Each abandonment reports once as it lands; a fresh watch does not replay
   historical ones, and nothing clears or acknowledges it.
+- Repository `ticket.handed-back`: the dispatcher returned a claimed or ready
+  ticket other than as completion, and the move is committed. `cause` is
+  `abort`, `spec-bounce`, `preparation-failed`, `pr-closed` or `discard`; the
+  payload carries the ticket, the build slug (or the preparation attempt), the
+  destination `state` and `role`, `requested` when an abort to ready fell back,
+  the spec-standard parts `missing`, and the operator's `reason`. Each hand-back
+  emits it once; moving the ticket on receipt is never overridden.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,
@@ -2996,6 +3020,11 @@ and acknowledge the lost historical gap. Never fall back to cursor zero.
 Checkpoint integrity errors are terminal; retired seed generations require an
 upgrade/restart and fresh attachment. Explicit MCP `builds.events` history is
 paged at 256 events with `cursor` and `hasMore`; follow every continuation.
+MCP `repository.events` is a connected agent's repository attention watch: it
+reads at most 256 journal positions after its cursor, with an optional wait of
+at most 30 seconds, and by default returns exactly the repository records this
+default watch reports. Its cursor advances past filtered events; omit it once
+for a baseline, and treat `cursor-too-old` as above.
 
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
