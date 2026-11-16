@@ -1381,3 +1381,108 @@ test('the no-dispatcher-run dashboard poll reads no event rows once warm', async
   const { noDispatcherRunDashboardBudget } = await import('../testing/reduced-read-budget')
   await noDispatcherRunDashboardBudget()
 })
+
+test('repository.events pages a large journal backlog in bounded, disjoint reads', async () => {
+  const { repositoryEventsReadBudget } = await import('../testing/reduced-read-budget')
+  expect(await repositoryEventsReadBudget()).toBe(4)
+})
+
+test('repository.events baselines without a cursor, filters to attention and maps an expired cursor', async () => {
+  const { buildRegistry, RegistryError } = await import('./registry')
+  const { REPOSITORY_TAIL_WINDOW } = await import('../store/event-reads')
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  const registry = buildRegistry({ store, clock })
+  expect(await registry.call('repository.events', { repo: REPO })).toEqual({
+    events: [],
+    cursor: 0,
+    hasMore: false,
+  })
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'ticket.handed-back',
+    payload: {
+      ticket: { source: 'fake', id: 'T-1' },
+      build: 'b',
+      cause: 'abort',
+      state: 'Ready',
+      role: 'ready',
+    },
+  })
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'ticket.handback-settled',
+    payload: { build: 'b' },
+  })
+  const attention = (await registry.call('repository.events', { repo: REPO, cursor: 0 })) as {
+    events: { type: string }[]
+    cursor: number
+  }
+  expect(attention.events.map((event) => event.type)).toEqual(['ticket.handed-back'])
+  expect(attention.cursor).toBe(2)
+  const all = (await registry.call('repository.events', {
+    repo: REPO,
+    cursor: 0,
+    filter: 'all',
+  })) as { events: { type: string }[] }
+  expect(all.events.map((event) => event.type)).toEqual([
+    'ticket.handed-back',
+    'ticket.handback-settled',
+  ])
+  await expect(registry.call('repository.events', { repo: REPO, waitSeconds: 31 })).rejects.toThrow(
+    RegistryError,
+  )
+  for (let i = 0; i < REPOSITORY_TAIL_WINDOW + 1; i++)
+    await store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+  const expired = await registry
+    .call('repository.events', { repo: REPO, cursor: 0 })
+    .catch((e) => e)
+  expect(expired).toBeInstanceOf(RegistryError)
+  expect((expired as InstanceType<typeof RegistryError>).body.code).toBe('cursor-too-old')
+})
+
+test('builds.control accepts an abort destination and reason, and refuses them on other actions', async () => {
+  const { buildRegistry, RegistryError } = await import('./registry')
+  const { buildControlRequestSchema } = await import('./protocol')
+  expect(
+    buildControlRequestSchema.parse({ action: 'abort', to: 'ready', reason: 'waiting' }),
+  ).toEqual({ action: 'abort', to: 'ready', reason: 'waiting' })
+  expect(buildControlRequestSchema.safeParse({ action: 'pause', to: 'ready' }).success).toBe(false)
+  expect(buildControlRequestSchema.safeParse({ action: 'abort', to: 'backlog' }).success).toBe(
+    false,
+  )
+  const store = new MemoryBuildStore({ clock })
+  await store.createBuild({
+    slug: 'aborting',
+    repo: REPO,
+    ticket: { source: 'fake', id: 'T-1' },
+    created: {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket: { source: 'fake', id: 'T-1' }, repo: REPO, baseBranch: 'main' },
+    },
+  })
+  await store.append('aborting', { actor: KERNEL, type: 'build.paused', payload: {} })
+  const registry = buildRegistry({ store, clock })
+  const refused = await registry
+    .call(
+      'builds.control',
+      { repo: REPO, slug: 'aborting', action: 'pause', to: 'ready' },
+      { identity: 'operator' },
+    )
+    .catch((error) => error)
+  expect(refused).toBeInstanceOf(RegistryError)
+  const result = (await registry.call(
+    'builds.control',
+    { repo: REPO, slug: 'aborting', action: 'abort', to: 'ready', reason: 'waiting on T-2' },
+    { identity: 'operator' },
+  )) as { event: { type: string; payload: unknown } }
+  expect(result.event).toMatchObject({
+    type: 'build.abort-requested',
+    payload: { to: 'ready', reason: 'waiting on T-2' },
+  })
+})

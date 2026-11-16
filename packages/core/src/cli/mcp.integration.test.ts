@@ -403,6 +403,44 @@ test('MCP builds.events forwards failed-node attention intact and respects its c
   }
 })
 
+test('MCP repository.events is advertised and delivers a ticket hand-back after its cursor', async () => {
+  await seed()
+  const repo = await realpath(tmp)
+  const client = await connect()
+  try {
+    const tools = await client.listTools()
+    expect(tools.tools.map((tool) => tool.name)).toContain('repository.events')
+    const call = async (args: Record<string, unknown>) => {
+      const result = await client.callTool({ name: 'repository.events', arguments: args })
+      expect(result.isError, JSON.stringify(result.content)).toBeUndefined()
+      return JSON.parse((result.content as { text: string }[])[0]!.text)
+    }
+    const baseline = await call({ repo })
+    expect(baseline.events).toEqual([])
+    const local = openLocalStore(storeDir)
+    await local.ensureRepo(repo)
+    const event = await local.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'ticket.handed-back',
+      payload: {
+        ticket: { source: 'file', id: 'T-1' },
+        build: 'demo',
+        cause: 'abort',
+        state: 'Ready',
+        role: 'ready',
+      },
+    })
+    await local.close()
+    expect(await call({ repo, cursor: baseline.cursor })).toEqual({
+      events: [event],
+      cursor: event.seq,
+      hasMore: false,
+    })
+  } finally {
+    await client.close()
+  }
+})
+
 test('MCP node spec revision needs no escalation and retains transport identity', async () => {
   await seed()
   const repo = await realpath(tmp)

@@ -416,6 +416,36 @@ describe('event wait over the wire', () => {
     expect(repoResponse.status).toBe(400)
   })
 
+  test('the repository events route bounds its read by through and passes it to the store', async () => {
+    const store = new MemoryBuildStore()
+    const server = createStoreServer({ store })
+    await server.fetch(
+      new Request('https://store.test/repos', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ repo: 'acme/through' }),
+      }),
+    )
+    for (let i = 0; i < 5; i++)
+      await store.appendRepo('acme/through', {
+        actor: humanActor('operator'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+    const tail = store.getRepositoryTail.bind(store)
+    const received: unknown[] = []
+    store.getRepositoryTail = (repo, since, opts) => {
+      received.push(opts?.through)
+      return tail(repo, since, opts)
+    }
+    const response = await server.fetch(
+      new Request('https://store.test/repos/acme%2Fthrough/events?since=1&through=3', { headers }),
+    )
+    expect(response.status).toBe(200)
+    expect(((await response.json()) as { seq: number }[]).map((event) => event.seq)).toEqual([2, 3])
+    expect(received).toEqual([3])
+  })
+
   test('a wait above the ceiling clamps; the hold still answers an append promptly', async () => {
     const server = startStoreServer({ store: new MemoryBuildStore() })
     try {

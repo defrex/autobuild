@@ -1444,6 +1444,7 @@ export class Dispatcher {
     slug: string,
     payload: RepositoryEventPayload<'ticket.handed-back'>,
   ): Promise<void> {
+    await this.store.ensureRepo(this.deps.repo)
     await this.store.refreshJournal()
     if (this.store.repositoryFacts().handbacks[handbackIdentity(slug)] !== undefined) return
     await this.store.appendRepo(this.deps.repo, {

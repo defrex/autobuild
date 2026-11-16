@@ -17,12 +17,17 @@ export interface RepositoryEventsPage {
  * repository journal after `cursor`, filtered by the same predicate as
  * `ab watch --operator`. The read itself is bounded to `(cursor, cursor+256]`
  * and the cursor advances past filtered events, so successive pages scan
- * disjoint ranges. An omitted cursor reads only the high-water mark. */
+ * disjoint ranges. An omitted cursor reads only the repository record and
+ * its high-water mark. */
 export async function readRepositoryAttentionPage(
   store: BuildStore,
   repo: string,
   opts: { cursor?: number; waitSeconds?: number; filter?: 'attention' | 'all' } = {},
 ): Promise<RepositoryEventsPage> {
+  // A repository no dispatcher has recorded yet has an empty journal, as
+  // `ab watch` treats it; one record read, no event rows.
+  if ((await store.getRepo(repo)) === null)
+    return { events: [], cursor: opts.cursor ?? 0, hasMore: false }
   if (opts.cursor === undefined)
     return { events: [], cursor: await store.getRepoHighWater(repo), hasMore: false }
   const cursor = opts.cursor
