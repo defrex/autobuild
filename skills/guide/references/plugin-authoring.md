@@ -31,7 +31,7 @@ All four manifest maps have production selectors. Omitted forge and workspace se
 
 ### `ticket-source`
 
-Lists, gets and claims tickets to start builds; receives comments, transitions, creates and updates. Owns lifecycle names, dependency completion, idempotent creation with a stable external creation-key projection, and partial-list diagnostics. Never consulted mid-build; not artifact storage.
+Lists, gets and claims tickets to start builds; receives comments, transitions, creates and updates. Owns lifecycle names, dependency completion, idempotent creation with a stable external creation-key projection, and partial-list diagnostics. A build never consults it mid-build; the dispatcher reads tickets and adds blockers only to validate a declared ticket wait. Not artifact storage.
 
 ### `agent-runtime`
 

@@ -1741,7 +1741,8 @@ an internal runner option, not an accepted `[policy]` TOML key. Reconcile
 execution and unchanged-base progress budgets retain their existing accounting.
 
 **Every phase ends with exactly one terminal command** — `done`, `verdict`,
-or `escalate`. The CLI rejects a second terminal call, and each terminal
+or `escalate`, or in a work build `wait-on`, which declares a ticket wait
+(§11). The CLI rejects a second terminal call, and each terminal
 validates its preconditions before emitting the phase event (no `done`
 without the required artifacts; no `done` on a dirty worktree in
 `implement`). A normally completed turn that ends **without** any terminal
@@ -2408,6 +2409,69 @@ even if it is also roundless. Cause-less historical roundless
 without migration. Routing uses these typed event fields and never parses the
 human-facing `question`.
 
+**Ticket waits.** A phase agent in a work build that cannot proceed until other
+tickets complete ends its session with `ab wait-on <ticket-id>... --reason
+<text>` instead of an escalation. The command is a terminal (§8.4). It checks
+only what needs no ticket source — 1 to 20 unique nonblank ids, a nonblank
+reason, no prior terminal in the session, a work build, and not the build's own
+recorded ticket id — and appends one `wait.requested {id, phase, round,
+tickets, reason}` as the session's agent actor. A session therefore needs only
+its build-phase store grant, local or hosted; it never holds a ticket-source
+credential for a wait.
+
+The dispatcher holds the ticket source, so it validates every request on its
+next tick, for local and hosted builds alike. The build digest marks a request
+without an outcome (`waitPending`), and only such a build is read further. Until
+the request is decided, the engine decides `wait ticket-wait` and the build
+keeps its slot. The dispatcher resolves each id through the source and refuses
+the request when an id is unknown, is the build's own ticket after
+canonicalisation, has already completed, or the build has no source ticket. A
+refusal appends `wait.refused {id, cause, tickets, message}` naming the
+offending ids. Nothing is written to the ticket and no wait begins; the
+declaring phase re-runs at the same round or attempt, with the refusal message
+as its guidance. Accepted, the dispatcher adds every id not already in the
+build ticket's `blockedBy` (so a retry after a lost append adds no duplicate),
+then appends `wait.entered {id, escalation, tickets, reason, question}` with
+the canonical ticket refs. A ticket-source failure writes nothing, reports a
+diagnostic and is retried on the next tick.
+
+An entered wait opens an escalation with id `escalation`, the declaring phase
+and round, `source: agent`, the declaring session and the waited tickets as
+`refs`; its question begins `Waiting on`. The build is `blocked`. A work build
+whose only open escalation is its wait, and which has no runner working, holds
+no capacity slot and keeps its branch, workspace and completed phase work
+(§12 "What holds a slot"). A wait ends at its first end fact: an
+`escalation.answered` on its escalation with any resolution (cause
+`operator`), or `wait.ended {id, cause, message}`, whose `cause` is
+`automatic` when its blockers completed or `operator` when an operator surface
+ends it without answering. `wait.ended` closes the escalation as `guidance`
+with its message as the answer; an end for an unknown, already ended or
+superseded wait is ignored. Answering a wait never resets a phase-failure
+budget.
+
+An ended wait requests a `resume` slot and is admitted before new ticket
+claims, as a parked finished build is; a `revise-spec` answer instead waits for
+the revision. The engine's ordinary rules re-run the declaring phase: a
+producer at the same round, a reviewer at the same review round, an agent
+verifier at the same step and attempt, and finalize or reconcile. Guidance
+reaches the session through its usual carrier, and its
+`$AB_CONTEXT_DIR/guidance.json` gains a `wait` block — `{id, tickets, reason,
+outcome: refused | ended, cause, message}` — whenever the guidance is the
+wait's refusal or answer, or when the wait ended without guidance text. A
+review phase's wait resumes that review round and never feeds the next
+producer. `ab build status` shows a requested, open, or ended-but-not-resumed
+wait and the tickets it names. Node builds cannot declare waits.
+
+The wait's reduced state is part of the build state contract:
+`waitRequest {id, session, phase, round, tickets, reason, seq, outcome?}`,
+where `outcome` is `{kind: entered, seq}` or `{kind: refused, cause, tickets,
+message, seq}`, and `wait {id, escalation, session, phase, round, tickets,
+reason, enteredSeq, enteredAt, ended?: {cause, seq, message}, resumedSeq?}`.
+Each holds only the latest request or entered wait. `resumedSeq` is the first
+`session.started` or `spec.revised` after the end; from then on the build holds
+a slot again. Open and answered escalation records carry `wait: {id}` as the
+wait marker.
+
 ## 12. The outer loop
 
 ```
@@ -2432,14 +2496,18 @@ has finished its pipeline (every verify step and every finalize post-step for
 the current spec) holds no slot while it waits for a merge decision, for merge
 gates or the forge, or on hold, and the slot goes to the next ready ticket. The
 dispatcher records the finish as an advisory `pipeline.settled` fact when the
-engine first decides `wait awaiting-pr`. A build that has not finished keeps its
-slot, even while paused, blocked or interrupted between `finalize.completed`
-and its post-steps. When a finished build must restack, re-verify or reconcile,
-it is admitted before new ticket claims, as a node is: intake reserves a slot
-for it, and its wait records nothing, consumes no attempt and raises no
-attention. Abort and pause acknowledgements are not gated. A finished build
-keeps its workspace until it merges or closes, so retained workspaces can
-exceed `capacity`; running work cannot.
+engine first decides `wait awaiting-pr`. A work build waiting on other tickets
+(an entered ticket wait, §11) with no runner working also holds no slot, and
+keeps its branch, workspace and completed phase work. Any other build that has
+not finished keeps its slot, even while paused, blocked on a question, waiting
+for the dispatcher to check a ticket wait, or interrupted between
+`finalize.completed` and its post-steps. When a finished build must restack,
+re-verify or reconcile, or a ticket wait ends, the build is admitted before new
+ticket claims, as a node is: intake reserves a slot for it (`resume` for an
+ended wait), and its wait records nothing, consumes no attempt and raises no
+attention. Abort and pause acknowledgements are not gated. A finished or
+waiting build keeps its workspace, so retained workspaces can exceed
+`capacity`; running work cannot.
 
 Additional scheduled ingesters such as `ingest:sentry` remain an open design
 thread and have no shipped config surface. Observation harvest is
@@ -2596,7 +2664,10 @@ The TicketSource **initiates and receives projections; it is never consulted
 mid-build and never used as artifact storage.** Dispatch reads the ticket
 (including the spec) as part of initiation — at claim time, or on a later tick
 while an interrupted dispatch still lacks its imported spec. After import, the
-build never reads the tracker again. Human-legibility projections (spec
+build never reads the tracker again. The one mid-build consultation is the
+dispatcher's, not the build's: validating a declared ticket wait resolves its
+ids and records them in the build ticket's `blockedBy` (§11 "Ticket waits").
+Human-legibility projections (spec
 posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
 put blobs must be fully workable.
@@ -2663,7 +2734,8 @@ and reviewer, while the filing read is authoritative. Both paths remain
 initiation, so the never-consulted-mid-build rule is untouched. A
 dependency-blocked ticket stays
 queued source work rather than becoming a blocked build: the runtime `blocked`
-status is for builds awaiting a human.
+status is for builds awaiting a human or waiting on other tickets after they
+started (§11 "Ticket waits").
 
 **Forge issue links.** A ticket may record the forge issues it addresses, each
 as `{issue, intent}`: `issue` is a positive issue number and `intent` is
@@ -2864,7 +2936,8 @@ idle node polling, so a slot freed in any tick goes to the node, not to a new
 claim. Its candidate occupancy excludes itself and capacity-bearing blocked or
 paused descendants, following accepted source-qualified build target ancestry.
 Running descendants and unrelated builds still count; ordinary blocked and
-paused work retains its slot for every other admission. Provisioning reserves
+paused work retains its slot for every other admission, except a work build
+parked by a ticket wait, which holds none. Provisioning reserves
 node occupancy before the runner starts. This exception never raises the budget
 for new claims. Status and both dashboards report actual occupancy, configured
 capacity, effective display capacity and the nodes using descendant-held slots.
@@ -3417,6 +3490,7 @@ with illustrative members:
 | Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
+| Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason}`; dispatcher `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is
@@ -3582,8 +3656,11 @@ runner is attached; it does not acquire a leaf pipeline.
 
 `status ∈ queued | running | collecting | paused | blocked | done | aborted`, plus
 `{phase, round, openEscalations[], reviewRoundCeilings?, pr?, autoMerge,
-lastEvent}`. `blocked` ≡ an `escalation.raised` without a matching
-`escalation.answered`, matched by id. `reviewRoundCeilings` projects valid
+lastEvent}`. `blocked` ≡ an open escalation: an `escalation.raised` (or the
+escalation a `phase.deferral-escalated` or `wait.entered` opens) without a
+matching `escalation.answered`, matched by id; a ticket wait's escalation also
+closes on `wait.ended`. `waitRequest` and `wait` project the latest ticket-wait
+request and entered wait (§11 "Ticket waits"). `reviewRoundCeilings` projects valid
 review-limit answers independently for the plan and code loops after the latest
 `spec.revised`; status and dashboard surfaces expose any projected values.
 `paused` ≡ a `build.paused` without a later `build.resumed`, and takes

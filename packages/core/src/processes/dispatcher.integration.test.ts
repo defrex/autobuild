@@ -17472,7 +17472,7 @@ describe('dispatcher — ticket waits', () => {
     const state = (await readBuildFacts(h.store, WAITER)).value.state
     expect(state.status).toBe('blocked')
     expect(state.openEscalations.map((escalation) => escalation.id)).toEqual([
-      (entered?.payload as { escalation: string }).escalation,
+      (entered!.payload as { escalation: string }).escalation,
     ])
   })
 
