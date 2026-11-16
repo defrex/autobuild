@@ -27,7 +27,8 @@ export interface StoredEvent {
 // Revision 4 retains the optional effective prompt in session projections.
 // Revision 5 retains the optional preparation creation key.
 // Revision 6 retains the optional role profile on build creation and session starts.
-export const READ_DECODER_REVISION = 6
+// Revision 7 retains the optional abort destination and hand-back report fields.
+export const READ_DECODER_REVISION = 7
 export function catalogIdentity(
   build: Record<string, string> = buildEventPolicy,
   repository: Record<string, string> = repositoryEventPolicy,

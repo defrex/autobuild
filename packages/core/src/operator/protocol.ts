@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { abortDestinationSchema } from '../events/payloads'
 import { issueLinksInputSchema } from '../ports/tickets/issue-links'
 import { TICKET_MOVE_ROLES } from '../ports/tickets/lifecycle'
 import { ticketPrioritySchema } from '../ports/tickets/priority'
@@ -28,7 +29,11 @@ export const buildControlRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('pause') }),
   z.strictObject({ action: z.literal('cancel-pause') }),
   z.strictObject({ action: z.literal('resume') }),
-  z.strictObject({ action: z.literal('abort') }),
+  z.strictObject({
+    action: z.literal('abort'),
+    to: abortDestinationSchema.optional(),
+    reason: z.string().optional(),
+  }),
   z.strictObject({ action: z.literal('discard') }),
   z.strictObject({ action: z.literal('land') }),
   z.strictObject({ action: z.literal('hold') }),

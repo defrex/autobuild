@@ -32,7 +32,7 @@ import {
   type ActorKind,
 } from './envelope'
 import { EventValidationError } from './catalog'
-import { providerAttemptSchema } from './payloads'
+import { handbackCauseSchema, handbackReport, providerAttemptSchema } from './payloads'
 
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
@@ -857,6 +857,8 @@ export const ticketPreparationEventPayloadSchemas = {
   'ticket-preparation.handback-selected': z.strictObject({
     ...preparationIdentity,
     state: z.string().min(1),
+    /** Spec-standard parts a bounce found missing, for its hand-back report. */
+    missing: handbackReport.missing,
   }),
   'ticket-preparation.resolved': z.strictObject({
     ...preparationIdentity,
@@ -865,6 +867,30 @@ export const ticketPreparationEventPayloadSchemas = {
     /** Written only for `abandoned`: the claim certainty known at resolution. */
     claimed: z.boolean().optional(),
   }),
+}
+
+/** Operator-visible ticket hand-backs. Each identity (`build`, or a
+ * preparation `attempt`) reports once; the dispatcher appends the report only
+ * after the ticket move is committed, so a watcher may move the ticket on it. */
+export const ticketHandbackEventPayloadSchemas = {
+  /** A dispatcher returned a claimed or ready ticket, not as completion. */
+  'ticket.handed-back': z
+    .strictObject({
+      /** The ref actually moved (its current id after any migration). */
+      ticket: ticketRefSchema,
+      build: z.string().min(1).optional(),
+      attempt: z.string().min(1).optional(),
+      cause: handbackCauseSchema,
+      /** The backend state name the ticket was moved to. */
+      state: z.string().min(1),
+      ...handbackReport,
+    })
+    .superRefine((value, ctx) => {
+      if ((value.build === undefined) === (value.attempt === undefined))
+        ctx.addIssue({ code: 'custom', message: 'exactly one of build or attempt is required' })
+    }),
+  /** Settles a build hand-back identity once the build is complete. */
+  'ticket.handback-settled': z.strictObject({ build: z.string().min(1) }),
 }
 
 export const dispatchPlacementFactSchema = z.discriminatedUnion('hosted', [
@@ -894,6 +920,7 @@ export type DispatchPlacementFact = z.infer<typeof dispatchPlacementFactSchema>
 export const repositoryEventPayloadSchemas = {
   'dispatcher.placement-set': dispatchPlacementFactSchema,
   ...ticketPreparationEventPayloadSchemas,
+  ...ticketHandbackEventPayloadSchemas,
   ...ticketMigrationEventPayloadSchemas,
   ...forgeHealthEventPayloadSchemas,
   ...kernelGitHealthEventPayloadSchemas,
@@ -975,6 +1002,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'ticket-preparation.recovery-failed': ['dispatcher'],
   'ticket-preparation.handback-selected': ['dispatcher'],
   'ticket-preparation.resolved': ['dispatcher'],
+  'ticket.handed-back': ['dispatcher'],
+  'ticket.handback-settled': ['dispatcher'],
 
   'tickets.migration-recorded': ['human'],
   'change-presence.observed': ['dispatcher', 'kernel'],

@@ -124,7 +124,7 @@ JSON bodies are strict: unknown fields are rejected.
 
 | Method and path | Body |
 |---|---|
-| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}` |
+| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}`. Abort alone also accepts `"to":"triage"\|"ready"` (default triage) and a `"reason"` of 1–2000 characters, as `ab abort --to/--reason` does. |
 | `POST …/builds/{slug}/restack` | Empty body; durable node restack demand. |
 | `POST …/builds/{slug}/answer` | One answer variant described below. |
 | `PUT …/settings/intake` | `{"enabled":boolean}` |
@@ -310,6 +310,12 @@ The default watch reports actionable conditions only:
   events written before `claimed` existed report the certainty as not recorded.
   Each abandonment reports once as it lands; a fresh watch does not replay
   historical ones, and nothing clears or acknowledges it.
+- Repository `ticket.handed-back`: a claimed or ready ticket was returned other
+  than as completion (`cause` `abort`, `spec-bounce`, `preparation-failed`,
+  `pr-closed` or `discard`), with its destination `state` and `role`, the build
+  or preparation attempt, and any `requested` role, `missing` spec parts and
+  `reason`. It is appended once, only after the move is committed, so moving
+  the ticket on receipt is never overridden.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
   reset time, once a tick started at or after reset has completed or failed
   with the episode still open; crossing reset alone is silent. Without a reset,
@@ -370,6 +376,15 @@ events per call. Follow `cursor` while `hasMore` is true to traverse a build's
 complete history without omission. Waiting remains bounded and applies only
 when no events are available. Repository event reads have a 1,000-position
 window; build history itself remains available through explicit pages.
+
+The MCP `repository.events` tool delivers the same repository attention to a
+connected agent. It takes `{repo, cursor?, waitSeconds?, filter?}` and returns
+`{events, cursor, hasMore}`: one bounded read of at most 256 journal positions
+after `cursor`, filtered by default (`filter: "attention"`) to exactly the
+repository records the CLI default watch reports, or every event with
+`filter: "all"`. The returned cursor is the last scanned position, so it
+advances past filtered events. Omitting `cursor` returns no events and a
+baseline cursor; an expired cursor fails with `code: "cursor-too-old"`.
 
 
 Hosted ticket tools resolve independent project ticket policy, including its
