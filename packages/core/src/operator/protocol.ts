@@ -30,7 +30,15 @@ export const buildControlRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('resume') }),
   z.strictObject({ action: z.literal('abort') }),
   z.strictObject({ action: z.literal('discard') }),
-  z.strictObject({ action: z.literal('land') }),
+  z.strictObject({
+    action: z.literal('land'),
+    /** Binds consent to the reviewed candidate head (full SHA or ≥7-character prefix). */
+    head: z
+      .string()
+      .trim()
+      .regex(/^\S+$/, 'head must be a nonblank commit SHA without whitespace')
+      .optional(),
+  }),
   z.strictObject({ action: z.literal('hold') }),
 ])
 export type OperatorBuildControlRequest = z.infer<typeof buildControlRequestSchema>

@@ -73,6 +73,25 @@ export function leafLandingUndecidedReason(
   return 'no refusal is recorded; the dispatcher decides at its next janitor poll (repository-wide forge deferrals appear in ab repository status)'
 }
 
+/** The live head of the merge candidate: a node's integration cycle head, a
+ * leaf's PR head. */
+export function currentCandidateHead(
+  state: Pick<BuildState, 'kind' | 'pr' | 'integration'>,
+): string | undefined {
+  return state.kind === 'node' ? state.integration?.cycle?.head : state.pr?.headSha
+}
+
+/** Whether an operator-given head names the live candidate head: an exact
+ * match, or a hexadecimal prefix of at least seven characters (forge UIs show
+ * abbreviated SHAs). Case-insensitive. */
+export function candidateHeadMatches(given: string, current: string | undefined): boolean {
+  if (current === undefined) return false
+  const head = given.toLowerCase()
+  const live = current.toLowerCase()
+  if (head === live) return true
+  return /^[0-9a-f]{7,}$/.test(head) && live.startsWith(head)
+}
+
 /** The deterministic part of land's guard. Live completeness and CAS remain at the write boundary. */
 export function landPreconditions(state: BuildState, restack: LeafRestackState): boolean {
   return landRefusalReason(state, restack) === undefined
@@ -93,10 +112,7 @@ export function landRefusalReason(
   if (state.openEscalations.length) return 'the build has open escalations to answer'
   if (actionableCommands(state).length) return 'earlier controls are awaiting acknowledgement'
   if (state.prState !== 'open') return `the pull request is ${state.prState ?? 'not open'}`
-  if (
-    (state.kind === 'node' ? state.integration?.cycle?.head : state.pr?.headSha) !==
-    decision.candidate.head
-  )
+  if (currentCandidateHead(state) !== decision.candidate.head)
     return "the merge candidate's head is stale"
   if (state.kind !== 'node' && restack.target && restack.target.sha !== decision.candidate.parent)
     return "the merge candidate's base is stale"

@@ -2341,7 +2341,8 @@ dispatcher records an immutable decision when each candidate becomes ready.
 No rules means leaf auto / node consent. There is no claim-time default
 seeding or fan-out over existing builds. `ab merge <slug>` supplies consent to
 that merge and frozen destination; it survives replacement heads until hold
-or completion. `ab hold <slug>` suppresses policy and withdraws consent.
+or completion. `--head <sha>` refuses with `head-mismatch`, recording nothing,
+unless `<sha>` is the current candidate head. `ab hold <slug>` suppresses policy and withdraws consent.
 The old `--auto-merge` / `--no-auto-merge` flags and `ab auto-merge` command
 are retired and return actionable errors; use merge rules and hold/merge.
 
@@ -2399,7 +2400,7 @@ to the build's event log and apply the same write-time checks.
 | Resume | `ab resume <slug> [--store <ref>]` | Select a `PAUSED` build and press `r`. | `build.resume-requested` |
 | Pause all | `ab pause --all [--store <ref>] [--json]` | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
 | Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
-| Consent to merge | `ab merge <slug> [--store <ref>]` | Select a ready build and press `l`. | `build.land-requested`, then `landing.command-acknowledged` |
+| Consent to merge | `ab merge <slug> [--head <sha>] [--store <ref>]` | Select a ready build and press `l`. | `build.land-requested`, then `landing.command-acknowledged` |
 | Restack node | `ab restack <node> [--store <ref>]` | CLI/tool request; normal safety gates apply. | `node.restack-requested`, then `node.restack-satisfied` |
 | Hold merge | `ab hold <slug> [--store <ref>]` | Select a build and press `o`, including before readiness. | `build.hold-requested`, then `landing.command-acknowledged` after native cancellation |
 | Answer blockers with guidance | `ab answer <slug> <text> [--store <ref>]` | Select a blocked build, press `r`, enter text, then Enter. | One `escalation.answered` with `resolution: guidance` per applicable blocker. |

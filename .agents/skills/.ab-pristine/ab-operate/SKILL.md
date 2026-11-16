@@ -312,10 +312,17 @@ Read events with a cursor or a small `--events` count; logs are long.
   build status before acting. Work the consent queue by checking completeness
   and current verification, then issuing merge for the chosen merge. A merge
   acknowledgement accepts consent; it never promises that gates passed. A
-  `merge-not-ready` or `node-incomplete` refusal records no consent and no
+  `merge-not-ready`, `node-incomplete` or `head-mismatch` refusal records no consent and no
   landing, though a node's completeness check may save an
   `integration.observed` diagnostic; re-read status and act on the stated
   reason.
+- `ab merge <slug> --head <sha>` — bind consent to the head you reviewed. It
+  records consent only when `<sha>` (full or at least seven characters) is the
+  build's current candidate head; otherwise it refuses with code
+  `head-mismatch`, records nothing, and names the current head. Review that
+  head before retrying. The guard applies only when consent is given: consent
+  still survives later restacks, and build status shows the consented head
+  beside the current one.
 - Configure ordered `[[merge]]` rules for project policy through ab-guide.
   Repository auto-merge defaults and per-build auto-merge toggles are retired.
 
@@ -583,6 +590,7 @@ or queue entries for merge ancestry after a source ticket changes.
 Start with `ab merges --json` (MCP `merges.list`). This is the one queue of
 ready merges needing a decision: consent-policy candidates and held ready
 candidates. Entries include the target, branch preview, candidate head/parent,
+the live `currentHead` and the `consentedHead` (null without consent),
 verification receipts and node children/completeness. Unknown completeness is
 not zero children. A changed head or parent must regain current verification;
 unfinished or automatically authorized candidates do not ask for attention.
@@ -592,7 +600,8 @@ delays it without failing it.
 
 Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`
-or `hold`. Hold is available before readiness and suppresses automatic merge.
+or `hold`; its optional `head` binds merge consent to the reviewed head, like
+`ab merge --head`. Hold is available before readiness and suppresses automatic merge.
 Merge rechecks readiness and live node completeness, so act on failures by
 refreshing the facts. Open children keep a node collecting; a child moved to
 the rejected role no longer does. When integration

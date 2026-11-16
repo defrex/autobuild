@@ -3974,6 +3974,10 @@ to this build/node merge into its effective destination. Consent survives head
 replacement, restacking, verification and re-finalization until another hold or
 completion. Accepted node reparenting revokes consent; holds survive.
 It is consent to the merge, not approval of an immutable diff.
+The optional `ab merge <slug> --head <sha>` (operator `head`) refuses with
+`head-mismatch`, recording nothing, unless `<sha>` (full or at least seven
+characters) is the current candidate head. The consented head is the head of
+the recorded decision the consent named; consent survival is unchanged.
 Commands and acknowledgements are sequence-correlated; hold acknowledgement
 requires confirmed native cancellation, while merge acknowledgement accepts
 consent without claiming that merge gates passed. The same actions are available

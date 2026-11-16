@@ -12090,6 +12090,10 @@
           "type": "49",
           "optional": true
         },
+        "head": {
+          "type": "4",
+          "optional": true
+        },
         "legacy": {
           "type": "733",
           "optional": true

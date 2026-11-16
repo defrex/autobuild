@@ -520,6 +520,52 @@ describe('operator behavioral parity contract', () => {
     }
   })
 
+  test('HTTP and MCP bind merge consent to the current candidate head', async () => {
+    const landed = async (store: MemoryBuildStore) =>
+      (await store.getEvents(SLUG)).filter((e) => e.type === 'build.land-requested')
+    const seeded = async () => {
+      const store = await makeStore()
+      await landSeed(store)
+      return store
+    }
+    const failed = (promise: Promise<unknown>) =>
+      promise.then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+
+    const httpStore = await seeded()
+    const httpError = await failed(
+      api(httpStore).controlBuild(REPO, SLUG, { action: 'land', head: 'other' }),
+    )
+    expect(httpError).toMatchObject({ status: 409, kind: 'refusal', code: 'head-mismatch' })
+    expect((httpError as Error).message).toContain('the current head is head')
+    expect(
+      await failed(api(httpStore).controlBuild(REPO, SLUG, { action: 'land', head: '' })),
+    ).toMatchObject({ status: 400, kind: 'validation' })
+    expect(await landed(httpStore)).toHaveLength(0)
+    await api(httpStore).controlBuild(REPO, SLUG, { action: 'land', head: 'head' })
+    expect(await landed(httpStore)).toHaveLength(1)
+
+    const toolStore = await seeded()
+    const registry = buildRegistry({ store: toolStore, clock })
+    const control = (args: Record<string, unknown>) =>
+      registry.call('builds.control', { repo: REPO, slug: SLUG, ...args }, { identity: USER })
+    const toolError = await failed(control({ action: 'merge', head: 'other' }))
+    expect(toolError).toBeInstanceOf(RegistryError)
+    expect((toolError as RegistryError).body).toMatchObject({
+      kind: 'refusal',
+      code: 'head-mismatch',
+    })
+    expect((toolError as RegistryError).message).toContain('the current head is head')
+    expect(
+      ((await failed(control({ action: 'hold', head: 'head' }))) as RegistryError).body,
+    ).toEqual({ kind: 'validation', error: 'head applies only to the merge action' })
+    expect(await landed(toolStore)).toHaveLength(0)
+    await control({ action: 'merge', head: 'head' })
+    expect(await landed(toolStore)).toHaveLength(1)
+  })
+
   test('blocked resume returns answer-required and writes nothing on both surfaces', async () => {
     const stores = [await makeStore(), await makeStore()]
     for (const store of stores) await raise(store)

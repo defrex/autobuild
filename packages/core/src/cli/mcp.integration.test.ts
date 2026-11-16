@@ -94,6 +94,9 @@ test('ab mcp advertises the registry: 27 tools with schemas and annotations', as
       readOnlyHint: false,
       destructiveHint: true,
     })
+    const controlProperties = (buildsControl.inputSchema as Record<string, unknown>)
+      .properties as Record<string, { description?: string }>
+    expect(controlProperties.head?.description).toContain('current candidate head')
     const notesRead = tools.find((tool) => tool.name === 'notes.read')!
     expect(notesRead.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
   } finally {
