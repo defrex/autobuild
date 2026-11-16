@@ -7,7 +7,14 @@ export interface LandingState {
   nativeEnablePending?: number
   forgeMerge?: EventPayload<'landing.forge-merged'>
   decision?: EventPayload<'landing.decided'> & { seq: number }
-  command?: { kind: 'hold' | 'land'; seq: number; decisionSeq?: number; legacy?: true }
+  command?: {
+    kind: 'hold' | 'land'
+    seq: number
+    decisionSeq?: number
+    /** The candidate head of the decision this consent named; absent for legacy commands. */
+    head?: string
+    legacy?: true
+  }
   acknowledgedSeq?: number
   native?: EventPayload<'landing.native-applied'> & { seq: number }
 }
@@ -33,7 +40,14 @@ export function advanceLanding(state: LandingState, event: AbEvent): void {
       state.command = { kind: 'hold', seq: event.seq }
       break
     case 'build.land-requested':
-      state.command = { kind: 'land', seq: event.seq, decisionSeq: event.payload.decisionSeq }
+      state.command = {
+        kind: 'land',
+        seq: event.seq,
+        decisionSeq: event.payload.decisionSeq,
+        ...(state.decision?.seq === event.payload.decisionSeq
+          ? { head: state.decision.candidate.head }
+          : {}),
+      }
       break
     case 'landing.command-acknowledged':
       if (event.payload.commandSeq === state.command?.seq)

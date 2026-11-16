@@ -113,6 +113,37 @@ describe('durable landing state', () => {
     expect(state?.decision?.labels).toEqual(['release'])
   })
 
+  test('consent records the head of the decision it named and keeps it across replacements', () => {
+    const log = [decided(), land(2)]
+    expect(buildReducer.reduce(log).landing?.command).toEqual({
+      kind: 'land',
+      seq: 2,
+      decisionSeq: 1,
+      head: 'head',
+    })
+    log.push(decided(3, { ...candidate, head: 'replacement' }))
+    const replaced = buildReducer.reduce(log).landing
+    expect(replaced?.command?.head).toBe('head')
+    expect(replaced?.decision?.candidate.head).toBe('replacement')
+    expect(landingAuthorized(replaced)).toBe(true)
+    log.push(hold(4))
+    expect(buildReducer.reduce(log).landing?.command).toEqual({ kind: 'hold', seq: 4 })
+    // A consent naming a superseded decision records no head.
+    expect(buildReducer.reduce([decided(), decided(2), land(3)]).landing?.command?.head).toBe(
+      undefined,
+    )
+    const legacy = event(1, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    expect(buildReducer.reduce([legacy]).landing?.command).toEqual({
+      kind: 'land',
+      seq: 1,
+      legacy: true,
+    })
+  })
+
   test('latest command wins; holds survive candidate changes and stale acknowledgements', () => {
     const log = [hold(1), decided(2), land(3), hold(4), ack(5, 3), decided(6)]
     const state = buildReducer.reduce(log).landing

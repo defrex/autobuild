@@ -320,7 +320,8 @@ These fields describe intent; dispatch and merge behavior are unchanged.`,
     summary: 'List ready merges awaiting consent.',
     detail: page([
       'Usage: ab merges [--json] [--store <ref>]',
-      'Shows ready consent and held merges with effective target, branch, verification and node children.',
+      'Shows ready consent and held merges with effective target, branch, verification, node children,',
+      'the current candidate head and any consented head.',
       'Use ab merge <slug> to consent or ab hold <slug> to withdraw consent. Merge rechecks readiness.',
       'Source ancestry is available separately through ab ticket tree or MCP tickets.tree.',
     ]),
@@ -692,10 +693,18 @@ These fields describe intent; dispatch and merge behavior are unchanged.`,
     audience: 'human' as const,
     summary: name === 'hold' ? 'Hold a merge and withdraw consent.' : 'Consent to a ready merge.',
     detail: page([
-      `Usage: ab ${name} <slug> [--store <ref>]`,
+      name === 'hold'
+        ? 'Usage: ab hold <slug> [--store <ref>]'
+        : 'Usage: ab merge <slug> [--head <sha>] [--store <ref>]',
       '',
       'Merge consent survives restacks and verification; hold persists until merge.',
       'These sessionless controls never bypass merge gates.',
+      ...(name === 'merge'
+        ? [
+            '--head refuses, recording nothing, unless <sha> (full or ≥7-character prefix)',
+            "is the build's current candidate head; consent still survives later restacks.",
+          ]
+        : []),
     ]),
   })),
   {

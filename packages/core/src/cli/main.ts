@@ -33,7 +33,12 @@ import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
 import { artifactDownload, artifactDownloadStream, artifactGet, artifactPut } from './artifact'
 import { multiFlag, parseArgs, stringFlag, type ParsedArgs } from './args'
-import { abBuildControl, type BuildControlAction, type BuildControlResult } from './build-control'
+import {
+  abBuildControl,
+  parseConsentHead,
+  type BuildControlAction,
+  type BuildControlResult,
+} from './build-control'
 import {
   abBulkControl,
   bulkControlLines,
@@ -1192,13 +1197,29 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'merge':
     case 'land': {
       if (command === 'land') stderr('ab land is deprecated; use ab merge')
-      const usage = `usage: ab ${command} <slug> [--store <ref>]`
-      const parsed = parseArgs(rest, { store: 'value' }, usage)
+      if (command === 'hold') {
+        const usage = 'usage: ab hold <slug> [--store <ref>]'
+        const parsed = parseArgs(rest, { store: 'value' }, usage)
+        if (parsed.positionals.length !== 1) throw new Error(usage)
+        await runBuildControl(
+          deps,
+          parsed.positionals[0]!,
+          { kind: 'hold' },
+          stringFlag(parsed, 'store'),
+        )
+        return 0
+      }
+      const usage = `usage: ab ${command} <slug> [--head <sha>] [--store <ref>]`
+      const parsed = parseArgs(rest, { store: 'value', head: 'value' }, usage)
       if (parsed.positionals.length !== 1) throw new Error(usage)
+      const headFlag = stringFlag(parsed, 'head')
+      const head = headFlag === undefined ? undefined : parseConsentHead(headFlag)
+      if (headFlag !== undefined && head === undefined)
+        throw new Error(`--head must be a nonblank commit SHA — ${usage}`)
       await runBuildControl(
         deps,
         parsed.positionals[0]!,
-        { kind: command === 'merge' ? 'land' : command },
+        head === undefined ? { kind: 'land' } : { kind: 'land', head },
         stringFlag(parsed, 'store'),
       )
       return 0

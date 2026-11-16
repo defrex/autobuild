@@ -1,5 +1,9 @@
 import { integrationFailed } from '../kernel/integration-state'
-import { landRefusalReason } from '../kernel/landing-readiness'
+import {
+  candidateHeadMatches,
+  currentCandidateHead,
+  landRefusalReason,
+} from '../kernel/landing-readiness'
 import { observeIntegration } from '../kernel/integration-completeness'
 import type { TicketSource } from '../ports/types'
 import { readBuildFacts } from '../store/reduced-reads'
@@ -43,7 +47,7 @@ export type AnswerResolutionRequest =
 
 export type BuildControlAction =
   | { kind: 'hold' }
-  | { kind: 'land' }
+  | { kind: 'land'; head?: string }
   | { kind: 'pause' }
   | { kind: 'resume' }
   | { kind: 'abort' }
@@ -124,6 +128,15 @@ export type BuildControlErrorCode =
   | 'incompatible-answer-options'
   | 'merge-not-ready'
   | 'node-incomplete'
+  | 'head-mismatch'
+
+/** Normalize an operator-given consent head (`ab merge --head`, the operator
+ * `head` field): trimmed and lowercased. Undefined when blank or containing
+ * whitespace, which every caller reports as a usage or validation error. */
+export function parseConsentHead(raw: string): string | undefined {
+  const head = raw.trim().toLowerCase()
+  return /^\S+$/.test(head) ? head : undefined
+}
 
 /** Typed codes let the dashboard turn stale selections/prompts into warnings
  * while the CLI can surface the same underlying conflict as a command error. */
@@ -542,6 +555,16 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         const current = facts.state
         activeState(opts.slug, current)
         if (opts.action.kind === 'land' && discardInFlight(current)) throw discardPending(opts.slug)
+        if (opts.action.kind === 'land' && opts.action.head !== undefined) {
+          const given = parseConsentHead(opts.action.head)
+          if (given === undefined) throw new Error('Merge consent head must be a nonblank SHA')
+          const live = currentCandidateHead(current)
+          if (!candidateHeadMatches(given, live))
+            throw new BuildControlError(
+              'head-mismatch',
+              `Merge consent was not recorded: head ${given} is not the current candidate head of build "${opts.slug}"; the current head is ${live ?? 'not yet recorded'}. Review that head and retry.`,
+            )
+        }
         const decision = current.landing?.decision
         if (opts.action.kind === 'land') {
           const reason = landRefusalReason(current, facts.log.restack)
