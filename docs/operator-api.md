@@ -124,7 +124,7 @@ JSON bodies are strict: unknown fields are rejected.
 
 | Method and path | Body |
 |---|---|
-| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}`. Abort alone also accepts `"to":"triage"\|"ready"` (default triage) and a `"reason"` of 1–2000 characters, as `ab abort --to/--reason` does. |
+| `POST …/builds/{slug}/control` | `{"action":"pause"\|"cancel-pause"\|"resume"\|"abort"\|"discard"\|"land"\|"hold"}`. Abort alone also accepts `"to":"triage"\|"ready"` (default triage) and a `"reason"` of 1–2000 characters after trimming, as `ab abort --to/--reason` does. Ready requires the current ticket to meet the spec standard; otherwise cleanup returns it to triage and the hand-back comment and `ticket.handed-back` event carry the `requested` role and `missing` parts. Repeating an identical pending abort is idempotent; a repeat with a different destination or reason is refused. |
 | `POST …/builds/{slug}/restack` | Empty body; durable node restack demand. |
 | `POST …/builds/{slug}/answer` | One answer variant described below. |
 | `PUT …/settings/intake` | `{"enabled":boolean}` |

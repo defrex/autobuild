@@ -1015,7 +1015,8 @@ documentFields(ticketsInputSchema, {
   claimedState: 'Workflow state entered when a ticket is claimed.',
   doneState: 'Project completion state and merged-ticket transition.',
   createState: 'Default state for newly created tickets when `ab ticket create` omits `--state`.',
-  triageState: 'State used for spec-gate bounces, aborts, and closed-unmerged PRs.',
+  triageState:
+    'State used for spec-gate bounces, aborts (unless `ab abort --to ready` with a ticket that meets the spec standard), and closed-unmerged PRs.',
   proposalState:
     'State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility.',
   backlogState:

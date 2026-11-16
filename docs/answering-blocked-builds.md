@@ -13,7 +13,7 @@ Every action below is sessionless, records a human-authored fact, and accepts
 | Retire a review disagreement | `ab answer <slug> --dismiss` | Records `dismiss-finding` for each escalation that cites a real finding id. The next reviewer is told not to re-raise that chain. |
 | Replace the build contract from a file | `ab answer <slug> --revise-spec <file>` | Records the replacement as the next spec revision and restarts leaves at `plan`; nodes recollect and verify. |
 | Re-import an amended ticket | `ab answer <slug> --revise-spec-from-ticket` | Reads the build's recorded ticket and performs the same revision. |
-| Abandon the build | `ab abort <slug> [--to ready] [--reason <text>]` | Irrevocably requests abort; cleanup returns the ticket to Triage, or to Ready with its blockers kept, and then reports `ticket.handed-back`. |
+| Abandon the build | `ab abort <slug> [--to ready] [--reason <text>]` | Irrevocably requests abort; cleanup returns the ticket to Triage, or with `--to ready` to Ready with its blockers kept, and then reports `ticket.handed-back`. Ready requires the current ticket to meet the spec standard; otherwise cleanup returns it to Triage, and the comment and event name the requested destination and the missing parts. |
 
 The dashboard's blocked-build `r` shortcut requests an inline answer step that
 supports guidance and a blank retry. While that step is open, it is exclusive
