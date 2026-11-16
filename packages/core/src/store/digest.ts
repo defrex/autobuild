@@ -39,6 +39,9 @@ export const DIGEST_EVENT_TYPES = [
   'pr-attachment.reclaimed',
   'execution.started',
   'execution.ended',
+  'wait.requested',
+  'wait.refused',
+  'wait.entered',
 ] as const
 
 /** The digest-relevant slice of one event row. Adapters ship `hostedSeq` for
@@ -85,10 +88,12 @@ export interface DigestAcc {
   openInstance: string | null
   /** Sorted unique node slugs any target or parent move has named. */
   nodeTargets: string[]
+  /** The latest ticket-wait fact is a request without its outcome. */
+  waitPending?: true
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 11
+export const BUILD_DIGEST_REDUCER_VERSION = 12
 
 /** A peer's digest answer predates a field a caller needs. Callers fail with
  * this rather than reconstructing the field from per-build reads. */
@@ -159,7 +164,10 @@ export const buildDigestReducer: IncrementalReducer<
       else if (event.type === 'pr-attachment.reclaimed') {
         if (event.hostedSeq !== undefined && event.seq > event.hostedSeq)
           acc.reclaimed.push(event.hostedSeq)
-      } else if (event.type === 'execution.started') acc.openInstance = event.instance ?? null
+      } else if (event.type === 'wait.requested') acc.waitPending = true
+      else if (event.type === 'wait.refused' || event.type === 'wait.entered')
+        acc.waitPending = undefined
+      else if (event.type === 'execution.started') acc.openInstance = event.instance ?? null
       else if (event.type === 'execution.ended') {
         if (acc.openInstance !== null && event.instance === acc.openInstance)
           acc.openInstance = null
@@ -182,6 +190,7 @@ export const buildDigestReducer: IncrementalReducer<
     reclaimed,
     openInstance,
     nodeTargets,
+    waitPending,
   }) => {
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
@@ -201,6 +210,7 @@ export const buildDigestReducer: IncrementalReducer<
       ...(terminal !== undefined ? { terminal } : {}),
       ...(reclaimPending ? { reclaimPending: true as const } : {}),
       ...(openInstance !== null ? { executionOpen: true as const } : {}),
+      ...(waitPending ? { waitPending } : {}),
       nodeTargets: [...nodeTargets],
     }
   },

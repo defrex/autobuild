@@ -44,6 +44,18 @@ startup, a successful attempt closes it unanswered, and a bare retry only brings
 the next attempt forward. Startup still recovers unblocked work and acknowledges
 pending operator commands.
 
+## Ending a ticket wait early
+
+A build whose agent ran `ab wait-on` waits on other tickets. Its escalation's
+question begins `Waiting on`, and `ab build status <slug>` shows a
+`waiting on:` line naming the tickets. The build holds no capacity slot while
+it waits, and its ticket lists those tickets in `blockedBy`. Answer it only to
+end the wait early, for example when the work it needs has landed another way:
+`ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait, the build
+takes the next free slot ahead of new ticket claims, and the phase that
+declared the wait re-runs. Its `guidance.json` carries a `wait` block naming
+the tickets, the reason, and how the wait ended.
+
 ## Widening an exhausted review loop
 
 `--review-round-ceiling` is available only while the selected build has one open

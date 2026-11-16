@@ -47,6 +47,7 @@ Run `bun ab <command>`; `bun ab help <command>` lists flags and subcommands. See
 - `done` — Complete a producer phase.
 - `verdict` — Complete a review or verification phase.
 - `escalate` — Park the build with a question for external judgment.
+- `wait-on` — Park the build until other tickets complete, without holding a slot.
 - `harvest` — Inspect or drive observation harvesting.
 
 Phase commands (`context`, `done`, `verdict`) use runner-scoped session authority: the runner starts phase agents, never your operator agent. See [Skills](skills.md).
