@@ -5,7 +5,7 @@ import { BUILD_OWNED_CONFIG_PATHS } from '../config/live'
 import { isPipelineSourceRef, type PipelineSourceMeta } from '../config/pipeline-source'
 import type { AbEvent } from '../events/catalog'
 import { defineReducer } from '../kernel/incremental'
-import type { Artifact, ArtifactInput } from '../store/types'
+import type { Artifact, ArtifactInput, BuildStore } from '../store/types'
 
 export const BUILD_EFFECTIVE_CONFIG_ARTIFACT = 'build-runner-effective-config'
 export const BUILD_RUNNER_DIAGNOSTIC_ARTIFACT = 'build-runner-diagnostic'
@@ -55,6 +55,35 @@ export function parseEffectiveBuildConfig(artifact: Artifact): Config {
     )
   }
   return result.data
+}
+
+/** The latest deposited pipeline exists but cannot be parsed. */
+export class EffectivePipelineUnreadable extends Error {
+  constructor(
+    readonly revision: number,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'EffectivePipelineUnreadable'
+  }
+}
+
+/** The dispatcher's first pipeline read: the latest deposited
+ * `build-runner-effective-config`, parsed. `null` when none is deposited (the
+ * dispatcher then decides with its deployment config); throws when the read
+ * fails, or `EffectivePipelineUnreadable` when the deposit does not parse.
+ * `ab build status` uses the same definition of readable. */
+export async function readEffectivePipeline(
+  store: Pick<BuildStore, 'getArtifact'>,
+  slug: string,
+): Promise<{ config: Config; revision: number } | null> {
+  const artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+  if (artifact === null) return null
+  try {
+    return { config: parseEffectiveBuildConfig(artifact), revision: artifact.meta.revision }
+  } catch (error) {
+    throw new EffectivePipelineUnreadable(artifact.meta.revision, error)
+  }
 }
 
 /** Read the artifact metadata's revision + pipeline-source projection. Old
