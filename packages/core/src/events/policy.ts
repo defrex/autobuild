@@ -172,6 +172,10 @@ export const buildEventPolicy = {
   'session.build-read-recovered': 'decisive',
   'phase.deferred': 'decisive',
   'phase.deferral-escalated': 'decisive',
+  'wait.requested': 'decisive',
+  'wait.refused': 'decisive',
+  'wait.entered': 'decisive',
+  'wait.ended': 'decisive',
 } satisfies Record<EventType, FactClassification>
 export const repositoryEventPolicy = {
   'dispatcher.placement-set': 'advisory',

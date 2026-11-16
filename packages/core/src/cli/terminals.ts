@@ -32,7 +32,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { loadConfig } from '../config/load'
 import { readTerminalGuardBoundary } from '../store/reduced-reads'
-import type { EventType } from '../events/payloads'
+import { WAIT_TICKET_LIMIT, type EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { ArtifactInput } from '../store/types'
 import type { EventEnvelope } from '../events/catalog'
@@ -93,6 +93,7 @@ async function terminalDeposit<T extends EventType>(
   deps: TerminalDeps,
   artifacts: ArtifactInput[],
   makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
+  refuse?: (guard: { waitHeld?: string }) => string | undefined,
 ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
   for (;;) {
     const boundary = await readTerminalGuardBoundary(
@@ -103,6 +104,8 @@ async function terminalDeposit<T extends EventType>(
       deps.env.session,
     )
     if (boundary.value.diagnostic) throw new Error(boundary.value.diagnostic)
+    const refusal = refuse?.(boundary.value)
+    if (refusal !== undefined) throw new Error(refusal)
     const deposited = await deps.store.appendWithArtifactsIfCurrent(
       deps.env.build,
       boundary.cursor,
@@ -983,4 +986,57 @@ export async function escalate(
       ...(opts.refs !== undefined && opts.refs.length > 0 ? { refs: opts.refs } : {}),
     },
   })).then(({ event }) => event)
+}
+
+// ── ab wait-on (any leaf phase — SPEC §11 "Ticket waits") ────────────────────
+
+export interface WaitOnOpts {
+  tickets: string[]
+  reason: string
+}
+
+/**
+ * Declare that this build waits on other tickets. The declaration is this
+ * session's terminal: it appends one `wait.requested` and returns. The
+ * dispatcher, which holds the ticket source, validates the ids and either
+ * enters the wait (the build parks without a slot) or refuses it (this phase
+ * re-runs with the reason as guidance). Only checks that need no ticket
+ * source run here, and every refusal writes nothing.
+ */
+export async function waitOn(
+  deps: TerminalDeps,
+  opts: WaitOnOpts,
+): Promise<EventEnvelope<'wait.requested'>> {
+  const { env, store } = deps
+  const tickets = opts.tickets.map((id) => id.trim())
+  if (tickets.length === 0 || tickets.some((id) => id === ''))
+    throw new Error("'ab wait-on' requires one or more nonblank ticket ids")
+  const duplicate = tickets.find((id, index) => tickets.indexOf(id) !== index)
+  if (duplicate !== undefined)
+    throw new Error(`'ab wait-on' names ticket "${duplicate}" more than once`)
+  if (tickets.length > WAIT_TICKET_LIMIT)
+    throw new Error(`'ab wait-on' accepts at most ${WAIT_TICKET_LIMIT} ticket ids`)
+  const reason = opts.reason.trim()
+  if (reason === '')
+    throw new Error("'ab wait-on' requires --reason <text> — it says why the build must wait")
+  await assertNoPriorTerminal(store, env)
+  const facts = (await readBuildFacts(store, env.build)).value
+  if (facts.state.kind === 'node')
+    throw new Error("'ab wait-on' is for work builds; a node build cannot declare a ticket wait")
+  const own = (await store.getBuild(env.build))?.ticket?.id
+  if (own !== undefined && tickets.includes(own))
+    throw new Error(`ticket "${own}" is this build's own ticket; a build cannot wait on itself`)
+  // Checked against the same prefix the append commits to, so concurrent
+  // verifiers cannot both declare: the loser re-reads and is refused.
+  const { event } = await terminalDeposit(
+    deps,
+    [],
+    () => ({
+      actor: agentActor(env.phase, env.session),
+      type: 'wait.requested',
+      payload: { id: deps.ids('wait'), phase: env.phase, round: env.round, tickets, reason },
+    }),
+    (guard) => guard.waitHeld,
+  )
+  return event
 }

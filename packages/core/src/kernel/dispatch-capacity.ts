@@ -2,14 +2,16 @@ import type { TicketRef } from '../ontology'
 import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
 import { integrationAdmissible, integrationNeedsRunner } from './integration-state'
+import { waitParked, waitResumeDue } from './ticket-wait'
 
 /** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
  *
- * `capacity` counts builds running work. A leaf that has finished its pipeline
- * (settled, see `epilogueLeaf`) and holds no runner is parked: it waits for a
- * merge decision, merge gates or the forge and holds no slot, though it keeps
+ * `capacity` counts builds running work. A leaf that holds no runner is
+ * parked when it has finished its pipeline (settled, see `epilogueLeaf`) and
+ * waits for a merge decision, merge gates or the forge, or when it waits on
+ * other tickets (`waitParked`). A parked leaf holds no slot, though it keeps
  * its workspace. Every other unfinished leaf holds a slot, paused or blocked
- * included. Nodes hold a slot only while they need a runner. */
+ * on a question included. Nodes hold a slot only while they need a runner. */
 export interface CapacityBuild {
   record: BuildRecord
   state: BuildState
@@ -19,8 +21,9 @@ export interface CapacityBuild {
   restackDue?: boolean
 }
 
-/** The runner a node or parked leaf has durably requested and does not yet hold. */
-export type SlotRequest = 'verification' | 'reconcile'
+/** The runner a node or parked leaf has durably requested and does not yet
+ * hold. `resume` is a leaf whose ticket wait ended. */
+export type SlotRequest = 'verification' | 'reconcile' | 'resume'
 
 export interface DispatchCapacity {
   configured: number
@@ -74,9 +77,14 @@ function executionOpen(state: BuildState): boolean {
   return state.openExecution?.commandId !== undefined
 }
 
-/** A finished leaf with no runner working. It holds no slot; its workspace does not count. */
+/** A finished or ticket-waiting leaf with no runner working. It holds no
+ * slot; its workspace does not count. */
 export function parkedLeaf(build: CapacityBuild, now: Date): boolean {
-  return epilogueLeaf(build.state) && !runnerAllocated(build, now) && !executionOpen(build.state)
+  return (
+    (epilogueLeaf(build.state) || waitParked(build.state)) &&
+    !runnerAllocated(build, now) &&
+    !executionOpen(build.state)
+  )
 }
 
 /** A finished leaf whose latest verify cycle or finalize has not been settled
@@ -114,6 +122,9 @@ function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefin
     state.targetRewrite !== undefined
   )
     return undefined
+  // A ticket wait parks a leaf mid-pipeline: it asks for a slot only once the
+  // wait has ended, to resume the phase that declared it.
+  if (waitParked(state)) return waitResumeDue(state) ? 'resume' : undefined
   if (state.prState === 'conflicted') return 'reconcile'
   if (build.restackDue || epilogueUnsettled(state)) return 'verification'
   return undefined

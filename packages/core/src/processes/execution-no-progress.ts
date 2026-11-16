@@ -165,6 +165,10 @@ export const executionProgress = {
   'session.build-read-recovered': 'bookkeeping',
   'phase.deferred': 'bookkeeping',
   'phase.deferral-escalated': 'bookkeeping',
+  'wait.requested': 'progress',
+  'wait.refused': 'bookkeeping',
+  'wait.entered': 'bookkeeping',
+  'wait.ended': 'bookkeeping',
   'phase.failed': 'failure',
 } satisfies Record<EventType, 'bookkeeping' | 'failure' | 'progress'>
 
