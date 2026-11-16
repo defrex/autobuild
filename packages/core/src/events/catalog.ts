@@ -135,6 +135,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'abort.remote-branch-deleted': ['dispatcher'],
   'abort.local-branch-deleted': ['dispatcher'],
   'abort.ticket-returned': ['dispatcher'],
+  'build.ticket-returned': ['dispatcher'],
   'dispatch.failed': ['dispatcher'],
   'dispatch.comment-posted': ['dispatcher'],
 

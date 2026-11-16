@@ -1600,7 +1600,91 @@ readyState = "Ready"
     expect(comment?.body).not.toContain('docs/spec-standard.md')
     expect(comment?.body).toContain("an '## Acceptance criteria' heading")
     expect(comment?.body).toContain("an '## Out of scope' heading")
+    const journal = await h.store.getRepoEvents(REPO)
+    const reports = journal.filter((event) => event.type === 'ticket.handed-back')
+    expect(reports).toHaveLength(1)
+    expect(reports[0]?.payload).toMatchObject({
+      ticket: { id: 'T-1' },
+      cause: 'spec-bounce',
+      state: 'Triage',
+      role: 'triage',
+      missing: expect.arrayContaining(["an '## Out of scope' heading"]),
+    })
+    const resolved = journal.findIndex((event) => event.type === 'ticket-preparation.resolved')
+    expect(journal.indexOf(reports[0]!)).toBeLessThan(resolved)
   })
+
+  test('an unconfirmed claim whose ticket stayed Ready resolves without a hand-back report', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    h.tickets.claim = async () => {
+      throw new Error('claim request offline')
+    }
+    await h.dispatcher.tick().catch(() => undefined)
+    const journal = await h.store.getRepoEvents(REPO)
+    expect(
+      journal.filter((event) => event.type === 'ticket-preparation.resolved').at(-1)?.payload,
+    ).toMatchObject({ outcome: 'handed-back' })
+    expect(journal.some((event) => event.type === 'ticket.handed-back')).toBe(false)
+  })
+
+  test('a bounce report whose acknowledgement is lost is resolved by recovery without a second report', async () => {
+    const h = harness({ tickets: [readyTicket('T-1', { body: 'make it faster' })] })
+    const appendRepo = h.store.appendRepo.bind(h.store)
+    let fail = true
+    h.store.appendRepo = (async (repo, event) => {
+      const committed = await appendRepo(repo, event)
+      if (event.type === 'ticket.handed-back' && fail) {
+        fail = false
+        throw new Error('acknowledgement lost')
+      }
+      return committed
+    }) as typeof h.store.appendRepo
+
+    await h.dispatcher.tick().catch(() => undefined)
+    h.clock.advance(60_000)
+    await h.dispatcher.tick().catch(() => undefined)
+    const journal = await h.store.getRepoEvents(REPO)
+    expect(journal.filter((event) => event.type === 'ticket.handed-back')).toHaveLength(1)
+    expect(
+      journal.filter((event) => event.type === 'ticket-preparation.resolved').at(-1)?.payload,
+    ).toMatchObject({ outcome: 'bounced' })
+    expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
+  })
+
+  for (const lost of ['ticket.handed-back', 'ticket-preparation.resolved'] as const) {
+    test(`a watcher move to the claimed state after a reported bounce survives a lost ${lost} write`, async () => {
+      const h = harness({ tickets: [readyTicket('T-1', { body: 'make it faster' })] })
+      const appendRepo = h.store.appendRepo.bind(h.store)
+      let fail = true
+      h.store.appendRepo = (async (repo, event) => {
+        if (event.type === lost && fail) {
+          fail = false
+          const committed = lost === 'ticket.handed-back' ? await appendRepo(repo, event) : null
+          // The watcher acts on the committed report before the dispatcher
+          // learns the outcome, moving the ticket to the claimed state.
+          await h.tickets.transition('T-1', 'Doing')
+          throw new Error(committed ? 'acknowledgement lost' : 'resolution failed')
+        }
+        return appendRepo(repo, event)
+      }) as typeof h.store.appendRepo
+
+      await h.dispatcher.tick().catch(() => undefined)
+      for (let i = 0; i < 3; i++) {
+        h.clock.advance(60_000)
+        await h.dispatcher.tick().catch(() => undefined)
+      }
+      expect((await h.tickets.get('T-1'))?.state).toBe('Doing')
+      expect(h.tickets.transitions).toEqual([
+        { id: 'T-1', state: 'Triage' },
+        { id: 'T-1', state: 'Doing' },
+      ])
+      const journal = await h.store.getRepoEvents(REPO)
+      expect(journal.filter((event) => event.type === 'ticket.handed-back')).toHaveLength(1)
+      expect(
+        journal.filter((event) => event.type === 'ticket-preparation.resolved').at(-1)?.payload,
+      ).toMatchObject({ outcome: 'bounced' })
+    })
+  }
 
   test('bounce targets Backlog by default for a linear ticket source', async () => {
     // Linear teams only have a "Triage" state when the triage feature is
@@ -3737,8 +3821,8 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     })
     expect(h.workspaces.releases).toHaveLength(1)
     expect(
-      (await h.store.getEvents('partial-discard')).map((event) => event.type).slice(-2),
-    ).toEqual(['workspace.released', 'build.completed'])
+      (await h.store.getEvents('partial-discard')).map((event) => event.type).slice(-3),
+    ).toEqual(['workspace.released', 'build.ticket-returned', 'build.completed'])
   })
 })
 
@@ -3964,11 +4048,12 @@ describe('Dispatcher janitor', () => {
     expect(report).toEqual({ ...emptyTickReport(), closed: 1 })
 
     const events = await h.store.getEvents(slug)
-    expect(events.map((e) => e.type).slice(-5)).toEqual([
+    expect(events.map((e) => e.type).slice(-6)).toEqual([
       'pr.closed',
       'workspace.fenced',
       'workspace.commits-preserved',
       'workspace.released',
+      'build.ticket-returned',
       'build.completed',
     ])
     expect(events.at(-1)?.payload).toEqual({ outcome: 'closed-unmerged' })
@@ -5055,6 +5140,248 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
+  })
+
+  describe('ticket hand-back reports', () => {
+    const handbacks = async (h: Harness) =>
+      (await h.store.getRepoEvents(REPO)).filter(
+        (event) => event.type === 'ticket.handed-back' || event.type === 'ticket.handback-settled',
+      )
+    const requestAbort = async (
+      h: Harness,
+      slug: string,
+      payload: { to?: 'triage' | 'ready'; reason?: string } = {},
+    ) => {
+      await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'build.abort-requested',
+        payload,
+      })
+      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    }
+
+    test('abort --to ready moves a conforming ticket straight to Ready with blockers kept, then reports once', async () => {
+      const h = harness({ tickets: [readyTicket('T-1', { blockedBy: ['T-9'] })] })
+      const slug = await seedBuild(h, { ticketId: 'T-1' })
+      await requestAbort(h, slug, { to: 'ready', reason: 'waiting on T-9' })
+
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).abandoned).toBe(1)
+      expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Ready' }])
+      expect(h.tickets.comments).toEqual([
+        { id: 'T-1', body: `build ${slug} aborted — returned to Ready\nReason: waiting on T-9` },
+      ])
+      expect((await h.tickets.get('T-1'))?.blockedBy).toEqual(['T-9'])
+      const events = await h.store.getEvents(slug)
+      expect(events.map((event) => event.type).slice(-2)).toEqual([
+        'abort.ticket-returned',
+        'build.completed',
+      ])
+      const journal = await handbacks(h)
+      expect(journal.map((event) => event.type)).toEqual([
+        'ticket.handed-back',
+        'ticket.handback-settled',
+      ])
+      expect(journal[0]?.payload).toEqual({
+        ticket: { source: 'fake', id: 'T-1', title: slug },
+        build: slug,
+        cause: 'abort',
+        state: 'Ready',
+        role: 'ready',
+        reason: 'waiting on T-9',
+      })
+      // The completion fact follows the report, which follows the move.
+      const completed = events.find((event) => event.type === 'build.completed')!
+      expect(Date.parse(completed.ts)).toBeGreaterThanOrEqual(Date.parse(journal[0]!.ts))
+
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(await handbacks(h)).toHaveLength(2)
+      expect(h.tickets.transitions).toHaveLength(1)
+    })
+
+    test('abort --to ready falls back to Triage for a nonconforming ticket and lists what is missing', async () => {
+      const h = harness({ tickets: [readyTicket('T-1', { body: 'make it faster' })] })
+      const slug = await seedBuild(h, { ticketId: 'T-1' })
+      await requestAbort(h, slug, { to: 'ready' })
+
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
+      const comment = h.tickets.comments[0]!.body
+      expect(comment).toContain(`build ${slug} aborted — returned to Triage instead of Ready`)
+      expect(comment).toContain("an '## Out of scope' heading")
+      const [report] = await handbacks(h)
+      expect(report?.payload).toMatchObject({
+        cause: 'abort',
+        state: 'Triage',
+        role: 'triage',
+        requested: 'ready',
+        missing: expect.arrayContaining(["an '## Out of scope' heading"]),
+      })
+    })
+
+    test('a default abort keeps its Triage comment and reports once', async () => {
+      const h = harness({ tickets: [readyTicket('T-1')] })
+      const slug = await seedBuild(h, { ticketId: 'T-1' })
+      await requestAbort(h, slug)
+
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(h.tickets.comments).toEqual([
+        { id: 'T-1', body: `build ${slug} aborted — returned to Triage` },
+      ])
+      const journal = await handbacks(h)
+      expect(journal.map((event) => event.type)).toEqual([
+        'ticket.handed-back',
+        'ticket.handback-settled',
+      ])
+      expect(journal[0]?.payload).toMatchObject({ cause: 'abort', state: 'Triage', role: 'triage' })
+    })
+
+    test('a completion that fails after the report committed retries without a second move or report', async () => {
+      const h = harness({ tickets: [readyTicket('T-1')] })
+      const slug = await seedBuild(h, { ticketId: 'T-1' })
+      await requestAbort(h, slug, { to: 'ready' })
+      const append = h.store.append.bind(h.store)
+      let fail = true
+      h.store.append = (async (target, event) => {
+        if (event.type === 'build.completed' && fail) {
+          fail = false
+          throw new Error('completion append lost')
+        }
+        return append(target, event)
+      }) as typeof h.store.append
+
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+      expect((await handbacks(h)).map((event) => event.type)).toEqual(['ticket.handed-back'])
+      h.clock.advance(30_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(reduceBuild(await h.store.getEvents(slug)).status).toBe('done')
+      expect((await handbacks(h)).map((event) => event.type)).toEqual([
+        'ticket.handed-back',
+        'ticket.handback-settled',
+      ])
+      expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Ready' }])
+    })
+
+    test('a report whose acknowledgement is lost is never appended twice', async () => {
+      const h = harness({ tickets: [readyTicket('T-1')] })
+      const slug = await seedBuild(h, { ticketId: 'T-1' })
+      await requestAbort(h, slug)
+      const appendRepo = h.store.appendRepo.bind(h.store)
+      let fail = true
+      h.store.appendRepo = (async (repo, event) => {
+        const committed = await appendRepo(repo, event)
+        if (event.type === 'ticket.handed-back' && fail) {
+          fail = false
+          throw new Error('acknowledgement lost')
+        }
+        return committed
+      }) as typeof h.store.appendRepo
+
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+      h.clock.advance(30_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect(reduceBuild(await h.store.getEvents(slug)).status).toBe('done')
+      expect(
+        (await handbacks(h)).filter((event) => event.type === 'ticket.handed-back'),
+      ).toHaveLength(1)
+      expect(h.tickets.transitions).toHaveLength(1)
+    })
+
+    test('a failed settlement is completed by a later tick', async () => {
+      const h = harness({ tickets: [readyTicket('T-1')] })
+      const slug = await seedBuild(h, { ticketId: 'T-1' })
+      await requestAbort(h, slug)
+      const appendRepo = h.store.appendRepo.bind(h.store)
+      // Both the inline settle and this tick's settlement pass fail.
+      let failures = 2
+      h.store.appendRepo = (async (repo, event) => {
+        if (event.type === 'ticket.handback-settled' && failures > 0) {
+          failures--
+          throw new Error('settle append failed')
+        }
+        return appendRepo(repo, event)
+      }) as typeof h.store.appendRepo
+
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).abandoned).toBe(1)
+      expect(reduceBuild(await h.store.getEvents(slug)).status).toBe('done')
+      expect((await handbacks(h)).map((event) => event.type)).toEqual(['ticket.handed-back'])
+      await h.dispatcher.tick({ acceptNewWork: false })
+      expect((await handbacks(h)).map((event) => event.type)).toEqual([
+        'ticket.handed-back',
+        'ticket.handback-settled',
+      ])
+      const { readRepositoryFacts } = await import('../store/reduced-reads')
+      expect((await readRepositoryFacts(h.store, REPO, true)).value.handbacks).toEqual({})
+    })
+
+    test('a discard reports its Ready hand-back once, after its checkpoint', async () => {
+      const h = harness({ tickets: [readyTicket('T-recover', { state: 'Doing' })] })
+      await seedInterrupted(h, 'discard-me')
+      await h.store.append('discard-me', {
+        actor: humanActor('operator'),
+        type: 'build.discard-requested',
+        payload: {},
+      })
+      const append = h.store.append.bind(h.store)
+      let fail = true
+      h.store.append = (async (target, event) => {
+        if (event.type === 'build.completed' && fail) {
+          fail = false
+          throw new Error('completion append lost')
+        }
+        return append(target, event)
+      }) as typeof h.store.append
+
+      await h.dispatcher.tick({ acceptNewWork: false })
+      h.clock.advance(30_000)
+      await h.dispatcher.tick({ acceptNewWork: false })
+      const events = await h.store.getEvents('discard-me')
+      expect(
+        events
+          .map((event) => event.type)
+          .filter((type) => type === 'build.ticket-returned' || type === 'build.completed'),
+      ).toEqual(['build.ticket-returned', 'build.completed'])
+      expect(h.tickets.transitions.filter((entry) => entry.id === 'T-recover')).toEqual([
+        { id: 'T-recover', state: 'Ready' },
+      ])
+      const journal = await handbacks(h)
+      expect(journal.map((event) => event.type)).toEqual([
+        'ticket.handed-back',
+        'ticket.handback-settled',
+      ])
+      expect(journal[0]?.payload).toMatchObject({
+        build: 'discard-me',
+        cause: 'discard',
+        state: 'Ready',
+        role: 'ready',
+      })
+    })
+
+    test('a closed PR reports its Triage hand-back once', async () => {
+      const h = harness({ tickets: [readyTicket('T-1', { labels: [] })] })
+      const slug = await seedBuild(h, { ticketId: 'T-1', pr: PR })
+      h.forge.setPrState(1, { state: 'closed' })
+      const append = h.store.append.bind(h.store)
+      let fail = true
+      h.store.append = (async (target, event) => {
+        if (event.type === 'build.completed' && fail) {
+          fail = false
+          throw new Error('completion append lost')
+        }
+        return append(target, event)
+      }) as typeof h.store.append
+
+      await h.dispatcher.tick()
+      h.clock.advance(30_000)
+      await h.dispatcher.tick()
+      expect(reduceBuild(await h.store.getEvents(slug)).status).toBe('done')
+      expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
+      const journal = await handbacks(h)
+      expect(journal.map((event) => event.type)).toEqual([
+        'ticket.handed-back',
+        'ticket.handback-settled',
+      ])
+      expect(journal[0]?.payload).toMatchObject({ build: slug, cause: 'pr-closed', role: 'triage' })
+    })
   })
 
   test('abort local-branch cleanup runs git in the physical checkout, not the origin-URL identity', async () => {
@@ -13782,6 +14109,18 @@ describe('Dispatcher recovery of allocated canonical build creation', () => {
     await expect(h.dispatcher.tick()).rejects.toThrow('rejected before commit')
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Ready' }])
     expect(await resolutions(store)).toEqual([{ outcome: 'handed-back' }])
+    const reports = (await store.getRepoEvents(REPO)).filter(
+      (event) => event.type === 'ticket.handed-back',
+    )
+    expect(reports.map((event) => event.payload)).toEqual([
+      {
+        ticket: expect.objectContaining({ id: 'T-1' }),
+        attempt: 'prep_1',
+        cause: 'preparation-failed',
+        state: 'Ready',
+        role: 'ready',
+      },
+    ])
     await h.dispatcher.tick()
     await h.dispatcher.tick()
     expect((await store.listBuilds()).map((record) => record.slug)).toEqual([derived('prep_2')])
