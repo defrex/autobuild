@@ -133,6 +133,9 @@ export interface BuildDigest {
   readinessChangeSeq?: number
   slug: string
   terminal?: 'done' | 'aborted'
+  /** A ticket wait was requested and the dispatcher has not yet accepted or
+   * refused it — the one signal that makes its wait stage read the build. */
+  waitPending?: true
   /** Ascending-seq `{seq, ts}` pairs for every `observation.recorded` in the
    * build's log; `ts` is the event envelope timestamp (AUT-521: the harvest
    * pressure gate measures drift from the oldest unclaimed occurrence's ts,
