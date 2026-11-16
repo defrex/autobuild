@@ -55,6 +55,7 @@ import {
   MixedVersionDeferral,
 } from '../kernel/mixed-version'
 import { guardForge, ForgeCooldown } from '../kernel/guarded-forge'
+import { leafLandingDeclineReason } from '../kernel/landing-readiness'
 import {
   escalationsBeyondJanitor,
   janitorBlocked,
@@ -188,7 +189,12 @@ import type { AutoMergeDefaultFact } from '../kernel/auto-merge-default'
 import { decideNextFromFacts, landingRestackDue } from '../kernel/engine'
 import { composeBuildConfig } from '../config/live'
 import { profileConflictDiagnostic, selectProfile } from '../config/profiles'
-import { BUILD_EFFECTIVE_CONFIG_ARTIFACT, parseEffectiveBuildConfig } from './build-execution-state'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  EffectivePipelineUnreadable,
+  parseEffectiveBuildConfig,
+  readEffectivePipeline,
+} from './build-execution-state'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   decideHarvestControl,
@@ -981,23 +987,29 @@ export class Dispatcher {
         }
       }
       if (pinned === undefined) {
-        let artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
-        if (artifact === null) {
-          this.sweepPins.delete(slug)
-          return decideNextFromFacts(state, log, this.deps.config)
-        }
-        revision = artifact.meta.revision
+        let latest: Awaited<ReturnType<typeof readEffectivePipeline>>
         try {
-          pinned = parseEffectiveBuildConfig(artifact)
+          latest = await readEffectivePipeline(this.store, slug)
         } catch (error) {
+          if (!(error instanceof EffectivePipelineUnreadable)) throw error
+          revision = error.revision
           this.sweepPins.delete(slug)
           if (this.deps.repairBuildConfig === undefined) throw error
           await this.deps.repairBuildConfig(slug)
-          artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
-          if (artifact === null) throw new Error('configuration repair deposited no pipeline')
-          revision = artifact.meta.revision
-          pinned = parseEffectiveBuildConfig(artifact)
+          try {
+            latest = await readEffectivePipeline(this.store, slug)
+          } catch (retry) {
+            if (retry instanceof EffectivePipelineUnreadable) revision = retry.revision
+            throw retry
+          }
+          if (latest === null) throw new Error('configuration repair deposited no pipeline')
         }
+        if (latest === null) {
+          this.sweepPins.delete(slug)
+          return decideNextFromFacts(state, log, this.deps.config)
+        }
+        revision = latest.revision
+        pinned = latest.config
         if (cacheable) {
           // A concurrent deposit may have advanced the revision after the probe:
           // label the bytes with the full response's revision, never the probe's.
@@ -3623,12 +3635,14 @@ export class Dispatcher {
     // finished after the publisher confirmed cancellation.
     const ready = async (candidate: BuildState): Promise<boolean> => {
       if (
-        (integration ? executionLeaseLive : candidate.sessions.open.length > 0) ||
-        candidate.status === 'paused' ||
-        candidate.status === 'done' ||
-        candidate.status === 'aborted' ||
-        escalationsBeyondJanitor(candidate).length ||
-        candidate.pendingCommands.length
+        integration
+          ? executionLeaseLive ||
+            candidate.status === 'paused' ||
+            candidate.status === 'done' ||
+            candidate.status === 'aborted' ||
+            escalationsBeyondJanitor(candidate).length ||
+            candidate.pendingCommands.length
+          : leafLandingDeclineReason(candidate) !== undefined
       )
         return false
       if (integration) {
@@ -3657,7 +3671,8 @@ export class Dispatcher {
             parent: current.integration.cycle.parent,
             cycle: current.integration.cycle.id,
           }
-        : current.pr && {
+        : // The leaf candidate's shared definition is `leafLandingCandidate`.
+          current.pr && {
             head: current.pr.headSha,
             parent:
               (await store.buildFacts(record.slug)).log.restack.completed?.targetBase ??

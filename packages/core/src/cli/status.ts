@@ -53,9 +53,13 @@ import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  EffectivePipelineUnreadable,
   parseBuildConfigMetadata,
   parseEffectiveBuildConfig,
+  readEffectivePipeline,
 } from '../processes/build-execution-state'
+import { leafLandingCandidate, leafLandingUndecidedReason } from '../kernel/landing-readiness'
+import { sameLandingCandidate } from '../kernel/landing-state'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
 import { currentAutoMergeDeferralFrom } from '../kernel/auto-merge'
@@ -158,7 +162,14 @@ export interface BuildObservation {
 }
 
 export type BuildDecisionProjection =
-  | { kind: 'awaiting-pr'; reason?: string }
+  | {
+      kind: 'awaiting-pr'
+      reason?: string
+      /** Set when status's own config read is the build's verify pin but the
+       * dispatcher's first read, the latest effective config, does not parse
+       * or cannot be read: the dispatcher then withholds every decision. */
+      pipelineUnreadable?: string
+    }
   | { kind: 'repository-completion'; prState: Extract<PrLifecycle, 'merged' | 'closed'> }
   | { kind: 'parked'; reason: string }
   | { kind: 'runner-work' }
@@ -173,6 +184,9 @@ export interface BuildDetail extends BuildSummary {
   /** Current work-owner decision. Open PRs use the build-owned config; ended
    * PRs project the repository completion path directly from durable state. */
   decision?: BuildDecisionProjection
+  /** Why an open-PR leaf parked at awaiting-pr has no landing decision for its
+   * current candidate. */
+  landingUndecided?: string
   /** The build's effective auto-merge display state (off, requested, enabled,
    * cancelling) — the same projection the dashboards render, so `--json` and
    * the text agree and `waiting: on PR` can say why it is waiting. */
@@ -405,6 +419,22 @@ export function detailFromFacts(
     autoMerge: autoMergeDisplay(state),
     ...(state.landing && Object.keys(state.landing).length ? { landing: state.landing } : {}),
     ...(decision !== undefined ? { decision } : {}),
+    ...(decision?.kind === 'awaiting-pr' &&
+    state.kind !== 'node' &&
+    state.prState === 'open' &&
+    facts.log &&
+    !sameLandingCandidate(
+      leafLandingCandidate(state, facts.log.restack),
+      state.landing?.decision?.candidate,
+    )
+      ? {
+          landingUndecided: leafLandingUndecidedReason(
+            state,
+            facts.log.restack,
+            decision.pipelineUnreadable,
+          ),
+        }
+      : {}),
     ...(state.verifyStage.superseded.length
       ? { supersededEscalations: state.verifyStage.superseded }
       : {}),
@@ -772,6 +802,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     // what the parked operator needs — off names the missing consent.
     const consent = d.decision.reason ?? `auto merge ${d.autoMerge}`
     lines.push(`  waiting:  on PR — ${consent}`)
+    if (d.landingUndecided !== undefined)
+      lines.push(`  landing:  undecided — ${d.landingUndecided}`)
   } else if (d.decision?.kind === 'repository-completion') {
     lines.push(
       `  waiting:  repository-level completion after the PR was ${d.decision.prState}; no runner re-attachment is pending`,
@@ -1040,6 +1072,23 @@ function decideFromConfig(facts: BuildFacts, config: Config): BuildDecisionProje
   return { kind: 'awaiting-pr', ...(reason !== undefined ? { reason } : {}) }
 }
 
+/** Why the dispatcher's read of the latest effective config fails, or
+ * undefined when it succeeds or none is deposited. */
+async function latestPipelineUnreadable(
+  store: Pick<BuildStore, 'getArtifact'>,
+  slug: string,
+): Promise<string | undefined> {
+  try {
+    await readEffectivePipeline(store, slug)
+    return undefined
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return error instanceof EffectivePipelineUnreadable
+      ? `${BUILD_EFFECTIVE_CONFIG_ARTIFACT}@${error.revision}: ${message}`
+      : `${BUILD_EFFECTIVE_CONFIG_ARTIFACT}: ${message}`
+  }
+}
+
 /** Load the build-owned configuration for the current work-owner decision.
  *
  * Source order: the store's deposited `build-runner-effective-config` artifact
@@ -1054,7 +1103,7 @@ function decideFromConfig(facts: BuildFacts, config: Config): BuildDecisionProje
  * the operator cannot access. An unavailable decision is a reportable
  * degradation, never a reason to guess from the current main branch or to make
  * the read-only command fail. */
-async function projectBuildDecision(
+export async function projectBuildDecision(
   slug: string,
   facts: BuildFacts,
   store: Pick<BuildStore, 'getArtifact'>,
@@ -1077,8 +1126,9 @@ async function projectBuildDecision(
     state.verify.configPin?.artifact.rev,
   )
   if (artifact !== null) {
+    let decision: BuildDecisionProjection
     try {
-      return decideFromConfig(facts, parseEffectiveBuildConfig(artifact))
+      decision = decideFromConfig(facts, parseEffectiveBuildConfig(artifact))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return {
@@ -1086,6 +1136,13 @@ async function projectBuildDecision(
         diagnostic: `the deposited ${BUILD_EFFECTIVE_CONFIG_ARTIFACT} artifact could not be read: ${message}`,
       }
     }
+    // With a verify pin, the artifact read above is not the dispatcher's first
+    // read: it decides only after the latest effective config parses.
+    if (decision.kind === 'awaiting-pr' && state.kind !== 'node' && state.verify.configPin) {
+      const pipelineUnreadable = await latestPipelineUnreadable(store, slug)
+      if (pipelineUnreadable !== undefined) return { ...decision, pipelineUnreadable }
+    }
+    return decision
   }
 
   // Source 2 — the local workspace, exactly as before, only when no artifact

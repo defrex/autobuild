@@ -38,6 +38,16 @@ bun ab build status example-build --json
 - Presence is advisory and allows multiple registrations. MCP repository status marks it `unavailable`, which is not evidence of absence. Termination attempts withdrawal; routine timeout/count re-arms keep the five-minute grace. SIGKILL and failed withdrawal rely on TTL expiry.
 - Dashboard and API share one lifecycle vocabulary.
 
+When a leaf with an open pull request waits on the PR but has no landing decision for its current candidate, `ab build status <slug>` prints a `landing: undecided — <reason>` line, and `--json` includes an optional `landingUndecided` string. The reason names what is holding the decision back:
+
+- an open session, a pause, a terminal state, an open escalation, or a pending pause or abort request;
+- a compatibility deferral;
+- a failed dispatcher janitor attempt, with its message and next attempt time;
+- a latest build pipeline configuration the dispatcher cannot read, even when the build's verification pin is still readable;
+- no recorded base for the merge candidate.
+
+If none of these apply, the line says no refusal is recorded and the dispatcher decides at its next janitor poll. Repository-wide forge deferrals appear in `ab repository status`. When a decision is recorded for the current candidate, the line and the field are no longer shown.
+
 A local CLI can use a remote Store:
 
 <!-- seam-config:start -->

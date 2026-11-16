@@ -1,11 +1,77 @@
 import type { BuildState } from './reducer'
 import { discardInFlight } from './reducer'
 import type { LeafRestackState } from './leaf-restack-state'
+import type { LandingCandidate } from './landing-policy'
+import { escalationsBeyondJanitor } from './janitor-failure'
+import { compatibilityDiagnostic, mixedVersionDeferred } from './mixed-version'
 import {
   integrationCurrent,
   integrationCycleVerified,
   integrationCycleCurrent,
 } from './integration-state'
+
+/** Pending controls a runner or dispatcher will still act on. A resume acts
+ * only on a paused build: one that cancelled a never-acknowledged pause stays
+ * queued (a late `build.paused` must still be resumed) but holds nothing back. */
+export function actionableCommands(
+  state: Pick<BuildState, 'pendingCommands' | 'status'>,
+): BuildState['pendingCommands'] {
+  return state.pendingCommands.filter(
+    (command) => command.command !== 'resume' || state.status === 'paused',
+  )
+}
+
+/** The candidate the dispatcher decides landing for on a leaf: its PR head on
+ * the restacked base (or the initial base), keyed by finalize completion. */
+export function leafLandingCandidate(
+  state: Pick<BuildState, 'pr' | 'finalizeCompletedSeq'>,
+  restack: LeafRestackState,
+): LandingCandidate | undefined {
+  return (
+    state.pr && {
+      head: state.pr.headSha,
+      parent: restack.completed?.targetBase ?? restack.initialBase ?? '',
+      cycle: String(state.finalizeCompletedSeq),
+    }
+  )
+}
+
+/** Why the dispatcher will not decide landing for this leaf on state alone, or
+ * undefined. The engine decision (`wait awaiting-pr`) and the candidate base are
+ * checked separately by the caller. */
+export function leafLandingDeclineReason(state: BuildState): string | undefined {
+  const session = state.sessions.open[0]
+  if (session) return `session ${session.session} (${session.phase}) is still open`
+  if (state.status === 'paused') return 'the build is paused'
+  if (state.status === 'done' || state.status === 'aborted') return `the build is ${state.status}`
+  if (escalationsBeyondJanitor(state).length) return 'the build has open escalations to answer'
+  const command = actionableCommands(state)[0]
+  if (command) return `a ${command.command} request awaits acknowledgement`
+  return undefined
+}
+
+/** Why an open-PR leaf parked at awaiting-pr has no landing decision for its
+ * current candidate, in the order the dispatcher's refusals apply: state
+ * guards, compatibility deferral, a failed janitor episode (any exception on
+ * the landing path, with its backoff), an unreadable build pipeline, a missing
+ * candidate base, else that the decision is due at the next poll. */
+export function leafLandingUndecidedReason(
+  state: BuildState,
+  restack: LeafRestackState,
+  pipelineUnreadable?: string,
+): string {
+  const declined = leafLandingDeclineReason(state)
+  if (declined) return declined
+  if (mixedVersionDeferred(state))
+    return `deferred for compatibility — ${compatibilityDiagnostic(state.compatibility)}`
+  if (state.janitor)
+    return `dispatcher janitor attempt ${state.janitor.attempt} failed — ${state.janitor.message}; next attempt ${state.janitor.nextAttemptAt}${state.janitor.escalation ? ' (escalated)' : ''}`
+  if (pipelineUnreadable)
+    return `the dispatcher cannot read this build's pipeline configuration (${pipelineUnreadable}); landing decisions are withheld until it is restored`
+  if (!leafLandingCandidate(state, restack)?.parent)
+    return 'no base is recorded for the merge candidate'
+  return 'no refusal is recorded; the dispatcher decides at its next janitor poll (repository-wide forge deferrals appear in ab repository status)'
+}
 
 /** The deterministic part of land's guard. Live completeness and CAS remain at the write boundary. */
 export function landPreconditions(state: BuildState, restack: LeafRestackState): boolean {
@@ -25,7 +91,7 @@ export function landRefusalReason(
   if (state.status === 'paused') return 'the build is paused'
   if (state.currentPhase) return `phase ${state.currentPhase} is still running`
   if (state.openEscalations.length) return 'the build has open escalations to answer'
-  if (state.pendingCommands.length) return 'earlier controls are awaiting acknowledgement'
+  if (actionableCommands(state).length) return 'earlier controls are awaiting acknowledgement'
   if (state.prState !== 'open') return `the pull request is ${state.prState ?? 'not open'}`
   if (
     (state.kind === 'node' ? state.integration?.cycle?.head : state.pr?.headSha) !==
@@ -67,10 +133,8 @@ export function landingReady(state: BuildState, restack: LeafRestackState): bool
     )
   )
     return false
-  return (
-    candidate.cycle === String(state.finalizeCompletedSeq) &&
-    candidate.parent === (restack.completed?.targetBase ?? restack.initialBase ?? '')
-  )
+  const current = leafLandingCandidate(state, restack)
+  return candidate.cycle === current?.cycle && candidate.parent === current.parent
 }
 
 export function awaitsConsent(state: BuildState, restack: LeafRestackState): boolean {
