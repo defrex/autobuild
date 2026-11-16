@@ -194,11 +194,13 @@ function harness(
     execCalls.push(cmd)
     execCwds.push(execOpts.cwd)
     return (
-      opts.exec?.(cmd, execOpts) ?? {
-        stdout: `${BASE_SHA}\trefs/heads/main\n`,
-        stderr: '',
-        exitCode: 0,
-      }
+      opts.exec?.(cmd, execOpts) ??
+      // Head path facts: the destination is the merge base and nothing changed.
+      (cmd[1] === 'merge-base' && cmd[2] !== '--is-ancestor'
+        ? { stdout: `${cmd[2]}\n`, stderr: '', exitCode: 0 }
+        : cmd[1] === 'diff' && cmd[2] === '--no-renames'
+          ? { stdout: '', stderr: '', exitCode: 0 }
+          : { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 })
     )
   }
   const dispatcher = new Dispatcher({
@@ -12838,7 +12840,7 @@ test.each(
     exec: async (cmd) => ({
       stdout: cmd.includes('ls-remote')
         ? `${BASE_SHA}\t${cmd.at(-1)}\n`
-        : cmd.includes('rev-parse')
+        : cmd.includes('rev-parse') || cmd[1] === 'merge-base'
           ? BASE_SHA
           : cmd.includes('rev-list')
             ? '0'

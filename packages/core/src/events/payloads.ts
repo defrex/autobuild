@@ -135,9 +135,10 @@ const headPathsPreview = z
 const headPathsRecorded = z
   .strictObject({
     source: z.enum(HEAD_PATHS_SOURCES),
-    head: gitOid,
-    destination: gitOid,
-    mergeBase: gitOid,
+    // Plain commit names, like the node and integration heads they describe.
+    head: z.string().min(1),
+    destination: z.string().min(1),
+    mergeBase: z.string().min(1),
     total: z.number().int().nonnegative(),
     preview: z.array(z.string().min(1)).max(HEAD_PATHS_PREVIEW),
     /** Reconcile-produced heads only: the paths the resolution itself edited. */

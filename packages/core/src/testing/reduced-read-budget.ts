@@ -3415,7 +3415,10 @@ export async function headPathsLandingReadBudget(opts: {
           expect(artifactReads).toBe(0)
           expect(rows.rows).toBe(0)
           expect(rows.buildRows).toBe(0)
-          const measured = { ...requests.vector(), gitSpawns: spawned.length }
+          const measured: Record<string, number> = {
+            ...requests.vector(),
+            gitSpawns: spawned.length,
+          }
           if (vector) expect(measured).toEqual(vector)
           vector = measured
         }
