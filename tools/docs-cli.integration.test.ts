@@ -7,7 +7,7 @@ test('CLI inventory covers the help catalog exactly once in the specified groups
   const source = await readFile(join(import.meta.dir, '../docs/cli.md'), 'utf8')
   const [, human, agent] = source.split(/## For (?:you|your operator agent)\n/)
   const commands = (section: string) =>
-    [...section.matchAll(/^- `([a-z]+)` —/gm)].map((match) => match[1]!)
+    [...section.matchAll(/^- `([a-z][a-z-]*)` —/gm)].map((match) => match[1]!)
   const humanCommands = commands(human!)
   const agentCommands = commands(agent!)
   expect(humanCommands.sort()).toEqual([

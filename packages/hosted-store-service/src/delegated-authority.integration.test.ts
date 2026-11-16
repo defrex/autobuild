@@ -4,7 +4,12 @@ import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import { createTicketServer } from './ticket-server'
 import { afterEach, expect, test } from 'bun:test'
 import { MemoryBuildStore, sampleBuildInput, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
-import { mintToken, verifyToken, type DelegatedTokenScope } from '@defrex/autobuild/remote-store'
+import {
+  mintToken,
+  RemoteBuildStore,
+  verifyToken,
+  type DelegatedTokenScope,
+} from '@defrex/autobuild/remote-store'
 import { createMachineAuth } from './machine-auth'
 import { createDelegationHandler, delegationActive } from './delegated-authority'
 import { createStoreServer } from './remote-store-server'
@@ -1591,4 +1596,54 @@ test('a provider deadline beyond admission fails recording explicitly without re
   })
   expect(calls).toBe(1)
   expect(await f.store.getRepoEvents(A)).toEqual([])
+})
+
+test('a build-phase grant declares a ticket wait with no ticket credential', async () => {
+  const f = await fixture('dispatcher')
+  await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.started',
+    payload: {
+      session: 'waiting-phase',
+      role: 'implement',
+      runner: 'fake',
+      phase: 'implement',
+      round: 1,
+    },
+  })
+  const issued = await f.issue(f.token, {
+    kind: 'build-phase',
+    id: 'one',
+    session: 'waiting-phase',
+  })
+  expect(issued.status).toBe(200)
+  const phase = (await issued.json()).token as string
+  const client = new RemoteBuildStore({
+    url: 'http://store',
+    token: phase,
+    fetchFn: (async (url: string | URL | Request, init?: RequestInit) =>
+      f.server.fetch(new Request(url, init))) as typeof fetch,
+  })
+  // `ab wait-on` deposits its terminal through this compare-and-append; the
+  // session needs only its build-phase grant, and the dispatcher validates.
+  const cursor = (await f.store.getEvents('one')).at(-1)!.seq
+  const deposited = await client.appendWithArtifactsIfCurrent('one', cursor, [], () => ({
+    actor: { kind: 'agent', role: 'implement', session: 'waiting-phase' },
+    type: 'wait.requested',
+    payload: { id: 'wait_1', phase: 'implement', round: 1, tickets: ['B'], reason: 'needs B' },
+  }))
+  expect(deposited?.event.type).toBe('wait.requested')
+  expect((await f.store.getEvents('one')).at(-1)).toMatchObject({
+    type: 'wait.requested',
+    actor: { kind: 'agent', session: 'waiting-phase' },
+  })
+  // The grant cannot attribute the declaration to another session.
+  const other = await client
+    .appendWithArtifactsIfCurrent('one', cursor + 1, [], () => ({
+      actor: { kind: 'agent', role: 'implement', session: 'another-phase' },
+      type: 'wait.requested',
+      payload: { id: 'wait_2', phase: 'implement', round: 1, tickets: ['B'], reason: 'needs B' },
+    }))
+    .catch((error: Error) => error)
+  expect(other).toBeInstanceOf(Error)
 })
