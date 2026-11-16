@@ -63,6 +63,7 @@ export function repositoryNeedsAttention(event: RepositoryEvent): boolean {
     case 'dispatcher.upgrade-failed':
     case 'dispatcher.kernel-git-unavailable':
     case 'forge.credential-limited':
+    case 'ticket.handed-back':
       return true
     case 'dispatcher.config-reloaded':
       return event.payload.restartRequired.length > 0

@@ -58,10 +58,12 @@ the ticket ready.
 ## Already-claimed work
 
 Adding blockers does not stop a build already claimed from an earlier listing.
-When the human authorizes restarting premature work: request `ab abort <slug>`,
-wait for dispatcher cleanup to finish and return the ticket to triage, verify
-or repair the blocker set, and only then move the ticket back to ready. Moving
-the ticket before cleanup finishes can be overwritten by cleanup. Ready with
+When the human authorizes restarting premature work and the blocker set is
+already right, request `ab abort <slug> --to ready`: cleanup moves the ticket
+straight back to ready with its blockers kept, so no second move is needed.
+If the blockers need changing first, verify or repair them once the
+`ticket.handed-back` repository event for that build arrives; the dispatcher
+writes nothing to the ticket for that hand-back afterwards. Ready with
 unresolved blockers is the normal waiting state: dispatch rechecks dependencies
 and claims the ticket only after they resolve and other readiness gates pass.
 
