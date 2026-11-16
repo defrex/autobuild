@@ -33,7 +33,12 @@ import { TicketAssigneesUnsupported } from '../ports/tickets/assignees'
  * every mutator, and — for constrained bindings — repository targeting.
  */
 import { z } from 'zod'
-import { controlBuild, BuildControlError, type BuildControlAction } from '../cli/build-control'
+import {
+  controlBuild,
+  BuildControlError,
+  parseConsentHead,
+  type BuildControlAction,
+} from '../cli/build-control'
 import type { Via } from '../events/envelope'
 import { bulkControlRepository, BulkWalkError } from '../cli/bulk-control'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
@@ -277,6 +282,13 @@ const buildControlInput = z.strictObject({
     .enum(['pause', 'cancel-pause', 'resume', 'merge', 'land', 'hold', 'abort', 'discard'])
     .describe(
       'Control to request: "pause" (or "cancel-pause" to revoke a pending pause), "resume" a paused build, "merge" (deprecated alias "land") for merge consent or "hold" to withdraw consent — or the destructive "abort" (cancels the build, cleans up its PR and workspace, returns the ticket to triage) and "discard" (dequeue a queued build).',
+    ),
+  head: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Only with "merge"/"land": the candidate head (full SHA or ≥7-character prefix) the operator reviewed. Consent is refused, with nothing recorded, unless it is the current candidate head.',
     ),
 })
 
@@ -616,7 +628,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'builds.control',
-    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate; hold withdraws merge consent.',
+    'Pause immediately suspends a live agent session. Resume continues where stopped when supported; remote and unsupported sessions rerun fresh. Request a durable control for one active build: pause/cancel-pause, resume, hold or merge — or the destructive abort and discard. Merge requires a ready candidate, and an optional head binds consent to the reviewed head; hold withdraws merge consent.',
     buildControlInput,
     'Either {kind: "command", slug, command, event} for an accepted control, or {kind: "answer-required", slug, escalationIds} when a resume needs its open escalations answered first.',
     async (raw, ctx) => {
@@ -624,6 +636,20 @@ export const TOOLS: readonly ToolEntry[] = [
       const input = {
         ...received,
         action: received.action === 'merge' ? ('land' as const) : received.action,
+      }
+      let head: string | undefined
+      if (input.head !== undefined) {
+        if (input.action !== 'land')
+          throw new RouteRefusalError({
+            kind: 'validation',
+            error: 'head applies only to the merge action',
+          })
+        head = parseConsentHead(input.head)
+        if (head === undefined)
+          throw new RouteRefusalError({
+            kind: 'validation',
+            error: 'head must be a nonblank commit SHA without whitespace',
+          })
       }
       await controlPrechecks(ctx.store, input.repo, input.slug, input.action)
       // The route maps BOTH pause and cancel-pause to `dashboard-pause`:
@@ -635,7 +661,9 @@ export const TOOLS: readonly ToolEntry[] = [
           ? { kind: 'dashboard-pause' }
           : input.action === 'resume'
             ? { kind: 'dashboard-resume' }
-            : { kind: input.action }
+            : input.action === 'land' && head !== undefined
+              ? { kind: 'land', head }
+              : { kind: input.action }
       return controlBuild({
         store: ctx.store,
         ...operatorControlTickets({ store: ctx.store, repo: input.repo, backend: ctx.tickets }),

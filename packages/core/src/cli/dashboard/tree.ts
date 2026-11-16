@@ -7,7 +7,7 @@ import {
   integrationCycleVerified,
 } from '../../kernel/integration-state'
 import { mergeVocabulary } from './landing-display'
-import { awaitsConsent, landingReady } from '../../kernel/landing-readiness'
+import { awaitsConsent, currentCandidateHead, landingReady } from '../../kernel/landing-readiness'
 
 export const treeVocabulary = {
   root: 'root',
@@ -17,6 +17,8 @@ export const treeVocabulary = {
   landing: mergeVocabulary.label,
   restack: 'restack',
   consent: 'consent',
+  head: 'head',
+  consentedAt: 'consented at',
   queue: 'queue',
   work: 'work',
   integrationKind: 'integration',
@@ -90,6 +92,12 @@ export function projectTree(
       : {}),
     ready: landingReady(state, restack),
     consent: awaitsConsent(state, restack),
+    /** The live candidate head: what `ab merge --head` must name. */
+    currentHead: currentCandidateHead(state) ?? null,
+    /** The candidate head consent was given at while merge consent is
+     * recorded; null without consent and for legacy consent. */
+    consentedHead:
+      state.landing?.command?.kind === 'land' ? (state.landing.command.head ?? null) : null,
     reason: awaitsConsent(state, restack)
       ? state.landing?.command?.kind === 'hold'
         ? ('held' as const)
