@@ -350,6 +350,19 @@ test('durable node transaction publishes ordered changes and promotes its bounda
   expect(node.inventory?.foreign).toHaveLength(1)
   expect(await git('rev-parse', 'ab-node/a')).toBe(node.inventory!.head)
   expect(await git('rev-parse', `refs/autobuild/archive/a/${oldHead}`)).toBe(oldHead)
+  const { headPathsFor } = await import('./head-paths')
+  const recorded = headPathsFor(
+    (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value.state,
+    node.inventory!.head,
+  )
+  if (!recorded.recorded) throw new Error('the published node head must be recorded')
+  expect(recorded.record).toMatchObject({
+    source: 'node-rewrite',
+    destination: parent,
+    total: 2,
+    preview: ['foreign', 'one'],
+  })
+  expect(recorded.record.resolution).toBeUndefined()
   const exec = tx.exec
   let historyReads = 0
   tx.exec = async (args, options) => {
@@ -714,6 +727,36 @@ test('a real conflicted transaction records NUL-delimited filenames including sp
   expect(
     (await store.getEvents('a')).findLast((e) => e.type === 'node.item-conflicted')?.payload,
   ).toMatchObject({ files })
+  // A resolver settles the conflict and also edits another file; the node
+  // head it publishes carries exactly those files as its resolution.
+  for (const path of files) await Bun.write(join(deps.workspacePath, path), 'resolved\n')
+  await Bun.write(join(deps.workspacePath, 'extra.ts'), 'resolver\n')
+  await git('add', '-A')
+  await git('-c', 'core.editor=true', 'cherry-pick', '--continue')
+  const head = await git('rev-parse', 'HEAD')
+  const { KERNEL } = await import('../events/envelope')
+  const { retainReplay } = await import('./reconcile-restack')
+  const tx = { ...deps, store, slug: 'a', forge, holder: 'holder', canWrite: async () => true }
+  await retainReplay(tx, head, parent)
+  await store.append('a', {
+    actor: KERNEL,
+    type: 'node.item-replayed',
+    payload: { id: 'conflict', index: 0, base: parent, head, dropped: false },
+  })
+  expect(
+    await runNodeTransaction(tx, { branch: 'ab-node/a', parentBranch: 'main', id: 'conflict' }),
+  ).toBe('completed')
+  const { headPathsFor, readHeadPaths } = await import('./head-paths')
+  const recorded = headPathsFor(
+    (await (await import('../store/reduced-reads')).readBuildFacts(store, 'a')).value.state,
+    head,
+  )
+  if (!recorded.recorded) throw new Error('the published node head must be recorded')
+  expect(recorded.record.source).toBe('node-rewrite')
+  expect(await readHeadPaths(store, 'a', recorded.record)).toEqual({
+    paths: ['a file.ts', 'extra.ts', '日本語.ts'],
+    resolution: { paths: ['a file.ts', 'extra.ts', '日本語.ts'] },
+  })
 })
 
 test('unavailable nested presence waits durably, survives re-parenting, and progresses only on actual coverage', async () => {

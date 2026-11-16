@@ -1,5 +1,11 @@
 import { proveTargetLineage } from '../kernel/target-lineage'
 import {
+  computeHeadPaths,
+  headPathsFor,
+  headPathsWrite,
+  type HeadPathsArtifact,
+} from '../kernel/head-paths'
+import {
   isRepositoryAuthorityLapse,
   RepositoryAuthorityLapsed,
   rethrowAuthorityLapse,
@@ -6755,6 +6761,7 @@ export class Dispatcher {
           head: exact.headSha,
         }
         let context: string | undefined
+        let headPaths: HeadPathsArtifact | undefined
         await this.withKernelRepository(async (path) => {
           const head = await forge.rewrite!.snapshot({
             workspacePath: path,
@@ -6768,22 +6775,29 @@ export class Dispatcher {
             ref: `refs/autobuild/archive/${record.slug}/${head}`,
             sha: head,
           })
+          const exec = forge.kernelExec ?? this.deps.exec
+          // Snapshot fetch brings the complete head ancestry, including merge sides.
+          // A parent may have advanced independently and need its own fetch.
+          const parent = await exec(['git', 'cat-file', '-e', `${exact.parentSha}^{commit}`], {
+            cwd: path,
+          })
+          if (parent.exitCode !== 0) {
+            const fetched = await exec(['git', 'fetch', '--no-tags', 'origin', exact.parentSha], {
+              cwd: path,
+            })
+            if (fetched.exitCode !== 0)
+              throw new Error(`cannot fetch node verification parent: ${fetched.stderr}`)
+          }
+          // The cycle's candidate head is recorded once, with the cycle.
+          if (!headPathsFor(current, exact.headSha).recorded)
+            headPaths = await computeHeadPaths(exec, path, {
+              source: 'integration',
+              head: exact.headSha,
+              destination: exact.parentSha,
+            })
           if (
             config.verify.steps.some((step) => config.verify.stepConfigs[step]?.kind === 'agent')
           ) {
-            const exec = forge.kernelExec ?? this.deps.exec
-            // Snapshot fetch brings the complete head ancestry, including merge sides.
-            // A parent may have advanced independently and need its own fetch.
-            const parent = await exec(['git', 'cat-file', '-e', `${exact.parentSha}^{commit}`], {
-              cwd: path,
-            })
-            if (parent.exitCode !== 0) {
-              const fetched = await exec(['git', 'fetch', '--no-tags', 'origin', exact.parentSha], {
-                cwd: path,
-              })
-              if (fetched.exitCode !== 0)
-                throw new Error(`cannot fetch node verification parent: ${fetched.stderr}`)
-            }
             context = await prepareNodeVerificationContext(
               this.store,
               record.repo,
@@ -6794,9 +6808,21 @@ export class Dispatcher {
           }
         })
         if (!(await this.store.renewNodeWriter(record.slug, holder))) return
+        let expectedSeq = current.lastSeq
+        if (headPaths !== undefined) {
+          const { artifacts, makeEvent } = headPathsWrite(headPaths, 'integration', DISPATCHER)
+          const recorded = await this.store.appendWithArtifactsIfCurrent(
+            record.slug,
+            expectedSeq,
+            artifacts,
+            makeEvent,
+          )
+          if (!recorded) return
+          expectedSeq = recorded.event.seq
+        }
         const prepared = await this.store.appendWithArtifactsIfCurrent(
           record.slug,
-          current.lastSeq,
+          expectedSeq,
           context === undefined ? [] : [{ kind: NODE_VERIFICATION_CONTEXT, content: context }],
           (deposited) => ({
             actor: DISPATCHER,

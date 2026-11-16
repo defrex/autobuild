@@ -3,7 +3,13 @@ import { compatibilityDiagnostic, MixedVersionDeferral } from '../kernel/mixed-v
 import { suspendNativeLanding } from '../kernel/landing-publication'
 import { validateNodeChange } from '../kernel/node-restack'
 import { validateRestack, retainReplay } from '../kernel/reconcile-restack'
-import { readBuildFacts, readTerminalGuard, type CurrentBuildFacts } from '../store/reduced-reads'
+import {
+  readBuildFacts,
+  readBuildSelector,
+  readTerminalGuard,
+  type CurrentBuildFacts,
+} from '../store/reduced-reads'
+import { leafLandingBase, recordHeadPaths, type HeadPathsInput } from '../kernel/head-paths'
 import { prIssueLinksForForge } from '../kernel/issue-keywords'
 /**
  * The three terminal commands — `ab done`, `ab verdict`, `ab escalate`
@@ -230,6 +236,29 @@ async function implementationReviewBoundary(
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(`${diagnostic}: ${detail}`)
   }
+}
+
+/** Record a produced candidate head's paths before the write that publishes
+ * it, through the same guarded deposit as the terminal itself. */
+async function recordTerminalHeadPaths(
+  deps: TerminalDeps,
+  events: CurrentBuildFacts,
+  input: HeadPathsInput,
+): Promise<void> {
+  await recordHeadPaths(
+    {
+      store: deps.store,
+      slug: deps.env.build,
+      exec: deps.exec,
+      workspacePath: deps.workspacePath,
+      actor: KERNEL,
+    },
+    {
+      ...input,
+      state: events.state,
+      deposit: (artifacts, makeEvent) => terminalDeposit(deps, artifacts, makeEvent),
+    },
+  )
 }
 
 function refOf(meta: ArtifactMeta | undefined): ArtifactRef {
@@ -471,6 +500,11 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       if (remotePublication(events)) {
         await assertCleanWorktree(deps)
         const head = await git(deps, ['rev-parse', '--verify', 'HEAD^{commit}'])
+        await recordTerminalHeadPaths(deps, events, {
+          source: 'finalize',
+          head: head.trim(),
+          destination: await leafLandingBase(deps.store, deps.env.build, events.log.restack),
+        })
         return await terminalDeposit(deps, [], () => ({
           actor,
           type: 'publication.requested',
@@ -482,6 +516,17 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
           },
         })).then(({ event }) => event)
       }
+      const published = await readBuildSelector(store, env.build, 'publishedBranchHead')
+      if (published === undefined)
+        throw new Error(
+          'finalize publication requires a prior implement.completed, reconcile.completed, ' +
+            'or successful finalize publication head, but this build has none',
+        )
+      await recordTerminalHeadPaths(deps, events, {
+        source: 'finalize',
+        head: published,
+        destination: await leafLandingBase(deps.store, deps.env.build, events.log.restack),
+      })
       return completeFinalizePr(deps, events, {
         branch,
         baseBranch,
@@ -549,6 +594,19 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       await retainReplay(restack, head, transaction.targetBase)
       const conflicted =
         events.reconcileReplay?.id === transaction.id && events.reconcileReplay.conflicted
+      await recordTerminalHeadPaths(deps, events, {
+        source: 'reconcile',
+        head,
+        destination: transaction.targetBase,
+        resolution: [
+          {
+            change: transaction.changeSha,
+            parent: transaction.oldBase,
+            onto: transaction.targetBase,
+            head,
+          },
+        ],
+      })
       const { event: intended } = await terminalDeposit(
         deps,
         [{ kind: 'reconcile-notes', content: notes }],

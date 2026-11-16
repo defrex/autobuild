@@ -1,3 +1,4 @@
+import { leafLandingBase, parseNulChangedPaths, recordHeadPaths } from '../kernel/head-paths'
 import { StoreWriteTooLargeError } from '../store/remote/errors'
 import { observeTarget } from '../kernel/target-observation'
 import { readBuildRange } from '../store/event-reads'
@@ -638,18 +639,7 @@ export function selectVerifyDiffBase(events: readonly AbEvent[]): string {
   return base
 }
 
-/** Parse `git diff --name-only -z`; malformed output fails closed. */
-export function parseNulChangedPaths(output: string): string[] {
-  if (output.length === 0) return []
-  if (!output.endsWith('\0')) {
-    throw new Error('git diff --name-only -z returned non-NUL-terminated output')
-  }
-  const paths = output.slice(0, -1).split('\0')
-  if (paths.some((path) => path.length === 0)) {
-    throw new Error('git diff --name-only -z returned an empty path entry')
-  }
-  return paths
-}
+export { parseNulChangedPaths }
 
 /** Terminal events of loop phases carry `round`; finalize.completed and
  * reconcile.completed do not (§15.3). Payloads are schema-validated at
@@ -2190,6 +2180,21 @@ export class BuildRunner {
         throw new Error('recovered automatic replay differs from its frozen publication intent')
       await retainReplay(deps, headSha, transaction.targetBase)
       const intent = { ...transaction, headSha }
+      await recordHeadPaths(
+        {
+          store,
+          slug,
+          exec: this.deps.exec,
+          workspacePath: this.deps.workspacePath,
+          actor: KERNEL,
+        },
+        {
+          source: 'restack',
+          head: headSha,
+          destination: transaction.targetBase,
+          state: facts.state,
+        },
+      )
       if (facts.log.restack.intent === undefined)
         await store.append(slug, {
           actor: KERNEL,
@@ -2812,8 +2817,21 @@ export class BuildRunner {
             head,
           )
           if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
-          const remote = (await readBuildFacts(this.deps.store, this.deps.slug)).value
-            .remoteWorkspace
+          const facts = (await readBuildFacts(this.deps.store, this.deps.slug)).value
+          await recordHeadPaths(
+            { ...this.deps, actor: KERNEL },
+            {
+              source: 'finalize-step',
+              head,
+              destination: await leafLandingBase(
+                this.deps.store,
+                this.deps.slug,
+                facts.log.restack,
+              ),
+              state: facts.state,
+            },
+          )
+          const remote = facts.remoteWorkspace
           if (remote) {
             await this.deps.store.append(this.deps.slug, {
               actor,

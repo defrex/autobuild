@@ -3415,6 +3415,7 @@ with illustrative members:
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
+| Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
@@ -3975,6 +3976,27 @@ captures a new base. Replay occurs detached, leaving the named branch untouched
 until publication. Confirmed publication reattaches the matching workspace HEAD
 to the build branch so a later verify → implement cycle can publish normally.
 Missing third-party forge capabilities refuse actionably.
+
+Every candidate head a build produces records the paths it changes, once per
+head, before the write that establishes it: finalize and finalize post-step
+pushes, automatic restacks, leaf reconciles, node rewrites and node
+integration cycles, on local and remote execution. `head.paths-recorded`
+names the producing `source`, the `head`, the `destination` it would land on
+and their `mergeBase`. Its paths are every path that differs between the
+merge base and the head with rename detection off, so a rename counts its old
+and new path and a deletion counts its path. A reconcile-produced head also
+carries `resolution`: the paths where the resolved head differs from the
+purely mechanical three-way replay of the build's change onto the
+destination, conflict markers included. Conflicted files the resolver
+settled and any extra edits count; changes that arrived cleanly from the
+destination do not. The complete sets live in an atomically deposited
+`head-paths` artifact; the event and build state carry only the exact
+`total` and a sorted `preview` of at most 100 paths, and build state keeps
+the newest four summaries, first per head. A head is "not recorded" until
+such a fact names it, which is distinct from "recorded and empty"; heads a
+build did not produce and heads that predate the fact read as not recorded.
+The dispatcher never derives the fact on a poll, and no decision reads it
+yet.
 
 Automatic leaf transactions use `restack.*`, independently of reconcile attempt
 numbers. Preparation freezes the trigger, verify-cycle boundary, absorbed target

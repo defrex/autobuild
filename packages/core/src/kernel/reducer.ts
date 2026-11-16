@@ -1,4 +1,5 @@
 import type { SelectedAccount } from '../config/accounts'
+import { foldHeadPaths, type HeadPathsSummary } from './head-paths-state'
 import {
   advanceVerifyStage,
   initialVerifyStageState,
@@ -248,6 +249,11 @@ export interface BuildState {
    * `links` is the running union; `published` is the last confirmed PR body
    * readback. Absent until the first fact. */
   nodeIssueLinks?: NodeIssueLinksState
+  /** The bounded summaries of the newest recorded candidate-head path facts
+   * (`head.paths-recorded`), first per head, newest last. Previews only: the
+   * complete sets are the `head-paths` artifact (`readHeadPaths`). Absent
+   * until the first fact; read through `candidateHeadPaths`. */
+  headPaths?: HeadPathsSummary[]
 
   /**
    * §15.5: 'queued' until `runner.attached`, 'running' after;
@@ -475,6 +481,7 @@ export interface BuildAcc {
    * `links` is the running union; `published` is the last confirmed PR body
    * readback. Absent until the first fact. */
   nodeIssueLinks?: NodeIssueLinksState
+  headPaths?: HeadPathsSummary[]
 
   attached: boolean
   pausedFlag: boolean
@@ -539,7 +546,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 34
+export const BUILD_REDUCER_VERSION = 35
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -775,6 +782,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'node.compared':
         acc.nodeComparison = event.payload
+        break
+      case 'head.paths-recorded':
+        acc.headPaths = foldHeadPaths(acc.headPaths, event.payload, event.seq)
         break
       case 'node.issue-links-recorded': {
         // Idempotent by construction: a repeated fact for a recorded build
@@ -1475,6 +1485,7 @@ function finishBuild(acc: BuildAcc): BuildState {
     nodePolling: acc.nodePolling,
     nodeComparison: acc.nodeComparison,
     ...(acc.nodeIssueLinks !== undefined ? { nodeIssueLinks: acc.nodeIssueLinks } : {}),
+    ...(acc.headPaths !== undefined ? { headPaths: structuredClone(acc.headPaths) } : {}),
     nodeRestack: acc.nodeRestack,
     status,
     ...(statusWithoutJanitorEscalation !== undefined ? { statusWithoutJanitorEscalation } : {}),

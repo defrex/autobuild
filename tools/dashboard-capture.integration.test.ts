@@ -212,8 +212,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('ready to merge into')
       expect(frame.text).toContain('empty')
     } else if (frame.id === 'post-reconcile-policy') {
-      // Preparation journal facts participate in the deterministic fixture clock.
-      expect(frame.text).toContain('merge (waiting, 7m55s)')
+      // Preparation and head-path facts participate in the deterministic fixture clock.
+      expect(frame.text).toContain('merge (waiting, 7m54s)')
       expect(frame.text).toContain('skipped by post-reconcile policy')
       expect(frame.text).toContain('verify.afterReconcile = false')
     } else if (frame.id.startsWith('account-credentials-')) {

@@ -27,6 +27,7 @@ import { bunExec } from '../ports/forge/github'
 import { leafRestackLog } from '../kernel/generators/leaf-restack-log'
 import { BuildRunner, selectVerifyDiffBase } from './build-runner'
 import { readBuildFacts } from '../store/reduced-reads'
+import { headPathsFor } from '../kernel/head-paths'
 import { settlePendingPublication } from '../cli/publication-settlement'
 
 const mkdtemp = ownTempDirectories(afterEach)
@@ -391,6 +392,15 @@ for (const conflict of [false, true])
             events.some((e) => e.type === (conflict ? 'reconcile.completed' : 'restack.completed')),
           ).toBe(true)
           expect(await git(['show', '-s', '--format=%P', BRANCH])).toBe(target)
+          // The produced candidate head is recorded with the step that made it.
+          const recorded = headPathsFor(
+            (await readBuildFacts(store, BUILD)).value.state,
+            await git(['rev-parse', BRANCH]),
+          )
+          expect(recorded.recorded && recorded.record.source).toBe(
+            conflict ? 'reconcile' : 'restack',
+          )
+          expect(recorded.recorded && recorded.record.destination).toBe(target)
           return
         }
         if (recovery === 'lost-candidate') {
