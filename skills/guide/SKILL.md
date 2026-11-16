@@ -97,8 +97,9 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   declaring phase re-runs with the refusal as its guidance. Accepted, the ids
   join the build ticket's `blockedBy`, the build is blocked on an escalation
   whose question begins `Waiting on`, and it holds no slot while keeping its
-  branch, workspace and completed phase work. Answering that escalation ends
-  the wait early; so does a `wait.ended` fact. The build then takes a slot
+  branch, workspace and completed phase work. Completing the named tickets
+  does not end the wait: answering that escalation does, and the wait ends
+  with cause `operator`. The build then takes a slot
   ahead of new ticket claims and the declaring phase re-runs at the same round
   or attempt. `ab build status` shows a `waiting on:` line naming the tickets.
   Node builds cannot declare waits.

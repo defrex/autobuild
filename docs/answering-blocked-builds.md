@@ -7,8 +7,8 @@ Every action below is sessionless, records a human-authored fact, and accepts
 
 | Need | Command | Effect |
 |---|---|---|
-| Give the phase a decision or missing information | `ab answer <slug> <text>` | Records `guidance`. In a review loop it feeds the next producer round. |
-| Try again without guidance | `ab answer <slug>` | Records a bare `retry`; no prose is delivered to an agent. |
+| Give the phase a decision or missing information | `ab answer <slug> <text>` | Records `guidance`. In a review loop it feeds the next producer round; a ticket wait's answer instead resumes the phase that declared it, including the same review round. |
+| Try again without guidance | `ab answer <slug>` | Records a bare `retry`; no prose is delivered to an agent, except that a ticket wait's resumed phase still gets a one-line summary and its `wait` block. |
 | Widen an exhausted review loop | `ab answer <slug> [<text>] --review-round-ceiling <n>` | Answers the open `review-round-limit` escalation and replaces the configured cap with absolute ceiling `n` for that loop and spec revision only. |
 | Retire a review disagreement | `ab answer <slug> --dismiss` | Records `dismiss-finding` for each escalation that cites a real finding id. The next reviewer is told not to re-raise that chain. |
 | Replace the build contract from a file | `ab answer <slug> --revise-spec <file>` | Records the replacement as the next spec revision and restarts leaves at `plan`; nodes recollect and verify. |
@@ -44,17 +44,23 @@ startup, a successful attempt closes it unanswered, and a bare retry only brings
 the next attempt forward. Startup still recovers unblocked work and acknowledges
 pending operator commands.
 
-## Ending a ticket wait early
+## Ending a ticket wait
 
-A build whose agent ran `ab wait-on` waits on other tickets. Its escalation's
-question begins `Waiting on`, and `ab build status <slug>` shows a
-`waiting on:` line naming the tickets. The build holds no capacity slot while
-it waits, and its ticket lists those tickets in `blockedBy`. Answer it only to
-end the wait early, for example when the work it needs has landed another way:
+A build whose agent ran `ab wait-on` asks to wait on other tickets. Until the
+dispatcher validates the request on its next tick, the build keeps its
+capacity slot and `ab build status <slug>` reports the wait as requested. A
+refused request writes nothing and the declaring phase re-runs with the
+refusal as guidance.
+
+Once accepted, the build's escalation question begins `Waiting on`,
+`ab build status <slug>` shows a `waiting on:` line naming the tickets, its
+ticket lists those tickets in `blockedBy`, and the build holds no capacity
+slot. Completing the named tickets does not end the wait: an answer does,
+whether the blockers have completed or the work landed another way.
 `ab answer <slug> <text>` or a bare `ab answer <slug>` ends the wait, the build
 takes the next free slot ahead of new ticket claims, and the phase that
-declared the wait re-runs. Its `guidance.json` carries a `wait` block naming
-the tickets, the reason, and how the wait ended.
+declared the wait re-runs at the same round or attempt. Its `guidance.json`
+carries a `wait` block naming the tickets, the reason, and how the wait ended.
 
 ## Widening an exhausted review loop
 

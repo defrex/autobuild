@@ -297,7 +297,7 @@ Read events with a cursor or a small `--events` count; logs are long.
   Active work, pause, pending controls and merge intent refuse revision. Leaves
   require an escalation and restart from plan after any unfinished reconcile
   resumes under the revised spec and its publication is confirmed. Answering a
-  ticket wait's escalation ends the wait early (see ticket wait attention). Run
+  ticket wait's escalation is what ends the wait (see ticket wait attention). Run
   `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
   hold and release the whole repository. Pause immediately interrupts live agent
@@ -411,7 +411,7 @@ that does the job, and say what you are doing before you do it:
   the caller supplies the amended body for ticket origin. The node recollects and
   verifies; leaves require an escalation and restart from plan after any unfinished reconcile
   resumes under the revised spec and its publication is confirmed. Answering a
-  ticket wait's escalation ends the wait early.
+  ticket wait's escalation is what ends the wait.
 - `tickets.list`, `tickets.get` — read the ticket queue and one ticket. A long
   queue pages with `limit`, `offset` and `order`; `total` counts every match.
 - `tickets.create` — file a new ticket from a conversation. A ticket filed
@@ -634,11 +634,12 @@ ticket wait: its agent declared with `ab wait-on` that it cannot proceed until
 the named tickets complete, and the dispatcher recorded them in the build
 ticket's `blockedBy`. It holds no capacity slot and keeps its branch and
 workspace; `ab build status` shows a `waiting on:` line naming the tickets.
-Drive the named tickets rather than the waiting build. Answer its escalation
-only to end the wait early, for example when the needed work landed another
+Drive the named tickets, then answer the waiting build: completing them does
+not end the wait by itself. Answer sooner when the needed work landed another
 way or the wait is mistaken. Any answer ends the wait; the build then takes a
 slot ahead of new ticket claims and the phase that declared the wait resumes,
-told what it waited on.
+told what it waited on. Until the dispatcher accepts a request, the build keeps
+its slot and `ab build status` reports the wait as requested.
 
 ### Janitor escalation attention
 
