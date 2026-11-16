@@ -2291,7 +2291,8 @@ while remote or unsupported sessions rerun fresh with a recorded fallback reason
 Without a live agent, acknowledgement still waits for a safe boundary. During
 that window `p` appends
 the opposing resume request, cancels the stale pause, and projects the build
-back to `RUNNING`. An acknowledged paused build offers only `r resume` and reads
+back to `RUNNING`. The cancelling resume holds back nothing, including merge
+readiness. An acknowledged paused build offers only `r resume` and reads
 `RESUMING` until the kernel acknowledges that request; there is no gesture to
 cancel a pending resume. Blocked takes visual precedence, including when the
 build is also operator-paused, and `r` opens the existing feedback field. Keys
@@ -2644,6 +2645,13 @@ changes — falling back to the local workspace's `autobuild.toml` only when no
 deposit exists; the decision is reported unavailable only when neither source
 can supply a configuration, and that message names the missing artifact kind
 rather than a workspace path.
+An open-PR leaf parked on the PR with no landing decision for its current
+candidate shows a `landing: undecided` line (`landingUndecided` in JSON) naming
+why the dispatcher has not decided: an open session, a pause, an open
+escalation, a pending pause or abort request, a compatibility deferral, a failed
+dispatcher janitor attempt with its message and next attempt time, or a build
+pipeline configuration the dispatcher cannot read. Otherwise it says no refusal
+is recorded and the decision is due at the next poll.
 Observations are shown without `--events`; for `forge = "local-git"`, this is where a deferred merge
 names uncommitted work that collides with the squash. Autobuild leaves that work
 untouched and later dispatcher ticks retry automatically after the operator
