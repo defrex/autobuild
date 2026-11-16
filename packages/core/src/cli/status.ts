@@ -10,6 +10,7 @@ import { buildVocabulary } from './dashboard/model'
 import { readBuildDigests } from '../store/reduced-reads'
 import { readBuildFacts } from '../store/reduced-reads'
 import { slotRequest, slotWaitText, type SlotRequest } from '../kernel/dispatch-capacity'
+import { ticketWaitStatus, ticketWaitText, type TicketWaitStatus } from '../kernel/ticket-wait'
 import { landingRestackDue } from '../kernel/engine'
 import type { BuildFacts } from '../processes/repo-view'
 /**
@@ -193,6 +194,9 @@ export interface BuildDetail extends BuildSummary {
   autoMerge: AutoMergeDisplay
   supersededEscalations?: BuildState['verifyStage']['superseded']
   openEscalations: OpenEscalation[]
+  /** The build's ticket wait while it is requested, open, or ended and not
+   * yet resumed (SPEC §11 "Ticket waits"); omitted otherwise. */
+  wait?: TicketWaitStatus
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
   /** Frozen forge issue links with effective intent; omitted when none. */
@@ -439,6 +443,7 @@ export function detailFromFacts(
       ? { supersededEscalations: state.verifyStage.superseded }
       : {}),
     openEscalations: state.openEscalations,
+    ...(ticketWaitStatus(state) !== undefined ? { wait: ticketWaitStatus(state) } : {}),
     ...(state.issueLinks.length > 0
       ? {
           issueLinks: state.issueLinks,
@@ -808,6 +813,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
           : 'no consent recorded'
     lines.push(`  merge:    ${consent} · current head ${d.tree.currentHead ?? 'unknown'}`)
   }
+  if (d.wait !== undefined)
+    lines.push(
+      d.wait.state === 'waiting'
+        ? `  waiting on: ${safeStatusText(ticketWaitText(d.wait))}`
+        : `  waiting:  ${safeStatusText(ticketWaitText(d.wait))}`,
+    )
   if (d.decision?.kind === 'awaiting-pr') {
     // The deferral reason (a durable observation about WHY consent could not
     // be applied) takes precedence; otherwise the auto-merge state itself is

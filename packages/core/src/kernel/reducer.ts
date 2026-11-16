@@ -31,7 +31,13 @@ import { reconcileRewriteHead } from './reconcile-head'
  */
 import type { Actor } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
-import { normalizeVerifyCompletion, type EventPayload, type PinnedAsset } from '../events/payloads'
+import {
+  normalizeVerifyCompletion,
+  type EventPayload,
+  type PinnedAsset,
+  type WaitEndCause,
+  type WaitRefusalCause,
+} from '../events/payloads'
 import type {
   ArtifactRef,
   BuildOutcome,
@@ -43,6 +49,7 @@ import type {
   Finding,
   Phase,
   PolicyEscalationCause,
+  TicketRef,
   VerifyOutcome,
 } from '../ontology'
 import { verifyPhase } from '../ontology'
@@ -84,6 +91,9 @@ export interface OpenEscalation {
   /** Raised by `build.janitor-escalated`. Its routing is inert (`setup`
    * target, no cause); the janitor's recovery closes it unanswered. */
   janitor?: true
+  /** Opened by `wait.entered`: this escalation is a ticket wait, and
+   * answering it ends the wait (SPEC §11 "Ticket waits"). */
+  wait?: { id: string }
   question: string
   refs?: string[]
   /** seq of the `escalation.raised` event — what `spec.revised` cites (§15.3). */
@@ -227,6 +237,49 @@ export interface DrainExecution {
   suspended?: true
 }
 
+/** The latest ticket-wait request (`wait.requested`) and its dispatcher
+ * outcome (SPEC §11 "Ticket waits", §15.3). `outcome` is absent while the
+ * dispatcher has not yet validated it. */
+export interface WaitRequestState {
+  id: string
+  session: string
+  phase: Phase
+  round: number
+  tickets: string[]
+  reason: string
+  seq: number
+  outcome?:
+    | { kind: 'entered'; seq: number }
+    | {
+        kind: 'refused'
+        cause: WaitRefusalCause
+        tickets: string[]
+        message: string
+        seq: number
+      }
+}
+
+/** The latest entered ticket wait (`wait.entered`). Retained after it ends
+ * so the resumed session can be told what it waited on. */
+export interface TicketWaitState {
+  id: string
+  escalation: string
+  session: string
+  phase: Phase
+  round: number
+  tickets: TicketRef[]
+  reason: string
+  enteredSeq: number
+  /** Envelope ts of `wait.entered`. */
+  enteredAt: string
+  /** The first end: an answer to the wait's escalation (`operator`), or
+   * `wait.ended` with its cause. */
+  ended?: { cause: WaitEndCause; seq: number; message: string }
+  /** seq of the first `session.started` or `spec.revised` after `ended`:
+   * the build has left the wait and holds a slot again. */
+  resumedSeq?: number
+}
+
 export interface BuildState {
   drainingExecutions?: Record<string, DrainExecution>
   compatibility: CompatibilityState
@@ -286,6 +339,10 @@ export interface BuildState {
   openEscalations: OpenEscalation[]
   /** In answer order, with resolutions for engine routing (§15.6-B). */
   answeredEscalations: AnsweredEscalation[]
+  /** The latest ticket-wait request; see `WaitRequestState`. */
+  waitRequest?: WaitRequestState
+  /** The latest entered ticket wait; see `TicketWaitState`. */
+  wait?: TicketWaitState
   /** Human-selected absolute caps for the current spec's independent loops. */
   reviewRoundCeilings: { plan?: number; code?: number }
   /** From `finalize.completed` (§15.3) — the kernel opened the PR (D7). */
@@ -485,6 +542,8 @@ export interface BuildAcc {
   lastCompletedPhase?: PhaseContext
   openEscalations: OpenEscalation[]
   answeredEscalations: AnsweredEscalation[]
+  waitRequest?: WaitRequestState
+  wait?: TicketWaitState
   reviewRoundCeilings: BuildState['reviewRoundCeilings']
   pr: BuildState['pr']
   prState?: PrLifecycle
@@ -539,7 +598,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 34
+export const BUILD_REDUCER_VERSION = 35
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -989,11 +1048,13 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         // matching engine.ts:710-712.
         restartSince = event.seq
         verify.cycleSince = Math.max(verify.cycleSince, event.seq)
+        if (acc.wait?.ended && acc.wait.resumedSeq === undefined) acc.wait.resumedSeq = event.seq
         delete reviewRoundCeilings.plan
         delete reviewRoundCeilings.code
         break
 
       case 'session.started': {
+        if (acc.wait?.ended && acc.wait.resumedSeq === undefined) acc.wait.resumedSeq = event.seq
         if (event.payload.profile !== undefined && event.payload.profile.name === acc.profile?.name)
           acc.profile = { ...acc.profile, configured: event.payload.profile.configured }
         const root = event.payload.continuation?.root ?? event.payload.session
@@ -1308,6 +1369,72 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           seq: event.seq,
         })
         break
+      case 'wait.requested':
+        if (event.actor.kind !== 'agent') break
+        acc.waitRequest = {
+          id: event.payload.id,
+          session: event.actor.session,
+          phase: event.payload.phase,
+          round: event.payload.round,
+          tickets: [...event.payload.tickets],
+          reason: event.payload.reason,
+          seq: event.seq,
+        }
+        break
+      case 'wait.refused':
+        if (acc.waitRequest?.id !== event.payload.id || acc.waitRequest.outcome) break
+        acc.waitRequest.outcome = {
+          kind: 'refused',
+          cause: event.payload.cause,
+          tickets: [...event.payload.tickets],
+          message: event.payload.message,
+          seq: event.seq,
+        }
+        break
+      case 'wait.entered': {
+        const request = acc.waitRequest
+        if (request?.id !== event.payload.id || request.outcome) break
+        request.outcome = { kind: 'entered', seq: event.seq }
+        acc.wait = {
+          id: request.id,
+          escalation: event.payload.escalation,
+          session: request.session,
+          phase: request.phase,
+          round: request.round,
+          tickets: event.payload.tickets.map((ticket) => ({ ...ticket })),
+          reason: event.payload.reason,
+          enteredSeq: event.seq,
+          enteredAt: event.ts,
+        }
+        openEscalations.set(event.payload.escalation, {
+          id: event.payload.escalation,
+          phase: request.phase,
+          round: request.round,
+          source: 'agent',
+          session: request.session,
+          wait: { id: request.id },
+          question: event.payload.question,
+          refs: event.payload.tickets.map((ticket) => ticket.id),
+          seq: event.seq,
+        })
+        break
+      }
+      case 'wait.ended': {
+        const wait = acc.wait
+        if (wait?.id !== event.payload.id || wait.ended) break
+        wait.ended = { cause: event.payload.cause, seq: event.seq, message: event.payload.message }
+        const open = openEscalations.get(wait.escalation)
+        if (open) {
+          openEscalations.delete(open.id)
+          answeredEscalations.push({
+            ...open,
+            answer: event.payload.message,
+            resolution: 'guidance',
+            answeredSeq: event.seq,
+          })
+        }
+        break
+      }
       case 'build.janitor-escalated':
         if (!openEscalations.has(event.payload.id))
           openEscalations.set(event.payload.id, {
@@ -1358,6 +1485,8 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
             answeredSeq: event.seq,
           })
           if (open.janitor && acc.janitor?.escalation === open.id) acc.janitor.retryRequested = true
+          if (open.wait && acc.wait?.id === open.wait.id && !acc.wait.ended)
+            acc.wait.ended = { cause: 'operator', seq: event.seq, message: event.payload.answer }
           if (
             event.payload.reviewRoundCeiling !== undefined &&
             open.source === 'policy' &&
@@ -1485,6 +1614,8 @@ function finishBuild(acc: BuildAcc): BuildState {
     lastCompletedPhase,
     openEscalations: [...acc.openEscalations],
     answeredEscalations: acc.answeredEscalations,
+    ...(acc.waitRequest !== undefined ? { waitRequest: acc.waitRequest } : {}),
+    ...(acc.wait !== undefined ? { wait: acc.wait } : {}),
     reviewRoundCeilings: acc.reviewRoundCeilings,
     pr: acc.pr,
     prState: acc.prState,

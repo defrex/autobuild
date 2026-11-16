@@ -43,6 +43,7 @@ import {
 import { indexLog, type LogIndex, type LoopIndex } from './log-index'
 import { reduceBuild, type AnsweredEscalation, type BuildState } from './reducer'
 import { stalledChains, type FindingChain } from './stall'
+import { pendingWaitRequest, waitGuidance } from './ticket-wait'
 
 // ── The decision contract ────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ export type WaitReason =
   | 'publication-retry'
   | 'verify-stage'
   | 'mixed-version'
+  | 'ticket-wait'
   | 'blocked'
   | 'paused'
   | 'awaiting-spec'
@@ -230,6 +232,11 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
     return { kind: 'acknowledge', command: 'pause' }
   }
 
+  // A declared ticket wait parks the build until the dispatcher validates it
+  // (SPEC §11 "Ticket waits"): accepted, it becomes an open escalation below;
+  // refused, the declaring phase re-runs with the refusal as guidance.
+  if (pendingWaitRequest(state)) return { kind: 'wait', reason: 'ticket-wait' }
+
   // Frozen transactions retain their original destination and may recover.
   if (state.targetRewrite && !log.restack.active && !state.nodeRestack?.active)
     return { kind: 'wait', reason: 'target-rewritten' }
@@ -273,6 +280,7 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
       (e) =>
         !(
           stage &&
+          e.wait === undefined &&
           e.source === 'agent' &&
           e.session !== undefined &&
           stage.stage.some(
@@ -450,10 +458,13 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // same-destination answers, so consuming the winner cannot reveal one of them
   // later. An answer appended after that delivery becomes the new winner and
   // remains eligible.
+  // A refused ticket wait is guidance for the phase that declared it, keyed by
+  // the wait request id and delivered by the same rule.
   const guidanceFeedback = (destination: GuidanceDestination): Feedback | undefined => {
-    let latest: AnsweredEscalation | undefined
-    for (const e of state.answeredEscalations) {
-      if (e.resolution !== 'guidance' || guidanceDestination(e) !== destination) continue
+    let latest: Pick<AnsweredEscalation, 'id' | 'answer' | 'answeredSeq'> | undefined
+    for (const e of [...state.answeredEscalations, ...waitGuidance(state)]) {
+      if ('resolution' in e && e.resolution !== 'guidance') continue
+      if (guidanceDestination(e) !== destination) continue
       if (latest === undefined || e.answeredSeq > latest.answeredSeq) latest = e
     }
     if (
@@ -986,11 +997,13 @@ type GuidanceDestination = 'plan' | 'code' | `verify:${string}` | 'other'
  * feeds implement. Finalize/reconcile guidance travels through `ab context`.
  */
 function guidanceDestination(
-  escalation: Pick<AnsweredEscalation, 'phase' | 'source' | 'deferral'>,
+  escalation: Pick<AnsweredEscalation, 'phase' | 'source' | 'deferral' | 'wait'>,
 ): GuidanceDestination {
   const { phase, source } = escalation
+  // A reviewer's own-build-read deferral or ticket wait re-runs that same
+  // review round, which reads its guidance through `ab context`.
   if (
-    escalation.deferral === 'own-build-read' &&
+    (escalation.deferral === 'own-build-read' || escalation.wait !== undefined) &&
     (phase === 'plan-review' || phase === 'code-review')
   )
     return 'other'
