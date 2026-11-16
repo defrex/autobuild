@@ -1651,6 +1651,41 @@ readyState = "Ready"
     expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Triage' }])
   })
 
+  for (const lost of ['ticket.handed-back', 'ticket-preparation.resolved'] as const) {
+    test(`a watcher move to the claimed state after a reported bounce survives a lost ${lost} write`, async () => {
+      const h = harness({ tickets: [readyTicket('T-1', { body: 'make it faster' })] })
+      const appendRepo = h.store.appendRepo.bind(h.store)
+      let fail = true
+      h.store.appendRepo = (async (repo, event) => {
+        if (event.type === lost && fail) {
+          fail = false
+          const committed = lost === 'ticket.handed-back' ? await appendRepo(repo, event) : null
+          // The watcher acts on the committed report before the dispatcher
+          // learns the outcome, moving the ticket to the claimed state.
+          await h.tickets.transition('T-1', 'Doing')
+          throw new Error(committed ? 'acknowledgement lost' : 'resolution failed')
+        }
+        return appendRepo(repo, event)
+      }) as typeof h.store.appendRepo
+
+      await h.dispatcher.tick().catch(() => undefined)
+      for (let i = 0; i < 3; i++) {
+        h.clock.advance(60_000)
+        await h.dispatcher.tick().catch(() => undefined)
+      }
+      expect((await h.tickets.get('T-1'))?.state).toBe('Doing')
+      expect(h.tickets.transitions).toEqual([
+        { id: 'T-1', state: 'Triage' },
+        { id: 'T-1', state: 'Doing' },
+      ])
+      const journal = await h.store.getRepoEvents(REPO)
+      expect(journal.filter((event) => event.type === 'ticket.handed-back')).toHaveLength(1)
+      expect(
+        journal.filter((event) => event.type === 'ticket-preparation.resolved').at(-1)?.payload,
+      ).toMatchObject({ outcome: 'bounced' })
+    })
+  }
+
   test('bounce targets Backlog by default for a linear ticket source', async () => {
     // Linear teams only have a "Triage" state when the triage feature is
     // enabled — Backlog is the hand-back state every team has.

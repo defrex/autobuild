@@ -5720,6 +5720,16 @@ export class Dispatcher {
             `Creation outcome unknown: the build store allocates canonical slugs and this attempt recorded no creation key, so a build created under an unrecorded slug cannot be ruled out; ticket unchanged. Inspect the repository's builds for ticket ${attempt.ticket.id} before manually retrying. Original failure: ${attempt.error ?? 'unknown'}`,
           )
       }
+      // A committed `ticket.handed-back` whose acknowledgement or resolution
+      // was lost means the hand-back already happened, and a watcher may have
+      // moved the ticket since. Resolve without touching the ticket.
+      const handback = attempt.handback ?? attempt.readyState
+      await this.store.refreshJournal()
+      if (this.store.repositoryFacts().preparation[attempt.attempt]?.reported)
+        return await this.preparationResolved(
+          attempt,
+          handback === attempt.readyState ? 'handed-back' : 'bounced',
+        )
       const ref = resolveTicketRef(
         this.store.repositoryFacts().ticketMigrations,
         attempt.ticket,
@@ -5735,7 +5745,6 @@ export class Dispatcher {
           'Ticket state is unavailable; ticket unchanged. Inspect the provider record before manually retrying.',
         )
       const state = (value: string) => value.toLowerCase()
-      const handback = attempt.handback ?? attempt.readyState
       // Only a confirmed claim left Ready; an unconfirmed one that stayed
       // Ready was never handed back and gets no report.
       const reportHandback = async (): Promise<void> => {
