@@ -4060,7 +4060,9 @@ parent. Labels are sampled from a successful source-ticket read at readiness;
 unavailable ticket data defers the decision instead of supplying empty labels.
 
 A leaf becomes ready after verification and finalize on a current base; a node
-must be complete and verified at its exact head and parent. `landing.decided`
+must be complete and verified at its exact head and parent. A pending pause or
+abort defers readiness; a resume that only cancelled a never-acknowledged pause
+does not. `landing.decided`
 records that candidate, the sampled labels, resulting mode, and the full matched
 rule and index (or explicit default). Editing configuration cannot change this
 recorded decision. A replacement candidate gets a new decision once ready.
