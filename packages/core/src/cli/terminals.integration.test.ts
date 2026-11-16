@@ -14,9 +14,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { agentActor, humanActor, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { autoMergeDeferralObservation, pendingAutoMerge } from '../kernel/auto-merge'
 import { reduceBuild } from '../kernel/reducer'
+import { readBuildFacts } from '../store/reduced-reads'
+import { headPathsFor, readHeadPaths } from '../kernel/head-paths'
 import { FakeForge } from '../ports/forge/fake'
 import { GitHubForge } from '../ports/forge/github'
 import type { Finding } from '../ontology'
@@ -1095,14 +1097,48 @@ describe('ab done — finalize', () => {
     releaseId: 42,
   }
 
+  let published: { base: string; head: string }
+  async function seedPublishedHead(): Promise<void> {
+    const { base, head } = published
+    await store.append(BUILD, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'worktree',
+        ref: workspace,
+        branch: BRANCH,
+        base: { source: 'remote', sha: base },
+      },
+    })
+    await store.append(BUILD, {
+      actor: agent('implement'),
+      type: 'implement.completed',
+      payload: { round: 1, commits: { base, head }, artifact: { kind: 'implement-notes', rev: 0 } },
+    })
+  }
+
+  async function recordedPaths(head: string) {
+    const answer = headPathsFor((await readBuildFacts(store, BUILD)).value.state, head)
+    if (!answer.recorded) return undefined
+    const { source, destination } = answer.record
+    return { source, destination, ...(await readHeadPaths(store, BUILD, answer.record)) }
+  }
+
   async function resetStoreWithImageHost(): Promise<void> {
     await store.close()
     store = await seedStore({ imageHost: IMAGE_HOST })
+    await seedPublishedHead()
   }
 
   beforeEach(async () => {
     workspace = join(tmp, 'ws-finalize')
     await initWorkspaceRepo(workspace)
+    // The implemented, published head finalize opens the PR from.
+    published = {
+      base: await runGit(['rev-parse', 'HEAD'], workspace),
+      head: await commitFile(workspace, 'limit.ts', 'export const limit = 1\n', 'limit'),
+    }
+    await seedPublishedHead()
     // A verdict history and verify results for the §7.5 summary comment.
     await store.append(BUILD, {
       actor: agent('code-review'),
@@ -1200,6 +1236,11 @@ describe('ab done — finalize', () => {
     })
     expect(deps.forge.opened).toEqual([])
     expect(await eventTypes()).not.toContain('finalize.completed')
+    expect(await recordedPaths(head)).toEqual({
+      source: 'finalize',
+      destination: published.base,
+      paths: ['limit.ts'],
+    })
   })
 
   test('opens the PR (title = first line sans #, body = rest), appends kernel-actor event, leaves summary publication to the runner', async () => {
@@ -1241,6 +1282,12 @@ describe('ab done — finalize', () => {
       '<code>e2e</code> (attempt 1): skipped — No browser-facing behavior changed',
     )
     expect(comment.body).toContain(`build: <code>${BUILD}</code>`)
+    // The published head the PR opens from is recorded before the PR exists.
+    expect(await recordedPaths(published.head)).toEqual({
+      source: 'finalize',
+      destination: published.base,
+      paths: ['limit.ts'],
+    })
   })
 
   test('detached HEAD still opens the PR from the durable build branch', async () => {
@@ -1834,6 +1881,12 @@ describe('ab done — reconcile', () => {
   let deps: TestDeps
   let oldHead: string
   let target: string
+  async function reconcileRecord(head: string) {
+    const answer = headPathsFor((await readBuildFacts(store, BUILD)).value.state, head)
+    if (!answer.recorded) return undefined
+    const { source, destination } = answer.record
+    return { source, destination, ...(await readHeadPaths(store, BUILD, answer.record)) }
+  }
   beforeEach(async () => {
     workspace = join(tmp, 'ws-reconcile')
     await initWorkspaceRepo(workspace)
@@ -1882,6 +1935,26 @@ describe('ab done — reconcile', () => {
       await runGit(['rev-parse', `refs/autobuild/archive/${BUILD}/${oldHead}`], workspace),
     ).toBe(oldHead)
     expect(deps.forge.pushes).toEqual([])
+    expect(await reconcileRecord(head)).toEqual({
+      source: 'reconcile',
+      destination: target,
+      paths: ['feature.ts'],
+      resolution: { paths: [] },
+    })
+  })
+  test('records the files the resolution itself edited, not destination arrivals', async () => {
+    await writeFile(join(workspace, 'feature.ts'), 'resolved work\n')
+    await writeFile(join(workspace, 'extra.ts'), 'resolver edit\n')
+    await runGit(['add', '-A'], workspace)
+    await runGit([...GIT_ID, 'commit', '--amend', '--no-edit', '-q'], workspace)
+    const head = await runGit(['rev-parse', 'HEAD'], workspace)
+    await done(deps, { notes: await stash('resolved.md', 'Resolved') })
+    expect(await reconcileRecord(head)).toEqual({
+      source: 'reconcile',
+      destination: target,
+      paths: ['extra.ts', 'feature.ts'],
+      resolution: { paths: ['extra.ts', 'feature.ts'] },
+    })
   })
   test('remote reconcile requests trusted guarded publication', async () => {
     await store.append(BUILD, {
@@ -1902,6 +1975,9 @@ describe('ab done — reconcile', () => {
     })
     expect(await runGit(['rev-parse', BRANCH], workspace)).toBe(oldHead)
     expect(await eventTypes()).not.toContain('reconcile.completed')
+    expect((await reconcileRecord(await runGit(['rev-parse', 'HEAD'], workspace)))?.source).toBe(
+      'reconcile',
+    )
   })
   test('rejects authored scratch before intent or branch publication', async () => {
     await mkdir(join(workspace, '.ab'), { recursive: true })

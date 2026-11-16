@@ -17,6 +17,7 @@ import { nativeSessionHandleSchema } from './native-session'
 import { z } from 'zod'
 import { landingRuleSchema } from '../config/landing'
 import { refineUniqueIssues } from '../ports/tickets/issue-links'
+import { HEAD_PATHS_ARTIFACT, HEAD_PATHS_PREVIEW, HEAD_PATHS_SOURCES } from './head-paths-limits'
 import {
   artifactRefSchema,
   buildOutcomeSchema,
@@ -106,6 +107,52 @@ const parentChange = z.strictObject({
   next: nodeParent,
   revision: z.string(),
 })
+
+/** A bounded path summary: the exact count plus the sorted, unique first
+ * `HEAD_PATHS_PREVIEW` paths. The complete set lives in the artifact. */
+const headPathsPreview = z
+  .strictObject({
+    total: z.number().int().nonnegative(),
+    preview: z.array(z.string().min(1)).max(HEAD_PATHS_PREVIEW),
+  })
+  .superRefine(({ total, preview }, ctx) => {
+    if (preview.length !== Math.min(total, HEAD_PATHS_PREVIEW))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['preview'],
+        message: `preview must hold exactly min(total, ${HEAD_PATHS_PREVIEW}) paths`,
+      })
+    for (let index = 1; index < preview.length; index++)
+      if (!(preview[index - 1]! < preview[index]!)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['preview', index],
+          message: 'preview paths must be sorted and unique',
+        })
+        break
+      }
+  })
+const headPathsRecorded = z
+  .strictObject({
+    source: z.enum(HEAD_PATHS_SOURCES),
+    // Plain commit names, like the node and integration heads they describe.
+    head: z.string().min(1),
+    destination: z.string().min(1),
+    mergeBase: z.string().min(1),
+    total: z.number().int().nonnegative(),
+    preview: z.array(z.string().min(1)).max(HEAD_PATHS_PREVIEW),
+    /** Reconcile-produced heads only: the paths the resolution itself edited. */
+    resolution: headPathsPreview.optional(),
+    artifact: z.strictObject({
+      kind: z.literal(HEAD_PATHS_ARTIFACT),
+      rev: z.number().int().nonnegative(),
+    }),
+  })
+  .superRefine((payload, ctx) => {
+    const summary = headPathsPreview.safeParse({ total: payload.total, preview: payload.preview })
+    for (const issue of summary.error?.issues ?? [])
+      ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message })
+  })
 
 const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
@@ -1304,6 +1351,11 @@ export const eventPayloadSchemas = {
     z.strictObject({ mergeCommit: z.string().min(1), artifact: artifactRefSchema }),
     z.strictObject({ headSha: gitOid, rewriteId: z.string().min(1), artifact: artifactRefSchema }),
   ]),
+
+  /** The paths a produced candidate head changes against its merge base with
+   * the destination, recorded once per head before the write that establishes
+   * it. A bounded summary; the complete sets are the `head-paths` artifact. */
+  'head.paths-recorded': headPathsRecorded,
 
   // ── Cross-cutting ──────────────────────────────────────────────────────────
   /** An agent found the build only partly resolves a linked `closes` issue.
