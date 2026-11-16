@@ -145,3 +145,6 @@ export { readTicketTree, getOperatorTicketTree } from './tickets'
 export { requestNodeRestack } from './restack'
 
 export { clearForgeDegradation } from './control'
+
+export { readRepositoryAttentionPage, REPOSITORY_EVENTS_PAGE } from './repository-events'
+export { repositoryNeedsAttention } from '../cli/attention'

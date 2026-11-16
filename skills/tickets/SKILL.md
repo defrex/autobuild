@@ -203,10 +203,11 @@ work proceeds, and urgency never stops a running build. To expedite a ticket,
 mark it urgent rather than moving other tickets out of `ready/`.
 
 When the dispatcher claims an eligible file ticket, it moves it to `doing/`,
-then to `done/` on merge or back to `triage/` if the build aborts or the spec
-bounces. A caught failure before build creation returns it to configured Ready
-after safe ownership checks; unfinished recovery stays durably tracked and
-withheld from another claim. Uncertain ownership or externally changed/missing
+then to `done/` on merge or back to `triage/` if the build aborts (`ready/`
+with `ab abort --to ready`) or the spec bounces. A caught failure before build
+creation returns it to configured Ready after safe ownership checks. Every such
+return reports one `ticket.handed-back` repository event once the move is done.
+Unfinished recovery stays durably tracked and withheld from another claim. Uncertain ownership or externally changed/missing
 tickets end automatic recovery with an `abandoned` resolution, reported once
 in that tick's dispatcher diagnostics and once as default `ab watch`
 repository attention, leaving the ticket unchanged for operator inspection.
