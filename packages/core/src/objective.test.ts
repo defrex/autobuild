@@ -172,8 +172,22 @@ describe('the autobuild-objective marker', () => {
       ['<pre>', '', fenced, '', '</pre>'].join('\n'),
       ['<custom-note>', fenced].join('\n'),
       ['# Heading', '<custom-note>', fenced].join('\n'),
+      ['Example', '=======', '<custom-note>', fenced, '</custom-note>'].join('\n'),
+      ['Example', '--', '<custom-note>', fenced].join('\n'),
+      ['| a | b |', '|---|---|', '| 1 | 2 |', '<custom-note>', fenced].join('\n'),
     ]
     for (const body of cases) expect(parseObjective(spec(body))).toEqual({ absent: true })
+  })
+
+  test('a tag after a line the scan cannot place as a paragraph hides the fence', () => {
+    // A renderer may continue a paragraph through these lines. The scan does
+    // not, so the cost is a missed objective, never a promoted plain node.
+    const fenced = block(MINIMAL)
+    const cases = ['- item', '1. item', '> quote', '[a]: /url', '[a]: /url\n"title"']
+    for (const before of cases)
+      expect(parseObjective(spec([before, '<custom-note>', fenced].join('\n')))).toEqual({
+        absent: true,
+      })
   })
 
   test('a commented-out example beside a real objective leaves exactly one block', () => {
@@ -206,6 +220,13 @@ describe('the autobuild-objective marker', () => {
       ['<?php', fenced, '?>', fenced].join('\n'),
       ['<![CDATA[', fenced, ']]>'].join('\n'),
       ['<script>', '', fenced, '', '</script>', fenced].join('\n'),
+      ['Example', '=======', '<custom-note>', fenced, '</custom-note>'].join('\n'),
+      ['Example', '--', '<custom-note>', fenced].join('\n'),
+      ['Example', '  ===  ', '<custom-note>', fenced].join('\n'),
+      ['Example', '= =', '<custom-note>', fenced].join('\n'),
+      ['Example', '====', 'more', '<custom-note>', fenced].join('\n'),
+      ['Para', '    indented', '<custom-note>', fenced].join('\n'),
+      ['| a | b |', '|---|---|', '| 1 | 2 |', '<custom-note>', fenced].join('\n'),
     ]
     for (const body of bodies) {
       const rendered = Bun.markdown.html(body).match(/language-autobuild-objective/g) ?? []

@@ -36,10 +36,12 @@ function scanObjectiveFences(body: string): FenceScan {
   let open: { char: string; length: number; indent: number; lines: string[] | null } | undefined
   let html: HtmlBlockEnd | undefined
   let paragraph = false
+  let opaque = false
   for (const line of body.replace(/\r\n?/g, '\n').split('\n')) {
     if (html !== undefined) {
       if (html === 'blank' ? isBlank(line) : html.test(line)) html = undefined
       paragraph = false
+      opaque = false
       continue
     }
     if (open !== undefined) {
@@ -57,11 +59,16 @@ function scanObjectiveFences(body: string): FenceScan {
       // A block whose end condition holds on its first line ends there.
       if (htmlEnd === 'blank' || !htmlEnd.test(line)) html = htmlEnd
       paragraph = false
+      opaque = false
       continue
     }
     const match = line.match(FENCE_OPEN)
     if (match === null) {
-      paragraph = continuesParagraph(line, paragraph)
+      // A table or link reference definition runs to the next blank line,
+      // and its lines never form a paragraph.
+      if (isBlank(line)) opaque = false
+      else if (paragraph ? TABLE_DELIMITER.test(line) : LINK_DEFINITION.test(line)) opaque = true
+      paragraph = !opaque && continuesParagraph(line, paragraph)
       continue
     }
     const [, indent = '', fence = '', info = ''] = match
@@ -72,6 +79,7 @@ function scanObjectiveFences(body: string): FenceScan {
       continue
     }
     paragraph = false
+    opaque = false
     open = {
       char: fence[0] ?? '`',
       length: fence.length,
@@ -135,16 +143,29 @@ function isBlank(line: string): boolean {
   return /^[ \t]*$/.test(line)
 }
 
+/** A GFM table delimiter row. After a paragraph line it starts a table. */
+const TABLE_DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/
+
+/** The start of a link reference definition, which is not a paragraph. */
+const LINK_DEFINITION = /^ {0,3}\[[^\]]+\]:/
+
 /**
  * Whether a line that opens no fence or HTML block leaves an open paragraph
  * behind it, which only matters to whether the next line can start a type 7
- * HTML block. A blank line, an ATX heading or a thematic break leaves none, and
- * an indented line opens indented code unless it continues a paragraph.
+ * HTML block. When unsure this answers no: a type 7 block then hides the
+ * fences after it, so the error is a missed objective, never a false one.
+ *
+ * A blank line, an ATX heading, a thematic break, a setext underline and a
+ * container start (list item or blockquote) leave none, and an indented line
+ * opens indented code unless it continues a paragraph. Table rows and link
+ * reference definitions are handled by the caller.
  */
 function continuesParagraph(line: string, paragraph: boolean): boolean {
   if (isBlank(line)) return false
   if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(line)) return false
   if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line)) return false
+  if (paragraph && /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)) return false
+  if (/^ {0,3}(?:>|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$))/.test(line)) return false
   if (!paragraph && /^(?: {4}| {0,3}\t)/.test(line)) return false
   return true
 }
