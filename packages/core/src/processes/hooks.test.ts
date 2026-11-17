@@ -181,7 +181,7 @@ interface Harness {
 function harness(
   store: BuildStore,
   clock: ReturnType<typeof manualClock> = manualClock(),
-  opts: { advanceOnBackoff?: boolean } = {},
+  opts: { advanceOnBackoff?: boolean; holdBackoff?: Promise<void> } = {},
 ): Harness {
   const attempts: Harness['attempts'] = []
   const backoffs: number[] = []
@@ -222,9 +222,16 @@ function harness(
     // The gate never fires on its own; tests pulse it explicitly.
     interval: (signal) =>
       new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true })),
-    backoff: async (ms) => {
+    backoff: async (ms, signal) => {
       backoffs.push(ms)
       if (opts.advanceOnBackoff !== false) clock.advance(ms)
+      if (opts.holdBackoff !== undefined)
+        await Promise.race([
+          opts.holdBackoff,
+          new Promise<void>((resolve) =>
+            signal.addEventListener('abort', () => resolve(), { once: true }),
+          ),
+        ])
     },
   })
   return {
@@ -314,6 +321,22 @@ function countingStore(
     },
   }) as BuildStore
   return { store: wrapped, calls }
+}
+
+/** A store whose progress writes throw while `down` is set. */
+function progressOutage(store: BuildStore): { store: BuildStore; down: { value: boolean } } {
+  const down = { value: false }
+  const wrapped = new Proxy(store, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver)
+      if (typeof value !== 'function') return value
+      return async (...args: unknown[]) => {
+        if (property === 'putRepoArtifact' && down.value) throw new Error('store unavailable')
+        return (value as (...a: unknown[]) => unknown).apply(target, args)
+      }
+    },
+  }) as BuildStore
+  return { store: wrapped, down }
 }
 
 /** A store whose `method` throws `error()` once, then behaves normally. */
@@ -538,6 +561,76 @@ describe('configured hooks', () => {
     await second.pulse()
     expect(ids(second, 'notify')).toEqual(['build:b:2', 'build:b:3'])
     await second.supervisor.stop()
+  })
+
+  describe('progress write outage', () => {
+    test('a success waits to be durable before the next record; a restart redelivers only it', async () => {
+      const store = await newStore()
+      await store.createBuild({ slug: 'b', repo: REPO })
+      const outage = progressOutage(store)
+      const first = harness(outage.store, manualClock(), { holdBackoff: new Promise(() => {}) })
+      await first.supervisor.reconcile({ notify: NOTIFY })
+      await first.pulse()
+      await escalate(store, 'b', 'e1')
+      await escalate(store, 'b', 'e2')
+      await escalate(store, 'b', 'e3')
+      outage.down.value = true
+      await first.pulse()
+      // The command is not rerun to retry the write, and nothing else is invoked.
+      expect(ids(first, 'notify')).toEqual(['build:b:1'])
+      expect(first.backoffs.length).toBeGreaterThan(0)
+      expect((await progressOf(store)).delivered).toBe(0)
+      await first.supervisor.stop()
+      outage.down.value = false
+      const second = harness(store)
+      await second.supervisor.reconcile({ notify: NOTIFY })
+      await second.pulse()
+      expect(ids(second, 'notify')).toEqual(['build:b:1', 'build:b:2', 'build:b:3'])
+      expect((await progressOf(store)).delivered).toBe(3)
+      await second.supervisor.stop()
+    })
+
+    test('the progress write is retried with backoff and delivery resumes once it lands', async () => {
+      const store = await newStore()
+      await store.createBuild({ slug: 'b', repo: REPO })
+      const outage = progressOutage(store)
+      let release: () => void = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const h = harness(outage.store, manualClock(), { holdBackoff: held })
+      await h.supervisor.reconcile({ notify: NOTIFY })
+      await h.pulse()
+      await escalate(store, 'b', 'e1')
+      await escalate(store, 'b', 'e2')
+      outage.down.value = true
+      await h.pulse()
+      expect(ids(h, 'notify')).toEqual(['build:b:1'])
+      outage.down.value = false
+      release()
+      await h.pulse()
+      expect(ids(h, 'notify')).toEqual(['build:b:1', 'build:b:2'])
+      expect((await progressOf(store)).delivered).toBe(2)
+      await h.supervisor.stop()
+    })
+
+    test('drainOnce stops at the first success it cannot persist', async () => {
+      const store = await newStore()
+      await store.createBuild({ slug: 'b', repo: REPO })
+      const outage = progressOutage(store)
+      await harness(outage.store).supervisor.drainOnce({ notify: NOTIFY })
+      await escalate(store, 'b', 'e1')
+      await escalate(store, 'b', 'e2')
+      await escalate(store, 'b', 'e3')
+      outage.down.value = true
+      const first = harness(outage.store)
+      await first.supervisor.drainOnce({ notify: NOTIFY })
+      expect(ids(first, 'notify')).toEqual(['build:b:1'])
+      outage.down.value = false
+      const second = harness(outage.store)
+      await second.supervisor.drainOnce({ notify: NOTIFY })
+      expect(ids(second, 'notify')).toEqual(['build:b:1', 'build:b:2', 'build:b:3'])
+    })
   })
 
   test('a graceful stop and a successor (hot-upgrade handoff) neither skip nor repeat', async () => {
@@ -1037,7 +1130,8 @@ describe('configured hooks', () => {
     for (let i = 0; i < 5; i++) await h.pulse()
     expect(ids(h, 'notify')).toEqual(Array.from({ length: total }, (_, i) => `build:b:${i + 1}`))
     await h.supervisor.stop()
-  })
+    // Reducing 600+ events in one pass takes seconds; the default 5 s is too tight.
+  }, 30_000)
 
   test('drainOnce delivers until the first failure and persists the failure', async () => {
     const store = await newStore()

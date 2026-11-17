@@ -293,10 +293,11 @@ class HookWorker {
   }
 
   /** Persist the current in-memory progress; writes are serialized and each
-   * writes the newest state, so a slower write never regresses the position. */
-  private persist(): Promise<void> {
+   * writes the newest state, so a slower write never regresses the position.
+   * Resolves whether the write succeeded; a failure is warned, never thrown. */
+  private persist(): Promise<boolean> {
     const next = this.writes.then(async () => {
-      if (this.state === undefined) return
+      if (this.state === undefined) return true
       const snapshot: HookProgress = { ...this.state, updatedAt: this.now().toISOString() }
       try {
         await this.deps.store.putRepoArtifact(this.deps.repo, {
@@ -305,11 +306,13 @@ class HookWorker {
         })
         this.written = snapshot
         this.lastWriteAt = this.now().getTime()
+        return true
       } catch (error) {
         this.deps.warn(`hook ${this.name}: progress write failed (${errorMessage(error)})`)
+        return false
       }
     })
-    this.writes = next
+    this.writes = next.then(() => {})
     return next
   }
 
@@ -578,8 +581,14 @@ class HookWorker {
       // A stop terminates the in-flight attempt; it is neither a success nor
       // a failure, and the record is redelivered by the next session.
       if (signal.aborted) return
-      if (result.ok) await this.succeed(head)
-      else {
+      if (result.ok) {
+        // The next record waits until this success is durable, so a restart
+        // redelivers at most the one record in flight.
+        if (!(await this.succeed(head, signal))) {
+          if (this.mode === 'once') session.abort()
+          return
+        }
+      } else {
         await this.fail(head, result.error)
         if (this.mode === 'once') {
           session.abort()
@@ -590,7 +599,12 @@ class HookWorker {
     }
   }
 
-  private async succeed(record: Queued): Promise<void> {
+  /**
+   * Record a success and persist it, retrying the progress write with backoff
+   * (never the command). Resolves false when the session ends, or a `--once`
+   * write fails, before the success is durable; the record is then redelivered.
+   */
+  private async succeed(record: Queued, signal: AbortSignal): Promise<boolean> {
     this.queue.shift()
     this.succeeded += 1
     const failing = this.state!.failing
@@ -616,7 +630,14 @@ class HookWorker {
         type: 'hook.recovered',
         payload: { hook: this.name, since: failing.since, attempts: failing.attempts },
       })
-    await this.persist()
+    let attempts = 0
+    while (!(await this.persist())) {
+      attempts += 1
+      if (this.mode === 'once' || signal.aborted) return false
+      await this.sleepBackoff(attempts, signal)
+      if (signal.aborted) return false
+    }
+    return true
   }
 
   private async fail(record: Queued, error: string): Promise<void> {
