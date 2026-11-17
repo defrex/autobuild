@@ -624,6 +624,39 @@ function corpora(): unknown[][] {
     [
       {
         type: 'build.created',
+        payload: { ticket: { source: 'fake', id: 'M-1' }, repo: 'repo', baseBranch: 'main' },
+      },
+      {
+        type: 'landing.decided',
+        payload: {
+          candidate: { head: 'aaa', parent: 'base', cycle: '1' },
+          from: 'leaf',
+          into: { kind: 'root' },
+          labels: [],
+          mode: 'auto',
+          rule: { index: 1, snapshot: { within: ['docs/**'], paths: ['docs/a.md'], mode: 'auto' } },
+          paths: { total: 1, preview: ['docs/a.md'] },
+        },
+      },
+      {
+        type: 'landing.deferred',
+        payload: {
+          candidate: { head: 'bbb', parent: 'base', cycle: '1' },
+          reason: 'paths-unrecorded',
+          rule: { index: 0, snapshot: { paths: ['autobuild.toml'], mode: 'consent' } },
+          policy: 'sha256:policy',
+        },
+      },
+    ].map((event, index) => ({
+      ...event,
+      build: 'path-ruled',
+      actor: { kind: 'dispatcher' },
+      seq: index + 1,
+      ts: '2026-11-17T00:00:00Z',
+    })),
+    [
+      {
+        type: 'build.created',
         payload: { ticket: { source: 'fake', id: 'H-1' }, repo: 'repo', baseBranch: 'main' },
       },
       {
@@ -734,11 +767,11 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 2,
         "baseBranchValue": 2,
-        "build": 35,
+        "build": 36,
         "buildDelegation": 1,
         "buildDigest": 11,
-        "buildReadFacts": 88,
-        "buildStreamSeed": 50,
+        "buildReadFacts": 89,
+        "buildStreamSeed": 51,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dashboardFacts": 3,

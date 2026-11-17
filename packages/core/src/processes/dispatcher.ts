@@ -3,6 +3,7 @@ import {
   computeHeadPaths,
   headPathsFor,
   headPathsWrite,
+  readHeadPaths,
   type HeadPathsArtifact,
 } from '../kernel/head-paths'
 import {
@@ -90,6 +91,7 @@ import {
   type CapacityBuild,
 } from '../kernel/dispatch-capacity'
 import { evaluateLandingPolicy } from '../kernel/landing-policy'
+import { landingPolicyIdentity } from '../kernel/landing-policy-identity'
 import {
   landingAuthorized,
   nativeLandingApplied,
@@ -885,7 +887,10 @@ export class Dispatcher {
     return nodeTicketObservationKey(state, await this.nodePollingChildren(slug))
   }
   private async nodePollingChildren(slug: string, refresh = false) {
-    const children: { slug: string; state: Pick<BuildState, 'pollingActivity'> }[] = []
+    const children: {
+      slug: string
+      state: Pick<BuildState, 'pollingActivity'>
+    }[] = []
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (record.slug === slug) continue
       // The digest names every node a build ever targeted, so a build it does
@@ -1221,7 +1226,9 @@ export class Dispatcher {
         // A frozen or non-writable message falls through to a wrapper.
       }
     }
-    return new AggregateError([error], `${String(error)}; ${lines}`, { cause: error })
+    return new AggregateError([error], `${String(error)}; ${lines}`, {
+      cause: error,
+    })
   }
 
   private async runTick(opts: TickOpts): Promise<TickReport> {
@@ -1391,7 +1398,11 @@ export class Dispatcher {
       await this.store.appendRepo(this.deps.repo, {
         actor: DISPATCHER,
         type: 'dispatcher.ticket-source-recovered',
-        payload: { source: current.source, cause: current.cause, operation: current.operation },
+        payload: {
+          source: current.source,
+          cause: current.cause,
+          operation: current.operation,
+        },
       })
     }
     if (next !== undefined) {
@@ -1579,7 +1590,12 @@ export class Dispatcher {
       startedAt,
       intervalMs: this.deps.config.ticketScanIntervalSeconds * 1000,
     }
-    const checkpoint = { startedAt, mode, readinessFingerprint, criteriaFingerprint }
+    const checkpoint = {
+      startedAt,
+      mode,
+      readinessFingerprint,
+      criteriaFingerprint,
+    }
     // The journal measurement alone proves deferral, so the cadence row is not read.
     if (ticketScanDeferredByJournal(input))
       return { ...checkpoint, allowClockRollback: false, due: false }
@@ -1861,7 +1877,11 @@ export class Dispatcher {
         // Conservatism: an unresolvable observation (provider error) throws
         // and is contained below — it never reaps.
         if (observation.state === 'running') continue
-        let snapshots: { outcome: 'confirmed' | 'unknown'; deleted?: number; error?: string } = {
+        let snapshots: {
+          outcome: 'confirmed' | 'unknown'
+          deleted?: number
+          error?: string
+        } = {
           outcome: 'unknown',
           error: 'provider did not report the snapshot purge',
         }
@@ -2652,7 +2672,9 @@ export class Dispatcher {
               !executionLeaseLive
             ) {
               operation = 'node cascade'
-              await this.prepareIntegration(record, state, report, launched, { refreshOnly: true })
+              await this.prepareIntegration(record, state, report, launched, {
+                refreshOnly: true,
+              })
               ;({ state, workspace, log } = await this.store.buildFacts(record.slug))
               await this.cascadeNode(record, state, report, launched, opts)
               loaded = undefined
@@ -2910,7 +2932,11 @@ export class Dispatcher {
     reason: string,
     report: TickReport,
   ) {
-    const rejection = { revision: ticket.revision, target: ticket.target ?? null, reason }
+    const rejection = {
+      revision: ticket.revision,
+      target: ticket.target ?? null,
+      reason,
+    }
     const state = (await this.store.buildFacts(record.slug)).state
     if (!sameParentRejection(state.nodeRestack?.parentRejection, rejection))
       await this.store.append(record.slug, {
@@ -3047,7 +3073,10 @@ export class Dispatcher {
         await this.store.appendIfCurrent(record.slug, state.lastSeq, {
           actor: DISPATCHER,
           type: 'node.parent-cancelled',
-          payload: { id: request.id, reason: 'source readback does not confirm requested target' },
+          payload: {
+            id: request.id,
+            reason: 'source readback does not confirm requested target',
+          },
         })
         return
       }
@@ -3544,12 +3573,18 @@ export class Dispatcher {
     kind?: 'work' | 'node',
   ): Promise<{ sha: string; buildTrailerPresent?: boolean }> {
     if (kind === 'node')
-      await this.recoverNodeContributions(await this.repoBuildDigests(), { slug: record.slug, sha })
+      await this.recoverNodeContributions(await this.repoBuildDigests(), {
+        slug: record.slug,
+        sha,
+      })
     const read = this.deps.forge.readCommitMessage
     if (read === undefined) return { sha }
     try {
       const message = await read.call(this.deps.forge, workspacePath, sha)
-      return { sha, buildTrailerPresent: hasBuildTrailer(message, record.slug) }
+      return {
+        sha,
+        buildTrailerPresent: hasBuildTrailer(message, record.slug),
+      }
     } catch (error) {
       rethrowAuthorityLapse(error)
       await this.store.append(record.slug, {
@@ -3713,6 +3748,15 @@ export class Dispatcher {
           state = current
           break
         }
+        // A deferred candidate waits for its recorded changed paths: no ticket
+        // read, evaluation or append until the head or the policy changes.
+        const rules = this.deps.config.landing
+        const policy = landingPolicyIdentity(rules)
+        const deferral = current.landing?.deferral
+        if (deferral?.policy === policy && sameLandingCandidate(candidate, deferral.candidate)) {
+          isReady = false
+          break
+        }
         if (!record.ticket) throw new Error('Merge policy requires a readable source ticket')
         const ticket = await tickets.get(await this.currentTicketId(record))
         if (!ticket)
@@ -3734,10 +3778,52 @@ export class Dispatcher {
             : { kind: 'root' as const },
           labels: ticket.labels,
         }
-        const decision = evaluateLandingPolicy(this.deps.config.landing, input)
+        // Path predicates read the head's already-reduced summary. Only a
+        // reached path rule on a head beyond the preview reads the complete
+        // set, once per new candidate.
+        const recorded = headPathsFor(current, candidate.head)
+        let decision = evaluateLandingPolicy(
+          rules,
+          input,
+          recorded.recorded
+            ? {
+                recorded: true,
+                complete: recorded.record.total === recorded.record.preview.length,
+                paths: recorded.record.preview,
+              }
+            : { recorded: false },
+        )
+        if ('deferred' in decision && decision.deferred === 'paths-incomplete' && recorded.recorded)
+          decision = evaluateLandingPolicy(rules, input, {
+            recorded: true,
+            complete: true,
+            paths: (await readHeadPaths(store, record.slug, recorded.record)).paths,
+          })
         if (!(await ready(current))) {
           isReady = false
           break
+        }
+        if ('deferred' in decision) {
+          if (decision.deferred !== 'paths-unrecorded')
+            throw new Error(
+              `Merge policy evaluation stayed ${decision.deferred} on a complete path set`,
+            )
+          if (
+            await store.appendIfCurrent(record.slug, current.lastSeq, {
+              actor: DISPATCHER,
+              type: 'landing.deferred',
+              payload: {
+                candidate,
+                reason: decision.deferred,
+                rule: decision.rule,
+                policy,
+              },
+            })
+          ) {
+            isReady = false
+            break
+          }
+          continue
         }
         if (
           await store.appendIfCurrent(record.slug, current.lastSeq, {
@@ -4149,7 +4235,10 @@ export class Dispatcher {
               await store.append(record.slug, {
                 actor: DISPATCHER,
                 type: 'landing.native-applied',
-                payload: { enabled: false, ...(enableSeq !== undefined ? { enableSeq } : {}) },
+                payload: {
+                  enabled: false,
+                  ...(enableSeq !== undefined ? { enableSeq } : {}),
+                },
               })
           }
         } else if (result.kind === 'deferred' && result.reason) {
@@ -4405,7 +4494,9 @@ export class Dispatcher {
         // Same predicate preservation archives under: only local-git keeps
         // archive refs in the local repository.
         ...(restoration?.length
-          ? { restorationArchives: this.deps.forge.name === 'local-git' ? 'local' : 'remote' }
+          ? {
+              restorationArchives: this.deps.forge.name === 'local-git' ? 'local' : 'remote',
+            }
           : {}),
       })
       const skipped = [
@@ -4763,7 +4854,12 @@ export class Dispatcher {
       ...(config.pr !== undefined ? { pr: config.pr } : {}),
       ...(seed?.assets !== undefined && seed.assets.length > 0 ? { assets: seed.assets } : {}),
       ...(seed?.issueLinks !== undefined && seed.issueLinks.length > 0
-        ? { issueLinks: seed.issueLinks.map(({ issue, intent }) => ({ issue, intent })) }
+        ? {
+            issueLinks: seed.issueLinks.map(({ issue, intent }) => ({
+              issue,
+              intent,
+            })),
+          }
         : {}),
       ...(seed?.profile !== undefined ? { profile: seed.profile } : {}),
     }
@@ -5023,7 +5119,10 @@ export class Dispatcher {
           await store.appendWithArtifacts(record.slug, [spec], (deposited) => ({
             actor: DISPATCHER,
             type: 'spec.imported' as const,
-            payload: { artifact: artifactRefOf(deposited), ticket: ticket!.ref },
+            payload: {
+              artifact: artifactRefOf(deposited),
+              ticket: ticket!.ref,
+            },
           }))
         }
       }
@@ -5280,7 +5379,12 @@ export class Dispatcher {
     if (retryIntent && state.pendingCommands.length === 0) {
       try {
         await publicationRetryGate(
-          { store: this.store, slug: record.slug, clock: this.deps.clock, actor: DISPATCHER },
+          {
+            store: this.store,
+            slug: record.slug,
+            clock: this.deps.clock,
+            actor: DISPATCHER,
+          },
           retryIntent.operation,
           retryIntent.id,
         )
@@ -5814,7 +5918,10 @@ export class Dispatcher {
         )
       })
     const destinationHeads = new Map<string, PresenceObservation>()
-    const demands: { slug: string; request: EventPayload<'node.restack-requested'> }[] = []
+    const demands: {
+      slug: string
+      request: EventPayload<'node.restack-requested'>
+    }[] = []
     const verdicts = new Map<string, DependencyVerdict>()
     const failed = new Set<string>()
     const targetBlocked = new Set<string>()
@@ -6044,7 +6151,11 @@ export class Dispatcher {
           await store.appendRepo(this.deps.repo, {
             actor: DISPATCHER,
             type: 'ticket-preparation.handback-selected',
-            payload: { attempt: attempt.attempt, ticket: attempt.ticket, state: attempt.handback },
+            payload: {
+              attempt: attempt.attempt,
+              ticket: attempt.ticket,
+              state: attempt.handback,
+            },
           })
           stage = 'bounce'
           await this.bounce(ticket, conformance.missing)
@@ -6175,7 +6286,10 @@ export class Dispatcher {
     ticket: Ticket,
     scan: TargetScan,
   ): Promise<
-    | { target: NonNullable<EventPayload<'build.created'>['target']>; branch: string }
+    | {
+        target: NonNullable<EventPayload<'build.created'>['target']>
+        branch: string
+      }
     | string
     | undefined
   > {
@@ -6523,7 +6637,12 @@ export class Dispatcher {
           )
             continue
           await suspendNativeLanding(
-            { store: this.store, forge, slug: child.record.slug, workspacePath: checkout },
+            {
+              store: this.store,
+              forge,
+              slug: child.record.slug,
+              workspacePath: checkout,
+            },
             `node:${record.slug}:${operation}`,
           )
         }
@@ -6831,7 +6950,12 @@ export class Dispatcher {
               ...cycle,
               config: integrationConfig(config),
               ...(deposited[0]
-                ? { context: { kind: NODE_VERIFICATION_CONTEXT, rev: deposited[0].revision } }
+                ? {
+                    context: {
+                      kind: NODE_VERIFICATION_CONTEXT,
+                      rev: deposited[0].revision,
+                    },
+                  }
                 : {}),
             },
           }),
@@ -6943,7 +7067,11 @@ export class Dispatcher {
         return
       throw error
     }
-    await this.store.append(record.slug, { actor: DISPATCHER, type: 'pr.opened', payload: { pr } })
+    await this.store.append(record.slug, {
+      actor: DISPATCHER,
+      type: 'pr.opened',
+      payload: { pr },
+    })
   }
 
   /** Recover manifests after merge-observation crashes as well as before
@@ -6971,7 +7099,10 @@ export class Dispatcher {
     try {
       await this.withKernelRepository(async (path) => {
         const forge = this.kernelForge()
-        const git = { exec: forge.kernelExec ?? this.deps.exec, workspacePath: path }
+        const git = {
+          exec: forge.kernelExec ?? this.deps.exec,
+          workspacePath: path,
+        }
         const visiting = new Set<string>()
         const recover = async (slug: string): Promise<void> => {
           if (visiting.has(slug)) throw new Error('cyclic node contribution evidence')
@@ -7044,7 +7175,11 @@ export class Dispatcher {
           state.nodeRestack ??= { items: [] }
           state.nodeRestack.contribution = payload
           entry.digest.nodeContribution = payload
-          inputs.landings.push({ slug, sha: landing, contribution: identities })
+          inputs.landings.push({
+            slug,
+            sha: landing,
+            contribution: identities,
+          })
           visiting.delete(slug)
         }
         for (const entry of pending) {
@@ -7184,11 +7319,17 @@ export class Dispatcher {
   private async presenceVerdict(
     ticket: Ticket,
     target:
-      | { target: NonNullable<EventPayload<'build.created'>['target']>; branch: string }
+      | {
+          target: NonNullable<EventPayload<'build.created'>['target']>
+          branch: string
+        }
       | undefined,
     nodes: Map<string, DependencyNode>,
     inputs: PresenceInputs,
-    demands: { slug: string; request: EventPayload<'node.restack-requested'> }[],
+    demands: {
+      slug: string
+      request: EventPayload<'node.restack-requested'>
+    }[],
     observations: Map<string, PresenceObservation>,
   ): Promise<DependencyVerdict> {
     const branch = target?.branch ?? this.deps.config.baseBranch
@@ -7265,9 +7406,12 @@ export class Dispatcher {
         ),
       ]
       if (target && missing.length) {
-        const path: { slug?: string; identities: string[]; branch: string; head: string }[] = [
-          { slug: target.target.build, ...observed },
-        ]
+        const path: {
+          slug?: string
+          identities: string[]
+          branch: string
+          head: string
+        }[] = [{ slug: target.target.build, ...observed }]
         const seen = new Set<string>()
         let slug: string | undefined = target.target.build
         while (slug) {
@@ -7484,7 +7628,11 @@ export class Dispatcher {
         } catch {
           return pending
         }
-        this.foreignBranchCache.set(target, { fingerprint, branch, scan: scan.generation })
+        this.foreignBranchCache.set(target, {
+          fingerprint,
+          branch,
+          scan: scan.generation,
+        })
       }
       return branch === null
         ? pending

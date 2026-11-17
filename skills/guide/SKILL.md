@@ -548,7 +548,17 @@ Rules are strict and blank predicates are rejected with their array index.
 | `into` | No | `root`, any `node`, or an exact frozen destination node ticket id. |
 | `from` | No | `leaf` or `node`. |
 | `label` | No | Exact, case-sensitive source ticket label sampled at readiness. |
+| `paths` | No | Globs; matches when at least one path the candidate head changes matches. |
+| `within` | No | Globs; matches when every changed path matches and at least one changed. |
 | `mode` | Yes | `auto` or `consent`. |
+
+`paths` and `within` use the `[verify.<step>].paths` selector grammar, and
+each candidate head is decided on its own recorded changed paths. When
+evaluation reaches a path rule and the head's paths are not recorded, the
+decision is deferred and `ab build status` says why; it is never treated as an
+empty change. Put protective path rules first: a `paths` rule holding
+sensitive files belongs ahead of a `within` rule releasing documentation. See
+[merge policy](references/merge-policy.md#changed-paths).
 
 Help the human choose policy around their release process. A solo team can
 use one catch-all `mode = "auto"` rule. A team requiring a human's review

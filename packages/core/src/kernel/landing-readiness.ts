@@ -2,6 +2,7 @@ import type { BuildState } from './reducer'
 import { discardInFlight } from './reducer'
 import type { LeafRestackState } from './leaf-restack-state'
 import type { LandingCandidate } from './landing-policy'
+import { sameLandingCandidate } from './landing-state'
 import { escalationsBeyondJanitor } from './janitor-failure'
 import { compatibilityDiagnostic, mixedVersionDeferred } from './mixed-version'
 import {
@@ -50,11 +51,23 @@ export function leafLandingDeclineReason(state: BuildState): string | undefined 
   return undefined
 }
 
+/** Why the merge decision for `candidate` is deferred, from the recorded
+ * `landing.deferred` fact naming it, or undefined. */
+export function landingDeferralReason(
+  state: Pick<BuildState, 'landing'>,
+  candidate: LandingCandidate | undefined,
+): string | undefined {
+  const deferral = state.landing?.deferral
+  if (!deferral || !sameLandingCandidate(deferral.candidate, candidate)) return undefined
+  return `deferred — [[merge]] rule merge[${deferral.rule.index}] matches on changed paths, but the changed paths of head ${deferral.candidate.head.slice(0, 12)} are not recorded; the decision waits for a head this build records (heads pushed outside a build are never recorded)`
+}
+
 /** Why an open-PR leaf parked at awaiting-pr has no landing decision for its
  * current candidate, in the order the dispatcher's refusals apply: state
  * guards, compatibility deferral, a failed janitor episode (any exception on
- * the landing path, with its backoff), an unreadable build pipeline, a missing
- * candidate base, else that the decision is due at the next poll. */
+ * the landing path, with its backoff), an unreadable build pipeline, a
+ * decision deferred for unrecorded changed paths, a missing candidate base,
+ * else that the decision is due at the next poll. */
 export function leafLandingUndecidedReason(
   state: BuildState,
   restack: LeafRestackState,
@@ -68,6 +81,8 @@ export function leafLandingUndecidedReason(
     return `dispatcher janitor attempt ${state.janitor.attempt} failed — ${state.janitor.message}; next attempt ${state.janitor.nextAttemptAt}${state.janitor.escalation ? ' (escalated)' : ''}`
   if (pipelineUnreadable)
     return `the dispatcher cannot read this build's pipeline configuration (${pipelineUnreadable}); landing decisions are withheld until it is restored`
+  const deferred = landingDeferralReason(state, leafLandingCandidate(state, restack))
+  if (deferred) return deferred
   if (!leafLandingCandidate(state, restack)?.parent)
     return 'no base is recorded for the merge candidate'
   return 'no refusal is recorded; the dispatcher decides at its next janitor poll (repository-wide forge deferrals appear in ab repository status)'
