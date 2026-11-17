@@ -17,6 +17,7 @@ import type { BuildDigest, BuildStore, RepositoryRecord } from '../store/types'
 import { readRepositoryFacts, readPersistedBuildDigests } from '../store/reduced-reads'
 import { isWorkDigest } from '../processes/repo-view'
 import { creationBuildSlug } from '../kernel/build-creation'
+import { landingFallbackReason } from '../kernel/landing-state'
 /**
  * `ab watch` — the sessionless streaming half of the status family
  * (§8.2, §7.2). It follows the event logs of one, several, or all active
@@ -517,6 +518,20 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
         `Merge consent revoked for ${event.build}: reconcile edited files protected by merge[${p.rule.index}] (${p.paths.preview.join(', ')}${more > 0 ? `, +${more} more` : ''}); head ${p.previousHead} → ${p.head}; re-review and run ab merge ${event.build}`,
       )
     }
+    case 'landing.polling-selected':
+      return singleLine(
+        landingFallbackReason(
+          { mode: 'polling', seq: event.seq, ...event.payload },
+          state?.pr?.number,
+        ),
+      )
+    case 'landing.human-merge-required':
+      return singleLine(
+        landingFallbackReason(
+          { mode: 'human-merge', seq: event.seq, ...event.payload },
+          state?.pr?.number,
+        ),
+      )
     case 'target.rewritten':
       return `Upstream rewrite on ${event.payload.branch}: ${event.payload.previousSha} → ${event.payload.sha}; automatic adoption withheld`
     case 'verify.cancelled':

@@ -10,6 +10,7 @@ import {
 } from './contract'
 import { buildTrailers } from '../../kernel/build-identity'
 import { bunExec, GitHubForge, rulesetsHaveMergeGate, type ExecResult } from './github'
+import { createGitHubFetchTransport } from './github-transport'
 
 const mkdtemp = ownTempDirectories(afterEach)
 
@@ -866,3 +867,42 @@ describe.skipIf(!runLiveGitHub)('GitHub integration stack rebase (manual opt-in)
     }
   })
 })
+
+// The polling route's admin assumption (AUT-1217): GitHub's REST
+// `mergeable_state` is not relaxed for a credential that could bypass branch
+// protection. Point AB_LIVE_ADMIN_PENDING_PR (`owner/repo#number`) at a PR in
+// a disposable repository whose classic protection requires a check that is
+// still pending, with "Do not allow bypassing" off, and run with an admin
+// token.
+describe.skipIf(!runLiveGitHub || !nonblank(process.env.AB_LIVE_ADMIN_PENDING_PR))(
+  'GitHub admin merge state for a pending required check (manual opt-in)',
+  () => {
+    test('an administrator sees the PR blocked, and the polling route never reports it clear', async () => {
+      const target = requiredEnv('AB_LIVE_ADMIN_PENDING_PR')
+      const match = /^([^/\s]+\/[^#\s]+)#(\d+)$/.exec(target)
+      if (match === null) throw new Error('AB_LIVE_ADMIN_PENDING_PR must be owner/repo#number')
+      const [, repository, number] = match
+      const token = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN)!.trim()
+      const transport = createGitHubFetchTransport({ token })
+      const repo = (await transport('GET', `repos/${repository}`)).json as {
+        permissions?: { admin?: boolean }
+      }
+      expect(repo.permissions?.admin).toBe(true)
+      const pr = (await transport('GET', `repos/${repository}/pulls/${number}`)).json as {
+        mergeable_state: string
+        base: { ref: string }
+      }
+      expect(pr.mergeable_state).toBe('blocked')
+      const forge = new GitHubForge({ transport, repository })
+      const result = await forge.withReadScope(async () => {
+        await forge.getPrState('/absent', Number(number))
+        return forge.setAutoMerge('/absent', Number(number), true, {
+          buildSlug: 'live-admin-pending',
+          baseBranch: pr.base.ref,
+          polling: true,
+        })
+      })
+      expect(result).toMatchObject({ kind: 'polling', clear: false })
+    })
+  },
+)

@@ -3074,6 +3074,87 @@ export async function nativeMaintenanceReadBudget(opts: {
   }
 }
 
+/** A gated root leaf landing by polling (GraphQL unavailable, PR blocked,
+ * current polling fact): each quiet tick costs one conditional PR read and
+ * nothing else — no GraphQL, queue, consent or store work beyond a tick
+ * that makes no landing call at all — and appends nothing, at 100 and
+ * 10,000 events. `settle` then records a human-merge fact: those ticks make
+ * no landing call and match the polling tick's store cost. */
+export async function gatedPollingReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  slug: string
+  forge: FakeForge
+  tick: () => Promise<unknown>
+  settle: () => Promise<unknown>
+}) {
+  const { store, slug, forge } = opts
+  const events = buildEventRows(store, slug)
+  const fill = async (length: number) => {
+    let filler = 0
+    while (events.length < length)
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: { id: `obs_polling_${length}_${filler++}`, kind: 'followup', summary: 'filler' },
+      })
+  }
+  const measure = async () => {
+    // Warm the saved reduced values past any new rows before measuring.
+    await opts.tick()
+    const boundary = events.at(-1)!.seq
+    const metrics = { historicalRows: 0, tailRows: 0 }
+    let calls = 0
+    const getReduced = store.getReducerValue.bind(store)
+    store.getReducerValue = async (...args) => {
+      calls++
+      return getReduced(...args)
+    }
+    const restore = instrumentBuildRows(store, slug, () => boundary, metrics)
+    const before = {
+      prReads: forge.getPrStateCalls.length,
+      graphql: forge.graphqlRequests,
+      activity: forge.activityReads,
+      fastPath: forge.pollingFastPath,
+      autoMerge: forge.autoMergeCalls.length,
+      squash: forge.squashMergeCalls.length,
+    }
+    try {
+      await opts.tick()
+    } finally {
+      restore()
+      store.getReducerValue = getReduced
+    }
+    expect(metrics.historicalRows).toBe(0)
+    expect(events.at(-1)!.seq).toBe(boundary)
+    expect(forge.getPrStateCalls.length - before.prReads).toBe(1)
+    expect(forge.graphqlRequests - before.graphql).toBe(0)
+    expect(forge.activityReads - before.activity).toBe(0)
+    expect(forge.autoMergeCalls.length - before.autoMerge).toBe(0)
+    expect(forge.squashMergeCalls.length - before.squash).toBe(0)
+    return {
+      rows: metrics.tailRows,
+      calls,
+      landingCalls: forge.pollingFastPath - before.fastPath,
+    }
+  }
+  let polling: { rows: number; calls: number; landingCalls: number } | undefined
+  for (const length of [100, 10_000]) {
+    await fill(length)
+    const costs = await measure()
+    expect(costs.landingCalls).toBe(1)
+    if (polling) expect(costs).toEqual(polling)
+    polling = costs
+  }
+  await opts.settle()
+  const settled = await measure()
+  expect(settled.landingCalls).toBe(0)
+  // No consent read or other store work on a quiet polling tick.
+  expect({ rows: settled.rows, calls: settled.calls }).toEqual({
+    rows: polling!.rows,
+    calls: polling!.calls,
+  })
+}
+
 type PrStateLike = Awaited<ReturnType<FakeForge['getPrState']>> & { nativeAutoMerge?: boolean }
 /** The bounded replaced-head record rides in the saved build facts: a warm
  * read touches no event rows, and its size is fixed at any rewrite count. */
