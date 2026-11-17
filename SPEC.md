@@ -706,15 +706,18 @@ Leaf branches are collapsed into one build change and restacked onto the frozen
 target branch's current head at verify entry, before any verifier or exclusion.
 This is kernel work within the fixed grammar, not another phase. A verify failure
 returns to implementation; its new commits append to the canonical change, and
-the next approved cycle collapses and restacks again. While waiting to merge after
-finalize and its post-steps, an observed target move also schedules a restack.
+the next approved cycle collapses and restacks again. A build resuming from a
+ticket wait (§11 "Ticket waits") first restacks onto the target's current head
+when the target moved, so the resumed phase sees the merged blockers. While
+waiting to merge after finalize and its post-steps, an observed target move
+also schedules a restack.
 For a node-targeted leaf, published finalize-step commits also schedule one
 waiting restack, even when the target SHA is unchanged, so guarded merge
 preserves one canonical build identity.
 Clean waiting restacks retain existing verification when build-owned config is
 unchanged (§16.1), including when replay replaces the pin commit's ancestry.
-Conflicts use reconcile and its captured post-reconcile policy. A conflict before initial verification cannot
-skip initial checks through that policy.
+Conflicts use reconcile and its captured post-reconcile policy. A conflict before initial verification,
+including one at a wait resume, cannot skip initial checks through that policy.
 
 
 ## 6. The spec
@@ -1220,7 +1223,7 @@ The base-selection invariants make this safe with Git:
   back to the local base and records the diagnostic.
 - **Re-provisioning resumes; eligible restacks rewrite.** Provisioning alone
   resumes the published branch. The kernel collapses and restacks at verify
-  entry and after target moves while awaiting merge. The first
+  entry, at a ticket-wait resume, and after target moves while awaiting merge. The first
   `workspace.provisioned` base stays immutable branch-cut provenance; later
   `existing` facts are resume evidence, not new cuts. A remote workspace lost
   before publication may be freshly cut again; the latest `remote` or `local`
@@ -1229,10 +1232,14 @@ The base-selection invariants make this safe with Git:
 - **Review loops keep their starting effective base.** The initial loop uses
   the latest fresh cut; after a successful verify-entry restack, later failure
   loops use that restacked contribution base. Plan, implementation and
-  code-review never rewrite the branch. Previously recorded review ranges
-  remain immutable, including between rounds.
+  code-review never rewrite the branch; the one exception is the kernel's
+  wait-resume restack between phases, after which the resumed loop uses the
+  restacked base. Previously recorded review ranges remain immutable,
+  including between rounds.
 - **Each implementation completion records its proven contribution boundary.**
-  `ab done` uses the current projected contribution base, falling back to the
+  `ab done` uses the current projected contribution base (the completed
+  range's base, else `implement.contributionBase`, the base a wait-resume
+  restack or fast-forward moved an uncompleted build onto), falling back to the
   latest fresh-cut provisioning base (`remote` or `local`, never an `existing`
   resume). It validates that immutable base against HEAD and records it verbatim.
   A moving or rewritten destination never changes the review range, and review
@@ -1247,7 +1254,8 @@ The base-selection invariants make this safe with Git:
   to code review and every agent verify step. Node integration cycles retain
   their separate range semantics.
 - **Verification names its actual base.** Successful restack or reconcile
-  publication promotes the contribution/path base. Every new verify start and
+  publication promotes the contribution/path base, as does a wait-resume
+  fast-forward (`restack.advanced`). Every new verify start and
   result, including skips, cites the cycle's base and head. Those citations stay
   frozen throughout the cycle and survive clean waiting restacks; historical
   facts without citations remain readable. Upstream-only paths are excluded.
@@ -2415,13 +2423,28 @@ tickets complete ends its session with `ab wait-on <ticket-id>... --reason
 only what needs no ticket source — 1 to 20 unique nonblank ids, a nonblank
 reason, no prior terminal in the session, a work build, and not the build's own
 recorded ticket id — and appends one `wait.requested {id, phase, round,
-tickets, reason}` as the session's agent actor. A build holds one ticket wait
+tickets, reason, publication?}` as the session's agent actor. A build holds one ticket wait
 at a time: while another session's request is undecided or its wait is open,
 the command is refused with no write, checked against the same log prefix the
 append commits to, so of two concurrent verifiers only one declares and the
 other keeps its ordinary terminals. A session therefore needs only
 its build-phase store grant, local or hosted; it never holds a ticket-source
 credential for a wait.
+
+An `implement` declaration first makes the session's commits durable, so a
+resume replays only published work. It requires a clean worktree, as `ab done`
+does. When HEAD is ahead of the published head (or of the contribution base
+before any publication), it publishes HEAD through the implement terminal's
+guarded publication. A local workspace pushes before the fact: a failed push
+throws, writes nothing and leaves the same session retryable, and the request
+records `publication {branch, base, sha, settlement: published}`. A remote
+workspace first deposits `publication.requested {operation: wait, id, branch,
+sha, base}` and records `settlement: requested`; the dispatcher's settlement
+stage publishes it and appends `wait.published {id, sha}`. The dispatcher
+enters such a wait only after `wait.published`. A recorded `publication.lost`
+refuses it with cause `publication-lost`, and the declaring phase re-runs with
+that refusal as guidance. Other phases author no branch commits and publish
+nothing.
 
 The dispatcher holds the ticket source, so it validates every request on its
 next tick, for local and hosted builds alike. The build digest marks a request
@@ -2431,7 +2454,8 @@ keeps its slot. The dispatcher resolves each id through the source and refuses
 the request when an id is unknown, is the build's own ticket after
 canonicalisation, has already completed, or the build has no source ticket. A
 refusal appends `wait.refused {id, cause, tickets, message}` naming the
-offending ids. Nothing is written to the ticket and no wait begins; the
+offending ids (cause `unknown-ticket`, `own-ticket`, `completed`,
+`no-source-ticket` or `publication-lost`). Nothing is written to the ticket and no wait begins; the
 declaring phase re-runs at the same round or attempt, with the refusal message
 as its guidance. Accepted, the dispatcher adds every id not already in the
 build ticket's `blockedBy` (so a retry after a lost append adds no duplicate),
@@ -2455,7 +2479,36 @@ budget.
 
 An ended wait requests a `resume` slot and is admitted before new ticket
 claims, as a parked finished build is; a `revise-spec` answer instead waits for
-the revision. The engine's ordinary rules re-run the declaring phase: a
+the revision. The dispatcher observes the leaf's target when it launches the
+resume. Before the declaring phase resumes, and ahead of the plan and code
+loops, the engine decides a `restack` with trigger `wait-resume` and cycle
+`wait.ended`'s seq when the accepted target differs from the base the build's
+work sits on. When the target has not moved, no restack runs. A build with
+published work replays it through the guarded automatic restack (`restack.*`
+facts carry the `wait-resume` trigger); a conflict runs `reconcile` for that
+transaction, which counts as initial verification, and the declaring phase
+resumes after `restack.completed`. A build with nothing published and no local
+commits (plan, plan-review, implement before its first commit) fast-forwards
+its local branch to the fresh target snapshot and records `restack.advanced
+{trigger, cycle, observation, branch, from, to}`; nothing is written remotely
+and no conflict is possible. That fact promotes the contribution base for the
+implement terminal, conditional verification and later restack decisions. A
+local branch with unpublished commits fails the restack rather than discarding
+them. The decision is taken once per wait end: a target move after the build
+resumed never restacks a running phase.
+
+A reconcile session that declares a wait leaves its occurrence frozen onto its
+original target. When the wait ends with the target moved, and the occurrence
+has recorded no publish intent, the kernel supersedes it: the runner aborts the
+pending replay, discarding the resolver's undeposited resolution, and records
+`reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}`, which
+closes the occurrence and any automatic restack it belonged to without a
+completion. It then runs the wait-resume restack from the unchanged published
+head, so the resumed reconcile session resolves a replay onto the current
+target, or none when the replay is clean. With the target unchanged the same
+attempt resumes with its replay intact.
+
+The engine's ordinary rules then re-run the declaring phase: a
 producer at the same round, a reviewer at the same review round, an agent
 verifier at the same step and attempt, and finalize or reconcile. Guidance
 reaches the session through its usual carrier, and its
@@ -2467,13 +2520,15 @@ producer. `ab build status` shows a requested, open, or ended-but-not-resumed
 wait and the tickets it names. Node builds cannot declare waits.
 
 The wait's reduced state is part of the build state contract:
-`waitRequest {id, session, phase, round, tickets, reason, seq, outcome?}`,
-where `outcome` is `{kind: entered, seq}` or `{kind: refused, cause, tickets,
+`waitRequest {id, session, phase, round, tickets, reason, seq, publication?,
+outcome?}`, where `publication` is `{branch, base, sha, published, requestSeq?,
+lost?}`, and
+`outcome` is `{kind: entered, seq}` or `{kind: refused, cause, tickets,
 message, seq}`, and `wait {id, escalation, session, phase, round, tickets,
 reason, enteredSeq, enteredAt, ended?: {cause, seq, message}, resumedSeq?}`.
 Each holds only the latest request or entered wait. `resumedSeq` is the first
-`session.started` or `spec.revised` after the end; from then on the build holds
-a slot again. Open and answered escalation records carry `wait: {id}` as the
+`session.started`, `spec.revised`, wait-resume `restack.prepared` or
+`restack.advanced` after the end; from then on the build holds a slot again. Open and answered escalation records carry `wait: {id}` as the
 wait marker.
 
 ## 12. The outer loop
@@ -3047,7 +3102,7 @@ dependency presence requires an ancestor change; on `ab restack <node>`; or on
 accepted re-parenting. There is no eager mode or cadence option. Nested nodes
 need their own demand. Existing frozen transactions, including ones reserved
 before upgrade, finish first; later demand coalesces onto the latest parent.
-Leaves keep verify-entry and awaiting-merge restacks for every target.
+Leaves keep verify-entry, wait-resume and awaiting-merge restacks for every target.
 
 Presence demand uses change identities, never ticket resolution alone. It follows
 only the path from the nearest proven ancestor source down to the dependent's
@@ -3491,11 +3546,11 @@ with illustrative members:
 | Integration attention | Kernel/dispatcher `integration.verification-failed {id, head, parent, steps, guidance}`: one durable failed-cycle notification, recovered from exact verification receipts |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
-| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` |
+| Leaf restacking | `target.moved {branch, sha, lineage?}`, `target.rewritten {branch, previousSha, sha}`, `target.rewrite-cleared {branch, sha, lineage?}`, advisory `target.distance {branch, sha, head, count}`, `restack.prepared`, `restack.replayed`, `restack.publish-intended`, `restack.rewritten`, `restack.contended`, `restack.completed` (trigger `verify-entry`, `wait-resume` or `awaiting-landing`), `restack.advanced {trigger: wait-resume, cycle, observation, branch, from, to}` |
 | Head path facts | advisory `head.paths-recorded {source, head, destination, mergeBase, total, preview, resolution?, artifact}` |
-| Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed` |
+| Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.prepared`, `reconcile.replayed`, `reconcile.publish-intended`, `reconcile.rewritten`, `reconcile.contended`, `reconcile.completed`, kernel `reconcile.superseded {attempt, cycle, cause: wait-resume, restackId?}` (§11 "Ticket waits") |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed`, `session.build-read-failed`, `session.build-read-recovered`, `phase.deferred`, `phase.deferral-escalated` |
-| Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason}`; dispatcher `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}` |
+| Ticket waits (§11) | Agent `wait.requested {id, phase, round, tickets, reason, publication?: {branch, base, sha, settlement: published \| requested}}`; dispatcher `wait.published {id, sha}`, `wait.refused {id, cause: unknown-ticket \| own-ticket \| completed \| no-source-ticket \| publication-lost, tickets, message}` and `wait.entered {id, escalation, tickets, reason, question}`; dispatcher, kernel or human `wait.ended {id, cause: operator \| automatic, message}` |
 | Repository journal | dispatcher setting facts; run lifecycle, effective config, tick/queue diagnostics, reload and runner outcomes; the `harvest.*` workflow, recovery, and ledger facts |
 
 Abort cleanup is a dispatcher-owned ordered saga. While an execution lease is

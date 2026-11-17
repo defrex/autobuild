@@ -61,6 +61,7 @@ export const waitRefusalCauseSchema = z.enum([
   'own-ticket',
   'completed',
   'no-source-ticket',
+  'publication-lost',
 ])
 export type WaitRefusalCause = z.infer<typeof waitRefusalCauseSchema>
 export const waitEndCauseSchema = z.enum(['operator', 'automatic'])
@@ -93,7 +94,7 @@ export const reconcileTransactionSchema = z.strictObject({
   localBranchHead: gitOid,
 })
 export const leafRestackSchema = reconcileTransactionSchema.omit({ attempt: true }).extend({
-  trigger: z.enum(['verify-entry', 'awaiting-landing']),
+  trigger: z.enum(['verify-entry', 'awaiting-landing', 'wait-resume']),
   cycle: z.number().int().nonnegative(),
   observation: z.number().int().positive(),
   message: z.string().min(1),
@@ -912,6 +913,15 @@ export const eventPayloadSchemas = {
       sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
       step: z.string().min(1),
     }),
+    /** An implement session's commits, published before its ticket wait is
+     * entered; `wait.published` with the same `id` completes it. */
+    z.strictObject({
+      operation: z.literal('wait'),
+      id: z.string().min(1),
+      branch: z.string().min(1),
+      sha: gitOid,
+      base: gitOid,
+    }),
   ]),
   /** Durable loss record: the dispatcher released (or is about to release) the
    * workspace while the referenced `publication.requested` (named by `request`,
@@ -932,7 +942,7 @@ export const eventPayloadSchemas = {
   'publication.lost': z.strictObject({
     /** seq of the lost `publication.requested` event. */
     request: z.number().int().positive(),
-    operation: z.enum(['implement', 'reconcile', 'restack', 'finalize', 'finalize-step']),
+    operation: z.enum(['implement', 'reconcile', 'restack', 'finalize', 'finalize-step', 'wait']),
     branch: z.string().min(1),
     sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
     reason: z.string().trim().min(1),
@@ -1344,6 +1354,17 @@ export const eventPayloadSchemas = {
     actual: gitOid.nullable(),
   }),
   'restack.completed': leafRestackSchema.extend({ headSha: gitOid }),
+  /** A pre-publication wait-resume fast-forward: the local branch had no
+   * commits beyond `from` and nothing was published, so it now points at
+   * the target snapshot `to`. No remote write happened. */
+  'restack.advanced': z.strictObject({
+    trigger: z.literal('wait-resume'),
+    cycle: z.number().int().nonnegative(),
+    observation: z.number().int().positive(),
+    branch: z.string().min(1),
+    from: gitOid,
+    to: gitOid,
+  }),
   'reconcile.started': z.strictObject({
     attempt,
     baseSha: z.string().min(1),
@@ -1371,6 +1392,16 @@ export const eventPayloadSchemas = {
     observedHead: gitOid.nullable().optional(),
     conflicted: z.boolean(),
     archives: z.array(archiveEntry),
+  }),
+  /** The kernel abandoned an open reconcile occurrence with no publish
+   * intent because its session declared a ticket wait and the target moved
+   * before the build resumed. The workspace operation was aborted and nothing
+   * was published; `restackId` names the automatic restack it also closes. */
+  'reconcile.superseded': z.strictObject({
+    attempt,
+    cycle: z.number().int().nonnegative(),
+    cause: z.literal('wait-resume'),
+    restackId: z.string().min(1).optional(),
   }),
   'reconcile.completed': z.union([
     z.strictObject({ mergeCommit: z.string().min(1), artifact: artifactRefSchema }),
@@ -1467,7 +1498,21 @@ export const eventPayloadSchemas = {
     round,
     tickets: waitTicketIdsSchema,
     reason: z.string().trim().min(1),
+    /** An implement session's unpublished commits at declaration. `published`:
+     * the CLI already pushed `sha` (local workspace). `requested`: a
+     * `publication.requested {operation: 'wait'}` with this id precedes this
+     * event, and the dispatcher enters the wait only after `wait.published`. */
+    publication: z
+      .strictObject({
+        branch: z.string().min(1),
+        base: gitOid,
+        sha: gitOid,
+        settlement: z.enum(['published', 'requested']),
+      })
+      .optional(),
   }),
+  /** The dispatcher published a wait's requested commits. */
+  'wait.published': z.strictObject({ id: z.string().min(1), sha: gitOid }),
   /** The dispatcher refused a ticket wait. Nothing was written to the ticket
    * and no wait began; the declaring phase re-runs with `message` as its
    * guidance. `tickets` names the offending ids. */

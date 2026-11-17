@@ -15,6 +15,9 @@ export interface LeafRestackState {
   replay?: EventPayload<'restack.replayed'>
   intent?: EventPayload<'restack.publish-intended'>
   completed?: EventPayload<'restack.completed'>
+  /** The latest pre-publication wait-resume fast-forward. */
+  advanced?: EventPayload<'restack.advanced'>
+  advancedAt?: number
   reconcileAttempt?: number
   initialVerification?: boolean
   gates: Record<string, EventPayload<'restack.completed'>>
@@ -97,8 +100,23 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
       case 'reconcile.started':
         if (state.active !== undefined && event.payload.restackId === state.active.id) {
           state.reconcileAttempt = event.payload.attempt
-          state.initialVerification = state.active.trigger === 'verify-entry'
+          // A resume restack conflicts before any verification on the new
+          // base, like a verify-entry one: post-reconcile policy cannot skip.
+          state.initialVerification =
+            state.active.trigger === 'verify-entry' || state.active.trigger === 'wait-resume'
         } else state.initialVerification = false
+        break
+      case 'reconcile.superseded':
+        if (event.payload.restackId !== undefined && event.payload.restackId === state.active?.id) {
+          delete state.active
+          delete state.replay
+          delete state.intent
+          delete state.reconcileAttempt
+        }
+        break
+      case 'restack.advanced':
+        state.advanced = event.payload
+        state.advancedAt = event.seq
         break
       case 'restack.completed':
         if (state.distance?.head !== event.payload.headSha) delete state.distance
@@ -114,8 +132,38 @@ export function advanceLeafRestack(state: LeafRestackState, events: readonly AbE
     }
   }
 }
+/** The target base the leaf's last restack moved it onto: the newer of the
+ * last completed restack and the last wait-resume fast-forward, else the
+ * provisioned base. Without `restack.advanced` this is exactly
+ * `completed?.targetBase ?? initialBase`. */
+export function leafRestackedBase(
+  state: Pick<
+    LeafRestackState,
+    'completed' | 'completedAt' | 'advanced' | 'advancedAt' | 'initialBase'
+  >,
+): string | undefined {
+  if (state.advanced !== undefined && (state.advancedAt ?? 0) > (state.completedAt ?? 0))
+    return state.advanced.to
+  return state.completed?.targetBase ?? state.initialBase
+}
+
+/** The base a leaf's published work currently sits on: the last reconcile's
+ * base when it is newer than the last restack completion, else
+ * `leafRestackedBase`. Shared by target observation and the wait-resume
+ * restack decision so the two cannot drift. */
+export function leafBaseInUse(log: {
+  restack: LeafRestackState
+  lastReconcileCompleted?: { completedSeq: number; baseSha: string }
+}): string | undefined {
+  const reconcile = log.lastReconcileCompleted
+  return reconcile &&
+    reconcile.completedSeq > Math.max(log.restack.completedAt ?? 0, log.restack.advancedAt ?? 0)
+    ? reconcile.baseSha
+    : leafRestackedBase(log.restack)
+}
+
 export const leafRestackReducer = defineReducer<LeafRestackState, AbEvent, LeafRestackState>({
-  version: 9,
+  version: 10,
   initial: () => ({ gates: {} }),
   fold: advanceLeafRestack,
   finish: (state) => structuredClone(state),

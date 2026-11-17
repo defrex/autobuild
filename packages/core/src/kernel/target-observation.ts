@@ -4,6 +4,7 @@ import type { Forge } from '../ports/types'
 import type { EventWrite } from '../events/catalog'
 import { readBuildFacts } from '../store/reduced-reads'
 import { gitOid } from '../events/payloads'
+import { leafBaseInUse } from './leaf-restack-state'
 
 export function assertTargetOid(sha: string): void {
   if (!gitOid.safeParse(sha).success) throw new Error('invalid target commit OID')
@@ -34,11 +35,7 @@ export async function observeTarget(input: {
     const accepted = restack.target?.branch === branch ? restack.target.sha : undefined
     // Reparent acceptance establishes a new branch scope. Until its replay
     // settles the old parent's contribution boundary is not a baseline here.
-    const reconcile = log.lastReconcileCompleted
-    const leafBase =
-      reconcile && reconcile.completedSeq > (restack.completedAt ?? 0)
-        ? reconcile.baseSha
-        : (restack.completed?.targetBase ?? restack.initialBase)
+    const leafBase = leafBaseInUse(log)
     const used =
       state.kind === 'node'
         ? node?.parentChange && node.parentReplay !== node.parentChange.id
