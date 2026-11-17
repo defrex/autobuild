@@ -427,7 +427,9 @@ export interface BuildState {
   /** The latest execution, while no instance-matched `execution.ended` follows it. */
   openExecution?: EventPayload<'execution.started'> & { seq: number }
   infrastructureFailures: Array<EventPayload<'infrastructure.failed'> & { seq: number }>
-  infrastructureFailure?: EventPayload<'infrastructure.failed'> & { seq: number }
+  infrastructureFailure?: EventPayload<'infrastructure.failed'> & {
+    seq: number
+  }
   cleanupAttempts: Array<EventPayload<'infrastructure.cleanup-attempted'> & { seq: number }>
   /** Outstanding human discard intent. It is settled only by terminal completion. */
   discardRequest?: { seq: number; actor: Actor }
@@ -546,7 +548,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 35
+export const BUILD_REDUCER_VERSION = 36
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -804,14 +806,20 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           ...(acc.nodeIssueLinks ?? { builds: [], links: [] }),
           published: {
             pr: event.payload.pr,
-            issueLinks: event.payload.issueLinks.map(({ issue, intent }) => ({ issue, intent })),
+            issueLinks: event.payload.issueLinks.map(({ issue, intent }) => ({
+              issue,
+              intent,
+            })),
             seq: event.seq,
           },
         }
         break
       case 'node.rewritten':
         if (acc.nodeComparison)
-          acc.nodeComparison = { ...acc.nodeComparison, headSha: event.payload.head }
+          acc.nodeComparison = {
+            ...acc.nodeComparison,
+            headSha: event.payload.head,
+          }
         if (pr) pr = { ...pr, headSha: event.payload.head }
         break
       case 'pr.opened':
@@ -823,7 +831,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         acc.target = event.payload.target
         acc.baseBranch = event.payload.baseBranch
         pinnedAssets = event.payload.assets ?? []
-        acc.issueLinks = (event.payload.issueLinks ?? []).map((link) => ({ ...link }))
+        acc.issueLinks = (event.payload.issueLinks ?? []).map((link) => ({
+          ...link,
+        }))
         if (event.payload.profile !== undefined)
           acc.profile = { name: event.payload.profile, configured: true }
         break
@@ -1005,7 +1015,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
 
       case 'session.started': {
         if (event.payload.profile !== undefined && event.payload.profile.name === acc.profile?.name)
-          acc.profile = { ...acc.profile, configured: event.payload.profile.configured }
+          acc.profile = {
+            ...acc.profile,
+            configured: event.payload.profile.configured,
+          }
         const root = event.payload.continuation?.root ?? event.payload.session
         acc.sessionTotals[root] ??= { activeMs: 0, transcripts: [] }
         const totals = acc.sessionTotals[root]
@@ -1082,7 +1095,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         const open = openSessions.get(event.payload.session)
         if (open) {
           const { nativeHandle: _handle, resumed: _resumed, ...fresh } = open
-          openSessions.set(open.session, { ...fresh, nativeResumeFallback: true })
+          openSessions.set(open.session, {
+            ...fresh,
+            nativeResumeFallback: true,
+          })
         }
         break
       }
@@ -1184,7 +1200,9 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           acc.verifyStage.cancellations[verifyMemberKey(event.payload.step, event.payload.attempt)]
             ?.seq === event.seq
         )
-          complete(verifyPhase(event.payload.step), event.seq, { attempt: event.payload.attempt })
+          complete(verifyPhase(event.payload.step), event.seq, {
+            attempt: event.payload.attempt,
+          })
         break
       case 'verify.stage-failed':
         break
@@ -1239,14 +1257,24 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         // §5: post-steps are independent and failure-tolerant — a completion
         // counts whether `ok` is true or false. Retain full-log history with
         // occurrence identity; readers scope it with `seq > restartBoundary`.
-        finalizeSteps.push({ step: event.payload.step, ok: event.payload.ok, seq: event.seq })
+        finalizeSteps.push({
+          step: event.payload.step,
+          ok: event.payload.ok,
+          seq: event.seq,
+        })
         break
 
       case 'pr.auto-merge-enabled':
-        autoMerge.applied = { enabled: true, commandSeq: event.payload.commandSeq }
+        autoMerge.applied = {
+          enabled: true,
+          commandSeq: event.payload.commandSeq,
+        }
         break
       case 'pr.auto-merge-disabled':
-        autoMerge.applied = { enabled: false, commandSeq: event.payload.commandSeq }
+        autoMerge.applied = {
+          enabled: false,
+          commandSeq: event.payload.commandSeq,
+        }
         break
       case 'pr.merged':
         acc.mergedSha = event.payload.sha
@@ -1269,7 +1297,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
       case 'restack.rewritten':
       case 'restack.completed':
         if (acc.kind !== 'node' && implement.commits)
-          implement.commits = { base: event.payload.targetBase, head: event.payload.headSha }
+          implement.commits = {
+            base: event.payload.targetBase,
+            head: event.payload.headSha,
+          }
         if (event.type === 'restack.completed' && prState === 'conflicted') prState = 'open'
         if (pr !== undefined)
           pr = {
@@ -1282,7 +1313,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'reconcile.rewritten':
         if (acc.kind !== 'node' && implement.commits)
-          implement.commits = { base: event.payload.targetBase, head: event.payload.headSha }
+          implement.commits = {
+            base: event.payload.targetBase,
+            head: event.payload.headSha,
+          }
         if (pr !== undefined) pr = { ...pr, headSha: reconcileRewriteHead(event.payload) }
         break
       case 'reconcile.completed': {
@@ -1525,7 +1559,10 @@ function finishBuild(acc: BuildAcc): BuildState {
     implement: acc.implement,
     codeReviewApproved: acc.codeReviewApproved,
     codeReviewApproval: acc.codeReviewApproval,
-    reviewFindings: { planReview: acc.planReviewFindings, codeReview: acc.codeReviewFindings },
+    reviewFindings: {
+      planReview: acc.planReviewFindings,
+      codeReview: acc.codeReviewFindings,
+    },
     verifyStage: acc.verifyStage,
     verify: acc.verify,
     reconcileAttempts: acc.reconcileAttempts,

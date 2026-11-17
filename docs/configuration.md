@@ -764,6 +764,32 @@ old key without changing policy values or order. See [deprecated spellings](merg
 
 **Constraints:** label must be nonblank (labels match exactly, including case)
 
+#### `merge[].paths`
+
+**TOML key:** `merge[].paths`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Match when at least one changed path matches a selector. Same glob grammar and case sensitivity as `[verify.<step>].paths`.
+
+**Constraints:** minimum length 1; Each item: Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.
+
+#### `merge[].within`
+
+**TOML key:** `merge[].within`
+
+- **Type:** `array of string`
+- **Default:** `omitted`
+- **Required:** Optional
+- **Reload:** Hot: next dispatcher action captures the accepted value. A running invocation keeps its captured values.
+
+**Description:** Match when every changed path matches a selector and at least one path changed.
+
+**Constraints:** minimum length 1; Each item: Positive repository-relative globs with literal characters, *, ?, and whole-segment ** only. No NUL, absolute paths, backslashes, negation, empty or traversal segments, character classes, brace expansion or extglobs.
+
 #### `merge[].mode`
 
 **TOML key:** `merge[].mode`
