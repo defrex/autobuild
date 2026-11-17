@@ -597,10 +597,16 @@ export class GitHubForge implements Forge {
       },
       false,
       (ref, sha) => this.createArchive(ref, sha),
+      (ref, sha) => this.createArchiveAfterRefusal(ref, sha),
     )
   }
   get kernelRewrite() {
-    return gitRewrite(this.kernelExec, false, (ref, sha) => this.createArchive(ref, sha))
+    return gitRewrite(
+      this.kernelExec,
+      false,
+      (ref, sha) => this.createArchive(ref, sha),
+      (ref, sha) => this.createArchiveAfterRefusal(ref, sha),
+    )
   }
   /** Credentials exist only in the trusted subprocess environment, never in
    * argv, repository config, remote URLs, or the resolving agent's environment. */
@@ -2061,6 +2067,34 @@ export class GitHubForge implements Forge {
       ),
       'archive create',
     )
+  }
+
+  /** Environments such as Claude Code on the web refuse non-branch git pushes but
+   * allow REST, so the identical create-only ref goes through the API instead. A
+   * 422 means the ref exists or GitHub lacks the commit; only a 404 commit probe
+   * proves the latter, and the caller's readback judges every other outcome. */
+  private async createArchiveAfterRefusal(ref: string, sha: string): Promise<void> {
+    try {
+      await this.createArchive(ref, sha)
+    } catch (error) {
+      if (isForgeFailure(error) || error instanceof ForgeRequestDeferred) throw error
+      if (!(error instanceof GitHubApiError && error.status === 422)) throw error
+      const { owner, name } = await this.requireCoordinates()
+      try {
+        await this.request(
+          'GET',
+          `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/commits/${sha}`,
+        )
+      } catch (probe) {
+        if (isForgeFailure(probe) || probe instanceof ForgeRequestDeferred) throw probe
+        if (probe instanceof GitHubApiError && probe.status === 404)
+          throw new Error(
+            `commit ${sha} exists only in the local workspace; this environment refuses non-branch git pushes, and GitHub REST can create ${ref} only for a commit already on GitHub. Publish the commit on a build branch from an environment that permits archive pushes, or allow refs/autobuild/archive/ pushes`,
+            { cause: error },
+          )
+      }
+      throw error
+    }
   }
 
   async createNodeBranch(branch: string, sha: string): Promise<string> {
